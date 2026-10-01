@@ -39,7 +39,7 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 
 ## Later
 
-- **Trim the core further.** `template/AGENTS.md` is about 2,500 tokens. "Other wikis" and "Sync" are the biggest sections left.
+- **Trim the core further.** `template/AGENTS.md` is about 2,600 tokens. "Other wikis" and "Sync" are the biggest sections left.
 - **Batch small compiles.** A one-line fact costs a lock, a source page, a topic page, an index edit, and a log entry. Let a few notes collect before compiling.
 - **Search page text, not just indexes.** `./wiki.sh find` reads `index.md` only. Past a few hundred pages per wiki it should search page bodies too.
 - **Reach sessions with no file access.** A chat session that can't read files can't use a wiki. A small MCP server over the collection would fix that.
@@ -51,8 +51,8 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 
 Things that have never been run for real. Treat them as unproven until crossed off.
 
-- `wiki.sh` on macOS. It was written for bash 3.2 and BSD tools but only run on Linux.
-- Git sync. Every dry run used wikis with no git.
+- `wiki.sh` on macOS, beyond `new` and `status`. Those two ran cleanly in real use on 2026-10-01. The other commands have only run on Linux.
+- Git sync between two people or two machines. Pull, commit, and push from one machine worked in real use on 2026-10-01.
 - Two sessions taking the compile lock in the same second.
 - A wiki with two shared wikis listed in `links.md`.
 - Real scale: hundreds of wikis, hundreds of pages.
@@ -65,6 +65,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command and one line.
 
 ## Done
+
+### Wikis that cover several repositories (2026-10-01, handbook version 7)
+
+- **Why:** the first real use was a product spread over several repositories. One wiki per repository sent sessions to the wrong wiki and split the same fact across two.
+- **What changed:** a wiki covers a project. That is one repository by default, or several listed in its `repos.md`. Sessions resolve a repository to its wiki by name, then by listing. `./wiki.sh cover` and `./wiki.sh which` manage and query the mapping. The staleness rule now covers facts checked against a cited source, not only against code. `./wiki.sh claude` replaces its own older line.
 
 ### Core handbook plus on-demand rules (2026-09-30, handbook version 6)
 

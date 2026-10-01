@@ -2,7 +2,7 @@
 
 A template for knowledge bases that an LLM agent maintains as plain markdown. Sources get compiled once into small linked pages. Questions get answered from the pages.
 
-This repo holds the rules and the scaffold. It is not a wiki. Each wiki lives in its own folder, one per code repository, plus a shared one for knowledge that applies everywhere.
+This repo holds the rules and the scaffold. It is not a wiki. Each wiki lives in its own folder, one per project, plus a shared one for knowledge that applies everywhere. A project is usually one code repository. It can also be a group of repositories that make up one product.
 
 **Contents**
 
@@ -57,7 +57,7 @@ One line in your tool's user-level instruction file covers every repository on t
 ./wiki.sh claude
 ```
 
-The line tells each session to find the wiki named after the repository it is working in and read its handbook. A repository with no wiki yet gets one the first time a session has something to file. Nothing needs setting up per repository.
+The line tells each session to find the wiki that covers the repository it is working in and read its handbook. If you already ran this command with an older version of the template, run it again. It replaces its own line and leaves the rest of the file alone. A repository with no wiki yet gets one the first time a session has something to file. Nothing needs setting up per repository.
 
 For any other tool, put the same line in whatever file it loads at the start of every session. `./wiki.sh claude` prints the text.
 
@@ -67,7 +67,7 @@ Two alternatives, if you want tighter control:
 
   > This project's knowledge wiki is at `~/wikis/<repository-name>`. Read its AGENTS.md at session start and follow it.
 
-- **Stricter, Claude Code only.** A sentence relies on the agent choosing to open the file. An import loads the handbook at launch, every time. Put `@~/wikis/<repository-name>/AGENTS.md` on its own line in the project's `CLAUDE.md`. Claude Code asks once to approve it. The core handbook then costs roughly 2,500 tokens in every session.
+- **Stricter, Claude Code only.** A sentence relies on the agent choosing to open the file. An import loads the handbook at launch, every time. Put `@~/wikis/<repository-name>/AGENTS.md` on its own line in the project's `CLAUDE.md`. Claude Code asks once to approve it. The core handbook then costs roughly 2,600 tokens in every session.
 
 With the skill installed, Claude also finds wikis in the folders a session can reach. A line is more dependable.
 
@@ -106,7 +106,7 @@ The handbook tells the agent to use judgment, not wait for commands.
 
 It tells you briefly what it wrote. It still asks before resolving a contradiction or merging, deleting, or restructuring pages. If it doubts a fact you gave it, it files the fact, marks it with a `Check` line, and says so.
 
-**Stale knowledge.** Code changes and pages don't. Each page records the date its claims were last confirmed and, for claims about code, the commit. Before the agent writes code that depends on a page, it checks the page against the code when the code is at hand. If the page is wrong it tells you and files a correction. When it answers from a page it couldn't check that is more than 90 days old, it says when the page was last verified. `./wiki.sh stale` lists pages past that age.
+**Stale knowledge.** The world changes and pages don't. Each page records the date its claims were last confirmed and, for claims about code, the commit. Before the agent writes code or publishes something that depends on a page, it checks the page against the code, or against the cited source for facts like votes, quotes, and figures, when that is at hand. If the page is wrong it tells you and files a correction. When it answers from a page it couldn't check that is more than 90 days old, it says when the page was last verified. `./wiki.sh stale` lists pages past that age.
 
 You can always steer it. "Don't save that" and "off the record" cover one item. "Leave the wiki alone" stops everything. "Save this", "ingest", and "lint" force it.
 
@@ -116,7 +116,7 @@ The design goal: a session working in repository A that needs a client from repo
 
 Three rules in the handbook make that work.
 
-- **One wiki per repository, named after it.** The name is the last part of the repository's remote URL. So the wiki for a dependency is found by name, with no search and no configuration.
+- **One wiki per project, found by repository name.** For a single repository the wiki is named after it: the last part of its remote URL. So the wiki for a dependency is found by name, with no search and no configuration. See below for projects that span several repositories.
 - **Knowledge lives with its owner.** What a session learns about D's client goes in D's wiki, even when the session is working in A. A's wiki keeps only what is specific to how A uses it, and cites D's page.
 - **Look before you read source.** When the work touches another repository, the agent reads that repository's wiki index before answering from its code or from general knowledge.
 
@@ -128,6 +128,19 @@ Around those:
 - **Citations.** Pages refer to other wikis as `repository-name:wiki/path.md`. They never copy.
 
 Keep work and personal knowledge in separate collections.
+
+### One project, several repositories
+
+Some repositories are really one product. One piece of work touches several of them, and the same facts matter to all of them. Give those one wiki. Splitting them makes the agent file the same fact in two places.
+
+```
+./wiki.sh new my-product
+./wiki.sh cover my-product repo-one repo-two repo-three
+```
+
+`cover` lists the repositories in the wiki's `repos.md`. A session in any of them then resolves to `my-product`, and `./wiki.sh which repo-two` prints it. Inside the wiki, shared knowledge is filed once by topic, and each repository gets a page only for what is specific to it.
+
+The test for grouping: if one session routinely works across the repositories, they are one wiki. If each is worked on alone and they only call each other, keep them separate.
 
 ## Run several sessions at once
 
@@ -173,12 +186,13 @@ Edit any of them, bump the version at the top of `template/AGENTS.md`, and run `
 AGENTS.md          Tells an agent this is the template and how to start a wiki from it.
 CLAUDE.md          Imports AGENTS.md for Claude Code.
 ROADMAP.md         Planned improvements, untested areas, and what was decided against.
-wiki.sh            Setup and upkeep: init, new, status, find, stale, upgrade, unlock, claude.
+wiki.sh            Setup and upkeep: init, new, cover, which, status, find, stale, upgrade, unlock, claude.
 template/          The scaffold. Copied whole to start a wiki.
   AGENTS.md        The core handbook. Loaded in every session.
   rules/           The rest of the handbook. Read on demand.
   CLAUDE.md        Imports the handbook for Claude Code.
   links.md         Shared wikis this one can fall back to.
+  repos.md         Repositories this wiki covers, when more than one.
   raw/             Immutable sources.
   wiki/            Compiled pages.
   data/            Structured data (CSV, SQLite).

@@ -55,7 +55,8 @@ commit: 3f2a9c1
 
 - `updated` is the day the page's text last changed.
 - `verified` is the day its claims were last confirmed. Set it at ingest. Move it forward when you confirm the page against code. If you confirmed only some of its claims, still move it forward, and mark each claim you could not check with `(not re-checked)`.
-- `commit` is the short hash of the owning repository's HEAD on the `verified` day. Include it for claims about code when that repository is at hand. Leave it out otherwise.
+- `commit` is the short hash of the owning repository's HEAD on the `verified` day. Include it only when you checked the claim against that repository's code. Leave it out otherwise. Never stamp a commit on a claim nobody checked. In a wiki that covers several repositories, write it as `repository-name@hash`.
+- A fact taken from outside, such as a vote, a quote, or a figure, names its source where the claim is stated: a link, or the document and date.
 - Dates and times are UTC everywhere: filenames, frontmatter, and the log.
 - Quote frontmatter values that contain a colon.
 - One topic per page.

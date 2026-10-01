@@ -14,6 +14,8 @@ Usage: ./wiki.sh <command> [options]
 
   init                 Create the wiki collection at $(tilde "$WIKIS_DIR") and its shared wiki, $SHARED.
   new <name|path>      Create a wiki from the template. A bare name goes under $(tilde "$WIKIS_DIR").
+  cover <wiki> <repo>...  Record that one wiki covers several repositories.
+  which <repo>         Print the wiki that covers a repository.
   status               List wikis: handbook version, notes waiting, lock state.
   find <word>          Search every wiki's index for a word.
   stale [days]         List pages not verified in that many days (default 90).
@@ -25,7 +27,8 @@ Usage: ./wiki.sh <command> [options]
   --git   With init: make the whole collection one git repo.
           With new:  make that wiki its own repo, unless it is already inside one.
 
-Name each wiki after the code repository it covers.
+Name a wiki after the repository it covers. For a project that spans several
+repositories, name it after the project and list the repositories with cover.
 Set WIKIS_DIR to keep wikis somewhere other than ~/wikis.
 EOF
 }
@@ -111,15 +114,67 @@ write_collection_marker() {
   cat > "$WIKIS_DIR/WIKIS.md" <<'EOF'
 # Wikis
 
-This folder is a collection of LLM-maintained wikis. Each subfolder is one wiki, named after the code repository it covers. `global` holds knowledge that applies everywhere.
+This folder is a collection of LLM-maintained wikis. Each subfolder is one wiki. Most cover a single code repository and are named after it. A wiki for a project that spans several repositories is named after the project and lists them in its `repos.md`. `global` holds knowledge that applies everywhere.
 
 Each wiki's `AGENTS.md` is its handbook. Agents follow it. People can read any page directly.
 
-- Knowledge about a repository's code lives in that repository's wiki, whichever session learned it.
+- Knowledge about a project lives in that project's wiki, whichever session learned it.
 - Wikis are created on demand. A missing folder means nothing has been recorded for that repository yet.
 - This file marks the folder as a collection. If the folder is a git repo, agents commit and push their wiki changes to it.
 EOF
   echo "created: $(tilde "$WIKIS_DIR/WIKIS.md")"
+}
+
+# Print the name of the wiki that covers a repository: the wiki named after it,
+# or the one whose repos.md lists it. Prints nothing when there is none.
+which_wiki() {
+  local name="$1" d
+  if is_wiki "$WIKIS_DIR/$name"; then
+    printf '%s' "$name"
+    return 0
+  fi
+  for d in "$WIKIS_DIR"/*/; do
+    d="${d%/}"
+    is_wiki "$d" || continue
+    if [ -f "$d/repos.md" ] && grep -qxF -- "- $name" "$d/repos.md"; then
+      printf '%s' "${d##*/}"
+      return 0
+    fi
+  done
+  return 0
+}
+
+cmd_which() {
+  local name="$1" w
+  w="$(which_wiki "$name")"
+  if [ -n "$w" ]; then
+    tilde "$WIKIS_DIR/$w"
+    printf '\n'
+  else
+    echo "no wiki covers $name" >&2
+    exit 1
+  fi
+}
+
+# cover <wiki> <repo>...: record that one wiki covers several repositories.
+cmd_cover() {
+  local wiki="$1" root repo owner
+  shift
+  root="$(resolve "$wiki")"
+  is_wiki "$root" || die "$(tilde "$root") is not a wiki"
+  [ $# -ge 1 ] || die "cover needs at least one repository name"
+  [ -f "$root/repos.md" ] || printf '# Repositories\n' > "$root/repos.md"
+  for repo in "$@"; do
+    owner="$(which_wiki "$repo")"
+    if [ -n "$owner" ] && [ "$WIKIS_DIR/$owner" != "$root" ]; then
+      echo "skipped: $repo is already covered by the wiki $owner"
+    elif grep -qxF -- "- $repo" "$root/repos.md"; then
+      echo "already listed: $repo"
+    else
+      printf -- '- %s\n' "$repo" >> "$root/repos.md"
+      echo "covers:  $repo"
+    fi
+  done
 }
 
 cmd_init() {
@@ -186,6 +241,9 @@ cmd_status() {
     fi
     note=""
     if [ -n "$tv" ] && [ "${v:-0}" -lt "$tv" ]; then note="  <- behind template v$tv, run: ./wiki.sh upgrade ${d##*/}"; fi
+    if [ -f "$d/repos.md" ] && grep -q '^- ' "$d/repos.md"; then
+      note="$note  covers: $(sed -n 's/^- //p' "$d/repos.md" | tr '\n' ' ')"
+    fi
     printf '%-26s %-9s %-8s %s%s\n' "${d##*/}" "v${v:-?}" "$waiting" "$lock" "$note"
   done
   [ "$found" = 1 ] || echo "(none yet. Run: ./wiki.sh init)"
@@ -290,17 +348,26 @@ cmd_unlock() {
 }
 
 cmd_claude() {
-  local f="$HOME/.claude/CLAUDE.md" dir line
+  local f="$HOME/.claude/CLAUDE.md" dir line tmp
   dir="$(tilde "$WIKIS_DIR")"
-  line="My knowledge wikis live in $dir, one folder per repository, named after the repository (the last part of its remote URL, or its folder name), plus a shared one at $dir/$SHARED. At session start, find the wiki for the repository you are working in, read its AGENTS.md, and follow it. If that repository has no wiki yet, read $dir/$SHARED/AGENTS.md and follow that, and create the repository's wiki with \`$(tilde "$REPO")/wiki.sh new <repository-name>\` the first time you have something to file there. Outside any repository, use the shared wiki."
-  if [ -f "$f" ] && grep -qF "knowledge wikis live in" "$f"; then
-    echo "already there: ~/.claude/CLAUDE.md has a wiki line. Edit it by hand to change it."
-    return 0
-  fi
+  line="My knowledge wikis live in $dir, one folder per project, plus a shared one at $dir/$SHARED. At session start, run \`$(tilde "$REPO")/wiki.sh which <repository-name>\` for the repository you are working in. Its name is the last part of its remote URL, or its folder name. The command prints the wiki that covers it. Read that wiki's AGENTS.md and follow it. If no wiki covers the repository, read $dir/$SHARED/AGENTS.md and follow that, and create the repository's wiki with \`$(tilde "$REPO")/wiki.sh new <repository-name>\` the first time you have something to file there. Outside any repository, use the shared wiki."
   mkdir -p "$HOME/.claude"
-  if [ -s "$f" ]; then printf '\n' >> "$f"; fi
-  printf '%s\n' "$line" >> "$f"
-  echo "added to ~/.claude/CLAUDE.md:"
+  if [ -f "$f" ] && grep -qF "knowledge wikis live in" "$f"; then
+    if grep -qxF "$line" "$f"; then
+      echo "already up to date: ~/.claude/CLAUDE.md"
+      return 0
+    fi
+    # Replace the older wiki line in place. Everything else in the file is kept.
+    tmp="$f.tmp"
+    grep -vF "knowledge wikis live in" "$f" > "$tmp" || true
+    printf '%s\n' "$line" >> "$tmp"
+    mv "$tmp" "$f"
+    echo "replaced the wiki line in ~/.claude/CLAUDE.md:"
+  else
+    if [ -s "$f" ]; then printf '\n' >> "$f"; fi
+    printf '%s\n' "$line" >> "$f"
+    echo "added to ~/.claude/CLAUDE.md:"
+  fi
   echo "  $line"
 }
 
@@ -308,6 +375,11 @@ cmd_claude() {
 [ $# -ge 1 ] || { usage; exit 1; }
 cmd="$1"
 shift
+if [ "$cmd" = cover ]; then
+  [ $# -ge 2 ] || die "usage: ./wiki.sh cover <wiki> <repo>..."
+  cmd_cover "$@"
+  exit 0
+fi
 want_git=0
 want_all=0
 target=""
@@ -325,9 +397,22 @@ need_target() { [ -n "$target" ] || die "$cmd needs a wiki name or path"; }
 
 case "$cmd" in
   init) cmd_init "$want_git" ;;
-  new) need_target; cmd_new "$(resolve "$target")" "$want_git" ;;
+  new)
+    need_target
+    case "$target" in
+      */*) ;;
+      *)
+        owner="$(which_wiki "$target")"
+        if [ -n "$owner" ] && [ "$owner" != "$target" ]; then
+          die "$target is already covered by the wiki $owner. Use that one."
+        fi
+        ;;
+    esac
+    cmd_new "$(resolve "$target")" "$want_git"
+    ;;
   status) cmd_status ;;
   find) [ -n "$target" ] || die "find needs a word"; cmd_find "$target" ;;
+  which) [ -n "$target" ] || die "which needs a repository name"; cmd_which "$target" ;;
   stale) cmd_stale "${target:-90}" ;;
   upgrade)
     if [ "$want_all" = 1 ]; then cmd_upgrade_all; else need_target; upgrade_one "$(resolve "$target")"; fi

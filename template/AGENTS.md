@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Handbook version 6.
+Handbook version 7.
 
 This folder is a knowledge base maintained by an LLM agent. Any agent working here follows this file. It needs no vendor features. Plain markdown, plain files.
 
@@ -23,6 +23,7 @@ rules/       The rest of the handbook, read on demand.
 index.md     One line per wiki page. The map.
 log.md       Append-only record of changes.
 links.md     Shared wikis this one can fall back to.
+repos.md     Repositories this wiki covers, when it covers more than one.
 raw/         Immutable sources. New files only.
 wiki/        Compiled pages. The agent writes these.
 data/        Structured data (CSV, SQLite). Queried, not read.
@@ -78,11 +79,11 @@ Keep wiki knowledge and general knowledge distinguishable. If you add something 
 
 ## Stale knowledge
 
-Code changes. Pages don't. Each page records when its claims were last confirmed (`verified`) and, for claims about code, the commit they were confirmed against (`commit`).
+The world changes. Pages don't. Each page records when its claims were last confirmed (`verified`) and, for claims about code, the commit they were confirmed against (`commit`).
 
-- Before you act on a claim about code, check it against the code if that code is at hand. Acting means writing code or giving instructions that depend on the claim. Answering a question in passing doesn't need the check.
-- If the claim no longer holds, tell the user and capture a correction into the owning wiki. A claim you checked against the code and found false is a correction, not a contradiction. Fix it without asking.
-- If it holds, remember that. At your next compile, set that page's `verified` and `commit` to today's values. That edit needs no source note.
+- Before you act on a claim, check it against its origin if the origin is at hand. For a claim about code, that is the code. For a fact taken from outside, such as a vote, a quote, a figure, or a document, that is the cited source. Acting means writing code, publishing, or giving instructions that depend on the claim. Answering a question in passing doesn't need the check.
+- If the claim no longer holds, tell the user and capture a correction into the owning wiki. A claim you checked against its origin and found false is a correction, not a contradiction. Fix it without asking.
+- If it holds, remember that. At your next compile, set that page's `verified` to today, and `commit` too when the claim is about code. That edit needs no source note.
 - When you answer from a page verified more than 90 days ago and you couldn't check it, say when it was last verified.
 
 ## Capture
@@ -90,7 +91,7 @@ Code changes. Pages don't. Each page records when its claims were last confirmed
 Trigger: your own judgment (see Act without being asked), or the user says "save this", "capture this", "file this", or "save this session", or hands over a source.
 
 1. For a file or document, copy it into `raw/` unchanged.
-2. For a chat, write a note instead. Plain markdown, no frontmatter, first line `Captured: YYYY-MM-DD` in UTC. Include decisions, facts, open questions, links cited. Keep only what the user said or confirmed, what you checked against code, and what came from a cited source. Leave out agent speculation.
+2. For a chat, write a note instead. Plain markdown, no frontmatter, first line `Captured: YYYY-MM-DD` in UTC. Include decisions, facts, open questions, links cited. Keep only what the user said or confirmed, what you checked against code or a source, and what came from a cited source. Leave out agent speculation.
 3. Name the file `YYYY-MM-DD-HHMMSS-short-slug.ext`, using the UTC date and time of capture. The timestamp sets ingest order and keeps names unique. If you can't get the time, use the date alone and tell the user. If the name is taken, add `-2`, `-3`, and so on. Never overwrite.
 4. Report the path in one line. Capture itself never touches `wiki/`, `index.md`, or `log.md`. Compiling the note is a separate step.
 
@@ -100,7 +101,7 @@ Rows of data are not notes. Records, listings, and metrics go in `data/` as CSV 
 
 This wiki is rarely alone. Two kinds of other wiki matter. Each has its own `AGENTS.md` and `rules/`, which apply when you write there. If its version line matches this handbook's, yours will do. Reading from another wiki needs no check.
 
-**Peers.** Every wiki in this wiki's parent folder is a peer. Each is named after the code repository it covers: the last part of the repository's remote URL, or its folder name when it has no remote.
+**Peers.** Every wiki in this wiki's parent folder is a peer. Each covers one project. Most projects are a single code repository, and the wiki is named after it: the last part of the repository's remote URL, or its folder name when it has no remote. A project that spans several repositories has one wiki, named after the project, and its `repos.md` lists every repository it covers. To find the wiki for a repository, look for the peer with that name. If there is none, search the peers' `repos.md` files for it.
 
 **Shared.** `links.md` lists wikis for knowledge that holds everywhere, one per line:
 
@@ -112,10 +113,10 @@ Each line is a name, a path, and a purpose. Skip a line whose path doesn't exist
 
 Rules for both kinds:
 
-- **Ownership.** Knowledge lives in the wiki of whatever owns the thing. What you learn about another repository's code, client, or API goes in that repository's wiki, even though this session is working elsewhere. General and third-party knowledge goes in the shared wiki whose purpose fits. Knowledge about this project stays here. When unsure, keep it here.
-- **Lookup by name.** When the work touches another repository the user's team owns, read that peer's `index.md` before answering from its source code or from general knowledge. The repository's name is the wiki's folder name. Also list its `raw/` for pending files whose names bear on the question, and read those.
+- **Ownership.** Knowledge lives in the wiki of whatever owns the thing. What you learn about another project's code, client, or API goes in that project's wiki, even though this session is working elsewhere. General and third-party knowledge goes in the shared wiki whose purpose fits. Knowledge about this project stays here, once, however many of its repositories it touches. When unsure, keep it here.
+- **Lookup by name.** When the work touches a repository outside this project that the user's team owns, find its wiki and read that `index.md` before answering from its source code or from general knowledge. Also list its `raw/` for pending files whose names bear on the question, and read those.
 - **Search.** When you don't know which wiki owns a topic, search the peers' `index.md` files by keyword and open only the ones that match. Then try the shared wikis in listed order. Never read every index.
-- **Missing wiki.** If you have something to file and the owning repository has no wiki yet, create one. `rules/peers.md` says how. Don't create a wiki just to look something up.
+- **Missing wiki.** If you have something to file and no wiki is named after the owning repository or lists it, create one. `rules/peers.md` says how. Don't create a wiki just to look something up.
 - **Cite, don't copy.** Never restate what another wiki says. Refer to its pages as `name:path`, such as `billing-service:wiki/entities/client.md`. Don't use relative file paths across wikis.
 
 ## Sync
