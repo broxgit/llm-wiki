@@ -6,6 +6,13 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 
 ## Next
 
+### Terse page style
+
+- **Why:** agents read pages far more often than people do. Measured on one sample page, terse notes in plain words used 56% of the tokens of default prose. The body alone used 45%.
+- **Sketch:** a style rule in `rules/compile.md`. One fact per line. Fragments over sentences. No narrative, no restating. Plain words, identifiers verbatim. Then trim frontmatter, which is nearly half of a terse page: cite sources by timestamp prefix, and drop fields that repeat each other.
+- **Not this:** invented abbreviations or JSON. In the same test, shorthand saved 2 points over terse plain words and JSON saved none. Abbreviations cost more tokens per word ("tmo" is 2 tokens, "timeout" is 1) and are harder for a model to read back.
+- **Open:** whether terse pages hurt answer quality. Test by asking the same questions against both versions of a page. Whether teammates still need to read pages comfortably.
+
 ### Seed a wiki from its repository
 
 - **Why:** a new wiki is empty. Each repository already holds a README, docs, decision records, and merged PR descriptions. Ingesting those makes a wiki useful on day one.
