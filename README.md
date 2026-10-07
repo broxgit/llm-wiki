@@ -67,7 +67,7 @@ Two alternatives, if you want tighter control:
 
   > This project's knowledge wiki is at `~/wikis/<repository-name>`. Read its AGENTS.md at session start and follow it.
 
-- **Stricter, Claude Code only.** A sentence relies on the agent choosing to open the file. An import loads the handbook at launch, every time. Put `@~/wikis/<repository-name>/AGENTS.md` on its own line in the project's `CLAUDE.md`. Claude Code asks once to approve it. The core handbook then costs roughly 2,600 tokens in every session.
+- **Stricter, Claude Code only.** A sentence relies on the agent choosing to open the file. An import loads the handbook at launch, every time. Put `@~/wikis/<repository-name>/AGENTS.md` on its own line in the project's `CLAUDE.md`. Claude Code asks once to approve it. The core handbook then costs roughly 2,900 tokens in every session.
 
 With the skill installed, Claude also finds wikis in the folders a session can reach. A line is more dependable.
 
@@ -100,9 +100,9 @@ You can do this in several sessions at the same time. Saving never collides. Fro
 The handbook tells the agent to use judgment, not wait for commands.
 
 - **Query.** It checks the wikis before answering anything they might cover.
-- **Capture.** It saves a note when the conversation produces a decision, an established or corrected fact, a solved problem, a research finding, or finished work.
-- **Compile.** At a pause it turns waiting notes into wiki pages and updates the index and log.
-- **Lint.** It runs a health check after every 10 ingests.
+- **Capture.** It saves a note when the conversation produces a decision, direction from you, an established or corrected fact, a solved problem, or a research finding. It does not log finished work, since the code and its git history already do. It captures at stopping points, about one or two notes an hour in a long session.
+- **Compile.** It turns waiting notes into wiki pages at session start, at a pause, and whenever five are waiting.
+- **Lint.** Every compile checks the log, and runs a health check once 10 ingests have passed since the last one.
 
 It tells you briefly what it wrote. It still asks before resolving a contradiction or merging, deleting, or restructuring pages. If it doubts a fact you gave it, it files the fact, marks it with a `Check` line, and says so.
 
@@ -165,7 +165,7 @@ The handbook tells agents to pull before writing and to commit and push after, t
 
 - **The agent ignores the wiki.** It never read the handbook. Run `./wiki.sh claude`, or paste the line from [Use it in an existing session](#use-it-in-an-existing-session). In Claude Code, `/context` lists the instruction files that loaded.
 - **The agent can't read or write the wiki.** It lacks folder access. See Setup step 4.
-- **Notes pile up in `raw/` and never become pages.** Run `./wiki.sh status` to see what is waiting and who holds the lock. Say "ingest" to force a compile. A lock older than 30 minutes is ignored. `./wiki.sh unlock <name>` frees one right away.
+- **Notes pile up in `raw/` and never become pages.** Run `./wiki.sh status`. It flags any wiki with five or more notes waiting as `compile due`, and any wiki past 10 ingests as `lint due`. The next session there compiles at startup. Say "ingest" to force it now. A lock older than 30 minutes is ignored. `./wiki.sh unlock <name>` frees one right away.
 - **Knowledge landed in the wrong wiki.** Tell the agent where it belongs. Moving pages is the one thing it asks about first.
 - **It saves too much or too little.** Edit the capture list under "Act without being asked" in `template/AGENTS.md`, bump the version, then upgrade.
 - **An answer came from an out-of-date page.** Tell the agent what changed. It files a correction. `./wiki.sh stale` shows what else hasn't been checked in a while.

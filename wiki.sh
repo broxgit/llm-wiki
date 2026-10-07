@@ -218,7 +218,7 @@ EOF
 }
 
 cmd_status() {
-  local d v tv waiting f b lock line note found=0
+  local d v tv waiting f b lock line note since found=0
   [ -d "$WIKIS_DIR" ] || { echo "no wikis at $(tilde "$WIKIS_DIR"). Run: ./wiki.sh init"; return 0; }
   tv="$(version_of "$TEMPLATE/AGENTS.md")"
   printf '%-26s %-9s %-8s %s\n' "WIKI" "HANDBOOK" "WAITING" "LOCK"
@@ -240,7 +240,11 @@ cmd_status() {
       case "$line" in held*) lock="$line" ;; esac
     fi
     note=""
-    if [ -n "$tv" ] && [ "${v:-0}" -lt "$tv" ]; then note="  <- behind template v$tv, run: ./wiki.sh upgrade ${d##*/}"; fi
+    if [ "$waiting" -ge 5 ]; then note="$note  <- compile due"; fi
+    # Ingest entries since the last lint entry. The handbook lints at 10.
+    since="$(awk '/^## [0-9-]+ lint/{n=0} /^## [0-9-]+ ingest/{n++} END{print n+0}' "$d/log.md" 2>/dev/null)"
+    if [ "${since:-0}" -ge 10 ]; then note="$note  <- lint due ($since ingests)"; fi
+    if [ -n "$tv" ] && [ "${v:-0}" -lt "$tv" ]; then note="$note  <- behind template v$tv, run: ./wiki.sh upgrade ${d##*/}"; fi
     if [ -f "$d/repos.md" ] && grep -q '^- ' "$d/repos.md"; then
       note="$note  covers: $(sed -n 's/^- //p' "$d/repos.md" | tr '\n' ' ')"
     fi

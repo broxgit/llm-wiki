@@ -1,6 +1,6 @@
 # Lint
 
-Run when the user asks, or on your own when the log shows 10 or more ingests since the last lint. Lint is compile work. Read `rules/compile.md` and take the lock first.
+Run when the user asks, or when a compile finds 10 or more ingests since the last lint. Lint is compile work. Read `rules/compile.md` and take the lock first.
 
 Check for:
 
@@ -20,4 +20,4 @@ Report findings first. Fix mechanical problems (links, index lines, frontmatter)
 
 Outside a lint run, fix a broken link or a stale claim when you trip over one while you hold the lock.
 
-Log the run with an entry of type `lint`.
+Log the run as `## YYYY-MM-DD lint`, with one `- fixed:` line per fix and one `- reported:` line per finding you left for the user. In a lint you started yourself, fix the mechanical problems, then report everything in your next reply.

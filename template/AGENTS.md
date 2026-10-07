@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Handbook version 7.
+Handbook version 8.
 
 This folder is a knowledge base maintained by an LLM agent. Any agent working here follows this file. It needs no vendor features. Plain markdown, plain files.
 
@@ -31,8 +31,9 @@ data/        Structured data (CSV, SQLite). Queried, not read.
 
 ## Session start
 
-1. If Sync applies to this wiki, pull.
+1. If Sync applies to this wiki and its repo has a remote, pull.
 2. Read `index.md`. Nothing else yet.
+3. List `raw/` and `wiki/sources/`. If notes are waiting, compile them before you start on the user's request, and say so in one line. If another session holds the lock, go on without it.
 
 Do not bulk-read `wiki/`. The index exists so you don't have to.
 
@@ -42,19 +43,21 @@ The user should not have to tell you when to use the wiki. Decide for yourself w
 
 **Query.** Before answering a question this wiki or another wiki might cover, check `index.md`. Skip it when the question is clearly outside all of them.
 
-**Capture.** Capture on your own when the conversation produces something a later session would want and the wiki doesn't have yet:
+**Capture.** Capture on your own when the conversation produces something a later session would want and could not get from the code or its git history:
 
 - a decision and its reason
+- direction from the user: what they want, and what they turned down
 - a fact that was established, measured, or corrected
 - a problem solved, with the cause and the fix
 - a research finding, with its source
-- finished work: what was built and where it lives
 
-Capture at milestones, not on every message. One note per milestone. Skip small talk, guesses, passing opinions, and work still in flux. When unsure, capture. A stray note is cheap. A lost decision is not.
+Finished work is not a capture by itself. The code and its history already record what changed. Note only what they don't show: why it was built that way, what was tried and dropped, what will trip up the next session.
 
-**Compile.** Ingest pending files on your own when you reach a pause. That covers this wiki, any shared wiki, and any peer this session captured into. A pause is any point with no work in progress: a task just finished, or the user is reporting or chatting, not asking for work. A question the pending files bear on also counts. Compile before answering it. Don't stop work in progress to compile. If another session holds the lock, carry on. The files stay pending and a later pause picks them up.
+Capture at stopping points, not as you go. A stopping point is where a piece of work is done and the user moves on. In a long working session that is rarely more than one or two notes an hour, each covering everything since the last. Skip small talk, guesses, passing opinions, and work still in flux. When unsure whether something is a decision or a correction, capture it. When unsure whether it is only a record of work done, don't.
 
-**Lint.** Run it on your own when the log shows 10 or more ingests since the last lint.
+**Compile.** Ingest pending files on your own at three points: at session start, at a pause, and as soon as five notes are waiting in one wiki. The five-note rule holds in the middle of long work: finish the step you are on, compile, then carry on. All of this covers this wiki, any shared wiki, and any peer this session captured into. A pause is any point with no work in progress: a task just finished, or the user is reporting or chatting, not asking for work. A question the pending files bear on also counts. Compile before answering it. Don't stop work in progress to compile. If another session holds the lock, carry on. The files stay pending and a later pause picks them up.
+
+**Lint.** Due when the log shows 10 or more ingests since the last lint. Every compile ends by checking, so you don't have to remember.
 
 **Ask first** before resolving a contradiction, merging or deleting pages, or restructuring.
 
@@ -92,7 +95,7 @@ Trigger: your own judgment (see Act without being asked), or the user says "save
 
 1. For a file or document, copy it into `raw/` unchanged.
 2. For a chat, write a note instead. Plain markdown, no frontmatter, first line `Captured: YYYY-MM-DD` in UTC. Include decisions, facts, open questions, links cited. Keep only what the user said or confirmed, what you checked against code or a source, and what came from a cited source. Leave out agent speculation.
-3. Name the file `YYYY-MM-DD-HHMMSS-short-slug.ext`, using the UTC date and time of capture. The timestamp sets ingest order and keeps names unique. If you can't get the time, use the date alone and tell the user. If the name is taken, add `-2`, `-3`, and so on. Never overwrite.
+3. Name the file `YYYY-MM-DD-HHMMSS-short-slug.ext`, using the UTC date and time of capture. Read it from the clock, for example with `date -u +%Y-%m-%d-%H%M%S`. Never estimate or round it. The timestamp sets ingest order and keeps names unique. If you can't get the time, use the date alone and tell the user. If the name is taken, add `-2`, `-3`, and so on. Never overwrite.
 4. Report the path in one line. Capture itself never touches `wiki/`, `index.md`, or `log.md`. Compiling the note is a separate step.
 
 Rows of data are not notes. Records, listings, and metrics go in `data/` as CSV or SQLite.
@@ -123,9 +126,9 @@ Rules for both kinds:
 
 This section applies in two cases. One: this folder is the top level of a git repo. Two: this folder's parent is a wiki collection, meaning a git repo whose top level holds a `WIKIS.md` file. In a collection, commit only the wiki folders you changed. If this wiki sits inside any other repo, or has no git, skip this section and leave commits to the user.
 
-- Pull before any write.
-- After a capture, commit the new file. After compile work, commit every changed file in one commit.
-- Commit messages: `wiki: capture <slug>`, `wiki: ingest <title>`, `wiki: lint`.
+- Pull before any write, if the repo has a remote.
+- Commit at each compile: every changed file, waiting captures included, in one commit. Don't commit each capture by itself. If you captured and no compile follows before the user's current request is done, commit the captures then.
+- Start commit messages with the wiki's name: `<wiki>: ingest <title>`, `<wiki>: ingest 6 notes`, `<wiki>: capture 3 notes`, `<wiki>: lint`.
 - Push after each commit if the repo has a remote. If the push is rejected, pull and push again, once.
 - On a merge conflict in `index.md` or `log.md`, keep the lines from both sides. On a conflict inside a page, stop and ask the user.
 

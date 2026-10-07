@@ -39,8 +39,10 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 
 ## Later
 
-- **Trim the core further.** `template/AGENTS.md` is about 2,600 tokens. "Other wikis" and "Sync" are the biggest sections left.
-- **Batch small compiles.** A one-line fact costs a lock, a source page, a topic page, an index edit, and a log entry. Let a few notes collect before compiling.
+- **Trim the core further.** `template/AGENTS.md` is about 2,900 tokens, up from 2,600 after version 8. "Other wikis" and "Sync" are the biggest sections left.
+- **Drop per-source summary pages.** Each raw note gets a summary page that only says where its claims live. The live collection has 59 of them. A single ledger file per wiki could track what has been ingested.
+- **Split work and personal collections.** One collection on a personal remote now holds work, client, and personal wikis. `WIKIS_DIR` already supports a second collection. The routing line would need to know about both.
+- **Compile a backlog in bulk.** A wiki with dozens of waiting notes compiles one source at a time. A bulk mode could read them all, then write pages once.
 - **Search page text, not just indexes.** `./wiki.sh find` reads `index.md` only. Past a few hundred pages per wiki it should search page bodies too.
 - **Reach sessions with no file access.** A chat session that can't read files can't use a wiki. A small MCP server over the collection would fix that.
 - **Review flow for teams.** Agents push straight to the collection. A team may want a weekly digest of changes, or pull requests.
@@ -55,7 +57,8 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - Git sync between two people or two machines. Pull, commit, and push from one machine worked in real use on 2026-10-01.
 - Two sessions taking the compile lock in the same second.
 - A wiki with two shared wikis listed in `links.md`.
-- Real scale: hundreds of wikis, hundreds of pages.
+- Real scale: hundreds of wikis, hundreds of pages. Real use so far is 10 wikis and 53 pages.
+- The version 8 triggers in real use. They passed a dry run only.
 - A model other than Claude following the handbook.
 
 ## Decided against
@@ -65,6 +68,14 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command and one line.
 
 ## Done
+
+### Fixes from the first week of real use (2026-10-07, handbook version 8)
+
+- **Why:** a review of the live collection after six days. Ten wikis, 109 captured notes, 53 pages. Four things had gone wrong.
+- **Compile wasn't firing.** 50 of 109 notes were never compiled, and five wikis had an empty index. Long working sessions never reach a "pause". Compile now also runs at session start and whenever five notes are waiting.
+- **Capture was too eager.** One build session wrote 27 notes in a day, each its own commit. "Finished work" is no longer a trigger. Notes cover decisions, direction, and what the code doesn't show, at stopping points. Captures are committed with the next compile.
+- **Lint never ran.** 58 ingests, no lint. Agents don't count log entries unprompted. Every compile now ends by counting, and `./wiki.sh status` flags `lint due` and `compile due`.
+- **Timestamps were invented.** Several notes carried round times. The capture step now says to read the clock and never estimate.
 
 ### Wikis that cover several repositories (2026-10-01, handbook version 7)
 

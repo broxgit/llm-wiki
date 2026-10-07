@@ -44,10 +44,10 @@ Read and edit the files where they live. Pull a file into a scratch area only fo
 Don't wait to be asked. The handbook's "Act without being asked" section is the rule. In short:
 
 - **Query** the wiki before answering anything it might cover.
-- **Capture** on your own at milestones: a decision, an established or corrected fact, a problem solved, a research finding, finished work.
-- **Compile** pending files at a pause, under the compile lock. Skip it if another session holds the lock.
+- **Capture** on your own at stopping points: a decision, direction from the user, an established or corrected fact, a problem solved, a research finding. Not a log of finished work. The code and its history already hold that.
+- **Compile** pending files at session start, at a pause, and whenever five are waiting, under the compile lock. Skip it if another session holds the lock.
 - **Check before acting.** Before you write code or publish something that depends on a wiki claim, check the claim against the code or the cited source if it is at hand. File a correction when it no longer holds.
-- **Lint** under the lock when the log shows 10 or more ingests since the last one.
+- **Lint** when a compile finds 10 or more ingests since the last one.
 - **Ask first** before resolving a contradiction, merging or deleting pages, or restructuring.
 - **Other wikis.** Wikis in the same folder are peers. File what you learn about another project in that project's wiki, and check a peer's index when the work touches its code. If you see one subject being split across wikis, say so and suggest one project wiki. `links.md` names shared wikis for general knowledge. Cite other wikis' pages instead of copying them.
 - **Hold back** when the user says so. "Don't save that" and "off the record" cover that one item. "Leave the wiki alone" stops all writes.

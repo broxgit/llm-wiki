@@ -21,7 +21,7 @@ Once you hold the lock, read the last 10 entries of `log.md`.
 
 ## Ingest
 
-Trigger: your own judgment at a pause, or the user says "ingest" or "compile".
+Trigger: session start, a pause, five notes waiting, or the user says "ingest" or "compile".
 
 With a named source, ingest that source. With none, ingest every pending file in `raw/` in filename order. That is oldest first. A raw file is pending when `wiki/sources/` has no page with the same name, extension aside. Check by listing the two folders. Don't open files to check. Ignore dotfiles. A missing `wiki/sources/` folder means nothing has been ingested yet.
 
@@ -34,6 +34,8 @@ For each source:
 5. Where the source disagrees with an existing page, or you doubt a claim, read `rules/conflicts.md` and follow it. Never overwrite silently.
 
 After the last source, update `index.md` once and append one entry per source to `log.md`. Also stamp any page you confirmed against code this session (see Stale knowledge in `AGENTS.md`). Then report in one line: pages created, pages updated, corrections, conflicts.
+
+Last, before you release the lock, count the `ingest` entries in `log.md` that come after the most recent `lint` entry. At 10 or more, read `rules/lint.md` and lint now.
 
 ## Pages
 
