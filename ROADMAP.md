@@ -40,6 +40,7 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 ## Later
 
 - **Merge requests in standups.** Reviews and MRs opened live in GitHub or GitLab, not in git history. Pulling them in would need an API token and a host per remote.
+- **Backfill from more places.** Sessions in the Claude desktop app and claude.ai chats aren't in `~/.claude/projects`. An agent with chat search could add them.
 - **Team digest.** A weekly roll-up across several people's journals, for a lead. Needs a shared, opt-in journal location.
 - **Trim the core further.** `template/AGENTS.md` is about 2,900 tokens, up from 2,600 after version 8. "Other wikis" and "Sync" are the biggest sections left.
 - **Drop per-source summary pages.** Each raw note gets a summary page that only says where its claims live. The live collection has 59 of them. A single ledger file per wiki could track what has been ingested.
@@ -57,6 +58,7 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 - `wiki.sh` on macOS, beyond `new` and `status`. Those two ran cleanly in real use on 2026-10-01. The other commands have only run on Linux.
 - `wiki.sh setup` on macOS. It ran only in a Linux pseudo-terminal. The SSH key test push never ran against a real SSH host.
+- `wiki.sh journal backfill` on macOS, and on transcripts from Claude Code versions other than the one it was written against. It needs `python3`.
 - `wiki.sh journal` and `standup` on macOS. Their date math has a separate BSD `date` path that has never run.
 - Git sync between two people or two machines. Pull, commit, and push from one machine worked in real use on 2026-10-01.
 - Two sessions taking the compile lock in the same second.
@@ -72,6 +74,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Journal backfill (2026-10-22, handbook version 10)
+
+- **Why:** the journal starts empty on the day it's turned on. Past sessions held the work that left no commit.
+- **What changed:** `./wiki.sh journal backfill` digests Claude Code transcripts into `journal/backfill.md`, one block per project per day: prompts, files changed, whether it committed, the last reply. Agents turn the digest into entries per the new Backfill section of `rules/journal.md`. `journal note` takes `--day` and `--at`.
 
 ### Step-by-step setup (2026-10-22)
 

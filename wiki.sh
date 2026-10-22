@@ -30,7 +30,11 @@ Usage: ./wiki.sh <command> [options]
   journal              Show the work journal's settings and today's entry count.
   journal on | off     Turn the journal on or off. It is on by default.
   journal set <key> <value>  Change a setting. See $(tilde "$WIKIS_DIR")/journal/config.
-  journal note <project> <text>  Add one line to today's journal.
+  journal note [--day DATE] [--at HH:MM] <project> <text>
+                       Add one line to today's journal, or a past day's.
+  journal backfill [--since 14d] [--until DATE]
+                       Digest past Claude Code sessions into journal/backfill.md.
+                       An agent turns the digest into entries.
   journal path | prune Print today's journal file. Delete days older than keep_days.
   standup [options]    Gather what you did: commits, journal lines, wiki notes,
                        work in progress, open checks. An agent turns it into a report.
@@ -745,7 +749,7 @@ since_to_date() {
 journal_file_for() { printf '%s/%s.md' "$JOURNAL_DIR" "$1"; }
 
 journal_note() {
-  local project="$1" text="$2" day f
+  local project="$1" text="$2" day="${3:-}" at="${4:-}" f
   if [ "$(journal_get enabled)" != yes ] || [ "$(journal_get entries)" != yes ]; then
     echo "journal entries are off, nothing written"
     return 0
@@ -753,11 +757,12 @@ journal_note() {
   text="$(printf '%s' "$text" | tr '\n\r' '  ')"
   [ -n "$text" ] || die "journal note needs some text"
   write_journal_config >/dev/null
-  day="$(journal_today)"
+  [ -n "$day" ] || day="$(journal_today)"
+  [ -n "$at" ] || at="$(date +%H:%M)"
   f="$(journal_file_for "$day")"
   [ -f "$f" ] || printf '# Journal %s\n\n' "$day" > "$f"
   # One short line per append, so parallel sessions don't interleave.
-  printf -- '- %s [%s] %s\n' "$(date +%H:%M)" "$project" "$text" >> "$f"
+  printf -- '- %s [%s] %s\n' "$at" "$project" "$text" >> "$f"
   echo "journal: $(tilde "$f")"
   journal_prune quiet
 }
@@ -792,6 +797,161 @@ journal_show() {
   fi
 }
 
+# journal note [--day YYYY-MM-DD] [--at HH:MM] <project> <text>
+cmd_journal_note() {
+  local day="" at=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --day) day="${2:-}"; shift 2 ;;
+      --at) at="${2:-}"; shift 2 ;;
+      *) break ;;
+    esac
+  done
+  case "$day" in '' | [0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]) ;; *) die "--day takes a date like 2026-10-21" ;; esac
+  case "$at" in '' | [0-2][0-9]:[0-5][0-9]) ;; *) die "--at takes a time like 14:05" ;; esac
+  if [ -n "$day" ] && [[ "$day" > "$(journal_today)" ]]; then die "--day can't be in the future"; fi
+  [ $# -ge 2 ] || die "usage: ./wiki.sh journal note [--day DATE] [--at HH:MM] <project> <text>"
+  journal_note "$1" "$(shift; printf '%s ' "$@" | sed 's/ $//')" "$day" "$at"
+}
+
+# journal backfill: digest past Claude Code sessions into journal/backfill.md.
+# An agent then writes entries from it. See rules/journal.md.
+journal_backfill() {
+  local since="14d" until="" from="$HOME/.claude/projects" today start out
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --since) since="${2:-}"; shift 2 ;;
+      --until) until="${2:-}"; shift 2 ;;
+      --from) from="${2:-}"; shift 2 ;;
+      *) die "backfill options: --since lastworkday|yesterday|week|lastweek|14d|DATE, --until DATE, --from DIR" ;;
+    esac
+  done
+  since_ok "$since" || die "--since takes lastworkday, yesterday, today, week, lastweek, a number of days like 14d, or a date"
+  [ -d "$from" ] || die "no Claude Code sessions at $(tilde "$from"). Use --from DIR."
+  command -v python3 >/dev/null 2>&1 || die "backfill needs python3 to read session files"
+  write_journal_config >/dev/null
+  today="$(journal_today)"
+  start="$(since_to_date "$today" "$since")"
+  until="${until:-$today}"
+  out="$JOURNAL_DIR/backfill.md"
+  python3 - "$from" "$start" "$until" "$(journal_get day_starts)" "$WIKIS_DIR" "$(journal_get exclude)" "$out" <<'PY'
+# Digest Claude Code transcripts into one markdown file: per local day, per
+# project, the user's prompts, files changed, whether it committed, and how it ended.
+import json, os, re, subprocess, sys, fnmatch
+from datetime import datetime, timedelta, date
+from pathlib import Path
+
+sess_dir, start, end, day_starts, wikis, exclude, out = sys.argv[1:8]
+start = date.fromisoformat(start); end = date.fromisoformat(end)
+ds_h, ds_m = (int(x) for x in day_starts.split(":"))
+excl = [g for g in exclude.split(",") if g]
+
+# repo -> wiki, from each wiki's repos.md
+cover = {}
+for rp in Path(wikis).glob("*/repos.md"):
+    for line in rp.read_text(errors="replace").splitlines():
+        if line.startswith("- "):
+            cover[line[2:].strip()] = rp.parent.name
+
+_proj = {}
+def project(cwd):
+    if not cwd: return "unknown"
+    if cwd in _proj: return _proj[cwd]
+    name = os.path.basename(cwd.rstrip("/")) or cwd
+    def git(*a):
+        try:
+            return subprocess.run(["git", "-C", cwd, *a], capture_output=True, text=True, timeout=5).stdout.strip()
+        except Exception:
+            return ""
+    if os.path.isdir(cwd):
+        url = git("config", "--get", "remote.origin.url")
+        top = git("rev-parse", "--show-toplevel")
+        if url: name = re.sub(r"\.git$", "", url.rstrip("/")).split("/")[-1].split(":")[-1]
+        elif top: name = os.path.basename(top)
+    if os.path.realpath(cwd) == os.path.realpath(wikis): name = "wikis"
+    _proj[cwd] = cover.get(name, name)
+    return _proj[cwd]
+
+def local(ts):
+    t = datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone()
+    d = (t - timedelta(hours=ds_h, minutes=ds_m)).date()
+    return d, t.strftime("%H:%M")
+
+NOISE = re.compile(r"<(system-reminder|command-[a-z]+|local-command-[a-z]+)>.*?</\1>", re.S)
+def clean(s, n):
+    s = NOISE.sub("", s).strip()
+    s = re.sub(r"\s+", " ", s)
+    return s if len(s) <= n else s[: n - 3] + "..."
+
+def texts(content):
+    if isinstance(content, str): return [content]
+    return [c.get("text", "") for c in content or [] if isinstance(c, dict) and c.get("type") == "text"]
+
+# (day, project) -> record
+work = {}
+cutoff = datetime.combine(start - timedelta(days=1), datetime.min.time()).timestamp()
+files = [p for p in Path(sess_dir).rglob("*.jsonl") if p.stat().st_mtime >= cutoff]
+for f in files:
+    for line in open(f, errors="replace"):
+        try: r = json.loads(line)
+        except ValueError: continue
+        if r.get("type") not in ("user", "assistant") or r.get("isSidechain") or r.get("isMeta"): continue
+        ts = r.get("timestamp")
+        if not ts: continue
+        d, hm = local(ts)
+        if d < start or d > end: continue
+        p = project(r.get("cwd"))
+        if any(fnmatch.fnmatch(p, g) for g in excl): continue
+        w = work.setdefault((d, p), {"first": hm, "last": hm, "sessions": set(), "prompts": [], "files": [], "commit": False, "end": "", "branch": ""})
+        w["first"] = min(w["first"], hm); w["last"] = max(w["last"], hm)
+        w["sessions"].add(r.get("sessionId", f.stem))
+        if r.get("gitBranch") and r["gitBranch"] != "HEAD": w["branch"] = r["gitBranch"]
+        msg = r.get("message") or {}
+        if r["type"] == "user":
+            for t in texts(msg.get("content")):
+                t = clean(t, 240)
+                if t and not t.startswith(("Caveat:", "[Request interrupted", "This session is being continued")):
+                    w["prompts"].append((hm, t))
+        else:
+            for c in msg.get("content") or []:
+                if not isinstance(c, dict): continue
+                if c.get("type") == "text":
+                    t = clean(c.get("text", ""), 400)
+                    if t: w["end"] = t
+                elif c.get("type") == "tool_use":
+                    inp = c.get("input") or {}
+                    fp = inp.get("file_path") or inp.get("notebook_path")
+                    if fp and c.get("name") in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
+                        b = os.path.basename(fp)
+                        if b not in w["files"]: w["files"].append(b)
+                    if "git commit" in str(inp.get("command", "")): w["commit"] = True
+
+with open(out, "w") as o:
+    o.write(f"# Session digest {start} to {end}\n\n")
+    o.write("Written by `wiki.sh journal backfill` from Claude Code transcripts. An agent turns this into journal entries, then this file can go.\n")
+    o.write("Times are local. Each block is one project on one day: the user's prompts, files changed, and the last thing the agent said.\n")
+    day = None
+    for (d, p) in sorted(work):
+        w = work[(d, p)]
+        if not w["prompts"]: continue
+        if d != day:
+            o.write(f"\n## {d}\n"); day = d
+        meta = [f"{w['first']}-{w['last']}", f"{len(w['sessions'])} session(s)"]
+        if w["branch"]: meta.append(f"branch {w['branch']}")
+        if w["commit"]: meta.append("ran git commit")
+        o.write(f"\n### [{p}] {', '.join(meta)}\n")
+        ps = w["prompts"]
+        if len(ps) > 14: ps = ps[:9] + [("", f"... {len(ps) - 14} more prompts ...")] + ps[-5:]
+        for hm, t in ps: o.write(f"- {hm} {t}\n" if hm else f"- {t}\n")
+        if w["files"]: o.write(f"- files changed: {', '.join(w['files'][:12])}{' ...' if len(w['files']) > 12 else ''}\n")
+        if w["end"]: o.write(f"- last reply: {w['end']}\n")
+n = sum(1 for k in work if work[k]["prompts"])
+print(f"{n} project-day(s) from {len(files)} transcript file(s)")
+PY
+  echo "digest:  $(tilde "$out") ($start to $until)"
+  echo "Next: tell an agent \"backfill my journal from the digest\". It writes the entries, then deletes the digest."
+}
+
 cmd_journal() {
   local sub="${1:-show}"
   [ $# -gt 0 ] && shift
@@ -800,10 +960,11 @@ cmd_journal() {
     on) write_journal_config >/dev/null; journal_set enabled yes; apply_journal_commit ;;
     off) write_journal_config >/dev/null; journal_set enabled no ;;
     set) [ $# -ge 1 ] || die "usage: ./wiki.sh journal set <key> <value>"; journal_set "$1" "${2:-}" ;;
-    note) [ $# -ge 2 ] || die "usage: ./wiki.sh journal note <project> <text>"; journal_note "$1" "$(shift; printf '%s ' "$@" | sed 's/ $//')" ;;
+    note) cmd_journal_note "$@" ;;
+    backfill) journal_backfill "$@" ;;
     path) journal_file_for "$(journal_today)"; printf '\n' ;;
     prune) journal_prune ;;
-    *) die "journal commands: show, on, off, set <key> <value>, note <project> <text>, path, prune" ;;
+    *) die "journal commands: show, on, off, set <key> <value>, note [--day DATE] [--at HH:MM] <project> <text>, backfill [--since X] [--until DATE], path, prune" ;;
   esac
 }
 

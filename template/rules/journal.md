@@ -33,6 +33,17 @@ Write it with `wiki.sh journal note <project> "<text>"`. The script lives in the
 
 Only ever append. Don't edit or reorder earlier lines.
 
+## Backfill
+
+When the user asks to fill in the journal for past days:
+
+1. Get a digest. `wiki.sh journal backfill --since <range>` reads past Claude Code sessions and writes `journal/backfill.md`: one block per project per day, with the user's prompts, files changed, whether it committed, and the last reply. The session files are in `~/.claude/projects` on the user's machine. If you can't reach them, ask the user to run the command. A `backfill.md` that is already there is the digest to use.
+2. For each block, write one to three entries by the same bar as live ones: work that left no commit, said as what was done and how it ended. Use `wiki.sh journal note --day <date> --at <time> <project> "<text>"`, with the date and a time from the block. Write each day in time order.
+3. Use only what the digest shows. Where it doesn't show how something ended, say so: "no result recorded". Don't guess.
+4. Skip blocks that only committed code, did wiki bookkeeping, or worked on the journal. Skip a project on a day whose file already has entries for it.
+5. A block named after the wikis folder or the template repo is wiki or tooling work. Name the entry after the project the prompts were about.
+6. Delete `backfill.md` when done. Tell the user how many entries you wrote for each day.
+
 ## Reports
 
 When the user asks what they did, or for a standup, summary, or status report:

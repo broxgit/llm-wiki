@@ -4,6 +4,12 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v10 (2026-10-22)
+
+- Journal backfill. `./wiki.sh journal backfill --since 14d` digests your past Claude Code sessions into `journal/backfill.md`. Ask an agent to "backfill my journal" and it writes entries for those days, then deletes the digest.
+- `./wiki.sh journal note` takes `--day` and `--at`, so entries can go on past days.
+- Do: to fill in the last two weeks, run `./wiki.sh journal backfill`, then ask an agent to backfill your journal.
+
 ## v9 (2026-10-22)
 
 - Work journal. Agents add one line per stopping point for work that leaves no commit: an investigation, a review, a dead end.

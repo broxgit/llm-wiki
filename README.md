@@ -173,6 +173,16 @@ It assembles the answer from records that already exist:
 ./wiki.sh standup --day 2026-10-21 --only 'billing-*'
 ```
 
+### Fill in past days
+
+The journal starts empty, but your past sessions aren't lost. Claude Code keeps a transcript of each one.
+
+```
+./wiki.sh journal backfill --since 14d
+```
+
+This reads those transcripts and writes a short digest, `~/wikis/journal/backfill.md`: per day and project, what you asked for, which files changed, and how it ended. It needs `python3`. Then tell an agent "backfill my journal". It writes entries for those days from the digest, by the same rules as live entries, and deletes the digest. One entry by hand works too: `./wiki.sh journal note --day 2026-10-21 --at 16:40 <project> "<text>"`.
+
 ### Settings
 
 The journal is on by default. Its settings live in `~/wikis/journal/config`. Walk through them with `./wiki.sh setup journal`, change one with `./wiki.sh journal set <key> <value>`, and see them with `./wiki.sh journal`.

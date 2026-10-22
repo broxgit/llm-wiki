@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Handbook version 9.
+Handbook version 10.
 
 This folder is a knowledge base maintained by an LLM agent. Any agent working here follows this file. It needs no vendor features. Plain markdown, plain files.
 
