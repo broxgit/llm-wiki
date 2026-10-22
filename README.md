@@ -30,19 +30,29 @@ You need an agent that can read and write files on this machine. Any model works
    git clone <this repo's URL> ~/dev/llm-wiki
    ```
 
-2. Create the wiki collection. Run this from the clone. It makes `~/wikis`, the shared wiki `~/wikis/global`, and with `--git` one git repo that holds every wiki.
+2. Run setup from the clone. It walks through every choice one question at a time, and Enter takes the suggested answer.
 
    ```
-   ./wiki.sh init --git
+   ./wiki.sh setup
    ```
 
-3. Optional. Give the collection a remote so it syncs.
+   It creates `~/wikis` and the shared wiki `~/wikis/global`, makes the collection one git repo, and adds a remote if you have one. It sets the commit email for that repo, and an SSH key for it if your usual key belongs to another account. Then it test-pushes, so a wrong key shows up now instead of in an agent's session. It adds the line that lets every Claude Code session find its wiki, upgrades any out-of-date handbooks, and walks through the [work journal](#work-journal-and-standups) settings.
+
+   Rerun it any time. It shows what you have and changes only what you change.
+
+   - `./wiki.sh setup --list` prints every setting, marks the ones still at their default, and asks nothing.
+   - `./wiki.sh setup git` or `./wiki.sh setup journal` reruns one section.
+   - `./wiki.sh setup journal.format`, or just `./wiki.sh setup format`, edits one setting.
+
+   Prefer plain commands? `./wiki.sh init --git` creates the collection and repo, and `./wiki.sh claude` adds the session line.
+
+3. After you pull template updates, run:
 
    ```
-   cd ~/wikis
-   git remote add origin <a private repo URL>
-   git push -u origin HEAD
+   ./wiki.sh setup --new
    ```
+
+   It asks only about what you haven't seen on this machine: new settings, handbooks behind the template, a session line that changed. `./wiki.sh status` says when there is something new.
 
 4. Give your agent access to `~/wikis` and to this clone. Agents that are sandboxed to a project folder need both added as extra folders.
    - Claude Code: start it with `--add-dir ~/wikis`, or approve the prompt the first time it reaches for the folder.
@@ -165,7 +175,7 @@ It assembles the answer from records that already exist:
 
 ### Settings
 
-The journal is on by default. Its settings live in `~/wikis/journal/config`. Change them with `./wiki.sh journal set <key> <value>`, and see them with `./wiki.sh journal`.
+The journal is on by default. Its settings live in `~/wikis/journal/config`. Walk through them with `./wiki.sh setup journal`, change one with `./wiki.sh journal set <key> <value>`, and see them with `./wiki.sh journal`.
 
 | Setting | Default | What it does |
 |---|---|---|
@@ -200,7 +210,7 @@ Make the collection one git repo (`./wiki.sh init --git`) and give it a remote. 
 
 1. Clone this template repo.
 2. Clone the collection repo to `~/wikis`.
-3. Repeat Setup step 4 and `./wiki.sh claude`.
+3. Run `./wiki.sh setup` from the template clone. It finds the cloned collection and asks the rest: this machine's commit email and SSH key, the session line, the journal. Then repeat Setup step 4.
 
 The handbook tells agents to pull before writing and to commit and push after, touching only the wiki folders they changed. Two people changing the same wiki resolve like any git conflict. Index and log conflicts keep both sides' lines.
 
@@ -214,14 +224,16 @@ The handbook tells agents to pull before writing and to commit and push after, t
 - **Knowledge landed in the wrong wiki.** Tell the agent where it belongs. Moving pages is the one thing it asks about first.
 - **It saves too much or too little.** Edit the capture list under "Act without being asked" in `template/AGENTS.md`, bump the version, then upgrade.
 - **An answer came from an out-of-date page.** Tell the agent what changed. It files a correction. `./wiki.sh stale` shows what else hasn't been checked in a while.
-- **A wiki's handbook is behind the template.** `./wiki.sh status` flags it. `./wiki.sh upgrade --all` brings every wiki up to date. Outside git it keeps the old handbook as `AGENTS.md.bak`.
-- **An agent's commit won't push.** The collection repo needs a working git identity and key on this machine, like any repo.
+- **A wiki's handbook is behind the template.** `./wiki.sh status` flags it. `./wiki.sh upgrade --all` brings every wiki up to date, then says what changed since the version each wiki was on and what to do about it: commit the upgrade, refresh the session line, look at new settings. Outside git it keeps the old handbook as `AGENTS.md.bak`.
+- **An agent's commit won't push.** Run `./wiki.sh setup git`. It sets the repo's commit email and SSH key and test-pushes. A machine with a work key and a personal key usually needs the key named for this repo.
 
 ## Change the rules
 
 The handbook is `template/AGENTS.md` plus the files in `template/rules/`. `AGENTS.md` loads in every session, so it holds only what every session needs. The rules files are read on demand: compile, conflicts, lint, peers.
 
-Edit any of them, bump the version at the top of `template/AGENTS.md`, and run `./wiki.sh upgrade --all` to roll it out.
+Edit any of them, bump the version at the top of `template/AGENTS.md`, add a section for the new version to `CHANGELOG.md`, and run `./wiki.sh upgrade --all` (or `./wiki.sh setup --new`) to roll it out.
+
+To add a journal setting, add one line to `JOURNAL_SETTINGS` in `wiki.sh`: key, type, basic or advanced, default, description. That line writes the config entry, validates `journal set`, and makes `./wiki.sh setup --new` ask about it on every machine. A setting for something other than the journal needs its own step in `cmd_setup`.
 
 `ROADMAP.md` lists planned improvements and what is still untested.
 
@@ -231,7 +243,8 @@ Edit any of them, bump the version at the top of `template/AGENTS.md`, and run `
 AGENTS.md          Tells an agent this is the template and how to start a wiki from it.
 CLAUDE.md          Imports AGENTS.md for Claude Code.
 ROADMAP.md         Planned improvements, untested areas, and what was decided against.
-wiki.sh            Setup and upkeep: init, new, cover, which, status, find, stale, upgrade, unlock, claude, journal, standup.
+CHANGELOG.md       What each handbook version changed. upgrade prints the parts you missed.
+wiki.sh            Setup and upkeep: setup, init, new, cover, which, status, find, stale, upgrade, unlock, claude, journal, standup.
 template/          The scaffold. Copied whole to start a wiki.
   AGENTS.md        The core handbook. Loaded in every session.
   rules/           The rest of the handbook. Read on demand.
@@ -246,7 +259,7 @@ skills/llm-wiki/   Optional Claude skill that finds, runs, and scaffolds wikis.
 
 Once in use, a wiki also holds `index.md` (one line per page) and `log.md` (the change record).
 
-The script only does file work. It never overwrites a file and never touches a remote. Run `./wiki.sh` with no arguments for the command list. Set `WIKIS_DIR` to keep wikis somewhere other than `~/wikis`.
+The script only does file work. It never overwrites a file. The one time it touches a remote is in `setup`: it adds the remote you name and test-pushes with `--dry-run`, which sends nothing. Run `./wiki.sh` with no arguments for the command list. Set `WIKIS_DIR` to keep wikis somewhere other than `~/wikis`.
 
 ## Install the skill
 

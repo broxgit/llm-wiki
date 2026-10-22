@@ -56,6 +56,7 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 Things that have never been run for real. Treat them as unproven until crossed off.
 
 - `wiki.sh` on macOS, beyond `new` and `status`. Those two ran cleanly in real use on 2026-10-01. The other commands have only run on Linux.
+- `wiki.sh setup` on macOS. It ran only in a Linux pseudo-terminal. The SSH key test push never ran against a real SSH host.
 - `wiki.sh journal` and `standup` on macOS. Their date math has a separate BSD `date` path that has never run.
 - Git sync between two people or two machines. Pull, commit, and push from one machine worked in real use on 2026-10-01.
 - Two sessions taking the compile lock in the same second.
@@ -68,9 +69,14 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 - **Embeddings or a vector database.** Lookup by repository name plus keyword search covers the need. Embeddings also tie the data to one embedding model.
 - **A custom UI.** Obsidian and GitHub already render markdown.
-- **More scaffolding automation.** Setup is one command and one line.
+- **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Step-by-step setup (2026-10-22)
+
+- **Why:** setup was five commands plus hand edits, and nothing told an existing machine when a template update added a setting.
+- **What changed:** `./wiki.sh setup` walks through the collection, git (repo, remote, commit email, a per-repo SSH key, a test push), the Claude Code session line, handbook upgrades, and every journal setting, with validation and re-asking on bad input. It records answered questions per machine in `~/.config/llm-wiki/setup`, so `setup --new` asks only about what's new. `setup --list` shows every value and marks defaults. `setup journal.format` (or `setup format`) edits one setting. `upgrade` ends with a summary: which wikis moved from which version, the `CHANGELOG.md` entries since then, and next steps (commit command, stale session line, new settings, restart running sessions). `status` and `upgrade --all` say when there is something. Journal settings now come from one registry in `wiki.sh`, so a new setting is one line. Handbook unchanged, still version 9.
 
 ### Work journal and standups (2026-10-22, handbook version 9)
 

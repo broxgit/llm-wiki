@@ -12,6 +12,9 @@ usage() {
   cat <<EOF
 Usage: ./wiki.sh <command> [options]
 
+  setup                Walk through every setting, step by step. Safe to rerun.
+  setup --new          Only what's new since you last ran it, such as after a template update.
+  setup --list         Print current settings without asking.
   init                 Create the wiki collection at $(tilde "$WIKIS_DIR") and its shared wiki, $SHARED.
   new <name|path>      Create a wiki from the template. A bare name goes under $(tilde "$WIKIS_DIR").
   cover <wiki> <repo>...  Record that one wiki covers several repositories.
@@ -76,12 +79,13 @@ in_git_repo() { git -C "$1" rev-parse --is-inside-work-tree >/dev/null 2>&1; }
 
 # Copy template files into a wiki. Never overwrites a file that is already there.
 copy_missing() {
-  local root="$1" f
+  local root="$1" report="${2:-}" f
   (cd "$TEMPLATE" && find . -type f -print) | while IFS= read -r f; do
     f="${f#./}"
     if [ ! -e "$root/$f" ]; then
       mkdir -p "$root/$(dirname "$f")"
       cp "$TEMPLATE/$f" "$root/$f"
+      case "$report:$f" in report:*.gitkeep | :*) ;; *) echo "added:    $f" ;; esac
     fi
   done
 }
@@ -188,30 +192,45 @@ cmd_cover() {
   done
 }
 
-cmd_init() {
-  local want_git="$1"
+init_collection() {
   mkdir -p "$WIKIS_DIR"
   write_collection_marker
   scaffold "$WIKIS_DIR/$SHARED" 0
   write_journal_config
-  if [ "$want_git" = 1 ]; then
-    if in_git_repo "$WIKIS_DIR"; then
-      echo "git:     $(tilde "$WIKIS_DIR") is already in a repo, skipped"
-    else
-      [ -f "$WIKIS_DIR/.gitignore" ] || printf '.DS_Store\n.compile-lock\n' > "$WIKIS_DIR/.gitignore"
-      git -C "$WIKIS_DIR" init -q
-      apply_journal_commit
-      git -C "$WIKIS_DIR" add -A
-      git -C "$WIKIS_DIR" commit -q -m "wikis: start collection"
-      echo "git:     $(tilde "$WIKIS_DIR") is now one repo for every wiki"
-    fi
+}
+
+git_init_collection() {
+  if in_git_repo "$WIKIS_DIR"; then
+    echo "git:     $(tilde "$WIKIS_DIR") is already in a repo, skipped"
+    return 0
   fi
+  [ -f "$WIKIS_DIR/.gitignore" ] || printf '.DS_Store\n.compile-lock\n' > "$WIKIS_DIR/.gitignore"
+  git -C "$WIKIS_DIR" init -q
+  apply_journal_commit
+  echo "git:     $(tilde "$WIKIS_DIR") is now one repo for every wiki"
+  git_first_commit
+}
+
+# Commit everything, unless git has no name and email to commit as.
+git_first_commit() {
+  if [ -z "$(git -C "$WIKIS_DIR" config user.email || true)" ] || [ -z "$(git -C "$WIKIS_DIR" config user.name || true)" ]; then
+    echo "git:     no commit name or email set yet, so nothing is committed. ./wiki.sh setup git sets them."
+    return 0
+  fi
+  git -C "$WIKIS_DIR" add -A
+  git -C "$WIKIS_DIR" commit -q -m "wikis: start collection"
+  echo "git:     first commit made"
+}
+
+cmd_init() {
+  init_collection
+  if [ "$1" = 1 ]; then git_init_collection; fi
   cat <<EOF
 
 Next:
   1. Give your agent access to $(tilde "$WIKIS_DIR") and $(tilde "$REPO").
-  2. Let every session find its wiki:   ./wiki.sh claude
-     Or create one yourself:            ./wiki.sh new <repository-name>
+  2. Walk through the rest:             ./wiki.sh setup
+     Or just let sessions find wikis:   ./wiki.sh claude
 EOF
 }
 
@@ -231,7 +250,7 @@ EOF
 }
 
 cmd_status() {
-  local d v tv waiting f b lock line note since found=0
+  local d v tv waiting f b lock line note since n found=0
   [ -d "$WIKIS_DIR" ] || { echo "no wikis at $(tilde "$WIKIS_DIR"). Run: ./wiki.sh init"; return 0; }
   tv="$(version_of "$TEMPLATE/AGENTS.md")"
   printf '%-26s %-9s %-8s %s\n' "WIKI" "HANDBOOK" "WAITING" "LOCK"
@@ -266,6 +285,12 @@ cmd_status() {
   [ "$found" = 1 ] || echo "(none yet. Run: ./wiki.sh init)"
   if [ -f "$JOURNAL_CFG" ]; then
     echo "journal: $(journal_get enabled), commit $(journal_get commit), entries $(journal_get entries)"
+  fi
+  n="$(setup_pending | wc -l | tr -d ' ')"
+  if [ ! -f "$SETUP_STATE" ]; then
+    echo "setup:   never run on this machine. Run: ./wiki.sh setup"
+  elif [ "$n" -gt 0 ]; then
+    echo "setup:   $n new setting(s). Run: ./wiki.sh setup --new"
   fi
 }
 
@@ -316,7 +341,7 @@ cmd_stale() {
 }
 
 upgrade_one() {
-  local root="$1" tv wv
+  local root="$1" tv wv f
   is_wiki "$root" || die "$(tilde "$root") is not a wiki (needs AGENTS.md and index.md)"
   tv="$(version_of "$TEMPLATE/AGENTS.md")"
   wv="$(version_of "$root/AGENTS.md")"
@@ -329,7 +354,10 @@ upgrade_one() {
     # The rules files are part of the handbook and move with its version.
     if [ -d "$TEMPLATE/rules" ]; then
       mkdir -p "$root/rules"
-      cp "$TEMPLATE"/rules/*.md "$root/rules/"
+      for f in "$TEMPLATE"/rules/*.md; do
+        [ -e "$root/rules/${f##*/}" ] || echo "added:    rules/${f##*/}"
+        cp "$f" "$root/rules/"
+      done
     fi
     echo "handbook: v${wv:-?} -> v$tv"
   fi
@@ -339,7 +367,7 @@ upgrade_one() {
     cp "$TEMPLATE/CLAUDE.md" "$root/CLAUDE.md"
     echo "CLAUDE.md: switched to an import of AGENTS.md"
   fi
-  copy_missing "$root"
+  copy_missing "$root" report
   if [ -f "$root/.gitignore" ] && ! grep -qxF '.compile-lock' "$root/.gitignore"; then
     printf '.compile-lock\n' >> "$root/.gitignore"
     echo ".gitignore: added .compile-lock"
@@ -348,8 +376,10 @@ upgrade_one() {
 }
 
 cmd_upgrade_all() {
-  local d found=0
+  local d found=0 behind from
   [ -d "$WIKIS_DIR" ] || die "no wikis at $(tilde "$WIKIS_DIR")"
+  behind="$(behind_versions)"
+  from="$(oldest_version "$behind")"
   for d in "$WIKIS_DIR"/*/; do
     d="${d%/}"
     is_wiki "$d" || continue
@@ -361,6 +391,98 @@ cmd_upgrade_all() {
   echo "== journal"
   write_journal_config
   apply_journal_commit
+  upgrade_summary "$from" "$behind"
+}
+
+cmd_upgrade_one() {
+  local root="$1" behind="" from
+  is_wiki "$root" || die "$(tilde "$root") is not a wiki (needs AGENTS.md and index.md)"
+  from="$(version_of "$root/AGENTS.md")"
+  if [ "${from:-0}" -lt "$(version_of "$TEMPLATE/AGENTS.md")" ]; then behind=" ${root##*/}:${from:-0}"; fi
+  upgrade_one "$root"
+  upgrade_summary "${from:-0}" "$behind" "$root"
+}
+
+# Wikis behind the template, as " name:version" pairs. 0 means no version line.
+behind_versions() {
+  local d v
+  for d in $(setup_upgrade_needed); do
+    v="$(version_of "$WIKIS_DIR/$d/AGENTS.md")"
+    printf ' %s:%s' "$d" "${v:-0}"
+  done
+}
+
+# The lowest version in a list of name:version pairs.
+oldest_version() {
+  local p v min=""
+  for p in $1; do
+    v="${p##*:}"
+    if [ -z "$min" ] || [ "$v" -lt "$min" ]; then min="$v"; fi
+  done
+  printf '%s' "${min:-0}"
+}
+
+# Print the CHANGELOG.md entries after version $1, up to the template's.
+changelog_since() {
+  local to
+  to="$(version_of "$TEMPLATE/AGENTS.md")"
+  [ -f "$REPO/CHANGELOG.md" ] || return 0
+  awk -v f="$1" -v t="${to:-0}" '
+    /^## v[0-9]+/ { v = substr($2, 2) + 0; show = (v > f && v <= t); if (show) print "\n" substr($0, 4); next }
+    /^## / { show = 0; next }
+    show && /^- / { print "  " $0 }
+  ' "$REPO/CHANGELOG.md"
+}
+
+# upgrade_commit_hint <names> <prefix>: if upgraded wikis have uncommitted changes, say how to commit them.
+upgrade_commit_hint() {
+  local d paths="" dirty tv
+  [ -n "$1" ] && in_git_repo "$WIKIS_DIR" || return 0
+  tv="$(version_of "$TEMPLATE/AGENTS.md")"
+  for d in $1; do paths="$paths $d"; done
+  # shellcheck disable=SC2086
+  dirty="$(cd "$WIKIS_DIR" && git status --porcelain -- $paths 2>/dev/null | head -n 1)"
+  [ -n "$dirty" ] || return 0
+  echo "${2}The upgrade isn't committed. To commit it now:"
+  echo "    git -C $(tilde "$WIKIS_DIR") add${paths} && git -C $(tilde "$WIKIS_DIR") commit -m \"wikis: handbook v$tv\" && git -C $(tilde "$WIKIS_DIR") push"
+}
+
+# upgrade_summary <from> <upgraded names> [one wiki root]: what changed and what to do next.
+upgrade_summary() {
+  local from="$1" names="$2" one="${3:-}" tv n d groups=""
+  tv="$(version_of "$TEMPLATE/AGENTS.md")"
+  echo
+  echo "== What changed"
+  # names arrives as name:version pairs. Group them by the version they came from.
+  if [ -n "$names" ]; then
+    groups="$(for d in $names; do echo "${d##*:} ${d%:*}"; done | sort -k1,1rn -k2,2 | awk '
+      $1 != last { if (line) print line; line = ($1 == 0 ? "  from an unversioned handbook:" : "  from v" $1 ":"); last = $1 }
+      { line = line " " $2 } END { if (line) print line }')"
+    names="$(for d in $names; do printf ' %s' "${d%:*}"; done)"
+  fi
+  if [ -z "$names" ] && [ -n "$one" ]; then
+    echo "Nothing. ${one##*/} was already on handbook v$tv."
+  elif [ -z "$names" ]; then
+    echo "Nothing. Every wiki was already on handbook v$tv."
+  else
+    n="$(echo "$names" | wc -w | tr -d ' ')"
+    printf 'Upgraded %s wiki(s) to handbook v%s.\n%s\n' "$n" "$tv" "$groups"
+    if [ "$from" = 0 ]; then echo; echo "What's new (all versions on record):"; else echo; echo "What's new since v$from:"; fi
+    changelog_since "$from"
+  fi
+  echo
+  echo "== Next"
+  if [ -n "$names" ]; then
+    echo "- New sessions load the new handbook. Sessions already running keep the old one until you restart them."
+  fi
+  upgrade_commit_hint "$names" "- "
+  if [ "$(claude_state)" = old ]; then
+    echo "- Your Claude Code wiki line is out of date: ./wiki.sh claude"
+  fi
+  if [ -n "$(setup_pending)" ]; then
+    echo "- New settings to look at: ./wiki.sh setup --new"
+  fi
+  echo "- Settings any time: ./wiki.sh setup --list"
 }
 
 cmd_unlock() {
@@ -370,10 +492,28 @@ cmd_unlock() {
   echo "unlocked: $(tilde "$root")"
 }
 
-cmd_claude() {
-  local f="$HOME/.claude/CLAUDE.md" dir line tmp
+CLAUDE_FILE="$HOME/.claude/CLAUDE.md"
+
+# claude_state: current, old (an older wiki line), or missing.
+claude_state() {
+  if [ -f "$CLAUDE_FILE" ] && grep -qxF "$(claude_line)" "$CLAUDE_FILE"; then
+    echo current
+  elif [ -f "$CLAUDE_FILE" ] && grep -qF "knowledge wikis live in" "$CLAUDE_FILE"; then
+    echo old
+  else
+    echo missing
+  fi
+}
+
+claude_line() {
+  local dir
   dir="$(tilde "$WIKIS_DIR")"
-  line="My knowledge wikis live in $dir, one folder per project, plus a shared one at $dir/$SHARED. At session start, run \`$(tilde "$REPO")/wiki.sh which <repository-name>\` for the repository you are working in. Its name is the last part of its remote URL, or its folder name. The command prints the wiki that covers it. Read that wiki's AGENTS.md and follow it. If no wiki covers the repository, read $dir/$SHARED/AGENTS.md and follow that, and create the repository's wiki with \`$(tilde "$REPO")/wiki.sh new <repository-name>\` the first time you have something to file there. Outside any repository, use the shared wiki."
+  printf '%s' "My knowledge wikis live in $dir, one folder per project, plus a shared one at $dir/$SHARED. At session start, run \`$(tilde "$REPO")/wiki.sh which <repository-name>\` for the repository you are working in. Its name is the last part of its remote URL, or its folder name. The command prints the wiki that covers it. Read that wiki's AGENTS.md and follow it. If no wiki covers the repository, read $dir/$SHARED/AGENTS.md and follow that, and create the repository's wiki with \`$(tilde "$REPO")/wiki.sh new <repository-name>\` the first time you have something to file there. Outside any repository, use the shared wiki."
+}
+
+cmd_claude() {
+  local f="$CLAUDE_FILE" line tmp
+  line="$(claude_line)"
   mkdir -p "$HOME/.claude"
   if [ -f "$f" ] && grep -qF "knowledge wikis live in" "$f"; then
     if grep -qxF "$line" "$f"; then
@@ -401,61 +541,70 @@ cmd_claude() {
 
 JOURNAL_DIR="$WIKIS_DIR/journal"
 JOURNAL_CFG="$JOURNAL_DIR/config"
-JOURNAL_KEYS="enabled commit entries format since day_starts workdays code_dirs depth authors exclude save keep_days"
+# Every journal setting, one per line: key|type|level|default|description.
+# This list drives the config file, `journal set` validation, and `setup`.
+# To add a setting, add a line here and read it with journal_get. `setup --new`
+# then asks about it on every machine that hasn't seen it.
+#   type:  yesno, number, time, days, since, text, or a choice like a/b/c
+#   level: basic settings are asked in every setup; advanced ones sit behind one question
+JOURNAL_SETTINGS='enabled|yesno|basic|yes|yes: agents keep the journal and answer "what did I do" from it. no: the feature is off.
+commit|yesno|basic|no|yes: journal files are committed and pushed with the wikis. no: they stay on this machine.
+entries|yesno|basic|yes|yes: agents add one line for work that leaves no commit (an investigation, a review, a dead end).
+format|standup/summary/detailed|basic|standup|Default report shape: standup (yesterday, today, blockers), summary (by project), or detailed.
+since|since|basic|lastworkday|Default report range: lastworkday, yesterday, today, week, lastweek, a number of days like 7d, or a date.
+code_dirs|text|basic|~/dev|Folders to search for code repositories, separated by colons.
+day_starts|time|advanced|04:00|Local time a new day starts. Work before it counts toward the previous day.
+workdays|days|advanced|12345|Working days, 1 is Monday and 7 is Sunday. Used to find the last workday.
+depth|number|advanced|4|How deep to search code_dirs for repositories.
+authors|text|advanced||Extra commit author emails or names, separated by commas. Each repository'"'"'s own user.email always counts.
+exclude|text|advanced||Repositories and wikis to leave out, as comma-separated globs, such as personal-*,scratch.
+save|yesno|advanced|no|yes: save each generated report in this folder as YYYY-MM-DD-<format>.md.
+keep_days|number|advanced|0|Delete day files older than this many days. 0 keeps everything.'
+JOURNAL_KEYS="$(printf '%s\n' "$JOURNAL_SETTINGS" | cut -d '|' -f 1 | tr '\n' ' ' | sed 's/ $//')"
 
-# shellcheck disable=SC2088
-journal_default() {
-  case "$1" in
-    enabled) echo yes ;;
-    commit) echo no ;;
-    entries) echo yes ;;
-    format) echo standup ;;
-    since) echo lastworkday ;;
-    day_starts) echo 04:00 ;;
-    workdays) echo 12345 ;;
-    code_dirs) echo "~/dev" ;;
-    depth) echo 4 ;;
-    authors) echo "" ;;
-    exclude) echo "" ;;
-    save) echo no ;;
-    keep_days) echo 0 ;;
+# journal_field <key> <n>: field n of a setting. 2 type, 3 level, 4 default, 5 description.
+journal_field() {
+  printf '%s\n' "$JOURNAL_SETTINGS" | awk -F '|' -v k="$1" -v n="$2" '$1 == k { print $n; exit }'
+}
+
+journal_default() { journal_field "$1" 4; }
+
+# journal_check <key> <value>: print why a value is wrong and fail, or succeed quietly.
+journal_check() {
+  local key="$1" val="$2" type
+  type="$(journal_field "$key" 2)"
+  [ -n "$type" ] || { echo "unknown journal setting: $key. Settings: $JOURNAL_KEYS"; return 1; }
+  case "$val" in *$'\n'*) echo "value must be one line"; return 1 ;; esac
+  case "$type" in
+    yesno) case "$val" in yes | no) ;; *) echo "$key takes yes or no"; return 1 ;; esac ;;
+    number) case "$val" in '' | *[!0-9]*) echo "$key takes a number"; return 1 ;; esac ;;
+    time) case "$val" in [0-2][0-9]:[0-5][0-9]) ;; *) echo "$key takes a time like 04:00"; return 1 ;; esac ;;
+    days) case "$val" in '' | *[!1-7]*) echo "$key takes digits 1 to 7, such as 12345"; return 1 ;; esac ;;
+    since) since_ok "$val" || { echo "$key takes lastworkday, yesterday, today, week, lastweek, a number of days like 7d, or a date"; return 1; } ;;
+    text) ;;
+    */*)
+      case "$val" in '' | */*) echo "$key takes one of: ${type//\// }"; return 1 ;; esac
+      case "/$type/" in
+        */"$val"/*) ;;
+        *) echo "$key takes one of: ${type//\// }"; return 1 ;;
+      esac
+      ;;
   esac
+  return 0
 }
 
 write_journal_config() {
+  local key def desc
   mkdir -p "$JOURNAL_DIR"
   [ -f "$JOURNAL_CFG" ] && return 0
-  cat > "$JOURNAL_CFG" <<'EOF'
-# Work journal settings. Change them with: ./wiki.sh journal set <key> <value>
-# Agents read this file. See rules/journal.md in any wiki.
-
-# yes: agents keep the journal and answer "what did I do" from it. no: the feature is off.
-enabled=yes
-# yes: journal files are committed and pushed with the wikis. no: they stay on this machine.
-commit=no
-# yes: agents add one line for work that leaves no commit (an investigation, a review, a dead end).
-entries=yes
-# Default report shape: standup (yesterday, today, blockers), summary (by project), or detailed.
-format=standup
-# Default report range: lastworkday, yesterday, today, week, lastweek, a number of days like 7d, or a date.
-since=lastworkday
-# Local time a new day starts. Work before it counts toward the previous day.
-day_starts=04:00
-# Working days, 1 is Monday and 7 is Sunday. Used to find the last workday.
-workdays=12345
-# Folders to search for code repositories, separated by colons.
-code_dirs=~/dev
-# How deep to search code_dirs for repositories.
-depth=4
-# Extra commit author emails or names, separated by commas. Each repository's own user.email always counts.
-authors=
-# Repositories and wikis to leave out, as comma-separated globs, such as personal-*,scratch.
-exclude=
-# yes: save each generated report in this folder as YYYY-MM-DD-<format>.md.
-save=no
-# Delete day files older than this many days. 0 keeps everything.
-keep_days=0
-EOF
+  {
+    echo "# Work journal settings. Change them with: ./wiki.sh journal set <key> <value>"
+    echo "# or walk through them with: ./wiki.sh setup journal"
+    echo "# Agents read this file. See rules/journal.md in any wiki."
+    printf '%s\n' "$JOURNAL_SETTINGS" | while IFS='|' read -r key _ _ def desc; do
+      printf '\n# %s\n%s=%s\n' "$desc" "$key" "$def"
+    done
+  } > "$JOURNAL_CFG"
   echo "created: $(tilde "$JOURNAL_CFG") (journal on, not committed)"
 }
 
@@ -507,24 +656,8 @@ apply_journal_commit() {
 }
 
 journal_set() {
-  local key="$1" val="$2" k ok=0 tmp
-  for k in $JOURNAL_KEYS; do [ "$k" = "$key" ] && ok=1; done
-  [ "$ok" = 1 ] || die "unknown journal setting: $key. Settings: $JOURNAL_KEYS"
-  case "$key" in
-    enabled | commit | entries | save)
-      case "$val" in yes | no) ;; *) die "$key takes yes or no" ;; esac ;;
-    format)
-      case "$val" in standup | summary | detailed) ;; *) die "format takes standup, summary, or detailed" ;; esac ;;
-    depth | keep_days)
-      case "$val" in '' | *[!0-9]*) die "$key takes a number" ;; esac ;;
-    day_starts)
-      case "$val" in [0-2][0-9]:[0-5][0-9]) ;; *) die "day_starts takes a time like 04:00" ;; esac ;;
-    workdays)
-      case "$val" in '' | *[!1-7]*) die "workdays takes digits 1 to 7, such as 12345" ;; esac ;;
-    since)
-      since_ok "$val" || die "since takes lastworkday, yesterday, today, week, lastweek, a number of days like 7d, or a date" ;;
-  esac
-  case "$val" in *$'\n'*) die "value must be one line" ;; esac
+  local key="$1" val="$2" tmp err
+  err="$(journal_check "$key" "$val")" || die "$err"
   write_journal_config >/dev/null
   tmp="$JOURNAL_CFG.tmp"
   awk -v k="$key" -v v="$val" 'BEGIN{done=0} $0 ~ "^"k"=" {print k"="v; done=1; next} {print} END{if(!done) print k"="v}' "$JOURNAL_CFG" > "$tmp"
@@ -881,6 +1014,410 @@ cmd_standup() {
   rm -f "$out"
 }
 
+# ---- setup ------------------------------------------------------------------
+# A walkthrough of every choice, for a new machine or an existing one.
+# Two kinds of step:
+#   checks    (collection, claude, upgrade) run every time and ask only when
+#             something is missing or out of date.
+#   questions (git, git.identity, journal.<key>) are recorded once answered,
+#             so `setup --new` asks only the ones this machine hasn't seen.
+# The record is per machine, outside the collection, so it never syncs.
+SETUP_STATE="${XDG_CONFIG_HOME:-$HOME/.config}/llm-wiki/setup"
+SETUP_MODE=all
+
+setup_done() { [ -f "$SETUP_STATE" ] && grep -qxF -- "$1" "$SETUP_STATE"; }
+
+setup_mark() {
+  mkdir -p "$(dirname "$SETUP_STATE")"
+  [ -f "$SETUP_STATE" ] || printf '# Setup questions answered on this machine. Written by ./wiki.sh setup.\n' > "$SETUP_STATE"
+  ensure_line "$SETUP_STATE" "$1"
+}
+
+# A question step is due in a full run always, and in --new only if unseen.
+setup_due() { [ "$SETUP_MODE" = all ] || ! setup_done "$1"; }
+
+# The question steps that apply to this machine right now and haven't been answered.
+setup_pending() {
+  local k
+  [ -d "$WIKIS_DIR" ] || return 0
+  setup_done git || echo git
+  if in_git_repo "$WIKIS_DIR"; then setup_done git.identity || echo git.identity; fi
+  setup_done journal.enabled || echo journal.enabled
+  [ "$(journal_get enabled)" = yes ] || return 0
+  for k in $JOURNAL_KEYS; do
+    [ "$k" = enabled ] && continue
+    setup_done "journal.$k" || echo "journal.$k"
+  done
+}
+
+section() { printf '\n== %s\n' "$1"; }
+
+# ask_yn <question> <y|n>: succeed for yes.
+ask_yn() {
+  local r hint="[y/N]"
+  [ "$2" = y ] && hint="[Y/n]"
+  while :; do
+    printf '%s %s ' "$1" "$hint"
+    IFS= read -r r || die "input ended"
+    case "${r:-$2}" in
+      y | Y | yes) return 0 ;;
+      n | N | no) return 1 ;;
+    esac
+    echo "  Answer y or n."
+  done
+}
+
+# ask <question> <current>: Enter keeps the current value, a single - clears it.
+# The answer is left in ANSWER.
+ask() {
+  local r
+  if [ -n "$2" ]; then printf '%s [%s]: ' "$1" "$2"; else printf '%s [none]: ' "$1"; fi
+  IFS= read -r r || die "input ended"
+  case "$r" in
+    '') ANSWER="$2" ;;
+    -) ANSWER="" ;;
+    *) ANSWER="$r" ;;
+  esac
+}
+
+setup_collection() {
+  local n=0 d
+  if [ "$SETUP_MODE" = new ] && [ -f "$WIKIS_DIR/WIKIS.md" ] && is_wiki "$WIKIS_DIR/$SHARED"; then return 0; fi
+  section "Collection"
+  if [ -d "$WIKIS_DIR" ]; then
+    for d in "$WIKIS_DIR"/*/; do is_wiki "${d%/}" && n=$((n + 1)); done
+    echo "Wikis live in $(tilde "$WIKIS_DIR"): $n found."
+  else
+    echo "Wikis will live in $(tilde "$WIKIS_DIR"). For another folder, quit and rerun with WIKIS_DIR=<path> set."
+    if ask_yn "Create it now?" y; then
+      init_collection | sed 's/^/  /'
+    else
+      echo "Nothing else to set up without a collection."
+      exit 0
+    fi
+  fi
+  write_collection_marker | sed 's/^/  /'
+  if ! is_wiki "$WIKIS_DIR/$SHARED"; then
+    echo "There is no shared wiki at $(tilde "$WIKIS_DIR/$SHARED"). It holds knowledge that applies to every project."
+    if ask_yn "Create it?" y; then scaffold "$WIKIS_DIR/$SHARED" 0 | sed 's/^/  /'; fi
+  fi
+}
+
+setup_git() {
+  local url
+  if setup_due git; then
+    section "Git"
+    if in_git_repo "$WIKIS_DIR"; then
+      echo "The collection is a git repo. Agents commit and push their wiki changes to it."
+    else
+      echo "The collection isn't a git repo. Git gives it history, undo, and sync between machines."
+      if ask_yn "Make it one?" y; then
+        git_init_collection | sed 's/^/  /'
+      else
+        setup_mark git
+        return 0
+      fi
+    fi
+    url="$(git -C "$WIKIS_DIR" remote get-url origin 2>/dev/null || true)"
+    if [ -n "$url" ]; then
+      echo "Remote: $url"
+    else
+      echo "No remote yet. With one, agents push and your other machines pull."
+      ask "Remote URL, such as git@github.com:you/wikis.git. Enter for none" ""
+      if [ -n "$ANSWER" ]; then
+        git -C "$WIKIS_DIR" remote add origin "$ANSWER"
+        echo "  added remote origin"
+      fi
+    fi
+    setup_mark git
+  fi
+  in_git_repo "$WIKIS_DIR" || return 0
+  # A repo with no commits yet needs a name and email before anything else.
+  if setup_due git.identity || ! git -C "$WIKIS_DIR" rev-parse -q --verify HEAD >/dev/null; then
+    setup_identity
+    if ! git -C "$WIKIS_DIR" rev-parse -q --verify HEAD >/dev/null; then
+      git_first_commit | sed 's/^/  /'
+    fi
+    setup_push_check
+  fi
+}
+
+# Which account commits and pushes. Matters on a machine with work and personal keys.
+setup_identity() {
+  local cur key cmd url
+  section "Git identity for this collection"
+  cur="$(git -C "$WIKIS_DIR" config user.name 2>/dev/null || true)"
+  if [ -z "$cur" ]; then
+    while :; do
+      ask "Name for commits in this repo" ""
+      [ -n "$ANSWER" ] && break
+    done
+    git -C "$WIKIS_DIR" config user.name "$ANSWER"
+  fi
+  cur="$(git -C "$WIKIS_DIR" config user.email 2>/dev/null || true)"
+  echo "Commits are made as: ${cur:-nobody yet}"
+  while :; do
+    ask "Email for commits in this repo only" "$cur"
+    [ -n "$ANSWER" ] && break
+    echo "  Commits need an email."
+  done
+  if [ "$ANSWER" != "$cur" ] || [ -z "$(git -C "$WIKIS_DIR" config --local user.email || true)" ]; then
+    git -C "$WIKIS_DIR" config user.email "$ANSWER"
+    echo "  set user.email for this repo"
+  fi
+  cmd="$(git -C "$WIKIS_DIR" config --local core.sshCommand 2>/dev/null || true)"
+  key="$(printf '%s' "$cmd" | sed -n 's/.*-i \([^ ]*\).*/\1/p')"
+  url="$(git -C "$WIKIS_DIR" remote get-url origin 2>/dev/null || true)"
+  case "$url" in
+    ssh://* | *@*:*)
+      echo "If your usual SSH key belongs to another account, name the key for this repo."
+      echo "It is used alone, without ~/.ssh/config, so host aliases there don't apply here."
+      while :; do
+        ask "SSH key path. Enter keeps it, - uses your normal SSH setup" "$(tilde "$key")"
+        # shellcheck disable=SC2088
+        case "$ANSWER" in "~/"*) ANSWER="$HOME/${ANSWER:2}" ;; esac
+        case "$ANSWER" in *" "*) echo "  Use a key path without spaces."; continue ;; esac
+        if [ -z "$ANSWER" ] || [ -f "$ANSWER" ]; then break; fi
+        echo "  No file at $ANSWER."
+      done
+      if [ -z "$ANSWER" ]; then
+        if [ -n "$cmd" ]; then
+          git -C "$WIKIS_DIR" config --local --unset core.sshCommand
+          echo "  removed the repo's SSH key setting"
+        fi
+      elif [ "$ANSWER" != "$key" ]; then
+        git -C "$WIKIS_DIR" config --local core.sshCommand "ssh -i $ANSWER -o IdentitiesOnly=yes -F /dev/null"
+        echo "  this repo now pushes with $(tilde "$ANSWER")"
+      fi
+      ;;
+  esac
+  setup_mark git.identity
+}
+
+# Try a push without sending anything, so a wrong key shows up now, not in an agent's session.
+setup_push_check() {
+  local url cmd err
+  url="$(git -C "$WIKIS_DIR" remote get-url origin 2>/dev/null || true)"
+  [ -n "$url" ] || return 0
+  git -C "$WIKIS_DIR" rev-parse -q --verify HEAD >/dev/null || return 0
+  ask_yn "Check that you can push to $url now?" y || return 0
+  cmd="$(git -C "$WIKIS_DIR" config core.sshCommand 2>/dev/null || echo ssh)"
+  if err="$(GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="$cmd -o BatchMode=yes -o ConnectTimeout=10" \
+    git -C "$WIKIS_DIR" push --dry-run --quiet origin HEAD 2>&1)"; then
+    echo "  ok: push access works"
+  else
+    echo "  push failed:"
+    printf '%s\n' "$err" | grep -v '^$' | head -n 4 | sed 's/^/    /'
+    echo "  Fix the key or the remote, then run: ./wiki.sh setup git"
+  fi
+}
+
+setup_claude() {
+  local state
+  state="$(claude_state)"
+  [ "$SETUP_MODE" = new ] && [ "$state" = current ] && return 0
+  section "Claude Code"
+  case "$state" in
+    current) echo "$(tilde "$CLAUDE_FILE") has the current wiki line. Every session finds its wiki." ;;
+    old)
+      echo "$(tilde "$CLAUDE_FILE") has an older wiki line."
+      if ask_yn "Replace it with the current one?" y; then cmd_claude | head -n 1 | sed 's/^/  /'; fi
+      ;;
+    missing)
+      echo "One line in $(tilde "$CLAUDE_FILE") lets every Claude Code session find its wiki."
+      echo "Other agents: put the same line in their user-level instruction file."
+      if ask_yn "Add it?" y; then cmd_claude | head -n 1 | sed 's/^/  /'; fi
+      ;;
+  esac
+}
+
+setup_upgrade() {
+  local d tv behind from
+  tv="$(version_of "$TEMPLATE/AGENTS.md")"
+  behind="$(setup_upgrade_needed)"
+  [ "$SETUP_MODE" = new ] && [ -z "$behind" ] && return 0
+  section "Handbooks"
+  if [ -z "$behind" ]; then
+    echo "Every wiki is on handbook v$tv."
+    return 0
+  fi
+  echo "Behind the template's v$tv:$behind"
+  from="$(oldest_version "$(behind_versions)")"
+  if ask_yn "Upgrade them now? Pages and notes are untouched." y; then
+    for d in $behind; do
+      printf '  %s: ' "$d"
+      upgrade_one "$WIKIS_DIR/$d" | sed -n 's/^handbook: //p'
+    done
+    echo "What's new since v$from:"
+    changelog_since "$from" | sed 's/^/  /'
+    echo "New sessions load the new handbook. Running sessions keep the old one until restarted."
+    upgrade_commit_hint "$behind" ""
+  fi
+}
+
+setup_journal_key() {
+  local key="$1" cur type desc val err hint
+  cur="$(journal_get "$key")"
+  type="$(journal_field "$key" 2)"
+  desc="$(journal_field "$key" 5)"
+  case "$type" in
+    yesno) hint="y/n" ;;
+    */*) hint="${type//\//, }" ;;
+    *) hint="" ;;
+  esac
+  printf '\n%s\n' "$desc"
+  while :; do
+    ask "  $key${hint:+ ($hint)}" "$cur"
+    val="$ANSWER"
+    if [ "$type" = yesno ]; then
+      case "$val" in y | Y) val=yes ;; n | N) val=no ;; esac
+    fi
+    if [ "$type" != text ] && [ -z "$val" ]; then
+      echo "  $key can't be empty."
+      continue
+    fi
+    if err="$(journal_check "$key" "$val")"; then break; fi
+    echo "  $err"
+  done
+  if [ "$val" != "$cur" ] || ! grep -q "^$key=" "$JOURNAL_CFG"; then
+    journal_set "$key" "$val" | sed 's/^/  /'
+  fi
+  setup_mark "journal.$key"
+}
+
+setup_journal() {
+  local k due="" adv=""
+  for k in $JOURNAL_KEYS; do
+    if setup_due "journal.$k"; then due="$due $k"; fi
+  done
+  [ -n "$due" ] || return 0
+  section "Work journal"
+  write_journal_config | sed 's/^/  /'
+  echo "Agents note work that leaves no commit, and ./wiki.sh standup turns your day into a report."
+  for k in $due; do
+    [ "$(journal_field "$k" 3)" = basic ] || { adv="$adv $k"; continue; }
+    setup_journal_key "$k"
+    if [ "$k" = enabled ] && [ "$(journal_get enabled)" = no ]; then
+      echo "  The journal is off. Its other settings are skipped."
+      return 0
+    fi
+  done
+  [ -n "$adv" ] || return 0
+  if [ "$SETUP_MODE" = all ]; then
+    echo
+    if ! ask_yn "Change advanced journal settings ($(echo "$adv" | sed 's/^ //; s/ /, /g'))?" n; then
+      for k in $adv; do setup_mark "journal.$k"; done
+      return 0
+    fi
+  fi
+  for k in $adv; do setup_journal_key "$k"; done
+}
+
+setup_list() {
+  local k v pending
+  pending=" $(setup_pending | tr '\n' ' ')"
+  echo "collection          $(tilde "$WIKIS_DIR")$([ -d "$WIKIS_DIR" ] || echo ' (missing)')"
+  if in_git_repo "$WIKIS_DIR"; then
+    echo "git                 remote $(git -C "$WIKIS_DIR" remote get-url origin 2>/dev/null || echo none)"
+    echo "git.identity        $(git -C "$WIKIS_DIR" config user.email 2>/dev/null || echo 'no email set')"
+  else
+    echo "git                 not a repo"
+  fi
+  echo "claude              $(claude_state)"
+  for k in $JOURNAL_KEYS; do
+    v="$(journal_get "$k")"
+    printf '%-19s %s' "journal.$k" "${v:-(none)}"
+    if [ "$v" = "$(journal_default "$k")" ]; then printf '  (default)'; fi
+    case "$pending" in *" journal.$k "*) printf '  <- new' ;; esac
+    printf '\n'
+  done
+  case "$pending" in *" git "* | *" git.identity "*) echo "(git questions not yet answered on this machine)" ;; esac
+  echo
+  echo "Change one:    ./wiki.sh setup journal.<key>   or   ./wiki.sh setup git.identity"
+  echo "Or a section:  ./wiki.sh setup git | claude | upgrade | journal"
+}
+
+cmd_setup() {
+  local what="" a n
+  for a in "$@"; do
+    case "$a" in
+      --new) SETUP_MODE=new ;;
+      --list) setup_list; return 0 ;;
+      -h | --help)
+        cat <<'EOF'
+Usage: ./wiki.sh setup [--new | --list | <section> | <setting>]
+
+  setup            Walk through every setting. Enter keeps what you have.
+  setup --new      Only what's missing, out of date, or added since you last ran it.
+  setup --list     Print current values without asking anything.
+  setup <section>  Just one section: collection, git, claude, upgrade, journal.
+  setup <setting>  Just one setting: git.identity, or journal.<key> such as journal.format.
+                   A bare journal key works too: setup format.
+EOF
+        return 0
+        ;;
+      collection | git | claude | upgrade | journal | git.identity) what="$a" ;;
+      journal.*)
+        [ -n "$(journal_field "${a#journal.}" 2)" ] || die "no journal setting called ${a#journal.}. Settings: $JOURNAL_KEYS"
+        what="$a"
+        ;;
+      *)
+        # A bare journal key works too: setup format
+        if [ -n "$(journal_field "$a" 2)" ]; then what="journal.$a"; else
+          die "setup: unknown option $a. Try ./wiki.sh setup --help"
+        fi
+        ;;
+    esac
+  done
+  [ -t 0 ] || die "setup asks questions, so it needs a terminal. ./wiki.sh setup --list prints the current values."
+  if [ "$SETUP_MODE" = new ] && [ -d "$WIKIS_DIR" ] && [ "$(claude_state)" = current ]; then
+    n="$(setup_pending | wc -l | tr -d ' ')"
+    [ "$n" -gt 0 ] || [ -n "$(setup_upgrade_needed)" ] || { echo "Nothing new to set up."; return 0; }
+  fi
+  echo "Setup for $(tilde "$WIKIS_DIR"). Enter keeps the value in brackets."
+  case "$what" in
+    collection) setup_collection ;;
+    git) SETUP_MODE=all; setup_git ;;
+    claude) SETUP_MODE=all; setup_claude ;;
+    upgrade) SETUP_MODE=all; setup_upgrade ;;
+    journal) SETUP_MODE=all; setup_journal ;;
+    git.identity)
+      in_git_repo "$WIKIS_DIR" || die "$(tilde "$WIKIS_DIR") isn't a git repo yet. Run: ./wiki.sh setup git"
+      setup_identity
+      setup_push_check
+      ;;
+    journal.*)
+      write_journal_config | sed 's/^/  /'
+      setup_journal_key "${what#journal.}"
+      ;;
+    '')
+      setup_collection
+      setup_git
+      setup_claude
+      setup_upgrade
+      setup_journal
+      ;;
+  esac
+  case "$what" in
+    *.*) return 0 ;;
+  esac
+  echo
+  echo "Done. Run ./wiki.sh setup --new after pulling template updates to see what's new."
+}
+
+# Names of wikis behind the template handbook, space separated.
+setup_upgrade_needed() {
+  local d v tv
+  tv="$(version_of "$TEMPLATE/AGENTS.md")"
+  [ -d "$WIKIS_DIR" ] || return 0
+  for d in "$WIKIS_DIR"/*/; do
+    d="${d%/}"
+    is_wiki "$d" || continue
+    v="$(version_of "$d/AGENTS.md")"
+    if [ "${v:-0}" -lt "${tv:-0}" ]; then printf ' %s' "${d##*/}"; fi
+  done
+}
+
 # ---- argument parsing ----
 [ $# -ge 1 ] || { usage; exit 1; }
 cmd="$1"
@@ -891,6 +1428,10 @@ if [ "$cmd" = journal ]; then
 fi
 if [ "$cmd" = standup ]; then
   cmd_standup "$@"
+  exit 0
+fi
+if [ "$cmd" = setup ]; then
+  cmd_setup "$@"
   exit 0
 fi
 if [ "$cmd" = cover ]; then
@@ -933,7 +1474,7 @@ case "$cmd" in
   which) [ -n "$target" ] || die "which needs a repository name"; cmd_which "$target" ;;
   stale) cmd_stale "${target:-90}" ;;
   upgrade)
-    if [ "$want_all" = 1 ]; then cmd_upgrade_all; else need_target; upgrade_one "$(resolve "$target")"; fi
+    if [ "$want_all" = 1 ]; then cmd_upgrade_all; else need_target; cmd_upgrade_one "$(resolve "$target")"; fi
     ;;
   unlock) need_target; cmd_unlock "$(resolve "$target")" ;;
   claude) cmd_claude ;;
