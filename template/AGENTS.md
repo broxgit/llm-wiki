@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Handbook version 8.
+Handbook version 9.
 
 This folder is a knowledge base maintained by an LLM agent. Any agent working here follows this file. It needs no vendor features. Plain markdown, plain files.
 
@@ -14,6 +14,7 @@ This file holds what every session needs. The rest is in `rules/`. Read a rules 
 | file a source that disagrees with a page, or a claim you doubt | `rules/conflicts.md` |
 | lint | `rules/lint.md` |
 | create a wiki for another repository, or move knowledge between wikis | `rules/peers.md` |
+| write a journal entry, or report what the user did | `rules/journal.md` |
 
 ## Layout
 
@@ -58,6 +59,8 @@ Capture at stopping points, not as you go. A stopping point is where a piece of 
 **Compile.** Ingest pending files on your own at three points: at session start, at a pause, and as soon as five notes are waiting in one wiki. The five-note rule holds in the middle of long work: finish the step you are on, compile, then carry on. All of this covers this wiki, any shared wiki, and any peer this session captured into. A pause is any point with no work in progress: a task just finished, or the user is reporting or chatting, not asking for work. A question the pending files bear on also counts. Compile before answering it. Don't stop work in progress to compile. If another session holds the lock, carry on. The files stay pending and a later pause picks them up.
 
 **Lint.** Due when the log shows 10 or more ingests since the last lint. Every compile ends by checking, so you don't have to remember.
+
+**Journal.** If the folder above this wiki has a `journal/config` with `enabled=yes`, the user keeps a work journal. Read `rules/journal.md` at your first stopping point, or when the user asks what they did, such as for a standup.
 
 **Ask first** before resolving a contradiction, merging or deleting pages, or restructuring.
 

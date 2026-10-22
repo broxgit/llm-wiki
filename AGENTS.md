@@ -21,6 +21,8 @@ Wikis in the same folder are peers. Most cover one repository and are named afte
 
 ## If a wiki's handbook is out of date
 
+The collection's `journal/` folder holds the user's work journal. It is personal, not a wiki. `./wiki.sh journal` shows its settings.
+
 `template/AGENTS.md` carries a version number. The files in `template/rules/` share it. If a wiki's copy has a lower one, tell the user. Upgrade it with `./wiki.sh upgrade <name>` only when they say so.
 
 ## Working on this repo itself

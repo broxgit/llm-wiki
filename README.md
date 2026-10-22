@@ -12,12 +12,13 @@ This repo holds the rules and the scaffold. It is not a wiki. Each wiki lives in
 4. [Check that it works](#check-that-it-works)
 5. [What the agent does on its own](#what-the-agent-does-on-its-own)
 6. [Many repositories](#many-repositories)
-7. [Run several sessions at once](#run-several-sessions-at-once)
-8. [Share it with a team or a second machine](#share-it-with-a-team-or-a-second-machine)
-9. [Troubleshooting](#troubleshooting)
-10. [Change the rules](#change-the-rules)
-11. [What's here](#whats-here)
-12. [Install the skill](#install-the-skill)
+7. [Work journal and standups](#work-journal-and-standups)
+8. [Run several sessions at once](#run-several-sessions-at-once)
+9. [Share it with a team or a second machine](#share-it-with-a-team-or-a-second-machine)
+10. [Troubleshooting](#troubleshooting)
+11. [Change the rules](#change-the-rules)
+12. [What's here](#whats-here)
+13. [Install the skill](#install-the-skill)
 
 ## Setup, once per machine
 
@@ -142,6 +143,50 @@ Some repositories are really one product. One piece of work touches several of t
 
 The test for grouping: if one session routinely works across the repositories, they are one wiki. If each is worked on alone and they only call each other, keep them separate.
 
+## Work journal and standups
+
+Ask any session "what did I do yesterday?" or "give me my standup" and it answers from what you actually did.
+
+It assembles the answer from records that already exist:
+
+- **Your commits** in every repository under your code folders, matched to each repository's `user.email`. Other people's commits are left out.
+- **Journal entries.** One line the agent writes at a stopping point for work that leaves no commit: an investigation, a review, a dead end, a deploy.
+- **Wiki notes and wiki changes** in the range.
+- **Work in progress.** Uncommitted files, unpushed commits, and open branches. These become "Today".
+- **Open `Check` and `Conflict` lines** in the wikis. These become "Blockers".
+
+`./wiki.sh standup` gathers that material. The agent writes it up as a standup (Yesterday, Today, Blockers), a summary by project, or a detailed report. You can run the command yourself to see the raw material.
+
+```
+./wiki.sh standup                      # last workday through now
+./wiki.sh standup --since week --format summary --exclude 'personal-*'
+./wiki.sh standup --day 2026-10-21 --only 'billing-*'
+```
+
+### Settings
+
+The journal is on by default. Its settings live in `~/wikis/journal/config`. Change them with `./wiki.sh journal set <key> <value>`, and see them with `./wiki.sh journal`.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `enabled` | `yes` | Turns the whole feature on or off. Also `./wiki.sh journal on` and `off`. |
+| `commit` | `no` | `yes` commits and pushes journal files with the wikis. `no` keeps them on this machine and adds `journal/` to the collection's `.gitignore`. |
+| `entries` | `yes` | `no` stops the agent writing journal lines. Reports still use commits and wiki notes. |
+| `format` | `standup` | Default report shape: `standup`, `summary`, or `detailed`. |
+| `since` | `lastworkday` | Default range: `lastworkday`, `yesterday`, `today`, `week`, `lastweek`, a number of days like `7d`, or a date. |
+| `day_starts` | `04:00` | Work before this local time counts toward the previous day. |
+| `workdays` | `12345` | Days that count as workdays, 1 for Monday. A Monday standup then covers Friday. |
+| `code_dirs` | `~/dev` | Folders to search for repositories, separated by colons. |
+| `depth` | `4` | How deep to search them. |
+| `authors` | empty | Extra commit emails or names that are you, separated by commas. |
+| `exclude` | empty | Repositories and wikis to leave out, as comma-separated globs, such as `personal-*`. |
+| `save` | `no` | `yes` saves each report as `journal/YYYY-MM-DD-<format>.md`. |
+| `keep_days` | `0` | Deletes journal days older than this. `0` keeps everything. |
+
+The journal is personal. It sits beside the wikis, not in one, and is not committed unless you set `commit` to `yes`. Leave it off if your collection's remote is shared or is not where work notes should go.
+
+You can add a line yourself: `./wiki.sh journal note <project> "what you did"`.
+
 ## Run several sessions at once
 
 - **Capture** adds one new timestamped file to `raw/` and touches nothing else. Any number of sessions can do it at once.
@@ -186,7 +231,7 @@ Edit any of them, bump the version at the top of `template/AGENTS.md`, and run `
 AGENTS.md          Tells an agent this is the template and how to start a wiki from it.
 CLAUDE.md          Imports AGENTS.md for Claude Code.
 ROADMAP.md         Planned improvements, untested areas, and what was decided against.
-wiki.sh            Setup and upkeep: init, new, cover, which, status, find, stale, upgrade, unlock, claude.
+wiki.sh            Setup and upkeep: init, new, cover, which, status, find, stale, upgrade, unlock, claude, journal, standup.
 template/          The scaffold. Copied whole to start a wiki.
   AGENTS.md        The core handbook. Loaded in every session.
   rules/           The rest of the handbook. Read on demand.

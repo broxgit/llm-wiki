@@ -39,6 +39,8 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 
 ## Later
 
+- **Merge requests in standups.** Reviews and MRs opened live in GitHub or GitLab, not in git history. Pulling them in would need an API token and a host per remote.
+- **Team digest.** A weekly roll-up across several people's journals, for a lead. Needs a shared, opt-in journal location.
 - **Trim the core further.** `template/AGENTS.md` is about 2,900 tokens, up from 2,600 after version 8. "Other wikis" and "Sync" are the biggest sections left.
 - **Drop per-source summary pages.** Each raw note gets a summary page that only says where its claims live. The live collection has 59 of them. A single ledger file per wiki could track what has been ingested.
 - **Split work and personal collections.** One collection on a personal remote now holds work, client, and personal wikis. `WIKIS_DIR` already supports a second collection. The routing line would need to know about both.
@@ -54,6 +56,7 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 Things that have never been run for real. Treat them as unproven until crossed off.
 
 - `wiki.sh` on macOS, beyond `new` and `status`. Those two ran cleanly in real use on 2026-10-01. The other commands have only run on Linux.
+- `wiki.sh journal` and `standup` on macOS. Their date math has a separate BSD `date` path that has never run.
 - Git sync between two people or two machines. Pull, commit, and push from one machine worked in real use on 2026-10-01.
 - Two sessions taking the compile lock in the same second.
 - A wiki with two shared wikis listed in `links.md`.
@@ -68,6 +71,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command and one line.
 
 ## Done
+
+### Work journal and standups (2026-10-22, handbook version 9)
+
+- **Why:** engineers need a daily summary for standup. Version 8 stopped capturing finished work, so the wikis alone can't supply one.
+- **What changed:** `./wiki.sh standup` gathers the user's commits across repositories, journal entries, wiki notes and changes, work in progress, and open checks. The agent writes it up as a standup, a summary, or a detailed report, per `rules/journal.md`. Agents add one journal line per stopping point for work that leaves no commit. On by default, not committed by default. Thirteen settings in `~/wikis/journal/config`.
 
 ### Fixes from the first week of real use (2026-10-07, handbook version 8)
 

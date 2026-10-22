@@ -50,6 +50,7 @@ Don't wait to be asked. The handbook's "Act without being asked" section is the 
 - **Lint** when a compile finds 10 or more ingests since the last one.
 - **Ask first** before resolving a contradiction, merging or deleting pages, or restructuring.
 - **Other wikis.** Wikis in the same folder are peers. File what you learn about another project in that project's wiki, and check a peer's index when the work touches its code. If you see one subject being split across wikis, say so and suggest one project wiki. `links.md` names shared wikis for general knowledge. Cite other wikis' pages instead of copying them.
+- **Journal.** When the collection's `journal/config` says `enabled=yes`, add one line for work that leaves no commit, and answer "what did I do" or standup requests from `wiki.sh standup`. The wiki's `rules/journal.md` has the details.
 - **Hold back** when the user says so. "Don't save that" and "off the record" cover that one item. "Leave the wiki alone" stops all writes.
 
 Direct requests still work: "save this", "save this session", "ingest", "lint". "Save this session" works mid-conversation in a session that started before the skill was loaded.
