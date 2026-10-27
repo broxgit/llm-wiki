@@ -66,6 +66,8 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - Real scale: hundreds of wikis, hundreds of pages. Real use so far is 10 wikis and 53 pages.
 - The version 8 triggers in real use. They passed a dry run only.
 - A model other than Claude following the handbook.
+- Delegation in real use: whether sessions suggest handoffs at the right size, and whether the log shows real savings. The log records outcomes, not tokens. Token counts per handoff would need the tool's usage data.
+- Patterns in real use: whether agents write `Feedback:` lines unprompted, and whether the thresholds are right.
 
 ## Decided against
 
@@ -75,10 +77,20 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### Delegation to cheaper models (2026-10-27, handbook version 12)
+
+- **Why:** expensive models spent tokens on volume work, such as test runs, sweeps and boilerplate, that a cheaper model does as well.
+- **What changed:** `rules/delegation.md` says when to hand off (self-contained, big, checkable), how to brief, to check before relying on the result, and to log each handoff. `~/wikis/delegation.md` holds the mode, a who-does-what table and an Auto list. Setup asks for the mode, the session line points every session at the file, and `./wiki.sh delegation` sums the log.
+
+### Repeat feedback becomes a fix (2026-10-27, handbook version 11)
+
+- **Why:** the same review comments came back on agent-written code, and the same corrections had to be repeated, such as a shared Go library's metrics being added again in every service that imports it. Repeated procedures and mechanical work cost tokens every time.
+- **What changed:** agents add `Feedback:` lines to their notes, filed in the wiki that owns the rule. Compile tallies them in each wiki's `patterns.md`. A ready pattern gets one proposal with evidence, and the fix depends on its kind: a conventions line, a note for code that uses a library, a skill, or a script. Agents check conventions before calling code done. `./wiki.sh patterns` gives the cross-wiki view, and lint reports patterns nobody has proposed.
+
 ### Journal backfill (2026-10-22, handbook version 10)
 
 - **Why:** the journal starts empty on the day it's turned on. Past sessions held the work that left no commit.
-- **What changed:** `./wiki.sh journal backfill` digests Claude Code transcripts into `journal/backfill.md`, one block per project per day: prompts, files changed, whether it committed, the last reply. Agents turn the digest into entries per the new Backfill section of `rules/journal.md`. `journal note` takes `--day` and `--at`.
+- **What changed:** `./wiki.sh journal backfill` digests Claude Code transcripts into `journal/backfill.md`, one block per project per day: prompts, files changed, whether it committed, the last reply. Agents turn the digest into entries per the new Backfill section of `rules/journal.md`. `journal note` takes `--day` and `--at`. First real run: 42 project-days over two weeks became 17 entries. It led to two digest fixes: drop prompts written by tools (task notifications, side-session events), and file sessions from scratch folders under the project they ran in.
 
 ### Step-by-step setup (2026-10-22)
 

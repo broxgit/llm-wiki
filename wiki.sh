@@ -22,6 +22,8 @@ Usage: ./wiki.sh <command> [options]
   status               List wikis: handbook version, notes waiting, lock state.
   find <word>          Search every wiki's index for a word.
   stale [days]         List pages not verified in that many days (default 90).
+  patterns             Recurring feedback across wikis, and which patterns are ready to propose.
+  delegation [off|ask|auto]  Show handoff mode and results by kind of work, or set the mode.
   upgrade <name|path>  Bring a wiki's handbook and scaffold files up to the template's.
   upgrade --all        Do that for every wiki in the collection.
   unlock <name|path>   Free a stuck compile lock.
@@ -201,6 +203,7 @@ init_collection() {
   write_collection_marker
   scaffold "$WIKIS_DIR/$SHARED" 0
   write_journal_config
+  write_delegation_file
 }
 
 git_init_collection() {
@@ -211,6 +214,7 @@ git_init_collection() {
   [ -f "$WIKIS_DIR/.gitignore" ] || printf '.DS_Store\n.compile-lock\n' > "$WIKIS_DIR/.gitignore"
   git -C "$WIKIS_DIR" init -q
   apply_journal_commit
+  apply_delegation_ignore
   echo "git:     $(tilde "$WIKIS_DIR") is now one repo for every wiki"
   git_first_commit
 }
@@ -280,6 +284,8 @@ cmd_status() {
     # Ingest entries since the last lint entry. The handbook lints at 10.
     since="$(awk '/^## [0-9-]+ lint/{n=0} /^## [0-9-]+ ingest/{n++} END{print n+0}' "$d/log.md" 2>/dev/null)"
     if [ "${since:-0}" -ge 10 ]; then note="$note  <- lint due ($since ingests)"; fi
+    n="$(patterns_ledger "$d" | grep -c '^ready|' || true)"
+    if [ "${n:-0}" -gt 0 ]; then note="$note  <- $n pattern(s) ready"; fi
     if [ -n "$tv" ] && [ "${v:-0}" -lt "$tv" ]; then note="$note  <- behind template v$tv, run: ./wiki.sh upgrade ${d##*/}"; fi
     if [ -f "$d/repos.md" ] && grep -q '^- ' "$d/repos.md"; then
       note="$note  covers: $(sed -n 's/^- //p' "$d/repos.md" | tr '\n' ' ')"
@@ -290,6 +296,7 @@ cmd_status() {
   if [ -f "$JOURNAL_CFG" ]; then
     echo "journal: $(journal_get enabled), commit $(journal_get commit), entries $(journal_get entries)"
   fi
+  if [ -f "$DELEG_FILE" ]; then echo "delegation: mode $(deleg_mode)"; fi
   n="$(setup_pending | wc -l | tr -d ' ')"
   if [ ! -f "$SETUP_STATE" ]; then
     echo "setup:   never run on this machine. Run: ./wiki.sh setup"
@@ -395,6 +402,9 @@ cmd_upgrade_all() {
   echo "== journal"
   write_journal_config
   apply_journal_commit
+  echo "== delegation"
+  write_delegation_file
+  apply_delegation_ignore
   upgrade_summary "$from" "$behind"
 }
 
@@ -512,7 +522,7 @@ claude_state() {
 claude_line() {
   local dir
   dir="$(tilde "$WIKIS_DIR")"
-  printf '%s' "My knowledge wikis live in $dir, one folder per project, plus a shared one at $dir/$SHARED. At session start, run \`$(tilde "$REPO")/wiki.sh which <repository-name>\` for the repository you are working in. Its name is the last part of its remote URL, or its folder name. The command prints the wiki that covers it. Read that wiki's AGENTS.md and follow it. If no wiki covers the repository, read $dir/$SHARED/AGENTS.md and follow that, and create the repository's wiki with \`$(tilde "$REPO")/wiki.sh new <repository-name>\` the first time you have something to file there. Outside any repository, use the shared wiki."
+  printf '%s' "My knowledge wikis live in $dir, one folder per project, plus a shared one at $dir/$SHARED. At session start, run \`$(tilde "$REPO")/wiki.sh which <repository-name>\` for the repository you are working in. Its name is the last part of its remote URL, or its folder name. The command prints the wiki that covers it. Read that wiki's AGENTS.md and follow it. If no wiki covers the repository, read $dir/$SHARED/AGENTS.md and follow that, and create the repository's wiki with \`$(tilde "$REPO")/wiki.sh new <repository-name>\` the first time you have something to file there. Outside any repository, use the shared wiki. Hand large, self-contained work to sub-agents on cheaper models as $dir/delegation.md says, following $dir/$SHARED/rules/delegation.md."
 }
 
 cmd_claude() {
@@ -853,6 +863,9 @@ for rp in Path(wikis).glob("*/repos.md"):
         if line.startswith("- "):
             cover[line[2:].strip()] = rp.parent.name
 
+# Names that count as projects: every wiki, and every repository a wiki covers.
+known = set(cover) | {d.name for d in Path(wikis).iterdir() if (d / "AGENTS.md").is_file() and (d / "index.md").is_file()}
+
 _proj = {}
 def project(cwd):
     if not cwd: return "unknown"
@@ -869,8 +882,19 @@ def project(cwd):
         if url: name = re.sub(r"\.git$", "", url.rstrip("/")).split("/")[-1].split(":")[-1]
         elif top: name = os.path.basename(top)
     if os.path.realpath(cwd) == os.path.realpath(wikis): name = "wikis"
+    # A scratch folder inside a project, such as politiboop/sweeps/b41, belongs to that project.
+    if name not in known:
+        for part in reversed(Path(cwd).parts[:-1]):
+            if part in known:
+                name = part
+                break
     _proj[cwd] = cover.get(name, name)
     return _proj[cwd]
+
+# Prompts written by tools, not the user. Side-session briefs are kept, marked.
+MACHINE = ("<task-notification", "<side-sessions-event", "<cross-session-message", "Caveat:",
+           "[Request interrupted", "This session is being continued")
+BRIEF = ("Background (from the session that started this one)", "Task (from the session that started this one)")
 
 def local(ts):
     t = datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone()
@@ -892,15 +916,25 @@ work = {}
 cutoff = datetime.combine(start - timedelta(days=1), datetime.min.time()).timestamp()
 files = [p for p in Path(sess_dir).rglob("*.jsonl") if p.stat().st_mtime >= cutoff]
 for f in files:
+    recs = []
     for line in open(f, errors="replace"):
         try: r = json.loads(line)
         except ValueError: continue
         if r.get("type") not in ("user", "assistant") or r.get("isSidechain") or r.get("isMeta"): continue
-        ts = r.get("timestamp")
-        if not ts: continue
+        if r.get("timestamp"): recs.append(r)
+    # A session started from a stray folder (/tmp, a memory folder) belongs to the
+    # known project most of its records ran in, if there is one.
+    seen = {}
+    for r in recs:
+        p = project(r.get("cwd"))
+        if p in known: seen[p] = seen.get(p, 0) + 1
+    main = max(seen, key=seen.get) if seen else None
+    for r in recs:
+        ts = r["timestamp"]
         d, hm = local(ts)
         if d < start or d > end: continue
         p = project(r.get("cwd"))
+        if p not in known and main: p = main
         if any(fnmatch.fnmatch(p, g) for g in excl): continue
         w = work.setdefault((d, p), {"first": hm, "last": hm, "sessions": set(), "prompts": [], "files": [], "commit": False, "end": "", "branch": ""})
         w["first"] = min(w["first"], hm); w["last"] = max(w["last"], hm)
@@ -909,9 +943,13 @@ for f in files:
         msg = r.get("message") or {}
         if r["type"] == "user":
             for t in texts(msg.get("content")):
-                t = clean(t, 240)
-                if t and not t.startswith(("Caveat:", "[Request interrupted", "This session is being continued")):
-                    w["prompts"].append((hm, t))
+                t = t.strip()
+                if not t or t.startswith(MACHINE): continue
+                if t.startswith(BRIEF):
+                    t = "(side session brief) " + clean(t.split(":", 1)[-1], 160)
+                else:
+                    t = clean(t, 240)
+                if t: w["prompts"].append((hm, t))
         else:
             for c in msg.get("content") or []:
                 if not isinstance(c, dict): continue
@@ -940,7 +978,7 @@ with open(out, "w") as o:
         if w["branch"]: meta.append(f"branch {w['branch']}")
         if w["commit"]: meta.append("ran git commit")
         o.write(f"\n### [{p}] {', '.join(meta)}\n")
-        ps = w["prompts"]
+        ps = sorted(w["prompts"], key=lambda x: x[0])
         if len(ps) > 14: ps = ps[:9] + [("", f"... {len(ps) - 14} more prompts ...")] + ps[-5:]
         for hm, t in ps: o.write(f"- {hm} {t}\n" if hm else f"- {t}\n")
         if w["files"]: o.write(f"- files changed: {', '.join(w['files'][:12])}{' ...' if len(w['files']) > 12 else ''}\n")
@@ -1175,6 +1213,157 @@ cmd_standup() {
   rm -f "$out"
 }
 
+# ---- patterns ---------------------------------------------------------------
+# Each wiki's patterns.md tallies recurring feedback. See template/rules/patterns.md.
+
+# patterns_ledger <wiki root>: one line per entry: ready|name|kind|status|sightings|repos
+patterns_ledger() {
+  [ -f "$1/patterns.md" ] || return 0
+  awk '
+    function flush() {
+      if (name == "") return
+      nrep = 0; for (r in repos) nrep++
+      ready = (status ~ /^watching/ && (n >= 3 || (n >= 2 && (kind == "review" || nrep >= 2)))) ? "ready" : ""
+      print ready "|" name "|" kind "|" status "|" n "|" nrep
+      name = ""; kind = ""; status = ""; n = 0; delete repos
+    }
+    /^## / { flush(); name = substr($0, 4); next }
+    /^- kind:/ { kind = $3 }
+    /^- status:/ { sub(/^- status: */, ""); status = $0 }
+    /^- seen:/ { c = 1; if ($NF ~ /^x[0-9]+$/) c = substr($NF, 2) + 0; n += c; if ($4 != "-") repos[$4] = 1 }
+    END { flush() }
+  ' "$1/patterns.md"
+}
+
+# Feedback lines in raw notes that haven't been compiled yet.
+patterns_pending() {
+  local d="$1" f b
+  for f in "$d"/raw/*; do
+    [ -f "$f" ] || continue
+    b="${f##*/}"
+    [ -e "$d/wiki/sources/${b%.*}.md" ] && continue
+    grep -h '^Feedback:' "$f" 2>/dev/null | sed "s#^#$b: #" || true
+  done
+}
+
+cmd_patterns() {
+  local d line ready name kind status n nrep pend found=0 total=0
+  [ -d "$WIKIS_DIR" ] || die "no wikis at $(tilde "$WIKIS_DIR")"
+  for d in "$WIKIS_DIR"/*/; do
+    d="${d%/}"
+    is_wiki "$d" || continue
+    line="$(patterns_ledger "$d")"
+    pend="$(patterns_pending "$d")"
+    [ -n "$line$pend" ] || continue
+    found=1
+    echo "== ${d##*/}"
+    if [ -n "$line" ]; then
+      while IFS='|' read -r ready name kind status n nrep; do
+        if [ "$ready" = ready ]; then total=$((total + 1)); printf '  READY  '; else printf '         '; fi
+        printf '%s (%s, seen %s, %s repo(s)): %s\n' "$name" "${kind:-?}" "$n" "$nrep" "${status:-watching}"
+      done <<EOF2
+$line
+EOF2
+    fi
+    if [ -n "$pend" ]; then
+      echo "  not yet compiled:"
+      printf '%s\n' "$pend" | sed 's/^/    /'
+    fi
+  done
+  [ "$found" = 1 ] || { echo "No patterns yet. Agents add Feedback lines to their notes as corrections come in."; return 0; }
+  echo
+  echo "$total ready to propose. An agent proposes each at a stopping point, per rules/patterns.md."
+}
+
+# ---- delegation -------------------------------------------------------------
+# delegation.md in the collection holds the user's handoff preferences: a mode
+# line, a table of work to model tiers, and an Auto list. Agents read it and
+# follow rules/delegation.md. delegation-log.csv records each handoff.
+DELEG_FILE="$WIKIS_DIR/delegation.md"
+DELEG_LOG="$WIKIS_DIR/delegation-log.csv"
+
+write_delegation_file() {
+  [ -d "$WIKIS_DIR" ] || return 0
+  [ -f "$DELEG_FILE" ] && return 0
+  cat > "$DELEG_FILE" <<'EOF2'
+# Delegation
+
+How sessions hand work to sub-agents on cheaper models. Edit this file freely. Agents read it and follow `rules/delegation.md` in any wiki. Change the mode with `./wiki.sh setup delegation`.
+
+mode: ask
+
+Modes: `off` never hands off unless you ask. `ask` suggests each handoff and waits for a yes. `auto` hands off and says so after.
+
+## Who does what
+
+| Work | Model | Effort |
+|---|---|---|
+| Searching or sweeping many files, gathering facts | sonnet | low |
+| Running tests or builds, summarizing failures | sonnet | low |
+| Link checks, data extraction, format conversions | haiku | low |
+| Boilerplate that copies an existing pattern | sonnet | medium |
+| First drafts of docs from code | sonnet | medium |
+| Design, debugging, code review, security, anything that needs this conversation | stay | - |
+
+Model names are tiers. Use the ones your tool offers.
+
+## Auto
+
+Kinds of work you have approved for handoff without asking, even in `ask` mode. One per line, starting with `- `.
+EOF2
+  echo "created: $(tilde "$DELEG_FILE") (mode ask)"
+}
+
+deleg_mode() {
+  local m=""
+  [ -f "$DELEG_FILE" ] && m="$(sed -n 's/^mode: *\([a-z]*\).*/\1/p' "$DELEG_FILE" | head -n 1)"
+  printf '%s' "${m:-ask}"
+}
+
+deleg_set_mode() {
+  local tmp
+  case "$1" in off | ask | auto) ;; *) die "delegation mode takes off, ask, or auto" ;; esac
+  write_delegation_file >/dev/null
+  tmp="$DELEG_FILE.tmp"
+  if grep -q '^mode:' "$DELEG_FILE"; then
+    sed "s/^mode:.*/mode: $1/" "$DELEG_FILE" > "$tmp" && mv "$tmp" "$DELEG_FILE"
+  else
+    printf '\nmode: %s\n' "$1" >> "$DELEG_FILE"
+  fi
+  echo "delegation: mode $1"
+}
+
+# The handoff log stays on this machine.
+apply_delegation_ignore() {
+  in_git_repo "$WIKIS_DIR" || return 0
+  ensure_line "$WIKIS_DIR/.gitignore" "delegation-log.csv"
+}
+
+cmd_delegation() {
+  case "${1:-show}" in
+    off | ask | auto) deleg_set_mode "$1"; return 0 ;;
+    show) ;;
+    *) die "delegation commands: show, off, ask, auto" ;;
+  esac
+  if [ ! -f "$DELEG_FILE" ]; then
+    echo "no $(tilde "$DELEG_FILE") yet. Mode is ask by default. ./wiki.sh setup delegation creates it."
+    return 0
+  fi
+  echo "delegation: mode $(deleg_mode)   ($(tilde "$DELEG_FILE"))"
+  sed -n '/^## Auto/,$p' "$DELEG_FILE" | grep '^- ' | sed 's/^- /  auto: /' || true
+  if [ ! -s "$DELEG_LOG" ]; then
+    echo "no handoffs logged yet"
+    return 0
+  fi
+  echo
+  printf '%-44s %5s %5s %6s %7s\n' "KIND (MODEL)" "RUNS" "OK" "FIXED" "REDONE"
+  awk -F, 'NR > 1 && NF >= 6 {
+      kind = $3; for (i = 4; i <= NF - 3; i++) kind = kind "," $i
+      k = kind " (" $(NF - 2) ")"; n[k]++; r[k "|" $NF]++
+    }
+    END { for (k in n) printf "%-44s %5d %5d %6d %7d\n", substr(k, 1, 44), n[k], r[k "|ok"], r[k "|fixed"], r[k "|redone"] }' "$DELEG_LOG" | sort
+}
+
 # ---- setup ------------------------------------------------------------------
 # A walkthrough of every choice, for a new machine or an existing one.
 # Two kinds of step:
@@ -1203,6 +1392,7 @@ setup_pending() {
   [ -d "$WIKIS_DIR" ] || return 0
   setup_done git || echo git
   if in_git_repo "$WIKIS_DIR"; then setup_done git.identity || echo git.identity; fi
+  setup_done delegation.mode || echo delegation.mode
   setup_done journal.enabled || echo journal.enabled
   [ "$(journal_get enabled)" = yes ] || return 0
   for k in $JOURNAL_KEYS; do
@@ -1416,6 +1606,24 @@ setup_upgrade() {
   fi
 }
 
+setup_delegation() {
+  local cur
+  setup_due delegation.mode || return 0
+  section "Delegation"
+  write_delegation_file | sed 's/^/  /'
+  echo "Sessions can hand big, self-contained work, like test runs and file sweeps, to sub-agents on cheaper models."
+  echo "off: never unless you ask. ask: suggest each one and wait for a yes. auto: do it and say so after."
+  echo "Which kinds of work go to which model is a table in $(tilde "$DELEG_FILE"). Edit it any time."
+  cur="$(deleg_mode)"
+  while :; do
+    ask "  mode (off, ask, auto)" "$cur"
+    case "$ANSWER" in off | ask | auto) break ;; esac
+    echo "  Answer off, ask, or auto."
+  done
+  if [ "$ANSWER" != "$cur" ] || ! grep -q '^mode:' "$DELEG_FILE"; then deleg_set_mode "$ANSWER" | sed 's/^/  /'; fi
+  setup_mark delegation.mode
+}
+
 setup_journal_key() {
   local key="$1" cur type desc val err hint
   cur="$(journal_get "$key")"
@@ -1485,6 +1693,10 @@ setup_list() {
     echo "git                 not a repo"
   fi
   echo "claude              $(claude_state)"
+  printf '%-19s %s' "delegation.mode" "$(deleg_mode)"
+  case "$pending" in *" delegation.mode "*) printf '  <- new' ;; esac
+  printf '\n'
+
   for k in $JOURNAL_KEYS; do
     v="$(journal_get "$k")"
     printf '%-19s %s' "journal.$k" "${v:-(none)}"
@@ -1495,7 +1707,7 @@ setup_list() {
   case "$pending" in *" git "* | *" git.identity "*) echo "(git questions not yet answered on this machine)" ;; esac
   echo
   echo "Change one:    ./wiki.sh setup journal.<key>   or   ./wiki.sh setup git.identity"
-  echo "Or a section:  ./wiki.sh setup git | claude | upgrade | journal"
+  echo "Or a section:  ./wiki.sh setup git | claude | upgrade | delegation | journal"
 }
 
 cmd_setup() {
@@ -1511,13 +1723,13 @@ Usage: ./wiki.sh setup [--new | --list | <section> | <setting>]
   setup            Walk through every setting. Enter keeps what you have.
   setup --new      Only what's missing, out of date, or added since you last ran it.
   setup --list     Print current values without asking anything.
-  setup <section>  Just one section: collection, git, claude, upgrade, journal.
+  setup <section>  Just one section: collection, git, claude, upgrade, delegation, journal.
   setup <setting>  Just one setting: git.identity, or journal.<key> such as journal.format.
                    A bare journal key works too: setup format.
 EOF
         return 0
         ;;
-      collection | git | claude | upgrade | journal | git.identity) what="$a" ;;
+      collection | git | claude | upgrade | journal | delegation | git.identity) what="$a" ;;
       journal.*)
         [ -n "$(journal_field "${a#journal.}" 2)" ] || die "no journal setting called ${a#journal.}. Settings: $JOURNAL_KEYS"
         what="$a"
@@ -1542,6 +1754,7 @@ EOF
     claude) SETUP_MODE=all; setup_claude ;;
     upgrade) SETUP_MODE=all; setup_upgrade ;;
     journal) SETUP_MODE=all; setup_journal ;;
+    delegation) SETUP_MODE=all; setup_delegation ;;
     git.identity)
       in_git_repo "$WIKIS_DIR" || die "$(tilde "$WIKIS_DIR") isn't a git repo yet. Run: ./wiki.sh setup git"
       setup_identity
@@ -1556,6 +1769,7 @@ EOF
       setup_git
       setup_claude
       setup_upgrade
+      setup_delegation
       setup_journal
       ;;
   esac
@@ -1589,6 +1803,10 @@ if [ "$cmd" = journal ]; then
 fi
 if [ "$cmd" = standup ]; then
   cmd_standup "$@"
+  exit 0
+fi
+if [ "$cmd" = delegation ]; then
+  cmd_delegation "$@"
   exit 0
 fi
 if [ "$cmd" = setup ]; then
@@ -1639,6 +1857,7 @@ case "$cmd" in
     ;;
   unlock) need_target; cmd_unlock "$(resolve "$target")" ;;
   claude) cmd_claude ;;
+  patterns) cmd_patterns ;;
   -h | --help | help) usage ;;
   *) usage; exit 1 ;;
 esac

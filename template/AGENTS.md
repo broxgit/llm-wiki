@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Handbook version 10.
+Handbook version 12.
 
 This folder is a knowledge base maintained by an LLM agent. Any agent working here follows this file. It needs no vendor features. Plain markdown, plain files.
 
@@ -15,6 +15,8 @@ This file holds what every session needs. The rest is in `rules/`. Read a rules 
 | lint | `rules/lint.md` |
 | create a wiki for another repository, or move knowledge between wikis | `rules/peers.md` |
 | write a journal entry, or report what the user did | `rules/journal.md` |
+| record feedback, update `patterns.md`, propose a fix, or check code against conventions | `rules/patterns.md` |
+| hand a task to a sub-agent on another model, or suggest doing so | `rules/delegation.md` |
 
 ## Layout
 
@@ -25,6 +27,7 @@ index.md     One line per wiki page. The map.
 log.md       Append-only record of changes.
 links.md     Shared wikis this one can fall back to.
 repos.md     Repositories this wiki covers, when it covers more than one.
+patterns.md  Recurring feedback and repeated work, tallied toward a fix.
 raw/         Immutable sources. New files only.
 wiki/        Compiled pages. The agent writes these.
 data/        Structured data (CSV, SQLite). Queried, not read.
@@ -34,7 +37,7 @@ data/        Structured data (CSV, SQLite). Queried, not read.
 
 1. If Sync applies to this wiki and its repo has a remote, pull.
 2. Read `index.md`. Nothing else yet.
-3. List `raw/` and `wiki/sources/`. If notes are waiting, compile them before you start on the user's request, and say so in one line. If another session holds the lock, go on without it.
+3. List `raw/` and `wiki/sources/`. A missing `wiki/sources/` means nothing is compiled yet. If notes are waiting, compile them before you start on the user's request, and say so in one line. If another session holds the lock, go on without it.
 
 Do not bulk-read `wiki/`. The index exists so you don't have to.
 
@@ -54,11 +57,17 @@ The user should not have to tell you when to use the wiki. Decide for yourself w
 
 Finished work is not a capture by itself. The code and its history already record what changed. Note only what they don't show: why it was built that way, what was tried and dropped, what will trip up the next session.
 
-Capture at stopping points, not as you go. A stopping point is where a piece of work is done and the user moves on. In a long working session that is rarely more than one or two notes an hour, each covering everything since the last. Skip small talk, guesses, passing opinions, and work still in flux. When unsure whether something is a decision or a correction, capture it. When unsure whether it is only a record of work done, don't.
+Capture at stopping points, not as you go. A stopping point is where a piece of work is done: you are about to report it finished, or the user moves on. In a long working session that is rarely more than one or two notes an hour, each covering everything since the last. Skip small talk, guesses, passing opinions, and work still in flux. When unsure whether something is a decision or a correction, capture it. When unsure whether it is only a record of work done, don't.
 
 **Compile.** Ingest pending files on your own at three points: at session start, at a pause, and as soon as five notes are waiting in one wiki. The five-note rule holds in the middle of long work: finish the step you are on, compile, then carry on. All of this covers this wiki, any shared wiki, and any peer this session captured into. A pause is any point with no work in progress: a task just finished, or the user is reporting or chatting, not asking for work. A question the pending files bear on also counts. Compile before answering it. Don't stop work in progress to compile. If another session holds the lock, carry on. The files stay pending and a later pause picks them up.
 
 **Lint.** Due when the log shows 10 or more ingests since the last lint. Every compile ends by checking, so you don't have to remember.
+
+**Feedback.** The user should never give the same correction twice. When the user corrects your work, review comments land on code an agent helped write, or you repeat a procedure or mechanical work, add a `Feedback:` line to your next capture. `rules/patterns.md` has the format and where the note goes. When `patterns.md` shows a pattern is ready, propose a fix at a stopping point: a convention, a note in a library's wiki, a skill, or a small tool.
+
+**Conventions.** Before you call code done, check it against the conventions pages that apply: this wiki's, the shared wiki's, and those of the internal libraries the change calls.
+
+**Delegate.** When a large, self-contained task comes up whose result you can check, and your tool can run a sub-agent on a cheaper model, follow the user's `delegation.md` in the folder above this wiki: suggest the handoff, or make it, as its mode says.
 
 **Journal.** If the folder above this wiki has a `journal/config` with `enabled=yes`, the user keeps a work journal. Read `rules/journal.md` at your first stopping point, or when the user asks what they did, such as for a standup.
 
@@ -130,7 +139,7 @@ Rules for both kinds:
 This section applies in two cases. One: this folder is the top level of a git repo. Two: this folder's parent is a wiki collection, meaning a git repo whose top level holds a `WIKIS.md` file. In a collection, commit only the wiki folders you changed. If this wiki sits inside any other repo, or has no git, skip this section and leave commits to the user.
 
 - Pull before any write, if the repo has a remote.
-- Commit at each compile: every changed file, waiting captures included, in one commit. Don't commit each capture by itself. If you captured and no compile follows before the user's current request is done, commit the captures then.
+- Commit at each compile: every changed file, waiting captures included, in one commit per wiki. Don't commit each capture by itself. If you captured and no compile follows before the user's current request is done, commit the captures then.
 - Start commit messages with the wiki's name: `<wiki>: ingest <title>`, `<wiki>: ingest 6 notes`, `<wiki>: capture 3 notes`, `<wiki>: lint`.
 - Push after each commit if the repo has a remote. If the push is rejected, pull and push again, once.
 - On a merge conflict in `index.md` or `log.md`, keep the lines from both sides. On a conflict inside a page, stop and ask the user.

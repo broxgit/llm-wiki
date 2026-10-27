@@ -35,7 +35,7 @@ The user keeps a template repo, usually named `llm-wiki`. It has a `template/` f
 
 Read `<root>/AGENTS.md` in full, then `<root>/index.md`. Do what `AGENTS.md` says. The copy in the wiki is the authority.
 
-`AGENTS.md` is the core. It names files under `rules/` for compile work, conflicts, lint, and peer wikis. Read one of those only when `AGENTS.md` says the work calls for it.
+`AGENTS.md` is the core. It names files under `rules/` for compile work, conflicts, lint, peer wikis, the journal, patterns, and delegation. Read one of those only when `AGENTS.md` says the work calls for it.
 
 Read and edit the files where they live. Pull a file into a scratch area only for a step that can't be done in place.
 
@@ -50,6 +50,8 @@ Don't wait to be asked. The handbook's "Act without being asked" section is the 
 - **Lint** when a compile finds 10 or more ingests since the last one.
 - **Ask first** before resolving a contradiction, merging or deleting pages, or restructuring.
 - **Other wikis.** Wikis in the same folder are peers. File what you learn about another project in that project's wiki, and check a peer's index when the work touches its code. If you see one subject being split across wikis, say so and suggest one project wiki. `links.md` names shared wikis for general knowledge. Cite other wikis' pages instead of copying them.
+- **Repeat feedback.** When the user corrects you, pastes review comments on code you helped write, or you repeat a procedure or mechanical work, add a `Feedback:` line to your next note. When a pattern is ready, propose a fix once, with the evidence. Before calling code done, check it against the conventions pages that apply. The wiki's `rules/patterns.md` has the details.
+- **Delegate.** When a large, self-contained task comes up whose result you can check, hand it to a sub-agent on a cheaper model as the user's `~/wikis/delegation.md` says: suggest it in `ask` mode, do it in `auto` mode. Brief it fully, check the result, log it. The wiki's `rules/delegation.md` has the details.
 - **Journal.** When the collection's `journal/config` says `enabled=yes`, add one line for work that leaves no commit, and answer "what did I do" or standup requests from `wiki.sh standup`. The wiki's `rules/journal.md` has the details.
 - **Hold back** when the user says so. "Don't save that" and "off the record" cover that one item. "Leave the wiki alone" stops all writes.
 
@@ -66,7 +68,7 @@ If no wiki turned up and the user didn't ask for one, offer once to set one up, 
 1. Settle the location. First make sure no existing wiki lists this repository in its `repos.md`. The default is `~/wikis/<repository-name>`, named after the repository the session is working in. Use it without asking when `~/wikis` already exists. Otherwise confirm with the user. One wiki per project, not one per session. Never inside the template repo.
 2. Build it from one of these, in this order:
    - **The template repo.** Run its `wiki.sh new <wiki root>`. Without a shell, copy everything inside its `template/` folder into the new root, hidden files included, then create `index.md` containing `# Index` and `log.md` containing `# Log`.
-   - **An existing wiki.** Copy its `AGENTS.md`, `CLAUDE.md`, `links.md`, `.gitignore`, and `rules/` folder. Add `raw/`, `wiki/`, and `data/` folders. Create `index.md` and `log.md` as above, and `repos.md` containing `# Repositories`.
+   - **An existing wiki.** Copy its `AGENTS.md`, `CLAUDE.md`, `links.md`, `.gitignore`, and `rules/` folder. Add `raw/`, `wiki/`, and `data/` folders. Create `index.md` and `log.md` as above, `repos.md` containing `# Repositories`, and `patterns.md` containing `# Patterns`.
    - **Neither is reachable.** Don't write a handbook from memory. Tell the user the template repo is needed and ask where it is.
 3. Check `links.md`. If the shared wiki it points at doesn't exist, offer once to scaffold it the same way.
 4. If the wiki sits inside a project folder, or this session is working in one, and that project has its own agent instruction file that doesn't mention the wiki, offer once to add this line to it: `This project's knowledge wiki is at <wiki root>. Read its AGENTS.md at session start and follow it.` That line lets future sessions find the wiki with no prompting.

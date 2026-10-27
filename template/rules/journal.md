@@ -15,7 +15,7 @@ The journal is personal to the user. It lives in the `journal/` folder beside th
 
 ## Entries
 
-Write an entry for work that leaves no commit: an investigation, a code review, a meeting outcome the user mentioned, a dead end, a deploy, a question answered for someone. Commits are already picked up by reports, so don't repeat them.
+Write an entry for work that leaves no commit: an investigation, reviewing someone else's code, a meeting outcome the user mentioned, a dead end, a deploy, a question answered for someone. Commits are already picked up by reports, so don't repeat them.
 
 A journal line records that the work happened. It doesn't replace a wiki capture. When the same work also established something worth keeping, such as a root cause, capture that in the wiki as usual.
 

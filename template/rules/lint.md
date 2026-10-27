@@ -14,6 +14,7 @@ Check for:
 - Duplicate or near-duplicate pages
 - Pending files in `raw/`
 - Knowledge about one subject split across this wiki and a peer. Report it. Don't move anything
+- Patterns: run `wiki.sh patterns`. Report ready entries nobody has proposed, accepted ones that still get sightings, and the same rule tallied in two wikis. Ask before moving an entry to the wiki that owns it
 - Stale pages: no `verified` date, or one more than 180 days old. If the owning repository is at hand, also pages whose `commit` is far behind its HEAD
 
 Report findings first. Fix mechanical problems (links, index lines, frontmatter) without asking. Re-verify stale pages against the code when you can, and stamp the ones that still hold. Ask before merging pages, deleting pages, or resolving conflicts.

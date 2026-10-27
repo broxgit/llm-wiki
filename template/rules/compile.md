@@ -32,6 +32,7 @@ For each source:
 3. Write a summary page in `wiki/sources/` with the raw file's name, minus its extension, plus `.md`. Keep it short: what the source is, and links to the pages that carry its claims. Don't restate a short note.
 4. Update every other wiki page the source affects. Create a new page only if the topic will be referenced again. When a page gains a claim that matters, revise its summary so the index shows it.
 5. Where the source disagrees with an existing page, or you doubt a claim, read `rules/conflicts.md` and follow it. Never overwrite silently.
+6. If it has `Feedback:` lines, add each to `patterns.md` as `rules/patterns.md` says.
 
 After the last source, update `index.md` once and append one entry per source to `log.md`. Also stamp any page you confirmed against code this session (see Stale knowledge in `AGENTS.md`). Then report in one line: pages created, pages updated, corrections, conflicts.
 
@@ -90,7 +91,7 @@ Newest entry at the bottom. Append only.
 - conflicts: 1
 ```
 
-One entry per source, dated the day of the work and titled with the summary page's title. List wiki pages only. `conflicts` counts contradictions flagged. Write it even at zero. Add a `corrections:` line when a source corrected earlier claims. Entry types: `ingest`, `lint`, `restructure`, `resolve`. Captures are not logged. The file in `raw/` is the record. Stamping `verified` and `commit` is not logged either.
+One entry per source, dated the day of the work and titled with the summary page's title. List wiki pages only. `conflicts` counts contradictions flagged. Write it even at zero. Add a `corrections:` line when a source corrected earlier claims, and a `patterns:` line with the number of `Feedback:` lines tallied when there were any. Entry types: `ingest`, `lint`, `restructure`, `resolve`. Captures are not logged. The file in `raw/` is the record. Stamping `verified` and `commit` is not logged either.
 
 ## Structured data
 

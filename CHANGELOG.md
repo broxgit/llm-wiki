@@ -4,6 +4,22 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v12 (2026-10-27)
+
+- Delegation. Sessions hand large, self-contained work whose results can be checked, like test runs, file sweeps and boilerplate, to sub-agents on cheaper models. Design, debugging and review stay in the session.
+- `~/wikis/delegation.md` holds your preferences: a mode (`off`, `ask`, `auto`), a table of which kind of work goes to which model and effort, and an Auto list of kinds approved without asking. The default is `ask`.
+- After you approve the same kind of handoff three times, the session offers to add it to the Auto list. Each handoff is logged, and `./wiki.sh delegation` shows how often each kind needed fixing or redoing.
+- The session line in `~/.claude/CLAUDE.md` now points every session at `delegation.md`.
+- Do: run `./wiki.sh setup --new` to pick a mode and refresh the session line. Edit the table in `~/wikis/delegation.md` to match the models you use.
+
+## v11 (2026-10-27)
+
+- Repeat feedback becomes a fix. When you correct an agent, paste review comments on code it wrote, or it repeats a procedure or mechanical work, the agent records a `Feedback:` line. Compile tallies them in each wiki's `patterns.md`.
+- When a pattern repeats (3 times, or twice in review comments or across repositories), the agent proposes a fix once, with the evidence: a convention, a note in a shared library's wiki, a skill, or a small script.
+- Agents check code against the conventions pages that apply before calling it done: the project's, the shared wiki's, and those of the internal libraries it calls.
+- `./wiki.sh patterns` shows every wiki's patterns and which are ready. `./wiki.sh status` flags `pattern(s) ready`.
+- Do: paste merge request review comments into the session that wrote the code. That is the evidence that stops the same comment coming back.
+
 ## v10 (2026-10-22)
 
 - Journal backfill. `./wiki.sh journal backfill --since 14d` digests your past Claude Code sessions into `journal/backfill.md`. Ask an agent to "backfill my journal" and it writes entries for those days, then deletes the digest.

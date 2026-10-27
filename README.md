@@ -153,6 +153,33 @@ Some repositories are really one product. One piece of work touches several of t
 
 The test for grouping: if one session routinely works across the repositories, they are one wiki. If each is worked on alone and they only call each other, keep them separate.
 
+## Hand work to cheaper models
+
+A session on your most capable model doesn't need to spend it on a test run or a sweep across 200 files. Sessions hand that kind of work to sub-agents on cheaper models and keep design, debugging and review for themselves. Handing off is only worth it when the work is big, needs nothing from the conversation, and its result can be checked, so the session checks before relying on it.
+
+Your preferences live in `~/wikis/delegation.md`:
+
+- **mode:** `off` never hands off unless you ask. `ask`, the default, suggests each handoff in one line and waits for a yes. `auto` hands off and tells you after.
+- **Who does what:** a table of kinds of work, each with a model and effort. Rows marked `stay` never leave the session. Edit it to match the models your tool offers.
+- **Auto:** kinds of work you've approved without asking. After you say yes to the same kind three times, the session offers to add it here.
+
+`./wiki.sh setup delegation` sets the mode. `./wiki.sh delegation` shows the mode and, from a log on this machine, how often each kind of handoff came back fine, needed fixing, or was redone. Kinds that keep getting redone get a suggestion to move up a model.
+
+This needs a tool that can run sub-agents on a chosen model, such as Claude Code. Elsewhere sessions do the work themselves.
+
+## Stop repeating yourself
+
+Agents learn from repeat feedback. When you correct an agent, paste review comments on code it wrote, or watch it do the same steps again, it notes that in the wiki. Once the same thing has come up a few times, it asks one question with the evidence and offers a fix:
+
+- **The same review comment keeps coming back.** It becomes a line on the project's conventions page, and agents check code against it before calling the work done.
+- **You keep correcting how a shared library is used**, such as "go-common already records request metrics, don't add them". The rule goes in that library's wiki, so every repository that calls the library gets it.
+- **The same procedure in different repositories** becomes a skill, or a how-to page for agents without skills.
+- **The same mechanical steps over and over** become a small script, so the next run costs a command instead of a pile of tokens.
+
+A pattern is ready after 3 sightings, or 2 when they are review comments or come from different repositories. A "no" is remembered, and that pattern is only raised again if it keeps happening. `./wiki.sh patterns` shows what every wiki is tracking. The rules are in `template/rules/patterns.md`.
+
+Paste merge request comments into the session that wrote the code. They are the best evidence there is.
+
 ## Work journal and standups
 
 Ask any session "what did I do yesterday?" or "give me my standup" and it answers from what you actually did.
@@ -260,6 +287,7 @@ template/          The scaffold. Copied whole to start a wiki.
   rules/           The rest of the handbook. Read on demand.
   CLAUDE.md        Imports the handbook for Claude Code.
   links.md         Shared wikis this one can fall back to.
+  patterns.md      Recurring feedback, tallied toward a fix.
   repos.md         Repositories this wiki covers, when more than one.
   raw/             Immutable sources.
   wiki/            Compiled pages.
