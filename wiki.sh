@@ -7,10 +7,13 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATE="$REPO/template"
 WIKIS_DIR="${WIKIS_DIR:-$HOME/wikis}"
 SHARED="global"
+# The command people type, for messages. The plugin's stable `wiki` command sets
+# LLM_WIKI_CMD. A clone is run as ./wiki.sh.
+WIKI_CMD="${LLM_WIKI_CMD:-./wiki.sh}"
 
 usage() {
   cat <<EOF
-Usage: ./wiki.sh <command> [options]
+Usage: $WIKI_CMD <command> [options]
 
   setup                Walk through every setting, step by step. Safe to rerun.
   setup --new          Only what's new since you last ran it, such as after a template update.
@@ -245,7 +248,7 @@ git_init_collection() {
 # Commit everything, unless git has no name and email to commit as.
 git_first_commit() {
   if [ -z "$(git -C "$WIKIS_DIR" config user.email || true)" ] || [ -z "$(git -C "$WIKIS_DIR" config user.name || true)" ]; then
-    echo "git:     no commit name or email set yet, so nothing is committed. ./wiki.sh setup git sets them."
+    echo "git:     no commit name or email set yet, so nothing is committed. $WIKI_CMD setup git sets them."
     return 0
   fi
   git -C "$WIKIS_DIR" add -A
@@ -259,6 +262,16 @@ git_first_commit() {
 # wikis: the collection, or a wiki that is its own repo. Never a project's repo.
 HOOK_SRC="$REPO/hooks/pre-commit"
 HOOK_MARK="# llm-wiki secret scan"
+
+# How to add the scan to someone else's pre-commit hook. The plugin's folder is
+# deleted after an update, so from the plugin the advice is to copy, not to call.
+hook_advice() {
+  if from_plugin; then
+    printf 'copy the lines of %s into it. Copy, because that folder is deleted after a plugin update.' "$(tilde "$HOOK_SRC")"
+  else
+    printf 'call %s from it.' "$(tilde "$HOOK_SRC")"
+  fi
+}
 
 # hook_file <repo dir>: where git looks for this repo's pre-commit hook.
 hook_file() {
@@ -285,11 +298,11 @@ install_hook() {
   in_git_repo "$dir" && [ -f "$HOOK_SRC" ] || return 0
   case "$(hook_state "$dir")" in
     hookspath)
-      echo "note:    git here uses core.hooksPath, so the secret scan wasn't installed. To add it, call $(tilde "$HOOK_SRC") from your pre-commit hook."
+      echo "note:    git here uses core.hooksPath, so the secret scan wasn't installed. To add it to your pre-commit hook, $(hook_advice)"
       return 0
       ;;
     other)
-      echo "note:    $(tilde "$dir") already has a pre-commit hook, left alone. To add the secret scan, call $(tilde "$HOOK_SRC") from it."
+      echo "note:    $(tilde "$dir") already has a pre-commit hook, left alone. To add the secret scan, $(hook_advice)"
       return 0
       ;;
   esac
@@ -315,12 +328,22 @@ wiki_repo() {
 cmd_init() {
   init_collection
   if [ "$1" = 1 ]; then git_init_collection; fi
+  # The plugin's hook finds each session's wiki, and Claude Code reaches the plugin's own files.
+  if from_plugin; then
+    cat <<EOF
+
+Next:
+  1. Give Claude Code access to $(tilde "$WIKIS_DIR"), or approve the prompt the first time it reaches for it.
+  2. Walk through the rest:             $WIKI_CMD setup
+EOF
+    return 0
+  fi
   cat <<EOF
 
 Next:
   1. Give your agent access to $(tilde "$WIKIS_DIR") and $(tilde "$REPO").
-  2. Walk through the rest:             ./wiki.sh setup
-     Or just let sessions find wikis:   ./wiki.sh claude
+  2. Walk through the rest:             $WIKI_CMD setup
+     Or just let sessions find wikis:   $WIKI_CMD claude
 EOF
 }
 
@@ -341,7 +364,7 @@ EOF
 
 cmd_status() {
   local d v tv waiting f b lock line note since n found=0
-  [ -d "$WIKIS_DIR" ] || { echo "no wikis at $(tilde "$WIKIS_DIR"). Run: ./wiki.sh init"; return 0; }
+  [ -d "$WIKIS_DIR" ] || { echo "no wikis at $(tilde "$WIKIS_DIR"). Run: $WIKI_CMD init"; return 0; }
   tv="$(version_of "$TEMPLATE/AGENTS.md")"
   printf '%-26s %-9s %-8s %s\n' "WIKI" "HANDBOOK" "WAITING" "LOCK"
   for d in "$WIKIS_DIR"/*/; do
@@ -368,7 +391,7 @@ cmd_status() {
     if [ "${since:-0}" -ge 10 ]; then note="$note  <- lint due ($since ingests)"; fi
     n="$(patterns_ledger "$d" | grep -c '^ready|' || true)"
     if [ "${n:-0}" -gt 0 ]; then note="$note  <- $n pattern(s) ready"; fi
-    if [ -n "$tv" ] && [ "${v:-0}" -lt "$tv" ]; then note="$note  <- behind template v$tv, run: ./wiki.sh upgrade ${d##*/}"; fi
+    if [ -n "$tv" ] && [ "${v:-0}" -lt "$tv" ]; then note="$note  <- behind template v$tv, run: $WIKI_CMD upgrade ${d##*/}"; fi
     # Someone upgraded a shared wiki with a newer template than this clone.
     if [ -n "$tv" ] && [ "${v:-0}" -gt "$tv" ]; then note="$note  <- ahead of your template v$tv, run: git -C $(tilde "$REPO") pull"; fi
     if [ -f "$d/repos.md" ] && grep -q '^- ' "$d/repos.md"; then
@@ -376,7 +399,7 @@ cmd_status() {
     fi
     printf '%-26s %-9s %-8s %s%s\n' "${d##*/}" "v${v:-?}" "$waiting" "$lock" "$note"
   done
-  [ "$found" = 1 ] || echo "(none yet. Run: ./wiki.sh init)"
+  [ "$found" = 1 ] || echo "(none yet. Run: $WIKI_CMD init)"
   if [ -f "$JOURNAL_CFG" ]; then
     echo "journal: $(journal_get enabled), commit $(journal_get commit), entries $(journal_get entries)"
   fi
@@ -384,15 +407,15 @@ cmd_status() {
   if in_git_repo "$WIKIS_DIR" && [ -f "$WIKIS_DIR/WIKIS.md" ]; then
     case "$(hook_state "$WIKIS_DIR")" in
       ours) command -v gitleaks >/dev/null 2>&1 || echo "secrets: commits aren't scanned, gitleaks isn't installed. Run: brew install gitleaks" ;;
-      none) echo "secrets: commits aren't scanned. Run: ./wiki.sh upgrade --all" ;;
-      *) echo "secrets: another pre-commit hook is in place. Call $(tilde "$HOOK_SRC") from it to scan commits." ;;
+      none) echo "secrets: commits aren't scanned. Run: $WIKI_CMD upgrade --all" ;;
+      *) echo "secrets: another pre-commit hook is in place. To scan commits, $(hook_advice)" ;;
     esac
   fi
   n="$(setup_pending | wc -l | tr -d ' ')"
   if [ ! -f "$SETUP_STATE" ]; then
-    echo "setup:   never run on this machine. Run: ./wiki.sh setup"
+    echo "setup:   never run on this machine. Run: $WIKI_CMD setup"
   elif [ "$n" -gt 0 ]; then
-    echo "setup:   $n new setting(s). Run: ./wiki.sh setup --new"
+    echo "setup:   $n new setting(s). Run: $WIKI_CMD setup --new"
   fi
 }
 
@@ -589,12 +612,12 @@ upgrade_summary() {
   fi
   upgrade_commit_hint "$names" "- "
   if [ "$(claude_state)" = old ]; then
-    echo "- Your Claude Code wiki line is out of date: ./wiki.sh claude"
+    echo "- Your Claude Code wiki line is out of date: $WIKI_CMD claude"
   fi
   if [ -n "$(setup_pending)" ]; then
-    echo "- New settings to look at: ./wiki.sh setup --new"
+    echo "- New settings to look at: $WIKI_CMD setup --new"
   fi
-  echo "- Settings any time: ./wiki.sh setup --list"
+  echo "- Settings any time: $WIKI_CMD setup --list"
 }
 
 cmd_unlock() {
@@ -719,8 +742,8 @@ write_journal_config() {
   mkdir -p "$JOURNAL_DIR"
   [ -f "$JOURNAL_CFG" ] && return 0
   {
-    echo "# Work journal settings. Change them with: ./wiki.sh journal set <key> <value>"
-    echo "# or walk through them with: ./wiki.sh setup journal"
+    echo "# Work journal settings. Change them with: $WIKI_CMD journal set <key> <value>"
+    echo "# or walk through them with: $WIKI_CMD setup journal"
     echo "# Agents read this file. See rules/journal.md in any wiki."
     printf '%s\n' "$JOURNAL_SETTINGS" | while IFS='|' read -r key _ _ def desc; do
       printf '\n# %s\n%s=%s\n' "$desc" "$key" "$def"
@@ -900,7 +923,7 @@ journal_prune() {
 journal_show() {
   local k today f
   if [ ! -f "$JOURNAL_CFG" ]; then
-    echo "no journal config yet. It is on by default: ./wiki.sh journal on creates it."
+    echo "no journal config yet. It is on by default: $WIKI_CMD journal on creates it."
     return 0
   fi
   echo "journal: $(tilde "$JOURNAL_DIR")"
@@ -927,7 +950,7 @@ cmd_journal_note() {
   case "$day" in '' | [0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]) ;; *) die "--day takes a date like 2026-10-21" ;; esac
   case "$at" in '' | [0-2][0-9]:[0-5][0-9]) ;; *) die "--at takes a time like 14:05" ;; esac
   if [ -n "$day" ] && [[ "$day" > "$(journal_today)" ]]; then die "--day can't be in the future"; fi
-  [ $# -ge 2 ] || die "usage: ./wiki.sh journal note [--day DATE] [--at HH:MM] <project> <text>"
+  [ $# -ge 2 ] || die "usage: $WIKI_CMD journal note [--day DATE] [--at HH:MM] <project> <text>"
   journal_note "$1" "$(shift; printf '%s ' "$@" | sed 's/ $//')" "$day" "$at"
 }
 
@@ -1104,7 +1127,7 @@ cmd_journal() {
     show) journal_show ;;
     on) write_journal_config >/dev/null; journal_set enabled yes; apply_journal_commit ;;
     off) write_journal_config >/dev/null; journal_set enabled no ;;
-    set) [ $# -ge 1 ] || die "usage: ./wiki.sh journal set <key> <value>"; journal_set "$1" "${2:-}" ;;
+    set) [ $# -ge 1 ] || die "usage: $WIKI_CMD journal set <key> <value>"; journal_set "$1" "${2:-}" ;;
     note) cmd_journal_note "$@" ;;
     backfill) journal_backfill "$@" ;;
     path) journal_file_for "$(journal_today)"; printf '\n' ;;
@@ -1396,7 +1419,7 @@ write_delegation_file() {
   cat > "$DELEG_FILE" <<'EOF2'
 # Delegation
 
-How sessions hand work to sub-agents on cheaper models. This file is yours alone: git ignores it, so it never reaches coworkers or your other machines. Edit it freely. Agents read it and follow `rules/delegation.md` in any wiki. Change the mode with `./wiki.sh setup delegation`.
+How sessions hand work to sub-agents on cheaper models. This file is yours alone: git ignores it, so it never reaches coworkers or your other machines. Edit it freely. Agents read it and follow `rules/delegation.md` in any wiki. Change the mode with `wiki.sh setup delegation`.
 
 mode: ask
 
@@ -1459,7 +1482,7 @@ cmd_delegation() {
     *) die "delegation commands: show, off, ask, auto" ;;
   esac
   if [ ! -f "$DELEG_FILE" ]; then
-    echo "no $(tilde "$DELEG_FILE") yet. Mode is ask by default. ./wiki.sh setup delegation creates it."
+    echo "no $(tilde "$DELEG_FILE") yet. Mode is ask by default. $WIKI_CMD setup delegation creates it."
     return 0
   fi
   echo "delegation: mode $(deleg_mode)   ($(tilde "$DELEG_FILE"))"
@@ -1492,7 +1515,7 @@ setup_done() { [ -f "$SETUP_STATE" ] && grep -qxF -- "$1" "$SETUP_STATE"; }
 
 setup_mark() {
   mkdir -p "$(dirname "$SETUP_STATE")"
-  [ -f "$SETUP_STATE" ] || printf '# Setup questions answered on this machine. Written by ./wiki.sh setup.\n' > "$SETUP_STATE"
+  [ -f "$SETUP_STATE" ] || printf '# Setup questions answered on this machine. Written by $WIKI_CMD setup.\n' > "$SETUP_STATE"
   ensure_line "$SETUP_STATE" "$1"
 }
 
@@ -1673,7 +1696,7 @@ setup_push_check() {
   else
     echo "  push failed:"
     printf '%s\n' "$err" | grep -v '^$' | head -n 4 | sed 's/^/    /'
-    echo "  Fix the key or the remote, then run: ./wiki.sh setup git"
+    echo "  Fix the key or the remote, then run: $WIKI_CMD setup git"
   fi
 }
 
@@ -1781,7 +1804,7 @@ setup_journal() {
   [ -n "$due" ] || return 0
   section "Work journal"
   write_journal_config | sed 's/^/  /'
-  echo "Agents note work that leaves no commit, and ./wiki.sh standup turns your day into a report."
+  echo "Agents note work that leaves no commit, and $WIKI_CMD standup turns your day into a report."
   for k in $due; do
     [ "$(journal_field "$k" 3)" = basic ] || { adv="$adv $k"; continue; }
     setup_journal_key "$k"
@@ -1825,8 +1848,8 @@ setup_list() {
   done
   case "$pending" in *" git "* | *" git.identity "*) echo "(git questions not yet answered on this machine)" ;; esac
   echo
-  echo "Change one:    ./wiki.sh setup journal.<key>   or   ./wiki.sh setup git.identity"
-  echo "Or a section:  ./wiki.sh setup git | claude | upgrade | delegation | journal"
+  echo "Change one:    $WIKI_CMD setup journal.<key>   or   $WIKI_CMD setup git.identity"
+  echo "Or a section:  $WIKI_CMD setup git | claude | upgrade | delegation | journal"
 }
 
 cmd_setup() {
@@ -1836,8 +1859,8 @@ cmd_setup() {
       --new) SETUP_MODE=new ;;
       --list) setup_list; return 0 ;;
       -h | --help)
-        cat <<'EOF'
-Usage: ./wiki.sh setup [--new | --list | <section> | <setting>]
+        cat <<EOF
+Usage: $WIKI_CMD setup [--new | --list | <section> | <setting>]
 
   setup            Walk through every setting. Enter keeps what you have.
   setup --new      Only what's missing, out of date, or added since you last ran it.
@@ -1856,12 +1879,12 @@ EOF
       *)
         # A bare journal key works too: setup format
         if [ -n "$(journal_field "$a" 2)" ]; then what="journal.$a"; else
-          die "setup: unknown option $a. Try ./wiki.sh setup --help"
+          die "setup: unknown option $a. Try $WIKI_CMD setup --help"
         fi
         ;;
     esac
   done
-  [ -t 0 ] || die "setup asks questions, so it needs a terminal. ./wiki.sh setup --list prints the current values."
+  [ -t 0 ] || die "setup asks questions, so it needs a terminal. $WIKI_CMD setup --list prints the current values."
   if [ "$SETUP_MODE" = new ] && [ -d "$WIKIS_DIR" ] && [ "$(claude_state)" = current ]; then
     n="$(setup_pending | wc -l | tr -d ' ')"
     [ "$n" -gt 0 ] || [ -n "$(setup_upgrade_needed)" ] || { echo "Nothing new to set up."; return 0; }
@@ -1875,7 +1898,7 @@ EOF
     journal) SETUP_MODE=all; setup_journal ;;
     delegation) SETUP_MODE=all; setup_delegation ;;
     git.identity)
-      in_git_repo "$WIKIS_DIR" || die "$(tilde "$WIKIS_DIR") isn't a git repo yet. Run: ./wiki.sh setup git"
+      in_git_repo "$WIKIS_DIR" || die "$(tilde "$WIKIS_DIR") isn't a git repo yet. Run: $WIKI_CMD setup git"
       setup_identity
       setup_push_check
       ;;
@@ -1896,7 +1919,7 @@ EOF
     *.*) return 0 ;;
   esac
   echo
-  echo "Done. Run ./wiki.sh setup --new after pulling template updates to see what's new."
+  echo "Done. Run $WIKI_CMD setup --new after pulling template updates to see what's new."
 }
 
 # Names of wikis behind the template handbook, space separated.
@@ -1933,7 +1956,7 @@ if [ "$cmd" = setup ]; then
   exit 0
 fi
 if [ "$cmd" = cover ]; then
-  [ $# -ge 2 ] || die "usage: ./wiki.sh cover <wiki> <repo>..."
+  [ $# -ge 2 ] || die "usage: $WIKI_CMD cover <wiki> <repo>..."
   cmd_cover "$@"
   exit 0
 fi

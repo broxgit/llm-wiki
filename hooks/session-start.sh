@@ -27,8 +27,26 @@ emit() {
 
 [ -x "$WIKI_SH" ] || exit 0
 
+# A stable terminal command. The plugin's folder changes with every update, and old
+# folders are deleted, so people can't type that path. The data folder survives
+# updates. Point the command at this version, rewriting it only when it changes.
+CMD=""
+if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
+  CMD="$CLAUDE_PLUGIN_DATA/bin/wiki"
+  shim="#!/bin/sh
+# The llm-wiki plugin's terminal command. Its session hook rewrites this file when the plugin updates.
+[ -x \"$WIKI_SH\" ] || { echo \"wiki: the llm-wiki plugin has updated. Start a Claude Code session once to refresh this command.\" >&2; exit 1; }
+LLM_WIKI_CMD=wiki exec \"$WIKI_SH\" \"\$@\""
+  if [ "$(cat "$CMD" 2>/dev/null)" != "$shim" ]; then
+    mkdir -p "${CMD%/*}" && printf '%s\n' "$shim" > "$CMD" && chmod +x "$CMD" || CMD=""
+  fi
+fi
+# How the user runs it in a terminal: `wiki` once it's on their PATH, the full path until then.
+TYPE="${CMD:-$WIKI_SH}"
+[ -n "$CMD" ] && [ "$(command -v wiki 2>/dev/null)" -ef "$CMD" ] && TYPE="wiki"
+
 if [ ! -d "$WIKIS_DIR" ]; then
-  emit "llm-wiki plugin: there is no wiki collection at $WIKIS_DIR yet, so this session has no wiki. If the user asks about wikis, tell them to run this in a terminal: $WIKI_SH setup"
+  emit "llm-wiki plugin: there is no wiki collection at $WIKIS_DIR yet, so this session has no wiki. If the user asks about wikis, tell them to run this in a terminal: $TYPE setup"
 fi
 
 # The repository's name: the last part of its remote URL, or its folder name.
@@ -79,7 +97,12 @@ This session's knowledge wiki is $wiki${repo:+, for the repository $repo}. Its h
 ${note:+
 $note
 }
-wiki.sh, the template repo's script that the handbook and its rules refer to, is at: $WIKI_SH"
+wiki.sh, the template repo's script that the handbook and its rules refer to, is at: $WIKI_SH
+When the user runs it in a terminal, the command is: $TYPE"
+if [ -n "$CMD" ] && [ "$TYPE" != wiki ]; then
+  ctx="$ctx
+\`wiki\` isn't on the user's PATH yet. The first time you give them a wiki.sh command to run, offer once to make it one word: \`ln -s \"$CMD\" ~/.local/bin/wiki\` when ~/.local/bin is on their PATH, or an alias in their shell profile."
+fi
 if [ "$waiting" -gt 0 ]; then
   ctx="$ctx
 
@@ -88,7 +111,7 @@ fi
 if [ -n "$wv" ] && [ -n "$tv" ] && [ "$wv" -lt "$tv" ]; then
   ctx="$ctx
 
-This wiki's handbook is v$wv and the plugin's template is v$tv. Tell the user once: run $WIKI_SH upgrade --all"
+This wiki's handbook is v$wv and the plugin's template is v$tv. Tell the user once: run $TYPE upgrade --all"
 fi
 ctx="$ctx
 
