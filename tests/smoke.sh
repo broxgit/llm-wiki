@@ -97,6 +97,8 @@ case "$out" in *"handbook: v12 -> v$TV"*) ok "upgrade moves the handbook to v$TV
 case "$out" in *"What's new since v12"*) ok "upgrade prints the changelog" ;; *) bad "upgrade prints the changelog" "$out" ;; esac
 check "upgrade restores patterns.md" test -f "$WIKIS_DIR/demo/patterns.md"
 check "upgrade restores .gitattributes" test -f "$WIKIS_DIR/demo/.gitattributes"
+case "$out" in *"Committed the upgrade"*) ok "upgrade commits its own changes" ;; *) bad "upgrade commits its own changes" "$out" ;; esac
+check "a wiki's rules/delegation.md isn't git-ignored" bash -c "! git -C '$WIKIS_DIR' check-ignore -q demo/rules/delegation.md"
 set_version "$WIKIS_DIR/demo/AGENTS.md" 999
 expect "status flags a wiki ahead of the template" "ahead of your template" "$W" status
 expect "upgrade leaves a newer wiki alone" "newer than your template" "$W" upgrade demo
@@ -280,6 +282,36 @@ n="$(printf '%s' "$out" | wc -c | tr -d ' ')"
 if [ "$n" -lt 2000 ]; then ok "with a tip the hook's context is still short ($n chars)"; else bad "with a tip the hook's context is still short ($n chars, limit 2000)"; fi
 lacks "no tip right after compaction" "One tip" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; hook '$T/projects/web' '{\"source\":\"compact\"}' | context"
 unset XDG_CONFIG_HOME
+
+section "Weekly report"
+mkdir -p "$HOME/.claude/projects/p1"
+now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+big="$(awk 'BEGIN { for (i = 0; i < 4000; i++) printf "x" }')"
+{
+  # One reply recorded twice, as Claude Code does for multi-part replies: counted once.
+  printf '{"type":"assistant","timestamp":"%s","cwd":"%s","sessionId":"s1","message":{"id":"m1","usage":{"input_tokens":100,"cache_creation_input_tokens":1900,"cache_read_input_tokens":50000,"output_tokens":300},"content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"%s"}}]}}\n' "$now" "$T/projects/web" "$WIKIS_DIR/demo/index.md"
+  printf '{"type":"assistant","timestamp":"%s","cwd":"%s","sessionId":"s1","message":{"id":"m1","usage":{"input_tokens":100,"cache_creation_input_tokens":1900,"cache_read_input_tokens":50000,"output_tokens":300},"content":[{"type":"text","text":"ok"}]}}\n' "$now" "$T/projects/web"
+  printf '{"type":"user","timestamp":"%s","cwd":"%s","sessionId":"s1","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"%s"}]}}\n' "$now" "$T/projects/web" "$big"
+} > "$HOME/.claude/projects/p1/s1.jsonl"
+out="$("$W" report 2>&1)"
+case "$out" in *"| demo | 1 | 2k | 50k | 300 | 1k |"*) ok "tokens: a covered repository's session counts toward its wiki, each reply once" ;; *) bad "tokens: a covered repository's session counts toward its wiki, each reply once" "$out" ;; esac
+case "$out" in *"Wiki reads are about 5"[0-9].[0-9]"% of new input"*) ok "tokens: wiki reads are estimated against new input" ;; *) bad "tokens: wiki reads are estimated against new input" "$out" ;; esac
+case "$out" in *"## What the wikis gained"*"- demo:"*"note(s) captured"*) ok "report lists what each wiki gained" ;; *) bad "report lists what each wiki gained" "$out" ;; esac
+printf '> **Conflict:** raw/a.md says X. raw/b.md says Y. Unresolved.\n' >> "$WIKIS_DIR/demo/wiki/conflict-test.md"
+printf '\n## Wrap errors\n- kind: review\n- rule: Wrap errors.\n- status: proposed 2026-10-20\n' >> "$WIKIS_DIR/demo/patterns.md"
+out="$("$W" report 2>&1)"
+case "$out" in *"## Needs you"*"open **Conflict:**"*) ok "Needs you lists open contradictions" ;; *) bad "Needs you lists open contradictions" "$out" ;; esac
+case "$out" in *"waits for an answer: Wrap errors"*) ok "Needs you lists unanswered proposals" ;; *) bad "Needs you lists unanswered proposals" "$out" ;; esac
+rm -f "$WIKIS_DIR/demo/wiki/conflict-test.md"
+lacks "a new collection's report isn't due yet" "due" "$W" report --due
+touch -t 202001010000 "$WIKIS_DIR/WIKIS.md"
+rm -f "$HOME/.config/llm-wiki/tips"
+expect "after a week the report is due" "due" "$W" report --due
+lacks "and then not again for a week" "due" "$W" report --due
+rm -f "$HOME/.config/llm-wiki/tips"
+out="$(hook "$T/projects/web" '{"source":"startup"}' | context 2>&1)"
+case "$out" in *"weekly wiki report is due"*) ok "the session hook offers the weekly report" ;; *) bad "the session hook offers the weekly report" "$out" ;; esac
+case "$out" in *"One tip"*) bad "a week with a report offer has no tip" "$out" ;; *) ok "a week with a report offer has no tip" ;; esac
 
 section "Stats"
 expect "stats with no log says so" "No lookups logged yet" "$W" stats

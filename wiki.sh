@@ -43,6 +43,8 @@ Usage: $WIKI_CMD <command> [options]
   patterns             Recurring feedback across wikis, and which patterns are ready to propose.
   skills [link]        Team skills in the wikis, and link them into ~/.claude/skills.
   tips [--mute NAME]   Features your own wikis suggest you'd get something out of.
+  report [--since R]   Weekly look: tokens per project, what the wikis gained, hit
+                       rate, and what needs you. An agent writes it up.
   stats [range]        How often wikis answered the questions sessions checked them for (default 30d).
   delegation [off|ask|auto]  Show handoff mode and results by kind of work, or set the mode.
   upgrade <name|path>  Bring a wiki's handbook and scaffold files up to the template's.
@@ -768,19 +770,38 @@ changelog_since() {
   ' "$REPO/CHANGELOG.md"
 }
 
-# upgrade_commit_hint <names> <prefix>: if upgraded wikis have uncommitted changes, say how to commit them.
-upgrade_commit_hint() {
-  local d paths="" dirty tv
+# upgrade_commit <names> <prefix>: commit what the upgrade changed in those wikis, so
+# it can't sit uncommitted. Sessions upgrade on their own and were leaving it to the
+# agent, which didn't always commit. Only files the handbook owns, and template files
+# the upgrade added, go in: a wiki's own uncommitted notes and pages stay out. Pushing
+# is left to the session, as for any wiki commit.
+upgrade_commit() {
+  local d f paths="" tv
   [ -n "$1" ] && in_git_repo "$WIKIS_DIR" || return 0
   tv="$(version_of "$TEMPLATE/AGENTS.md")"
-  for d in $1; do paths="$paths $d"; done
-  # Upgrades can add ignore rules for the journal and delegation files.
-  if [ -n "$(cd "$WIKIS_DIR" && git status --porcelain -- .gitignore 2>/dev/null)" ]; then paths="$paths .gitignore"; fi
+  for d in $1; do
+    for f in AGENTS.md CLAUDE.md rules .gitattributes .gitignore; do
+      [ -e "$WIKIS_DIR/$d/$f" ] && paths="$paths $d/$f"
+    done
+    # Template files the upgrade created, such as patterns.md in an old wiki.
+    while IFS= read -r f; do
+      [ -n "$f" ] && paths="$paths $f"
+    done < <(cd "$WIKIS_DIR" && (cd "$TEMPLATE" && find . -type f | sed "s#^\./#$d/#") | while IFS= read -r f; do
+      [ -e "$f" ] && ! git ls-files --error-unmatch -- "$f" >/dev/null 2>&1 && printf '%s\n' "$f"
+    done)
+  done
+  # Upgrades can add ignore rules for the journal, delegation and stats files.
+  [ -f "$WIKIS_DIR/.gitignore" ] && paths="$paths .gitignore"
   # shellcheck disable=SC2086
-  dirty="$(cd "$WIKIS_DIR" && git status --porcelain -- $paths 2>/dev/null | head -n 1)"
-  [ -n "$dirty" ] || return 0
-  echo "${2}The upgrade isn't committed. To commit it now:"
-  echo "    git -C $(tilde "$WIKIS_DIR") add${paths} && git -C $(tilde "$WIKIS_DIR") commit -m \"wikis: handbook v$tv\" && git -C $(tilde "$WIKIS_DIR") push"
+  [ -n "$(cd "$WIKIS_DIR" && git status --porcelain -- $paths 2>/dev/null | head -n 1)" ] || return 0
+  # shellcheck disable=SC2086
+  if (cd "$WIKIS_DIR" && git add -- $paths && git commit -q -m "wikis: handbook v$tv" -- $paths) >/dev/null 2>&1; then
+    echo "${2}Committed the upgrade as \"wikis: handbook v$tv\"."
+    [ -z "$(git -C "$WIKIS_DIR" remote)" ] || echo "${2}Push it: git -C $(tilde "$WIKIS_DIR") push"
+  else
+    echo "${2}The upgrade isn't committed: git refused. Commit it yourself:"
+    echo "    git -C $(tilde "$WIKIS_DIR") add${paths} && git -C $(tilde "$WIKIS_DIR") commit -m \"wikis: handbook v$tv\""
+  fi
 }
 
 # upgrade_summary <from> <upgraded names> [one wiki root]: what changed and what to do next.
@@ -811,7 +832,7 @@ upgrade_summary() {
   if [ -n "$names" ]; then
     echo "- New sessions load the new handbook. Sessions already running keep the old one until you restart them."
   fi
-  upgrade_commit_hint "$names" "- "
+  upgrade_commit "$names" "- "
   if [ "$(claude_state)" = old ]; then
     echo "- Your Claude Code wiki line is out of date: $WIKI_CMD claude"
   fi
@@ -988,13 +1009,15 @@ remove_line() {
 apply_journal_commit() {
   local gi="$WIKIS_DIR/.gitignore"
   in_git_repo "$WIKIS_DIR" || return 0
+  # Anchored with /: unanchored, it would also hide any folder called journal in a wiki.
+  remove_line "$gi" "journal/"
   if [ "$(journal_get commit)" = yes ]; then
-    remove_line "$gi" "journal/"
+    remove_line "$gi" "/journal/"
     if git -C "$WIKIS_DIR" check-ignore -q journal/config 2>/dev/null; then
       echo "note:    another ignore rule still hides journal/. Check $(tilde "$gi")."
     fi
   else
-    ensure_line "$gi" "journal/"
+    ensure_line "$gi" "/journal/"
     if [ -n "$(git -C "$WIKIS_DIR" ls-files journal 2>/dev/null)" ]; then
       echo "note:    journal files are already tracked. To stop tracking them: git -C $(tilde "$WIKIS_DIR") rm -r --cached journal"
     fi
@@ -1754,6 +1777,8 @@ tip_set() {
 record_use() {
   case "$1:${2:-}" in
     seed:* | standup:* | stats:* | find:* | stale:* | skills:* | delegation:*) tip_set "used:$1" ;;
+    report:--due) ;;
+    report:*) tip_set "used:report" ;;
     journal:backfill) tip_set "used:backfill" ;;
   esac
   return 0
@@ -1924,6 +1949,235 @@ EOF
   esac
 }
 
+# ---- report -----------------------------------------------------------------
+# A weekly look at whether the wikis earn their keep, and what waits on a person.
+# Tokens come from Claude Code's transcripts, which record each reply's usage.
+# "Wiki reads" is an estimate: the size of what sessions read from the wikis, at
+# about four characters a token. The agent writes the material up.
+
+# report_tokens <start> <end>: the Tokens section, from transcripts.
+report_tokens() {
+  local from="$HOME/.claude/projects"
+  if [ ! -d "$from" ] || ! command -v python3 >/dev/null 2>&1; then
+    echo "No Claude Code transcripts on this machine${from:+ (or no python3)}, so no token counts."
+    return 0
+  fi
+  python3 - "$from" "$1" "$2" "$(journal_get day_starts)" "$WIKIS_DIR" "$REPO" <<'PY'
+import json, os, re, subprocess, sys
+from datetime import datetime, timedelta, date
+from pathlib import Path
+
+sess_dir, start, end, day_starts, wikis, repo = sys.argv[1:7]
+start = date.fromisoformat(start); end = date.fromisoformat(end)
+dh, dm = (int(x) for x in day_starts.split(":"))
+wikis_real = os.path.realpath(wikis)
+
+cover = {}
+for rp in Path(wikis).glob("*/repos.md"):
+    for line in rp.read_text(errors="replace").splitlines():
+        if line.startswith("- "):
+            cover[line[2:].strip()] = rp.parent.name
+known = set(cover) | set(cover.values()) | {d.name for d in Path(wikis).iterdir() if (d / "AGENTS.md").is_file()}
+_proj = {}
+def project(cwd):
+    if not cwd: return None
+    if cwd in _proj: return _proj[cwd]
+    name = os.path.basename(cwd.rstrip("/")) or cwd
+    if os.path.isdir(cwd):
+        def git(*a):
+            try: return subprocess.run(["git", "-C", cwd, *a], capture_output=True, text=True, timeout=5).stdout.strip()
+            except Exception: return ""
+        url = git("config", "--get", "remote.origin.url"); top = git("rev-parse", "--show-toplevel")
+        if url: name = re.sub(r"\.git$", "", url.rstrip("/")).split("/")[-1].split(":")[-1]
+        elif top: name = os.path.basename(top)
+    if os.path.realpath(cwd) == wikis_real: name = "wikis"
+    name = cover.get(name, name)
+    # A scratch folder inside a project, such as politiboop/sweeps/b41, belongs to it.
+    if name not in known and name != "wikis":
+        name = next((x for x in reversed(Path(cwd).parts[:-1]) if x in known), None)
+    _proj[cwd] = name
+    return name
+
+def is_wiki_path(p):
+    return isinstance(p, str) and (os.path.realpath(os.path.expanduser(p)).startswith(wikis_real + os.sep))
+def touches_wiki(use):
+    inp = use.get("input") or {}
+    for k in ("file_path", "notebook_path", "path"):
+        if is_wiki_path(inp.get(k)): return True
+    cmd = str(inp.get("command", ""))
+    return wikis in cmd or wikis_real in cmd or "~/wikis" in cmd or "wiki.sh" in cmd or re.match(r"\s*wiki\s", cmd) is not None
+
+def day_of(ts):
+    t = datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone()
+    return (t - timedelta(hours=dh, minutes=dm)).date()
+
+cutoff = datetime.combine(start - timedelta(days=1), datetime.min.time()).timestamp()
+rows = {}      # project -> counts
+seen = set()   # message ids already counted
+for f in Path(sess_dir).rglob("*.jsonl"):
+    if f.stat().st_mtime < cutoff: continue
+    wiki_uses = {}   # tool_use id -> project
+    recs = []
+    for line in open(f, errors="replace"):
+        try: r = json.loads(line)
+        except ValueError: continue
+        if r.get("timestamp"): recs.append(r)
+    # A session started in a stray folder counts toward the project it mostly ran in.
+    counts = {}
+    for r in recs:
+        x = project(r.get("cwd"))
+        if x: counts[x] = counts.get(x, 0) + 1
+    main = max(counts, key=counts.get) if counts else None
+    for r in recs:
+        d = day_of(r["timestamp"])
+        if d < start or d > end: continue
+        p = project(r.get("cwd")) or main or "other folders"
+        row = rows.setdefault(p, {"sessions": set(), "new": 0, "cached": 0, "out": 0, "wiki": 0})
+        row["sessions"].add(r.get("sessionId", f.stem))
+        msg = r.get("message") or {}
+        u = msg.get("usage")
+        mid = msg.get("id")
+        if u and mid not in seen:
+            seen.add(mid)
+            row["new"] += u.get("input_tokens", 0) + u.get("cache_creation_input_tokens", 0)
+            row["cached"] += u.get("cache_read_input_tokens", 0)
+            row["out"] += u.get("output_tokens", 0)
+        for c in msg.get("content") or []:
+            if not isinstance(c, dict): continue
+            if c.get("type") == "tool_use" and touches_wiki(c):
+                wiki_uses[c.get("id")] = p
+                row["wiki"] += len(json.dumps(c.get("input") or {})) // 4
+            elif c.get("type") == "tool_result" and c.get("tool_use_id") in wiki_uses:
+                body = c.get("content")
+                if isinstance(body, list): body = " ".join(x.get("text", "") for x in body if isinstance(x, dict))
+                rows[wiki_uses[c["tool_use_id"]]]["wiki"] += len(str(body or "")) // 4
+
+rows = {p: r for p, r in rows.items() if r["new"] or r["out"]}
+if not rows:
+    print("No Claude Code sessions in this range."); sys.exit()
+def k(n): return f"{n / 1e6:.1f}M" if n >= 1e6 else (f"{n / 1e3:.0f}k" if n >= 1e3 else str(n))
+print("| Project | Sessions | New input | Cache reads | Output | Wiki reads (est.) |")
+print("|---|---|---|---|---|---|")
+tot = {"s": 0, "new": 0, "cached": 0, "out": 0, "wiki": 0}
+for p, r in sorted(rows.items(), key=lambda x: -(x[1]["new"] + x[1]["cached"])):
+    print(f"| {p} | {len(r['sessions'])} | {k(r['new'])} | {k(r['cached'])} | {k(r['out'])} | {k(r['wiki'])} |")
+    tot["s"] += len(r["sessions"]); tot["new"] += r["new"]; tot["cached"] += r["cached"]; tot["out"] += r["out"]; tot["wiki"] += r["wiki"]
+print(f"| all | {tot['s']} | {k(tot['new'])} | {k(tot['cached'])} | {k(tot['out'])} | {k(tot['wiki'])} |")
+share = 100 * tot["wiki"] / tot["new"] if tot["new"] else 0
+print(f"\nWiki reads are about {share:.1f}% of new input. New input is what entered a session's context for the first time; cache reads are that context read again on later turns.")
+PY
+}
+
+# report_gains <start> <end>: per wiki, what was captured, compiled and added.
+report_gains() {
+  local d notes line any=0 s="$1" e="$2"
+  for d in "$WIKIS_DIR"/*/; do
+    d="${d%/}"
+    is_wiki "$d" || continue
+    excluded "${d##*/}" && continue
+    notes="$(ls "$d"/raw 2>/dev/null | awk -v s="$s" -v e="$e" '{ x = substr($0, 1, 10) } x >= s && x <= e' | wc -l | tr -d ' ' || true)"
+    line="$(awk -v s="$s" -v e="$e" '
+      /^## [0-9]{4}-[0-9]{2}-[0-9]{2} / { inr = ($2 >= s && $2 <= e); if (inr && $3 == "ingest:") ing++; if (inr && $3 == "lint") lint++; next }
+      inr && /^- created: / && $3 !~ /^wiki\/sources\// { c++ }
+      inr && /^- updated: / && $3 !~ /^wiki\/sources\// { u++ }
+      END { printf "%d %d %d %d", ing, c, u, lint }' "$d/log.md" 2>/dev/null)"
+    set -- $line
+    local skills
+    skills=0
+    [ ! -d "$d/skills" ] || skills="$(find "$d/skills" -name SKILL.md -newermt "$s" 2>/dev/null | wc -l | tr -d ' ')"
+    [ "$notes$1$2$3$4$skills" != "000000" ] || continue
+    any=1
+    printf -- '- %s: %s note(s) captured, %s compiled, pages %s created and %s updated%s%s\n' "${d##*/}" "$notes" "${1:-0}" "${2:-0}" "${3:-0}" \
+      "$([ "${4:-0}" -gt 0 ] && echo ", ${4} lint run(s)")" "$([ "$skills" -gt 0 ] && echo ", $skills skill(s) added or changed")"
+  done
+  [ "$any" = 1 ] || echo "Nothing captured or compiled in this range."
+}
+
+# report_lookups <start> <end>: hit rate per wiki, from stats.csv.
+report_lookups() {
+  if [ ! -s "$STATS_FILE" ]; then echo "No lookups logged. Sessions on handbook v16 or later log them."; return 0; fi
+  awk -F, -v s="$1" -v e="$2" '
+    $1 ~ /^20/ && $1 >= s && $1 <= e && NF >= 3 { n[$2]++; if ($3 ~ /^hit/) h[$2]++; t++; ht += ($3 ~ /^hit/) }
+    END {
+      if (!t) { print "No lookups logged in this range."; exit }
+      for (w in n) printf "- %s: %d lookup(s), %d%% answered\n", w, n[w], 100 * h[w] / n[w]
+      printf "- all: %d lookup(s), %d%% answered\n", t, 100 * ht / t
+    }' "$STATS_FILE"
+}
+
+# report_needs_you: what waits on a person, whatever the range.
+report_needs_you() {
+  local d n lines any=0 tv v cutoff stale=0 muted
+  tv="$(version_of "$TEMPLATE/AGENTS.md")"
+  cutoff="$(days_ago 90)"
+  for d in "$WIKIS_DIR"/*/; do
+    d="${d%/}"
+    is_wiki "$d" || continue
+    excluded "${d##*/}" && continue
+    lines="$(grep -rhE '^> \*\*(Check|Conflict):\*\*' "$d/wiki" 2>/dev/null | head -n 3 | sed 's/^> //' || true)"
+    if [ -n "$lines" ]; then any=1; printf '%s\n' "$lines" | sed "s/^/- ${d##*/}: open /"; fi
+    lines="$(awk '/^## /{ name = substr($0, 4) } /^- status: proposed/{ print name }' "$d/patterns.md" 2>/dev/null || true)"
+    if [ -n "$lines" ]; then any=1; printf '%s\n' "$lines" | sed "s/^/- ${d##*/}: a proposed fix still waits for an answer: /"; fi
+    n="$(patterns_ledger "$d" | grep -c '^ready|' || true)"
+    if [ "${n:-0}" -gt 0 ]; then any=1; echo "- ${d##*/}: $n repeated pattern(s) ready for a fix. wiki patterns lists them."; fi
+    n="$(pending_files "$d" | wc -l | tr -d ' ')"
+    if [ "$n" -gt 10 ]; then any=1; echo "- ${d##*/}: $n notes waiting to be compiled."; fi
+    v="$(version_of "$d/AGENTS.md")"
+    if [ -n "$tv" ] && [ "${v:-0}" -lt "$tv" ]; then any=1; echo "- ${d##*/}: handbook v${v:-?}, behind v$tv."; fi
+    while IFS= read -r v; do
+      [[ "$v" < "$cutoff" ]] && stale=$((stale + 1))
+    done < <(grep -rh --include='*.md' --exclude-dir=sources '^verified:' "$d/wiki" 2>/dev/null | sed 's/^verified: *//' || true)
+  done
+  if [ "$stale" -gt 0 ]; then any=1; echo "- $stale page(s) not checked in over 90 days. wiki stale lists them."; fi
+  muted="$( [ ! -f "$TIPS_STATE" ] || awk '$1 ~ /^muted:/ { sub(/^muted:/, "", $1); printf "%s ", $1 }' "$TIPS_STATE")"
+  if [ -n "$muted" ]; then any=1; echo "- Muted tips: ${muted% }. If everyone mutes one, it may not be worth keeping."; fi
+  [ "$any" = 1 ] || echo "Nothing."
+}
+
+# report [--since RANGE] [--due]
+cmd_report() {
+  local since=7d today start due=0 w
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --since) since="${2:-}"; shift 2 ;;
+      --due) due=1; shift ;;
+      *) die "report options: --since lastworkday|week|lastweek|7d|DATE, --due" ;;
+    esac
+  done
+  if [ "$due" = 1 ]; then
+    # For the session hook: due once a week, once the collection is a week old.
+    [ -f "$WIKIS_DIR/WIKIS.md" ] && [ -n "$(find "$WIKIS_DIR/WIKIS.md" -mtime +6 2>/dev/null)" ] || return 0
+    for w in used:report shown:report; do
+      [ -z "$(tip_get "$w")" ] || [[ "$(tip_get "$w")" < "$(days_ago 6)" ]] || return 0
+    done
+    tip_set shown:report
+    echo due
+    return 0
+  fi
+  since_ok "$since" || die "--since takes lastworkday, yesterday, today, week, lastweek, a number of days like 7d, or a date"
+  today="$(journal_today)"
+  start="$(since_to_date "$today" "$since")"
+  echo "# Wiki report: $start to $today"
+  echo
+  echo "Agents: write this up for the user in a few short sections, outcomes first. Lead with Needs you if it has anything. Don't paste the tables whole."
+  echo
+  echo "## Tokens (Claude Code)"
+  echo
+  report_tokens "$start" "$today"
+  echo
+  echo "## What the wikis gained"
+  echo
+  report_gains "$start" "$today"
+  echo
+  echo "## Lookups"
+  echo
+  report_lookups "$start" "$today"
+  echo
+  echo "## Needs you"
+  echo
+  report_needs_you
+}
+
 # ---- stats ------------------------------------------------------------------
 # Agents log each wiki lookup to stats.csv in the collection: date,wiki,hit|miss.
 # A hit means the pages answered at least part of the question. stats sums it, so
@@ -2013,10 +2267,14 @@ deleg_set_mode() {
 # The preferences, the handoff log and the lookup stats are one person's, so they
 # stay on this machine. In a shared collection, coworkers would otherwise overwrite them.
 apply_delegation_ignore() {
+  local f
   in_git_repo "$WIKIS_DIR" || return 0
-  ensure_line "$WIKIS_DIR/.gitignore" "delegation.md"
-  ensure_line "$WIKIS_DIR/.gitignore" "delegation-log.csv"
-  ensure_line "$WIKIS_DIR/.gitignore" "stats.csv"
+  # Anchored with /, so they match only at the top of the collection. Unanchored,
+  # delegation.md also hid every wiki's rules/delegation.md, which belongs in git.
+  for f in delegation.md delegation-log.csv stats.csv; do
+    remove_line "$WIKIS_DIR/.gitignore" "$f"
+    ensure_line "$WIKIS_DIR/.gitignore" "/$f"
+  done
   if [ -n "$(git -C "$WIKIS_DIR" ls-files delegation.md delegation-log.csv 2>/dev/null)" ]; then
     echo "note:    delegation files are tracked from before. To keep them on this machine only: git -C $(tilde "$WIKIS_DIR") rm --cached delegation.md delegation-log.csv"
   fi
@@ -2444,7 +2702,7 @@ setup_upgrade() {
     echo "What's new since v$from:"
     changelog_since "$from" | sed 's/^/  /'
     echo "New sessions load the new handbook. Running sessions keep the old one until restarted."
-    upgrade_commit_hint "$behind" ""
+    upgrade_commit "$behind" ""
   fi
 }
 
@@ -2678,6 +2936,10 @@ if [ "$cmd" = setup ]; then
 fi
 if [ "$cmd" = tips ]; then
   cmd_tips "$@"
+  exit 0
+fi
+if [ "$cmd" = report ]; then
+  cmd_report "$@"
   exit 0
 fi
 if [ "$cmd" = pending ]; then

@@ -55,6 +55,7 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - Sessions upgrading wikis on their own (plugin, 2026-10-28): whether they pull before upgrading, and two machines upgrading one shared collection at once.
 - Tips in real use: whether people act on them or mute them all. Look at the mutes after a few weeks and drop the tips everyone mutes. Usage before 2026-10-28 wasn't recorded, so early standup and find tips may point at features already used.
 - Bulk compile in real use: how long twenty seeded documents take, and whether planning by topic gives better pages than one at a time. No agent has run it yet.
+- The weekly report in real use: whether people ask for it, and whether the token estimate for wiki reads is close enough to be useful.
 - Patterns in real use: whether agents write `Feedback:` lines unprompted, and whether the thresholds are right.
 
 ## Decided against
@@ -64,6 +65,12 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Weekly report, and two fixes it found (2026-10-28)
+
+- **Why:** to show whether the wikis earn their keep, and to gather what waits on a person into one weekly list instead of more nudges.
+- **What changed:** `wiki report` builds the material from data already on disk: tokens per project from Claude Code's transcripts (each reply counted once, though a multi-part reply is recorded several times; scratch folders count toward their project), the estimated share spent reading wikis, what each wiki captured and compiled, hit rates, and a Needs you list. The session hook offers it once a week, and skips that week's tip. On this machine's real week: 33 sessions, 102.7M new input tokens, 5.4B cache reads, and wiki reads about 1.4% of new input.
+- **Found while building it:** a session had upgraded every wiki to v18 but never committed, so 39 files sat uncommitted. `wiki upgrade` now commits its own changes, only the files the handbook owns, and leaves a wiki's other uncommitted work alone. And since v14 the collection's `.gitignore` said `delegation.md` unanchored, which also hid every wiki's `rules/delegation.md` in collections made after v14. The patterns are now anchored with `/`, and upgrades rewrite old ones.
 
 ### Bulk compile (2026-10-28, handbook version 18)
 
