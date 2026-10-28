@@ -56,7 +56,6 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - Git sync between two people or two machines. Pull, commit, and push from one machine worked in real use on 2026-10-01.
 - Two sessions taking the compile lock in the same second.
 - A wiki with two shared wikis listed in `links.md`.
-- The plugin in a real Claude Code session: the hook and commands ran by hand and the manifests validate, but no session has loaded it.
 - Real scale: hundreds of wikis, hundreds of pages. Real use so far is 10 wikis and 53 pages.
 - The version 8 triggers in real use. They passed a dry run only.
 - A model other than Claude following the handbook.
@@ -74,7 +73,7 @@ Things that have never been run for real. Treat them as unproven until crossed o
 ### Claude Code plugin (2026-10-28)
 
 - **Why:** a line in `CLAUDE.md` relies on the agent choosing to act on it, the skill had to be zipped and uploaded by hand, and coworkers needed several setup steps.
-- **What changed:** the repo is a plugin and its own marketplace. A `SessionStart` hook finds the session's wiki the way `wiki.sh which` does and loads its handbook and index, with the waiting-note count and a note when the handbook is behind. It runs again after `/clear` and compaction. Commands: `status`, `save`, `compile`, `standup`. The plugin carries `wiki.sh` and the template, and `wiki.sh` skips the `CLAUDE.md` line when run from the plugin, since a line naming the plugin's versioned folder would break on update. The manifest has no `version`, so each pushed commit is an update. The plugin's folder changes with each update, so the hook keeps a `wiki` command in the plugin's data folder, which survives updates, pointed at the current version. Claude offers once to link it onto the `PATH`. `wiki.sh` messages name whichever command was typed.
+- **What changed:** the repo is a plugin and its own marketplace. A `SessionStart` hook finds the session's wiki the way `wiki.sh which` does and tells the session to read its handbook first, with the waiting-note count and a note when the handbook is behind. It first embedded the handbook and index, about 15KB; in the desktop app's Code tab only a 2KB preview reached the model, so it now points instead, in about 600 characters. Tested in a desktop Code-tab session on 2026-10-28: hook, `/llm-wiki:status`, and the `wiki` command all worked. It runs again after `/clear` and compaction. Commands: `status`, `save`, `compile`, `standup`. The plugin carries `wiki.sh` and the template, and `wiki.sh` skips the `CLAUDE.md` line when run from the plugin, since a line naming the plugin's versioned folder would break on update. The manifest has no `version`, so each pushed commit is an update. The plugin's folder changes with each update, so the hook keeps a `wiki` command in the plugin's data folder, which survives updates, pointed at the current version. Claude offers once to link it onto the `PATH`. `wiki.sh` messages name whichever command was typed.
 
 ### Scan for secrets before pushing (2026-10-28, handbook version 15)
 

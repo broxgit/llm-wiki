@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # SessionStart hook for the llm-wiki Claude Code plugin. Finds the wiki that covers the
-# repository this session works in, and puts its handbook and index in the session's
-# context. It does the job of the ~/.claude/CLAUDE.md line from `wiki.sh claude`, so the
-# agent can't skip it. Runs on startup, resume, /clear and after compaction.
+# repository this session works in, and tells the session to read its handbook. It does
+# the job of the ~/.claude/CLAUDE.md line from `wiki.sh claude`, and runs on startup,
+# resume, /clear and after compaction, so the instruction is always fresh.
 # A hook must never block a session: every path exits 0.
 set -u
 
@@ -78,9 +78,9 @@ if [ -z "$wiki" ]; then
   [ -f "$WIKIS_DIR/global/AGENTS.md" ] || exit 0
   wiki="$WIKIS_DIR/global"
   if [ -n "$repo" ]; then
-    note="No wiki covers the repository $repo yet, so the shared wiki below is this session's wiki. The first time there is something to file about $repo, create its wiki: $WIKI_SH new $repo"
+    note="No wiki covers the repository $repo yet, so the shared wiki is this session's wiki. The first time there is something to file about $repo, create its wiki: $WIKI_SH new $repo"
   else
-    note="This session isn't in a repository, so the shared wiki below is its wiki."
+    note="This session isn't in a repository, so the shared wiki is its wiki."
   fi
 fi
 [ -f "$wiki/AGENTS.md" ] || exit 0
@@ -96,9 +96,12 @@ version_of() { sed -n 's/^Handbook version \([0-9][0-9]*\).*/\1/p' "$1" 2>/dev/n
 wv="$(version_of "$wiki/AGENTS.md")"
 tv="$(version_of "$ROOT/template/AGENTS.md")"
 
+# Keep this short. Claude Code shows the model only a short preview of a long hook
+# output and saves the rest to a file, so the handbook itself can't ride along here.
+# The first lines must carry the instruction to read it.
 ctx="# llm-wiki
 
-This session's knowledge wiki is $wiki${repo:+, for the repository $repo}. Its handbook (AGENTS.md) and index.md are below, already loaded. Follow the handbook from now on. Don't read either file again unless a pull changes it.
+This session's knowledge wiki is $wiki${repo:+, for the repository $repo}. Before anything else, read $wiki/AGENTS.md, its handbook, and follow it for the rest of the session. Its session-start steps say to read index.md next.
 ${note:+
 $note
 }
@@ -117,18 +120,5 @@ if [ -n "$wv" ] && [ -n "$tv" ] && [ "$wv" -lt "$tv" ]; then
   ctx="$ctx
 
 This wiki's handbook is v$wv and the plugin's template is v$tv. Tell the user once: run $TYPE upgrade --all"
-fi
-ctx="$ctx
-
-## $wiki/AGENTS.md
-
-$(cat "$wiki/AGENTS.md")
-
-## $wiki/index.md
-
-$(head -n 300 "$wiki/index.md" 2>/dev/null)"
-if [ "$(wc -l < "$wiki/index.md" 2>/dev/null || echo 0)" -gt 300 ]; then
-  ctx="$ctx
-(index.md continues past 300 lines. Search it by keyword.)"
 fi
 emit "$ctx"

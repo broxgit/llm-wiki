@@ -5,7 +5,7 @@
 ## Setup
 
 - **The agent ignores the wiki.** It never loaded the handbook.
-  - Plugin: check that `/plugin` lists `llm-wiki` as enabled, then restart Claude Code. A session started before you installed it doesn't have it.
+  - Plugin: in a terminal, `claude plugin list` should show `llm-wiki@llm-wiki` as enabled. A session started before you installed it doesn't have it, so start a new one. In the desktop app, quit and reopen it if a new session still doesn't. Ask the session "what does your llm-wiki session context say?" to check.
   - Without the plugin: run `./wiki.sh claude`, or paste the line from [A session that's already running](other-agents.md#a-session-thats-already-running). In Claude Code, `/context` lists the instruction files that loaded.
 - **The agent can't read or write the wiki.** It lacks access to `~/wikis`. Start Claude Code with `--add-dir ~/wikis`, or approve the prompt the first time it reaches for the folder. In the desktop app, add the folder to the session.
 - **`wiki: command not found`.** Plugin: in a session, say "set up the wiki command". Clone: link it with `ln -s <clone>/wiki.sh ~/.local/bin/wiki`. Either way, `~/.local/bin` must be on your `PATH`.
@@ -23,7 +23,7 @@
 ## Git and updates
 
 - **A wiki's handbook is behind.** `wiki upgrade --all` brings every wiki up to date, then says what changed and what to do next. Outside git it keeps the old handbook as `AGENTS.md.bak`.
-- **A wiki is ahead of your template.** A teammate upgraded it with a newer template. Plugin: `/plugin marketplace update llm-wiki`, then restart. Clone: `git pull` in the clone.
+- **A wiki is ahead of your template.** A teammate upgraded it with a newer template. Plugin: `claude plugin marketplace update llm-wiki` in a terminal, then start a new session. Clone: `git pull` in the clone.
 - **A commit was refused for a secret.** The agent replaces it with `[REDACTED]` and commits again. If it isn't a secret, add the `Fingerprint` line gitleaks printed to `.gitleaksignore` at the top of the collection.
 - **An agent's commit won't push.** Run `wiki setup git`. It sets the repo's commit email and SSH key and test-pushes. A machine with a work key and a personal key usually needs the key named for this repo.
 - **A merge conflict in a page.** The agent stops and asks. Resolve it like any git conflict. Conflicts in `index.md` and `log.md` resolve on their own.

@@ -1,6 +1,8 @@
 # Set up with another agent
 
-For Codex, Cursor, Copilot, Gemini, the Claude desktop app, or Claude Code without the plugin. Any agent that can read and write files on your machine works, with any model. About ten minutes. Using Claude Code? [The plugin](claude-code.md) is less work.
+For Codex, Cursor, Copilot, Gemini, the Claude desktop app's **Chat** tab, claude.ai, or Claude Code without the plugin. Any agent that can read and write files on your machine works, with any model. About ten minutes.
+
+Using Claude Code, including the desktop app's **Code** tab? [The plugin](claude-code.md) is less work.
 
 ## Install
 
@@ -20,7 +22,7 @@ For Codex, Cursor, Copilot, Gemini, the Claude desktop app, or Claude Code witho
    It asks one question at a time, and Enter takes the suggested answer. It creates your wiki collection in `~/wikis` with a shared wiki, `~/wikis/global`, makes the collection a git repo, and walks through the [work journal](using.md#work-journal-and-standups). For Claude Code, it also adds the session line below.
 3. Give your agent access to `~/wikis` and to the clone. Agents sandboxed to one project folder need both added as extra folders.
    - Claude Code: start it with `--add-dir ~/wikis`, or approve the prompt the first time it reaches for the folder.
-   - Claude desktop app: add both folders to the session.
+   - Claude desktop app: add both folders to the session or conversation.
 4. Point every session at its wiki. See the next section.
 5. Install gitleaks, which stops agents from committing a secret: `brew install gitleaks`.
 
@@ -43,7 +45,7 @@ For tighter control, two alternatives:
 
 - **Stricter, Claude Code only.** A sentence relies on the agent choosing to open the file. An import loads it every time. Put `@~/wikis/<repository-name>/AGENTS.md` on its own line in the project's `CLAUDE.md`. That costs roughly 2,900 tokens in every session.
 
-**Claude desktop and web apps:** also zip the `skills/llm-wiki` folder, with the folder at the zip root, and add it under Customize > Skills. The skill finds wikis in the folders a session can reach.
+**The desktop app's Chat tab and claude.ai:** they have no instruction file to put the line in. Zip the `skills/llm-wiki` folder, with the folder at the zip root, and add it under Customize > Skills. The skill finds wikis in the folders a conversation can reach, so connect `~/wikis` too.
 
 ## Check that it works
 

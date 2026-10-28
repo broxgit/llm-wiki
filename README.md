@@ -12,8 +12,8 @@ It also writes your standup, tallies repeated corrections until they become a ru
 
 | You use | Guide | Time |
 |---|---|---|
-| Claude Code | [Set up with Claude Code](docs/claude-code.md), as a plugin | 5 minutes |
-| Anything else: Codex, Cursor, Copilot, the Claude desktop app | [Set up with another agent](docs/other-agents.md) | 10 minutes |
+| Claude Code: in a terminal, the Claude desktop app's **Code** tab, or an IDE | [Set up with Claude Code](docs/claude-code.md), as a plugin | 5 minutes |
+| Anything else: Codex, Cursor, Copilot, the desktop app's **Chat** tab, claude.ai | [Set up with another agent](docs/other-agents.md) | 10 minutes |
 
 Joining a team that already shares a collection? Read [Teams](docs/teams.md#join-a-shared-collection) first.
 

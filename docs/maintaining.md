@@ -26,7 +26,7 @@ skills/llm-wiki/   The Claude skill that finds, runs, and scaffolds wikis.
 commands/          The plugin's slash commands.
 hooks/
   hooks.json       The plugin's session hook, which runs session-start.sh.
-  session-start.sh Finds the session's wiki, loads it, and keeps the wiki command current.
+  session-start.sh Finds the session's wiki, points the session at it, and keeps the wiki command current.
   pre-commit       The secret scan that wiki.sh installs in wiki repos.
 ```
 
@@ -50,5 +50,9 @@ Pushing to the default branch is the release. The plugin has no version number, 
 - `shellcheck -S warning wiki.sh hooks/session-start.sh hooks/pre-commit`
 - `claude plugin validate .` after any change to `.claude-plugin/`, `commands/` or `hooks/hooks.json`. The one warning, no `version`, is on purpose.
 - Docs: a change people will notice belongs in the setup guides or [Using it](using.md), not only in the CHANGELOG.
+
+To try a change before pushing it, install the plugin from your clone: `claude plugin marketplace add <path to clone>`, then `claude plugin install llm-wiki@llm-wiki`. A marketplace added from a local path runs straight from your working tree, so a new session picks up your edits. Switch back with `claude plugin marketplace remove llm-wiki` and the install steps in [Set up with Claude Code](claude-code.md).
+
+Keep the session hook's output short. Claude Code shows the model only a short preview of a long hook output and saves the rest to a file, which the model may never read. The hook points at the handbook rather than embedding it for this reason.
 
 `ROADMAP.md` lists what's planned and what's still untested. When you finish an item, move it to Done and say what changed.
