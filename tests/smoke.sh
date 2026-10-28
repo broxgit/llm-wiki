@@ -219,6 +219,24 @@ check "the hook writes the command for an installed plugin" test -x "$T/pdata/bi
 lacks "with no install record, the command runs its own version" "v98" "$T/pdata/bin/wiki" status
 printf '{"version":2,"plugins":{"llm-wiki@mk":[{"scope":"user","installPath":"%s","version":"v2"}]}}\n' "$C2" > "$HOME/.claude/plugins/installed_plugins.json"
 expect "after an update, the command runs the new version at once" "behind template v98" "$T/pdata/bin/wiki" status
+# wiki link puts the command on the PATH. Each case gets a PATH without the real ~/.local/bin.
+base_path="/usr/bin:/bin:/usr/sbin:/sbin"
+mkdir -p "$HOME/.local/bin"
+expect "link uses a writable folder already on the PATH" "linked ~/.local/bin/wiki" env PATH="$HOME/.local/bin:$base_path" "$T/pdata/bin/wiki" link
+check "the linked wiki is the plugin's command" test "$HOME/.local/bin/wiki" -ef "$T/pdata/bin/wiki"
+expect "link again says it's done" "already a command" env PATH="$HOME/.local/bin:$base_path" "$T/pdata/bin/wiki" link
+rm -f "$HOME/.local/bin/wiki"
+expect "without one, link asks before touching the shell profile" "link --yes" env PATH="$base_path" SHELL=/bin/zsh "$T/pdata/bin/wiki" link </dev/null
+check "and leaves the profile alone" test ! -e "$HOME/.zshrc"
+expect "link --yes adds ~/.local/bin to the profile" "added it to your PATH" env PATH="$base_path" SHELL=/bin/zsh "$T/pdata/bin/wiki" link --yes
+check "the profile line is there" grep -qF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.zshrc"
+mkdir -p "$T/otherbin" && printf '#!/bin/sh\n' > "$T/otherbin/wiki" && chmod +x "$T/otherbin/wiki"
+refuse "link leaves someone else's wiki command alone" env PATH="$T/otherbin:$base_path" "$T/pdata/bin/wiki" link
+printf '{"extraKnownMarketplaces":{"mk":{"source":{"source":"github","repo":"x/y"}}}}\n' > "$HOME/.claude/settings.json"
+expect "status warns when auto-update is off" "auto-update is off" "$T/pdata/bin/wiki" status
+printf '{"extraKnownMarketplaces":{"mk":{"source":{"source":"github","repo":"x/y"},"autoUpdate":true}}}\n' > "$HOME/.claude/settings.json"
+lacks "and is quiet once it's on" "auto-update is off" "$T/pdata/bin/wiki" status
+rm -f "$HOME/.claude/settings.json" "$HOME/.zshrc"
 rm -rf "$C1"
 expect "it still works once the old version is deleted" "behind template v98" "$T/pdata/bin/wiki" status
 printf '{"version":2,"plugins":{"llm-wiki@mk":[{"scope":"user","installPath":"%s/gone"}]}}\n' "$HOME" > "$HOME/.claude/plugins/installed_plugins.json"

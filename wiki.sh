@@ -45,6 +45,7 @@ Usage: $WIKI_CMD <command> [options]
   unlock <name|path>   Free a stuck compile lock.
   claude               Add the wiki line to ~/.claude/CLAUDE.md so every session finds its wiki.
   claude --print       Print the line, for another agent's instruction file.
+  link [--yes]         With the plugin: make wiki a command in every terminal.
 
   journal              Show the work journal's settings and today's entry count.
   journal on | off     Turn the journal on or off. It is on by default.
@@ -514,6 +515,10 @@ cmd_status() {
     echo "journal: $(journal_get enabled), commit $(journal_get commit), entries $(journal_get entries)"
   fi
   if [ -f "$DELEG_FILE" ]; then echo "delegation: mode $(deleg_mode)"; fi
+  if from_plugin; then
+    n="$(plugin_key)"
+    [ "$(autoupdate_state "${n#*@}")" != off ] || echo "plugin:  auto-update is off, so fixes don't arrive. Run: $WIKI_CMD setup plugin"
+  fi
   if in_git_repo "$WIKIS_DIR" && [ -f "$WIKIS_DIR/WIKIS.md" ]; then
     case "$(hook_state "$WIKIS_DIR")" in
       ours) command -v gitleaks >/dev/null 2>&1 || echo "secrets: commits aren't scanned, gitleaks isn't installed. Run: brew install gitleaks" ;;
@@ -1655,6 +1660,152 @@ cmd_delegation() {
     END { for (k in n) printf "%-44s %5d %5d %6d %7d\n", substr(k, 1, 44), n[k], r[k "|ok"], r[k "|fixed"], r[k "|redone"] }' "$DELEG_LOG" | sort
 }
 
+# ---- plugin -----------------------------------------------------------------
+# From the plugin, setup also does the fiddly parts of installing: it puts `wiki`
+# on the PATH, turns on auto-update, and removes the old CLAUDE.md line. Then a
+# new person's install is two commands, one session, and `wiki setup`.
+
+# plugin_key: plugin@marketplace for this copy, from its folder in the plugin cache.
+plugin_key() {
+  local d="${REPO%/*}"
+  printf '%s@%s' "${d##*/}" "$(basename "${d%/*}")"
+}
+
+# The command the session hook writes, in the plugin's data folder. Its path
+# doesn't change between versions. The command itself says where it is.
+plugin_cmd() {
+  local k
+  k="$(plugin_key)"
+  printf '%s' "${LLM_WIKI_SHIM:-$HOME/.claude/plugins/data/${k%@*}-${k#*@}/bin/wiki}"
+}
+
+# wiki_linked: `wiki` on the PATH is the plugin's command.
+wiki_linked() {
+  local cur
+  cur="$(command -v wiki 2>/dev/null || true)"
+  [ -n "$cur" ] && [ "$cur" -ef "$(plugin_cmd)" ]
+}
+
+# link_dir: a writable folder already on the PATH for the command, best first.
+link_dir() {
+  local d
+  for d in "$HOME/.local/bin" "$HOME/bin" /opt/homebrew/bin /usr/local/bin; do
+    case ":$PATH:" in *":$d:"*) [ -d "$d" ] && [ -w "$d" ] && { printf '%s' "$d"; return 0; } ;; esac
+  done
+  return 0
+}
+
+# link [--yes]: make `wiki` a command in every new terminal.
+# The messages name ~/.local/bin literally, as people type it.
+# shellcheck disable=SC2088
+cmd_link() {
+  local cmd cur dir profile line
+  from_plugin || die "link is for the plugin's wiki command. From a clone: ln -s $(tilde "$REPO")/wiki.sh ~/.local/bin/wiki"
+  cmd="$(plugin_cmd)"
+  [ -x "$cmd" ] || die "the plugin hasn't written its wiki command yet. Start a Claude Code session once, then rerun this."
+  if wiki_linked; then echo "wiki: already a command"; return 0; fi
+  cur="$(command -v wiki 2>/dev/null || true)"
+  # An older link of ours, such as one into a clone, can be replaced. Anything else is someone else's.
+  if [ -n "$cur" ] && ! [ -L "$cur" ]; then
+    die "$(tilde "$cur") is already a command called wiki and isn't a link, so it's left alone. Run the plugin's as $(tilde "$cmd")"
+  fi
+  dir="${cur%/*}"
+  [ -n "$cur" ] || dir="$(link_dir)"
+  if [ -n "$dir" ]; then
+    ln -sf "$cmd" "$dir/wiki"
+    echo "wiki: linked $(tilde "$dir/wiki")"
+    return 0
+  fi
+  # No writable folder on the PATH: use ~/.local/bin and add it to the PATH.
+  mkdir -p "$HOME/.local/bin"
+  ln -sf "$cmd" "$HOME/.local/bin/wiki"
+  line='export PATH="$HOME/.local/bin:$PATH"'
+  case "${SHELL##*/}" in
+    zsh) profile="$HOME/.zshrc" ;;
+    bash) profile="$HOME/.bash_profile" ;;
+    *) profile="" ;;
+  esac
+  if [ -n "$profile" ] && { [ "${1:-}" = --yes ] || { [ -t 0 ] && ask_yn "~/.local/bin isn't on your PATH. Add it in $(tilde "$profile")?" y; }; }; then
+    ensure_line "$profile" "$line"
+    echo "wiki: linked ~/.local/bin/wiki and added it to your PATH in $(tilde "$profile"). Open a new terminal to use it."
+  else
+    echo "wiki: linked ~/.local/bin/wiki, which isn't on your PATH yet. Add this line to your shell profile, then open a new terminal:"
+    echo "  $line"
+    [ -t 0 ] || [ -z "$profile" ] || echo "Or run: $(tilde "$cmd") link --yes"
+  fi
+}
+
+# autoupdate_state <marketplace>: on, off, or unknown.
+autoupdate_state() {
+  [ -f "$HOME/.claude/settings.json" ] && command -v python3 >/dev/null 2>&1 || { echo unknown; return 0; }
+  python3 - "$HOME/.claude/settings.json" "$1" 2>/dev/null <<'PY' || echo unknown
+import json, sys
+m = json.load(open(sys.argv[1])).get("extraKnownMarketplaces", {}).get(sys.argv[2])
+print("unknown" if m is None else ("on" if m.get("autoUpdate") is True else "off"))
+PY
+}
+
+# autoupdate_on <marketplace>: set autoUpdate in ~/.claude/settings.json, keeping a backup.
+autoupdate_on() {
+  local f="$HOME/.claude/settings.json"
+  cp "$f" "$f.bak" || return 1
+  python3 - "$f" "$1" <<'PY'
+import json, sys
+path, name = sys.argv[1], sys.argv[2]
+s = json.load(open(path))
+s["extraKnownMarketplaces"][name]["autoUpdate"] = True
+with open(path, "w") as f:
+    json.dump(s, f, indent=2)
+    f.write("\n")
+PY
+}
+
+# plugin_pending: the plugin step has something to ask.
+plugin_pending() {
+  local k
+  from_plugin || return 1
+  k="$(plugin_key)"
+  { ! wiki_linked && ! [ "$HOME/.local/bin/wiki" -ef "$(plugin_cmd)" ]; } || [ "$(autoupdate_state "${k#*@}")" = off ] || old_claude_line
+}
+
+# Lines in CLAUDE.md from before the plugin. The plugin's hook does their job.
+old_claude_line() { from_plugin && [ -f "$CLAUDE_FILE" ] && grep -q "knowledge wikis live in" "$CLAUDE_FILE"; }
+
+setup_plugin() {
+  local mkt
+  from_plugin || return 0
+  mkt="$(plugin_key)"
+  mkt="${mkt#*@}"
+  if [ "$SETUP_MODE" = new ] && ! plugin_pending; then return 0; fi
+  section "Claude Code plugin"
+  if wiki_linked; then
+    echo "wiki is a command in every terminal."
+  elif [ "$HOME/.local/bin/wiki" -ef "$(plugin_cmd)" ]; then
+    echo "wiki is linked in ~/.local/bin. Open a new terminal to type it as plain wiki."
+  else
+    echo "The wiki command isn't on your PATH yet, so for now you run it as $(tilde "$(plugin_cmd)")."
+    if ask_yn "Make it plain wiki?" y; then cmd_link | sed 's/^/  /'; fi
+  fi
+  case "$(autoupdate_state "$mkt")" in
+    on) echo "Auto-update is on, so fixes arrive on their own." ;;
+    off)
+      echo "Auto-update is off for the $mkt marketplace, so you'd get no fixes. Claude Code starts other marketplaces with it off."
+      if ask_yn "Turn it on?" y; then
+        if autoupdate_on "$mkt"; then echo "  turned on, in ~/.claude/settings.json (backup beside it)"; else echo "  couldn't change ~/.claude/settings.json. Use /plugin in a terminal session instead."; fi
+      fi
+      ;;
+    *) echo "Couldn't tell whether auto-update is on. Check with /plugin in a terminal Claude Code session." ;;
+  esac
+  if old_claude_line; then
+    echo "$(tilde "$CLAUDE_FILE") still has the wiki line from before the plugin. The plugin does its job, and both would point sessions at the handbook twice."
+    if ask_yn "Remove it?" y; then
+      cp "$CLAUDE_FILE" "$CLAUDE_FILE.bak"
+      remove_line "$CLAUDE_FILE" "$(grep -m 1 "knowledge wikis live in" "$CLAUDE_FILE")"
+      echo "  removed (backup beside it)"
+    fi
+  fi
+}
+
 # ---- setup ------------------------------------------------------------------
 # A walkthrough of every choice, for a new machine or an existing one.
 # Two kinds of step:
@@ -1782,7 +1933,16 @@ setup_git() {
     fi
     setup_push_check
   fi
-  install_hook "$WIKIS_DIR" | sed 's/^/  /'
+  # The gitleaks note is left out here: the question below covers it.
+  install_hook "$WIKIS_DIR" | { grep -v 'gitleaks isn' || true; } | sed 's/^/  /'
+  if ! command -v gitleaks >/dev/null 2>&1; then
+    echo "gitleaks isn't installed, so commits aren't checked for secrets."
+    if command -v brew >/dev/null 2>&1; then
+      if ask_yn "Install it with Homebrew?" y; then brew install gitleaks </dev/null 2>&1 | tail -n 1 | sed 's/^/  /'; fi
+    else
+      echo "  Install it from https://github.com/gitleaks/gitleaks, then commits are checked."
+    fi
+  fi
 }
 
 # Which account commits and pushes. Matters on a machine with work and personal keys.
@@ -1859,11 +2019,10 @@ setup_claude() {
   local state
   state="$(claude_state)"
   [ "$SETUP_MODE" = new ] && [ "$state" = current ] && return 0
+  from_plugin && return 0
   section "Claude Code"
-  if from_plugin; then
-    echo "The llm-wiki plugin's session hook finds each session's wiki. No line in $(tilde "$CLAUDE_FILE") is needed."
-    return 0
-  fi
+  # The plugin step covers Claude Code: the hook does this job.
+  from_plugin && return 0
   case "$state" in
     current) echo "$(tilde "$CLAUDE_FILE") has the current wiki line. Every session finds its wiki." ;;
     old)
@@ -2026,7 +2185,7 @@ Usage: $WIKI_CMD setup [--new | --list | <section> | <setting>]
 EOF
         return 0
         ;;
-      collection | git | claude | upgrade | journal | delegation | git.identity) what="$a" ;;
+      collection | git | claude | plugin | upgrade | journal | delegation | git.identity) what="$a" ;;
       journal.*)
         [ -n "$(journal_field "${a#journal.}" 2)" ] || die "no journal setting called ${a#journal.}. Settings: $JOURNAL_KEYS"
         what="$a"
@@ -2040,7 +2199,7 @@ EOF
     esac
   done
   [ -t 0 ] || die "setup asks questions, so it needs a terminal. $WIKI_CMD setup --list prints the current values."
-  if [ "$SETUP_MODE" = new ] && [ -d "$WIKIS_DIR" ] && [ "$(claude_state)" = current ]; then
+  if [ "$SETUP_MODE" = new ] && [ -d "$WIKIS_DIR" ] && [ "$(claude_state)" = current ] && ! plugin_pending; then
     n="$(setup_pending | wc -l | tr -d ' ')"
     [ "$n" -gt 0 ] || [ -n "$(setup_upgrade_needed)" ] || { echo "Nothing new to set up."; return 0; }
   fi
@@ -2061,7 +2220,9 @@ EOF
       write_journal_config | sed 's/^/  /'
       setup_journal_key "${what#journal.}"
       ;;
+    plugin) SETUP_MODE=all; setup_plugin ;;
     '')
+      setup_plugin
       setup_collection
       setup_git
       setup_claude
@@ -2074,7 +2235,11 @@ EOF
     *.*) return 0 ;;
   esac
   echo
-  echo "Done. Run $WIKI_CMD setup --new after pulling template updates to see what's new."
+  if from_plugin; then
+    echo "Done. After a plugin update, $WIKI_CMD setup --new shows what's new."
+  else
+    echo "Done. After you pull template updates, $WIKI_CMD setup --new shows what's new."
+  fi
 }
 
 # Names of wikis behind the template handbook, space separated.
@@ -2122,12 +2287,14 @@ fi
 want_git=0
 want_all=0
 want_print=0
+want_yes=0
 target=""
 for arg in "$@"; do
   case "$arg" in
     --git) want_git=1 ;;
     --all) want_all=1 ;;
     --print) want_print=1 ;;
+    --yes) want_yes=1 ;;
     -h | --help) usage; exit 0 ;;
     -*) die "unknown option: $arg" ;;
     *) [ -z "$target" ] || die "too many arguments"; target="$arg" ;;
@@ -2163,6 +2330,7 @@ case "$cmd" in
   unlock) need_target; cmd_unlock "$(resolve "$target")" ;;
   claude) if [ "$want_print" = 1 ]; then claude_line; printf '\n'; else cmd_claude; fi ;;
   patterns) cmd_patterns ;;
+  link) cmd_link "$( [ "$want_yes" = 1 ] && echo --yes)" ;;
   stats) cmd_stats "${target:-30d}" ;;
   -h | --help | help) usage ;;
   *) usage; exit 1 ;;

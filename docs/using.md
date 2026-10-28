@@ -152,7 +152,7 @@ Settings live in `~/wikis/journal/config`. Walk through them with `wiki setup jo
 
 - `wiki setup --list` prints every setting and marks the ones still at their default.
 - `wiki setup --new` asks only about what's new since you last ran it.
-- `wiki setup git`, `wiki setup journal` or `wiki setup delegation` reruns one section.
+- `wiki setup plugin`, `wiki setup git`, `wiki setup journal` or `wiki setup delegation` reruns one section.
 - `wiki setup format` edits one journal setting.
 
 ## Start a wiki from a repository's docs

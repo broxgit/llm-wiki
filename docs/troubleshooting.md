@@ -8,8 +8,9 @@
   - Plugin: in a terminal, `claude plugin list` should show `llm-wiki@llm-wiki` as enabled. A session started before you installed it doesn't have it, so start a new one. In the desktop app, quit and reopen it if a new session still doesn't. Ask the session "what does your llm-wiki session context say?" to check.
   - Without the plugin: run `./wiki.sh claude`, or paste the line from [A session that's already running](other-agents.md#a-session-thats-already-running). In Claude Code, `/context` lists the instruction files that loaded.
 - **The agent can't read or write the wiki.** It lacks access to `~/wikis`. Start Claude Code with `--add-dir ~/wikis`, or approve the prompt the first time it reaches for the folder. In the desktop app, add the folder to the session.
-- **`wiki: command not found`.** Plugin: in a session, say "set up the wiki command". Clone: link it with `ln -s <clone>/wiki.sh ~/.local/bin/wiki`. Either way, `~/.local/bin` must be on your `PATH`.
+- **`wiki: command not found`.** Plugin: run `~/.claude/plugins/data/llm-wiki-llm-wiki/bin/wiki link`, then open a new terminal. If that file doesn't exist, start a Claude Code session once first. Clone: link it with `ln -s <clone>/wiki.sh ~/.local/bin/wiki`. Either way, `~/.local/bin` must be on your `PATH`.
 - **`wiki` says it can't find the llm-wiki plugin.** Claude Code's record of the plugin points at a folder that's gone. Run `claude plugin list` to check it's installed, and reinstall it if not.
+- **Auto-update is off.** `wiki status` says so. Run `wiki setup plugin` to turn it on.
 - **`wiki setup` says it needs a terminal.** It asks questions, so run it in a terminal, not through the agent. `wiki setup --list` shows the current values anywhere.
 
 ## Day to day

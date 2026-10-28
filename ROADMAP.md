@@ -54,6 +54,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### Install in three steps (2026-10-28)
+
+- **Why:** a dry run as a new coworker, on a fake machine with a stock macOS `PATH`, hit two snags in the seven-step guide: auto-update needed a hand edit to `~/.claude/settings.json`, and the `wiki` command was linked into `~/.local/bin`, which a stock Mac's shell never looks in.
+- **What changed:** from the plugin, `wiki setup` now links `wiki` into a writable folder already on the `PATH` (or `~/.local/bin`, adding it to the shell profile after asking), turns on auto-update, offers to install gitleaks with Homebrew, and removes the old `CLAUDE.md` line. `wiki link` does the first part alone, and the session hook points Claude at it. The guide went from seven steps to three: install, start a session, run setup. `wiki status` warns when auto-update is off. The rerun found and fixed a setup crash where an empty `grep` stopped the script.
+
 ### Day-one value, stats, and capture after compaction (2026-10-28, handbook version 16)
 
 - **Seed:** `wiki seed` copies a repository's tracked README, top-level guides, `docs/` and decision records into its wiki's `raw/`, most useful first, capped at 20 documents and 100KB each, with a manifest note saying where they came from and that their code claims are unchecked. Reruns copy only what's new. The plugin's hook offers it in a repository with no wiki. PR descriptions were left out: they need an API token.
