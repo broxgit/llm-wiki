@@ -383,6 +383,20 @@ check "the teammate's note came in" test -f "$WIKIS_DIR/global/raw/2026-01-01-00
 check "the other wiki's note stayed uncommitted" bash -c "git -C '$WIKIS_DIR' status --short | grep -q 'global/raw/2026-01-02-000000-uncommitted.md'"
 rm -f "$WIKIS_DIR/global/raw/2026-01-02-000000-uncommitted.md"
 
+section "Setup fit"
+expect "which suggests a wiki with a shared word" "Close matches: demo" "$W" which demo-api
+expect "and the cover fix" "cover <wiki> demo-api" "$W" which demo-api
+refuse "which still exits 1 when nothing covers it" "$W" which demo-api
+expect "an https remote is explained" "signs in with a password or token" "$W" __push-advice "fatal: could not read Username for 'https://gitlab.com'" "https://gitlab.com/kn/w.git"
+expect "and the SSH form names the right host" "git@gitlab.com:" "$W" __push-advice "fatal: could not read Username" "https://gitlab.com/kn/w.git"
+expect "a refused key is explained" "didn't accept the key" "$W" __push-advice "git@gitlab.com: Permission denied (publickey)." "git@gitlab.com:kn/w.git"
+expect "a blocked port is explained" "port 443" "$W" __push-advice "ssh: connect to host gitlab.com port 22: Operation timed out" "git@gitlab.com:kn/w.git"
+expect "a missing repository is explained" "isn't at that address" "$W" __push-advice "fatal: repository not found" "git@gitlab.com:kn/w.git"
+out="$(hook "$T/projects/web" | context 2>&1)"
+case "$out" in *"means $T/data/bin/wiki"* | *"means ~/"*"/bin/wiki"*) ok "the hook gives sessions the stable wiki command" ;; *) bad "the hook gives sessions the stable wiki command" "$out" ;; esac
+expect "the report defers to the user's reply style" "usual reply style" "$W" report
+check "save writes journal lines" grep -q 'journal note' "$REPO/commands/save.md"
+
 section "Harvest Claude Code memory"
 M="$HOME/.claude/projects/-x-web"
 mkdir -p "$M/memory" "$HOME/.claude/projects/-x-unknown/memory"

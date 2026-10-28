@@ -67,6 +67,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### Fitting real setups (2026-10-28, handbook version 21)
+
+- **Why:** the same review of real use, plus a coworker's failed push test.
+- **What changed:** the session hook gives sessions the stable `wiki` command; `which` suggests close matches and the `cover` fix; setup tries normal SSH before asking for a key, and explains push-test failures (https remote, refused key, blocked port, missing repository); reports and standups follow the user's reply style; `/llm-wiki:save` writes journal lines. Handbook v21: status pages carry `as_of` and are rewritten, newer versions of a document supersede older ones, and wikis keep only role and ownership about people. Docs: living with lint hooks, commit rules and commit-message skills; troubleshooting for a failed pull, a failed push test, a refused delete, and a repo under another name; one handbook version a day at most.
+
 ### Bookkeeping commands (2026-10-28, handbook version 20)
 
 - **Why:** a review of two weeks of real use found the handbook's by-hand bookkeeping going wrong. In one collection: 61 `date -u` calls to name captures, 13 names rounded to `:00` and 9 with no time, 26 of 73 notes without `Captured:`, 58 shell calls on locks, and a rebase-pull that refused to run while another wiki had uncommitted notes. A digest delete was also refused by a safety check.

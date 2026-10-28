@@ -228,9 +228,34 @@ cmd_which() {
     tilde "$WIKIS_DIR/$w"
     printf '\n'
   else
-    echo "no wiki covers $name" >&2
+    which_miss "$name" >&2
     exit 1
   fi
+}
+
+# which_miss <repository>: say so, and point at the likely fix. A repository whose
+# folder name differs from its project wiki, like history for cloud-dvr, otherwise
+# leaves sessions guessing names.
+which_miss() {
+  local name="$1" d w t hits=""
+  echo "no wiki covers $name"
+  for d in "$WIKIS_DIR"/*/; do
+    d="${d%/}"
+    is_wiki "$d" || continue
+    w="${d##*/}"
+    # Shares a word of three letters or more, or its index mentions the repository.
+    for t in $(printf '%s' "$name" | tr -c 'A-Za-z0-9\n' ' '); do
+      [ "${#t}" -ge 3 ] || continue
+      case "-$w-" in *"$t"*) hits="$hits $w"; continue 2 ;; esac
+    done
+    grep -qiF -- "$name" "$d/index.md" 2>/dev/null && hits="$hits $w"
+  done
+  if [ -n "$hits" ]; then
+    # shellcheck disable=SC2086
+    echo "Close matches:$(printf ' %s' $hits | tr ' ' '\n' | sort -u | head -n 5 | tr '\n' ' ' | sed 's/ $//')"
+    echo "If $name belongs to one of them: $WIKI_CMD cover <wiki> $name"
+  fi
+  echo "If it's a project of its own, the first session with something to file creates its wiki: $WIKI_CMD new $name"
 }
 
 # cover <wiki> <repo>...: record that one wiki covers several repositories.
@@ -2697,7 +2722,7 @@ cmd_report() {
   start="$(since_to_date "$today" "$since")"
   echo "# Wiki report: $start to $today"
   echo
-  echo "Agents: write this up for the user in a few short sections, outcomes first. Lead with Needs you if it has anything. Don't paste the tables whole."
+  echo "Agents: write this up in the user's usual reply style, outcomes first, leading with Needs you if it has anything. Don't paste the tables. If they prefer short replies, give Needs you and a line of totals, and offer the rest."
   echo
   echo "## Tokens (Claude Code)"
   echo
@@ -3179,8 +3204,18 @@ setup_identity() {
   url="$(git -C "$WIKIS_DIR" remote get-url origin 2>/dev/null || true)"
   case "$url" in
     ssh://* | *@*:*)
+      # Most people need no key here: their normal SSH setup already works, and naming
+      # a key bypasses ~/.ssh/config, which can be what makes it work (a passphrase in
+      # the keychain, a port-443 host). So try the normal setup first.
+      if [ -z "$key" ] && GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=10" \
+        git -C "$WIKIS_DIR" ls-remote origin >/dev/null 2>&1; then
+        echo "Your normal SSH setup reaches $url, so this repo needs no key of its own."
+        setup_mark git.identity
+        return 0
+      fi
       echo "If your usual SSH key belongs to another account, name the key for this repo."
       echo "It is used alone, without ~/.ssh/config, so host aliases there don't apply here."
+      echo "If your normal SSH works for this host, answer - instead."
       while :; do
         ask "SSH key path. Enter keeps it, - uses your normal SSH setup" "$(tilde "$key")"
         # shellcheck disable=SC2088
@@ -3217,8 +3252,40 @@ setup_push_check() {
   else
     echo "  push failed:"
     printf '%s\n' "$err" | grep -v '^$' | head -n 4 | sed 's/^/    /'
-    echo "  Fix the key or the remote, then run: $WIKI_CMD setup git"
+    push_advice "$err" "$url" | sed 's/^/  /'
+    echo "  Then run the test again: $WIKI_CMD setup git.identity"
   fi
+}
+
+# push_advice <git error> <remote url>: what the failure means, and the fix.
+push_advice() {
+  local err="$1" url="$2" host
+  # git@host:path, ssh://git@host[:port]/path or https://host/path: just the host.
+  host="$(printf '%s' "$url" | sed -E 's#^[a-z+]+://##; s#^[^@/]*@##; s#[:/].*##')"
+  case "$err" in
+    *"could not read Username"* | *"Authentication failed"* | *"terminal prompts disabled"*)
+      echo "The remote is an https URL, which signs in with a password or token, not an SSH key."
+      echo "Switch it to SSH: git -C $(tilde "$WIKIS_DIR") remote set-url origin git@$host:<group>/<repo>.git"
+      ;;
+    *"Permission denied (publickey)"*)
+      echo "$host didn't accept the key. It may not be added to your account there, or it has a passphrase"
+      echo "that isn't loaded. Load it once with: ssh-add --apple-use-keychain <key>"
+      echo "If your normal SSH works for $host (ssh -T git@$host), answer - at the key question instead."
+      ;;
+    *"Host key verification failed"*)
+      echo "ssh hasn't seen $host before. Run ssh -T git@$host once and answer yes."
+      ;;
+    *"timed out"* | *"Could not resolve hostname"* | *"Connection refused"*)
+      echo "Couldn't reach $host. Networks that block port 22 need SSH over port 443 in ~/.ssh/config:"
+      echo "GitLab uses altssh.gitlab.com, GitHub uses ssh.github.com. Then answer - at the key question,"
+      echo "so that config is used."
+      ;;
+    *"not found"* | *"does not appear to be a git repository"* | *"not exist"*)
+      echo "The repository isn't at that address, or this account can't see it. Check the URL,"
+      echo "and that the project exists: git -C $(tilde "$WIKIS_DIR") remote -v"
+      ;;
+    *) echo "Check the key and the remote: git -C $(tilde "$WIKIS_DIR") remote -v" ;;
+  esac
 }
 
 setup_claude() {
@@ -3500,6 +3567,11 @@ if [ "$cmd" = delegation ]; then
 fi
 if [ "$cmd" = setup ]; then
   cmd_setup "$@"
+  exit 0
+fi
+if [ "$cmd" = __push-advice ]; then
+  # For tests: the advice for a push-test error, without running setup.
+  push_advice "${1:-}" "${2:-}"
   exit 0
 fi
 if [ "$cmd" = __complete ]; then
