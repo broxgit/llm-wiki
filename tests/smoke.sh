@@ -383,6 +383,35 @@ check "the teammate's note came in" test -f "$WIKIS_DIR/global/raw/2026-01-01-00
 check "the other wiki's note stayed uncommitted" bash -c "git -C '$WIKIS_DIR' status --short | grep -q 'global/raw/2026-01-02-000000-uncommitted.md'"
 rm -f "$WIKIS_DIR/global/raw/2026-01-02-000000-uncommitted.md"
 
+section "Index and lint"
+L="$WIKIS_DIR/lintdemo"
+"$W" new lintdemo >/dev/null
+mkdir -p "$L/wiki/concepts" "$L/wiki/howto"
+page() { printf -- '---\ntitle: %s\nsummary: %s\nupdated: 2026-01-01\nverified: %s\n---\n\n%s\n' "$2" "$3" "${5:-2026-10-01}" "${4:-Body.}" > "$L/wiki/$1"; }
+page concepts/zebra.md Zebra "Zebras come first in this index, by hand." "See [the howto](../howto/setup.md)."
+page concepts/alpha.md Alpha '"Alpha: a summary YAML had to quote."'
+page howto/setup.md Setup "How to set up." "Cites global:wiki/nope.md and links [nothing](../concepts/missing.md)."
+page concepts/old.md Old "A page nobody has checked in years." "Body." 2020-01-01
+printf -- '- [Zebra](wiki/concepts/zebra.md): stale text\n- [Gone](wiki/concepts/gone.md): no such page\n- [Zebra](wiki/concepts/zebra.md): twice\n' > "$T/lines"
+printf '# Index\n\n## Concepts\n' > "$L/index.md"; cat "$T/lines" >> "$L/index.md"
+refuse "index --check fails when the index is out of step" "$W" index lintdemo --check
+out="$("$W" index lintdemo 2>&1)"
+case "$out" in *"1 updated, 3 added, 1 removed, 1 duplicate(s)"*) ok "index updates, adds, removes and dedupes" ;; *) bad "index updates, adds, removes and dedupes" "$out" ;; esac
+case "$out" in *"was: stale text"*) ok "index shows the text it replaced" ;; *) bad "index shows the text it replaced" "$out" ;; esac
+check "the hand-made order is kept: zebra stays first" bash -c "grep '^- ' '$L/index.md' | head -n 1 | grep -q zebra.md"
+check "a new how-to gets its own heading" grep -q '^## How-to' "$L/index.md"
+check "YAML quotes don't reach the index" bash -c "grep -q '): Alpha: a summary YAML had to quote.\$' '$L/index.md'"
+expect "a second run changes nothing" "nothing to change" "$W" index lintdemo
+printf 'Captured: 2026-01-01\n\nWaiting.\n' > "$L/raw/2026-01-01-000000-waiting.md"
+out="$("$W" lint lintdemo 2>&1)"
+for want in "broken link" "broken citation" "not verified in 180 days" "notes waiting"; do
+  case "$out" in *"$want"*) ok "lint reports: $want" ;; *) bad "lint reports: $want" "$out" ;; esac
+done
+printf '\n- [Ghost](wiki/concepts/ghost.md): gone\n' >> "$L/index.md"
+expect "lint reports an index line with no page" "index line with no page" "$W" lint lintdemo
+expect "lint --all covers every wiki" "== global" "$W" lint --all
+refuse "lint needs a wiki or --all" "$W" lint
+
 section "Setup fit"
 expect "which suggests a wiki with a shared word" "Close matches: demo" "$W" which demo-api
 expect "and the cover fix" "cover <wiki> demo-api" "$W" which demo-api
