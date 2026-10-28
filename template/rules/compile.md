@@ -29,6 +29,8 @@ With a named source, ingest that source. With none, ingest every pending file in
 
 With fewer than five pending files, compile them one at a time, as in the steps below. With five or more, as after `wiki seed`, compile them as one batch: see [Many files at once](#many-files-at-once).
 
+When a pending file is a newer version of an earlier one, the same document often named `-v2` or `-v3`, the newer one supersedes it. Compile the newer version. In the older one's source page, add a line naming the file that replaced it. Don't merge claims from both versions.
+
 For each source:
 
 1. If it is not in `raw/` yet, capture it first.
@@ -80,6 +82,7 @@ commit: 3f2a9c1
 - Dates and times are UTC everywhere: filenames, frontmatter, and the log.
 - Quote frontmatter values that contain a colon.
 - One topic per page.
+- A page about current state, such as work in progress or open questions, carries `as_of: YYYY-MM-DD` in its frontmatter and the date in its summary. When the state changes, rewrite it to the new state. Don't append: the log and the sources keep the history.
 - Keep pages under roughly 1,500 words. Split larger ones and link the parts.
 - Lead with the conclusion. Detail follows.
 - Link with relative markdown links: `[Title](../concepts/page.md)`. They work in every tool.

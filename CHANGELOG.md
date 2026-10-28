@@ -4,6 +4,18 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v21 (2026-10-28)
+
+Fitting in with real setups, from a review of two weeks of use.
+
+- Status pages, such as work in progress or open questions, carry an `as_of` date and are rewritten when the state changes, not appended to.
+- A newer version of a captured document supersedes the older one at compile, instead of both being merged.
+- About people, wikis keep only role, ownership, and how to work with them.
+- Reports and standups follow the user's own reply style where it differs from the default shapes.
+- The session hook gives sessions the plugin's stable `wiki` command, not a path that changes with every update. `wiki which` suggests close matches and the `wiki cover` fix. `/llm-wiki:save` also writes the session's journal lines.
+- `wiki setup` tries your normal SSH before asking for a key, and explains a failed push test: an https remote, a key that wasn't accepted, a blocked port, or a missing repository.
+- Do: nothing. Sessions upgrade the wikis on their own.
+
 ## v20 (2026-10-28)
 
 Commands for the mechanical parts of capturing and compiling. A review of two weeks of real use found agents rounding capture times, skipping the `Captured:` line, and spending dozens of shell calls on locks, log entries and pulls, which also failed on a dirty collection.

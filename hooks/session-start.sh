@@ -86,6 +86,8 @@ EOF
   fi
 fi
 # How the user runs it in a terminal: `wiki` once it's on their PATH, the full path until then.
+# Sessions get the same stable command for wiki.sh: the plugin's own folder changes
+# with every update, and a session that saved that path would break.
 TYPE="${CMD:-$WIKI_SH}"
 [ -n "$CMD" ] && [ "$(command -v wiki 2>/dev/null)" -ef "$CMD" ] && TYPE="wiki"
 LINK=""
@@ -155,7 +157,7 @@ if [ -n "$wv" ] && [ -n "$tv" ] && [ "$wv" -lt "$tv" ]; then
 fi
 ctx="# llm-wiki
 
-\`wiki.sh\` here means $(t "$WIKI_SH"), the script the handbook refers to. In a terminal the user runs it as: $(t "$TYPE")
+\`wiki.sh\` here means $(t "${CMD:-$WIKI_SH}"), the script the handbook refers to. In a terminal the user runs it as: $(t "$TYPE")
 
 This session's knowledge wiki is $(t "$wiki")${repo:+, for the repository $repo}. $read_first, its handbook, and follow it for the rest of the session. Its session-start steps say what to read next, including the shared wiki.
 Save knowledge in the wiki, not in your own memory: memory stays in this folder, and the wiki reaches every repository and teammate.

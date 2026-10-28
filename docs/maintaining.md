@@ -44,6 +44,8 @@ The handbook is `template/AGENTS.md` plus `template/rules/`. `AGENTS.md` loads i
 3. Add a section for that version to `CHANGELOG.md`, written for the person upgrading: what changed, and `- Do:` lines for anything they need to do. `wiki upgrade` prints it.
 4. Run `wiki upgrade --all` to roll it out to your own wikis.
 
+Batch handbook changes: at most one version a day. Each version makes every machine's next session upgrade and commit. Seven versions in one day left people seeing "behind template" over and over.
+
 ## Add a setting
 
 A journal setting is one line in `JOURNAL_SETTINGS` in `wiki.sh`: key, type, basic or advanced, default, description. That line writes the config entry, validates `journal set`, and makes `wiki setup --new` ask about it on every machine. Anything else a person configures needs its own step in `cmd_setup`, recorded with `setup_mark`.

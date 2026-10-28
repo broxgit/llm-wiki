@@ -61,6 +61,16 @@ The goal: a session working in repository A that needs a client from repository 
 
 Keep work and personal knowledge in separate collections. Set `WIKIS_DIR` to use a second one.
 
+### A repository whose folder name differs from its wiki
+
+Sessions find a wiki by the repository's name. When a repository belongs to a project wiki under another name, say a `history` repo whose work lives in the `cloud-dvr` wiki, tell the tools once:
+
+```
+wiki cover cloud-dvr history
+```
+
+When no wiki covers a repository, `wiki which` suggests wikis with a similar name and prints this command.
+
 ### One project, several repositories
 
 Some repositories are really one product: one piece of work touches several, and the same facts matter to all of them. Give those one wiki:
@@ -226,6 +236,13 @@ Tips come from the plugin's session hook, so other agents don't show them on the
 ## Tab completion
 
 Press Tab after `wiki` to fill in commands, wiki names, journal settings and their values, tip names, and folders for `wiki seed`. `wiki setup` offers to turn it on for zsh or bash: it adds one line to `~/.zshrc` or `~/.bashrc` that loads a small file in `~/.config/llm-wiki/`. Setup rewrites that file each time, and the candidates come from `wiki` itself, so updates never leave completion stale. Rerun the step alone with `wiki setup completion`.
+
+## Living with your other tools
+
+- **Markdown lint hooks.** If a hook checks every markdown file Claude writes, exclude `~/wikis/*/raw/*`. Notes in `raw/` are kept as captured and never edited, so a hook that flags one pushes the agent to break that rule. Pages under `wiki/` can stay linted.
+- **"Only commit when I ask."** The handbook commits and pushes the wikis on its own, so add an exception for `~/wikis` to that rule, in your `CLAUDE.md` or the shared wiki's `For agents` conventions.
+- **Commit-message conventions.** Wiki commits start with the wiki's name, such as `billing: ingest 3 notes`. If a skill or hook wants a ticket number first, tell it to skip `~/wikis`.
+- **Reply style.** Reports and standups follow your own reply style when you have one, such as no headers or short replies.
 
 ## Several sessions at once
 

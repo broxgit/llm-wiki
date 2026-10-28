@@ -58,6 +58,7 @@ When the user asks what they did, or for a standup, summary, or status report:
 
 Rules for every report:
 
+- The user's own reply style wins over the shapes above. If they want no headers or lists, or short replies, keep the content and change the shape.
 - Group by project, not by repository. A wiki that covers several repositories is one project.
 - Write for a teammate. Outcomes over activity. Plain words, no commit hashes outside `detailed`.
 - Merge related commits and entries into one bullet.
