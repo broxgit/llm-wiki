@@ -55,7 +55,9 @@ The goal: a session working in repository A that needs a client from repository 
 - **Look before reading source.** When work touches another repository, the agent reads that repository's wiki index before answering from its code.
 - **Wikis appear on demand.** The first session with something to file about a repository creates its wiki.
 - **Unknown owner.** The agent searches the indexes by keyword. `wiki find <word>` does the same for you.
-- **Shared knowledge.** Third-party libraries, tooling, and conventions go in the shared wiki.
+- **Shared knowledge.** Anything that holds beyond one project goes in the shared wiki: how you want agents to work, how shared libraries, internal tools and vendors behave, pipelines and environments, team practice, guild decisions. Before saving anything, the agent asks whether another repository would need it. Every session reads the shared wiki's index at its start, so what's there gets used.
+- **Working agreements.** The shared wiki's `wiki/conventions.md` has a `For agents` section: how you want agents to work with you in every repository, such as when to commit, how to write, and when to ask. Every session reads it at its start. Corrections you repeat land there.
+- **The wiki, not the agent's memory.** Some agents keep notes of their own, per project folder, which no other repository sees. The handbook tells them to save to the wiki instead.
 
 Keep work and personal knowledge in separate collections. Set `WIKIS_DIR` to use a second one.
 

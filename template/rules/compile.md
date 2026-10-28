@@ -32,7 +32,7 @@ For each source:
 1. If it is not in `raw/` yet, capture it first.
 2. Read it once, fully. Skip the read if this session wrote it.
 3. Write a summary page in `wiki/sources/` with the raw file's name, minus its extension, plus `.md`. Keep it short: what the source is, and links to the pages that carry its claims. Don't restate a short note.
-4. Update every other wiki page the source affects. Create a new page only if the topic will be referenced again. When a page gains a claim that matters, revise its summary so the index shows it.
+4. Update every other wiki page the source affects. Create a new page only if the topic will be referenced again. Before creating one, look for the topic in the other wikis with `wiki.sh find <word>`. If another wiki has it, add to that page or cite it, instead of starting a second copy. If the lesson holds beyond this project, as `AGENTS.md` describes under Ownership, write it in the shared wiki and cite it from here. When a page gains a claim that matters, revise its summary so the index shows it.
 5. Where the source disagrees with an existing page, or you doubt a claim, read `rules/conflicts.md` and follow it. Never overwrite silently.
 6. If it has `Feedback:` lines, add each to `patterns.md` as `rules/patterns.md` says.
 

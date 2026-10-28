@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Handbook version 18.
+Handbook version 19.
 
 This folder is a knowledge base maintained by an LLM agent. Any agent working here follows this file. It needs no vendor features. Plain markdown, plain files.
 
@@ -37,7 +37,7 @@ data/        Structured data (CSV, SQLite). Queried, not read.
 ## Session start
 
 1. If Sync applies to this wiki and its repo has a remote, pull.
-2. Read `index.md`. Nothing else yet.
+2. Read `index.md`, then each shared wiki's `index.md` and the `## For agents` section of its `wiki/conventions.md`. Shared wikis are listed in `links.md`. Nothing else yet. Shared knowledge only helps if you know it's there, and the agreements in `For agents` apply to every session.
 3. List `raw/` and `wiki/sources/`. A missing `wiki/sources/` means nothing is compiled yet. If notes are waiting, compile them before you start on the user's request, and say so in one line. With more than ten waiting, do the user's request first and compile at the next pause, and say that instead. If another session holds the lock, go on without it.
 
 Do not bulk-read `wiki/`. The index exists so you don't have to.
@@ -66,7 +66,7 @@ Capture at stopping points, not as you go. A stopping point is where a piece of 
 
 **Feedback.** The user should never give the same correction twice. When the user corrects your work, review comments land on code an agent helped write, or you repeat a procedure or mechanical work, add a `Feedback:` line to your next capture. `rules/patterns.md` has the format and where the note goes. When `patterns.md` shows a pattern is ready, propose a fix at a stopping point: a convention, a note in a library's wiki, a skill, or a small tool.
 
-**Conventions.** Before you call code done, check it against the conventions pages that apply: this wiki's, the shared wiki's, and those of the internal libraries the change calls.
+**Conventions.** Before you call code done, check it against the conventions pages that apply: this wiki's, the shared wiki's `wiki/conventions.md`, and those of the internal libraries the change calls.
 
 **Delegate.** When a large, self-contained task comes up whose result you can check, and your tool can run a sub-agent on a cheaper model, follow the user's `delegation.md` in the folder above this wiki: suggest the handoff, or make it, as its mode says.
 
@@ -88,7 +88,7 @@ Several sessions may use this wiki at once. That is safe because writes are spli
 1. Pick pages from `index.md` by their summaries.
 2. Read up to 5 pages. Read more only if those leave a gap.
 3. Answer from the pages. Cite each page by path.
-4. If the wiki can't answer, search `raw/` by keyword before reading anything whole. Then try the other wikis. If nothing answers, say so plainly.
+4. If this wiki and the shared wikis can't answer, search `raw/` by keyword before reading anything whole. Then try the peer wikis. If nothing answers, say so plainly.
 5. If the answer produced synthesis worth keeping, capture it.
 6. Log the lookup: append `<UTC date>,<wiki>,hit` to `stats.csv` in the folder above this wiki, or `miss` when no page helped. Use the wiki that answered, or this wiki for a miss. Create the file with the line `date,wiki,result` if it's missing. One line per question, only when you checked a wiki. Git ignores it.
 
@@ -108,9 +108,12 @@ The world changes. Pages don't. Each page records when its claims were last conf
 Trigger: your own judgment (see Act without being asked), or the user says "save this", "capture this", "file this", or "save this session", or hands over a source.
 
 1. For a file or document, copy it into `raw/` unchanged.
-2. For a chat, write a note instead. Plain markdown, no frontmatter, first line `Captured: YYYY-MM-DD` in UTC. Include decisions, facts, open questions, links cited. Keep only what the user said or confirmed, what you checked against code or a source, and what came from a cited source. Leave out agent speculation.
-3. Name the file `YYYY-MM-DD-HHMMSS-short-slug.ext`, using the UTC date and time of capture. Read it from the clock, for example with `date -u +%Y-%m-%d-%H%M%S`. Never estimate or round it. The timestamp sets ingest order and keeps names unique. If you can't get the time, use the date alone and tell the user. If the name is taken, add `-2`, `-3`, and so on. Never overwrite.
-4. Report the path in one line. Capture itself never touches `wiki/`, `index.md`, or `log.md`. Compiling the note is a separate step.
+2. Before writing, ask of each item: would another repository need this? If so, it belongs in the shared wiki or the wiki that owns it, not here. See Ownership under Other wikis. One conversation can make notes in several wikis.
+3. For a chat, write a note instead. Plain markdown, no frontmatter, first line `Captured: YYYY-MM-DD` in UTC. Include decisions, facts, open questions, links cited. Keep only what the user said or confirmed, what you checked against code or a source, and what came from a cited source. Leave out agent speculation.
+4. Name the file `YYYY-MM-DD-HHMMSS-short-slug.ext`, using the UTC date and time of capture. Read it from the clock, for example with `date -u +%Y-%m-%d-%H%M%S`. Never estimate or round it. The timestamp sets ingest order and keeps names unique. If you can't get the time, use the date alone and tell the user. If the name is taken, add `-2`, `-3`, and so on. Never overwrite.
+5. Report the path in one line. Capture itself never touches `wiki/`, `index.md`, or `log.md`. Compiling the note is a separate step.
+
+Save knowledge in the wiki, not in your tool's own memory. Some agents keep notes of their own, per project folder. A rule saved there only reaches sessions in that folder, while the wiki reaches every repository and every teammate. When you would save a correction, a working rule, or a fact about a project or tool to your own memory, capture it in the wiki instead.
 
 Rows of data are not notes. Records, listings, and metrics go in `data/` as CSV or SQLite.
 
@@ -130,9 +133,17 @@ Each line is a name, a path, and a purpose. Skip a line whose path doesn't exist
 
 Rules for both kinds:
 
-- **Ownership.** Knowledge lives in the wiki of whatever owns the thing. What you learn about another project's code, client, or API goes in that project's wiki, even though this session is working elsewhere. General and third-party knowledge goes in the shared wiki whose purpose fits. Knowledge about this project stays here, once, however many of its repositories it touches. When unsure, keep it here.
+- **Ownership.** Knowledge lives in the wiki of whatever owns the thing. What you learn about another project's code, client, or API goes in that project's wiki, even though this session is working elsewhere. Knowledge that holds beyond one project goes in the shared wiki whose purpose fits. For example:
+  - how the user wants agents to work (commits, branches, writing style, when to ask), in `wiki/conventions.md` under `## For agents`;
+  - how a shared library, internal tool, or vendor behaves;
+  - delivery pipelines, environments, and deploys;
+  - team practice for observability, tickets, and reviews;
+  - decisions by a guild or any group that sets practice across repositories.
+
+  Write the general lesson there once. Here, keep only what is specific to this project, with a citation to the shared page. Knowledge about this project stays here, once, however many of its repositories it touches. When unsure whether something holds beyond this project, ask yourself whether another repository's session would act differently for knowing it.
 - **Lookup by name.** When the work touches a repository outside this project that the user's team owns, find its wiki and read that `index.md` before answering from its source code or from general knowledge. Also list its `raw/` for pending files whose names bear on the question, and read those.
 - **Search.** When you don't know which wiki owns a topic, search the peers' `index.md` files by keyword and open only the ones that match. Then try the shared wikis in listed order. Never read every index.
+- **Found another way.** If you reached this repository's wiki some way other than its name or `repos.md`, such as a pointer in a file, run `wiki.sh cover <wiki> <repository>` so the next session finds it by name.
 - **Missing wiki.** If you have something to file and no wiki is named after the owning repository or lists it, create one. `rules/peers.md` says how. Don't create a wiki just to look something up.
 - **Cite, don't copy.** Never restate what another wiki says. Refer to its pages as `name:path`, such as `billing-service:wiki/entities/client.md`. Don't use relative file paths across wikis.
 
@@ -152,7 +163,7 @@ This section applies in two cases. One: this folder is the top level of a git re
 - Index first. Always.
 - Search by keyword before opening files.
 - Open `raw/` only during ingest or when the wiki can't answer.
-- Read another wiki's index only when this wiki can't answer or the work touches its repository. Never read every index.
+- Read the shared wikis' indexes at session start. Read a peer wiki's index only when the work touches its repository or the shared wikis can't answer. Never read every index.
 - Read a `rules/` file only when the table at the top says to.
 - Don't paste whole pages back into chat. Answer the question and cite the path.
 - When the wiki passes about 200 pages, rely on search over the index.

@@ -66,6 +66,8 @@ set_version() { sed "s/^Handbook version [0-9]*\./Handbook version $2./" "$1" > 
 section "Collection"
 expect "init --git makes the first commit" "first commit made" "$W" init --git
 check "the collection is a git repo" git -C "$WIKIS_DIR" rev-parse --is-inside-work-tree
+check "the shared wiki starts with a conventions page" grep -q '^## For agents' "$WIKIS_DIR/global/wiki/conventions.md"
+check "the shared index lists it" grep -q 'wiki/conventions.md' "$WIKIS_DIR/global/index.md"
 expect "new creates a wiki" "created:" "$W" new demo
 refuse "new refuses a name with a space" "$W" new "My Repo"
 refuse "new refuses a wiki inside the template repo" "$W" new "$REPO/template/inside"
@@ -96,6 +98,10 @@ out="$("$W" upgrade demo 2>&1)"
 case "$out" in *"handbook: v12 -> v$TV"*) ok "upgrade moves the handbook to v$TV" ;; *) bad "upgrade moves the handbook to v$TV" "$out" ;; esac
 case "$out" in *"What's new since v12"*) ok "upgrade prints the changelog" ;; *) bad "upgrade prints the changelog" "$out" ;; esac
 check "upgrade restores patterns.md" test -f "$WIKIS_DIR/demo/patterns.md"
+rm "$WIKIS_DIR/global/wiki/conventions.md"
+"$W" upgrade --all >/dev/null 2>&1
+check "upgrade recreates a missing conventions page" test -f "$WIKIS_DIR/global/wiki/conventions.md"
+check "without listing it twice" test "$(grep -c 'wiki/conventions.md' "$WIKIS_DIR/global/index.md")" -eq 1
 check "upgrade restores .gitattributes" test -f "$WIKIS_DIR/demo/.gitattributes"
 case "$out" in *"Committed the upgrade"*) ok "upgrade commits its own changes" ;; *) bad "upgrade commits its own changes" "$out" ;; esac
 check "a wiki's rules/delegation.md isn't git-ignored" bash -c "! git -C '$WIKIS_DIR' check-ignore -q demo/rules/delegation.md"
@@ -171,6 +177,7 @@ set_version "$WIKIS_DIR/global/AGENTS.md" "$TV"
 case "$out" in *"seed"*) ok "in a repository with no wiki the hook offers seed" ;; *) bad "in a repository with no wiki the hook offers seed" "$out" ;; esac
 n="$(printf '%s' "$out" | wc -c | tr -d ' ')"
 if [ "$n" -lt 2000 ]; then ok "the hook's longest context is short ($n chars)"; else bad "the hook's longest context is short ($n chars, limit 2000)"; fi
+expect "the hook says to keep knowledge in the wiki, not the agent's memory" "not in your own memory" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; hook '$T/projects/web' | context"
 check "the hook writes the wiki command" test -x "$T/data/bin/wiki"
 expect "the wiki command runs wiki.sh" "WIKI" "$T/data/bin/wiki" status
 expect "the wiki command's messages say wiki" "Run: wiki init" env WIKIS_DIR="$T/none" "$T/data/bin/wiki" status
@@ -315,6 +322,12 @@ out="$("$W" report 2>&1)"
 case "$out" in *"| demo | 1 | 2k | 50k | 300 | 1k |"*) ok "tokens: a covered repository's session counts toward its wiki, each reply once" ;; *) bad "tokens: a covered repository's session counts toward its wiki, each reply once" "$out" ;; esac
 case "$out" in *"Wiki reads are about 5"[0-9].[0-9]"% of new input"*) ok "tokens: wiki reads are estimated against new input" ;; *) bad "tokens: wiki reads are estimated against new input" "$out" ;; esac
 case "$out" in *"## What the wikis gained"*"- demo:"*"note(s) captured"*) ok "report lists what each wiki gained" ;; *) bad "report lists what each wiki gained" "$out" ;; esac
+case "$out" in *"Corrections recorded as Feedback lines:"*) ok "report counts recorded corrections" ;; *) bad "report counts recorded corrections" "$out" ;; esac
+for i in 01 02 03 04 05 06 07 08 09 10; do printf 'Captured: %s\n\nA note.\n' "$(date -u +%Y-%m-%d)" > "$WIKIS_DIR/global/raw/$(date -u +%Y-%m-%d)-1200$i-busy-$i.md"; done
+expect "a busy week with no corrections becomes a Needs you item" "may have gone to its own memory" "$W" report
+printf 'Captured: %s\n\nFeedback: correction | everywhere | Ask before pushing.\n' "$(date -u +%Y-%m-%d)" > "$WIKIS_DIR/global/raw/$(date -u +%Y-%m-%d)-120099-feedback.md"
+lacks "and goes away once one is recorded" "may have gone to its own memory" "$W" report
+rm -f "$WIKIS_DIR"/global/raw/*-busy-*.md "$WIKIS_DIR"/global/raw/*-120099-feedback.md
 printf '> **Conflict:** raw/a.md says X. raw/b.md says Y. Unresolved.\n' >> "$WIKIS_DIR/demo/wiki/conflict-test.md"
 printf '\n## Wrap errors\n- kind: review\n- rule: Wrap errors.\n- status: proposed 2026-10-20\n' >> "$WIKIS_DIR/demo/patterns.md"
 out="$("$W" report 2>&1)"

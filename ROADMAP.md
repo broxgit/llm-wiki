@@ -56,6 +56,7 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - Tips in real use: whether people act on them or mute them all. Look at the mutes after a few weeks and drop the tips everyone mutes. Usage before 2026-10-28 wasn't recorded, so early standup and find tips may point at features already used.
 - Bulk compile in real use: how long twenty seeded documents take, and whether planning by topic gives better pages than one at a time. No agent has run it yet.
 - The weekly report in real use: whether people ask for it, and whether the token estimate for wiki reads is close enough to be useful.
+- Shared knowledge in real use: whether sessions now file general lessons in the shared wiki, and whether they stop saving to their own memory. The weekly report's correction count is the first signal. Harvesting existing memory files is the next step.
 - Patterns in real use: whether agents write `Feedback:` lines unprompted, and whether the thresholds are right.
 
 ## Decided against
@@ -65,6 +66,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Shared knowledge reaches every project (2026-10-28, handbook version 19)
+
+- **Why:** audits of two collections found general lessons stuck in project wikis (12 on one machine), sessions that opened the shared wiki only to write to it, no conventions pages anywhere, and zero `Feedback:` lines. The work machine's transcripts showed 11 corrections, 9 of them global, saved to Claude Code's own per-folder memory, which no other repository loads.
+- **What changed:** sessions read the shared index and its conventions page's `For agents` section at start. Every capture asks whether another repository needs the item. The Ownership rule lists what belongs in the shared wiki, and "when unsure, keep it here" became a question about whether another repository's session would act differently. Knowledge goes in the wiki, not the agent's memory, and the hook repeats it. Setup and upgrade create the shared conventions page. Compile searches other wikis before starting a page. Lint reports duplicates, stale copies, broken cross-wiki citations, and lessons stuck in a project. Sessions that find a wiki indirectly run `wiki cover`. The weekly report counts corrections and flags a busy week with none.
 
 ### Tab completion (2026-10-28)
 

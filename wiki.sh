@@ -416,10 +416,48 @@ cmd_cover() {
   done
 }
 
+# The shared wiki's conventions page. Sessions read its For agents section at every
+# start, and check code against the rest, so it has to exist before anyone fills it.
+ensure_shared_conventions() {
+  local g="$WIKIS_DIR/$SHARED" f today
+  is_wiki "$g" || return 0
+  f="$g/wiki/conventions.md"
+  [ -f "$f" ] && return 0
+  today="$(date -u +%Y-%m-%d)"
+  mkdir -p "$g/wiki"
+  cat > "$f" <<EOF
+---
+title: Conventions
+summary: Rules every session follows, in every project. How agents work with the user, and conventions for code.
+tags: [conventions]
+sources: []
+updated: $today
+verified: $today
+---
+
+# Conventions
+
+One rule per line, each naming where it came from: a note in \`raw/\`, or a \`patterns.md\` entry in brackets. Sessions read **For agents** at every start, and check code against **For code** before calling it done.
+
+## For agents
+
+How the user wants agents to work with them, in every repository: committing and pushing, branches, writing style, when to ask and when to look it up.
+
+## For code
+
+Conventions for code in every repository. A rule about using one library belongs in that library's wiki, under \`## For code that uses this\`.
+EOF
+  if ! grep -q 'wiki/conventions.md' "$g/index.md"; then
+    printf '\n## Conventions\n- [Conventions](wiki/conventions.md): Rules every session follows, in every project. How agents work with the user, and conventions for code.\n' >> "$g/index.md"
+  fi
+  echo "created: $(tilde "$f")"
+}
+
 init_collection() {
   mkdir -p "$WIKIS_DIR"
   write_collection_marker
   scaffold "$WIKIS_DIR/$SHARED" 0
+  ensure_shared_conventions
   write_journal_config
   write_delegation_file
 }
@@ -718,6 +756,7 @@ cmd_upgrade_all() {
     upgrade_one "$d"
   done
   [ "$found" = 1 ] || echo "(no wikis to upgrade)"
+  ensure_shared_conventions
   echo "== journal"
   write_journal_config
   apply_journal_commit
@@ -793,6 +832,10 @@ upgrade_commit() {
   done
   # Upgrades can add ignore rules for the journal, delegation and stats files.
   [ -f "$WIKIS_DIR/.gitignore" ] && paths="$paths .gitignore"
+  # And the shared wiki's conventions page, when the upgrade created it.
+  if [ -f "$WIKIS_DIR/$SHARED/wiki/conventions.md" ] && ! git -C "$WIKIS_DIR" ls-files --error-unmatch -- "$SHARED/wiki/conventions.md" >/dev/null 2>&1; then
+    paths="$paths $SHARED/wiki/conventions.md $SHARED/index.md"
+  fi
   # shellcheck disable=SC2086
   [ -n "$(cd "$WIKIS_DIR" && git status --porcelain -- $paths 2>/dev/null | head -n 1)" ] || return 0
   # shellcheck disable=SC2086
@@ -2202,9 +2245,12 @@ print(f"\nWiki reads are about {share:.1f}% of new input. New input is what ente
 PY
 }
 
-# report_gains <start> <end>: per wiki, what was captured, compiled and added.
+# report_gains <start> <end>: per wiki, what was captured, compiled and added. Also
+# sets REPORT_NOTES and REPORT_FEEDBACK, the range's notes and Feedback lines.
+REPORT_NOTES=0
+REPORT_FEEDBACK=0
 report_gains() {
-  local d notes line any=0 s="$1" e="$2"
+  local d notes line any=0 s="$1" e="$2" fb
   for d in "$WIKIS_DIR"/*/; do
     d="${d%/}"
     is_wiki "$d" || continue
@@ -2216,6 +2262,9 @@ report_gains() {
       inr && /^- updated: / && $3 !~ /^wiki\/sources\// { u++ }
       END { printf "%d %d %d %d", ing, c, u, lint }' "$d/log.md" 2>/dev/null)"
     set -- $line
+    fb="$(ls "$d"/raw 2>/dev/null | awk -v s="$s" -v e="$e" '{ x = substr($0, 1, 10) } x >= s && x <= e' | while IFS= read -r f; do grep -c '^Feedback:' "$d/raw/$f" 2>/dev/null || true; done | awk '{ n += $1 } END { print n + 0 }')"
+    REPORT_NOTES=$((REPORT_NOTES + notes))
+    REPORT_FEEDBACK=$((REPORT_FEEDBACK + fb))
     local skills
     skills=0
     [ ! -d "$d/skills" ] || skills="$(find "$d/skills" -name SKILL.md -newermt "$s" 2>/dev/null | wc -l | tr -d ' ')"
@@ -2225,6 +2274,7 @@ report_gains() {
       "$([ "${4:-0}" -gt 0 ] && echo ", ${4} lint run(s)")" "$([ "$skills" -gt 0 ] && echo ", $skills skill(s) added or changed")"
   done
   [ "$any" = 1 ] || echo "Nothing captured or compiled in this range."
+  echo "- Corrections recorded as Feedback lines: $REPORT_FEEDBACK, in $REPORT_NOTES note(s)."
 }
 
 # report_lookups <start> <end>: hit rate per wiki, from stats.csv.
@@ -2265,6 +2315,11 @@ report_needs_you() {
   if [ "$stale" -gt 0 ]; then any=1; echo "- $stale page(s) not checked in over 90 days. wiki stale lists them."; fi
   muted="$( [ ! -f "$TIPS_STATE" ] || awk '$1 ~ /^muted:/ { sub(/^muted:/, "", $1); printf "%s ", $1 }' "$TIPS_STATE")"
   if [ -n "$muted" ]; then any=1; echo "- Muted tips: ${muted% }. If everyone mutes one, it may not be worth keeping."; fi
+  # A busy week with no corrections recorded usually means they went somewhere else.
+  if [ "$REPORT_FEEDBACK" -eq 0 ] && [ "$REPORT_NOTES" -ge 10 ]; then
+    any=1
+    echo "- No corrections were recorded this week, across $REPORT_NOTES notes. If you corrected an agent, the correction may have gone to its own memory instead of the wiki, where no other repository sees it."
+  fi
   [ "$any" = 1 ] || echo "Nothing."
 }
 
