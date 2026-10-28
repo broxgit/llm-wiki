@@ -76,12 +76,20 @@ When you correct the agent, paste review comments on code it wrote, or watch it 
 
 - **The same review comment keeps coming back.** It becomes a line on the project's conventions page, and agents check code against it before calling the work done.
 - **You keep correcting how a shared library is used.** The rule goes in that library's wiki, so every repository that calls the library gets it.
-- **The same procedure in different repositories** becomes a skill, or a how-to page for agents without skills.
+- **The same procedure in different repositories** becomes a [team skill](#team-skills).
 - **The same mechanical steps over and over** become a small script.
 
 A pattern is ready after 3 sightings, or 2 when they are review comments or come from different repositories. A "no" is remembered. `wiki patterns` shows what every wiki is tracking.
 
 Paste merge request comments into the session that wrote the code. They are the best evidence there is.
+
+## Team skills
+
+A skill that comes out of a repeated procedure lives in the wiki that owns it, as `skills/<name>/SKILL.md`: the shared wiki for skills that apply everywhere, a project's wiki for that project's. Everyone who syncs the collection gets it, and a fix reaches everyone. The skill holds the steps and points at wiki pages for the facts, so a corrected page corrects the skill. Each wiki's index lists its skills, so agents without skills can follow them as how-tos.
+
+Claude Code looks for skills in `~/.claude/skills`. `wiki skills link` links every team skill there. The plugin does it at every session start, and `upgrade` and `setup` do it too, so new ones show up without you doing anything. `wiki skills` lists them. A skill of yours with the same name is left alone and shown as a clash.
+
+To share a skill you already have, move its folder from `~/.claude/skills` into `~/wikis/global/skills/`, or a project wiki's `skills/`, then run `wiki skills link`. It's linked back where it was, and everyone else gets it on their next pull.
 
 ## Hand work to cheaper models
 
@@ -163,7 +171,7 @@ A new wiki is empty, so for its first few days it can't answer much. Most reposi
 wiki seed ~/dev/billing-api
 ```
 
-It copies the repository's README, top-level guides like `ARCHITECTURE.md` and `CONTRIBUTING.md`, its `docs/` folder, and decision records into the wiki's `raw/`, with a note saying where they came from. It takes only files git tracks, skips changelogs, licenses and dependencies, leaves out anything over 100KB, and stops at 20 documents. The next session in that repository compiles them, or say "compile". Run it without a path inside the repository. `--dry-run` shows what it would copy, `--max N` changes the limit, and running it again copies only what's new.
+It copies the repository's README, its agent instructions (`CLAUDE.md`, `AGENTS.md`, Cursor and Copilot rules), its Claude skills, top-level guides like `ARCHITECTURE.md` and `CONTRIBUTING.md`, its `docs/` folder, and decision records into the wiki's `raw/`, with a note saying where they came from. It takes only files git tracks, skips changelogs, licenses and dependencies, leaves out anything over 100KB, and stops at 20 documents. The next session in that repository compiles them, or say "compile". Run it without a path inside the repository. `--dry-run` shows what it would copy, `--max N` changes the limit, and running it again copies only what's new.
 
 With the plugin, a session in a repository that has no wiki offers to do this.
 
@@ -200,4 +208,5 @@ Run `wiki` with no arguments for the full list. The ones you're likely to use:
 | `wiki cover <wiki> <repo>...` | One wiki for several repositories. |
 | `wiki unlock <name>` | Free a stuck compile lock. |
 | `wiki seed [<repo>]` | Start a wiki from a repository's own docs. |
+| `wiki skills [link]` | List team skills, or link them for Claude Code. |
 | `wiki stats [range]` | How often each wiki answered the questions it was checked for. |

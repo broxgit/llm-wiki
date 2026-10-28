@@ -163,6 +163,15 @@ if [ -n "$LINK" ]; then
   ctx="$ctx
 $LINK"
 fi
+# Team skills added to the wikis since last time, linked so Claude Code finds them.
+if [ -d "$HOME/.claude" ]; then
+  linked="$("$WIKI_SH" skills link 2>/dev/null | sed -n 's/^linked:  \([^ ]*\).*/\1/p' | tr '\n' ' ' | sed 's/ $//')"
+  if [ -n "$linked" ]; then
+    ctx="$ctx
+
+New team skills from the wikis are linked and available: $linked"
+  fi
+fi
 if [ "$compacted" = 1 ]; then
   ctx="$ctx
 

@@ -71,7 +71,7 @@ commit: 3f2a9c1
 
 ## index.md
 
-Grouped by category. One line per page, except pages under `wiki/sources/`. Those are bookkeeping and stay out of the index.
+Grouped by category. One line per page, except pages under `wiki/sources/`. Those are bookkeeping and stay out of the index. Skills get a `## Skills` section, one line per `skills/<name>/SKILL.md`, with its description.
 
 ```markdown
 ## Concepts
