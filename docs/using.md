@@ -188,6 +188,17 @@ wiki stats week
 
 A wiki with a low hit rate is missing pages for the questions you actually ask, or covers a repository you rarely need help with.
 
+## Tips
+
+Some features only help once you know they exist. When something in your own wikis suggests one would help, Claude mentions it, at most once a session and only at a stopping point. For example: a repository you're working in has docs but no wiki, a skill of yours lives only on this machine, or the journal has entries but you've never asked for a standup.
+
+- A tip rests for two weeks after it's shown.
+- Say "don't suggest that again", and Claude mutes it for good. `wiki tips --mute <name>` does the same, and `--unmute` brings it back.
+- Once you've used the feature, its tip stops.
+- `wiki tips` lists every tip that applies right now, with its evidence. `wiki status` says when there are any.
+
+Tips come from the plugin's session hook, so other agents don't show them on their own. Run `wiki tips` now and then instead.
+
 ## Several sessions at once
 
 Safe. Saving a note adds one new file and touches nothing else, so any number of sessions can save at once. Compiling changes shared files, so a lock keeps it to one session per wiki. A session that finds the lock held skips compiling and carries on.
@@ -209,4 +220,5 @@ Run `wiki` with no arguments for the full list. The ones you're likely to use:
 | `wiki unlock <name>` | Free a stuck compile lock. |
 | `wiki seed [<repo>]` | Start a wiki from a repository's own docs. |
 | `wiki skills [link]` | List team skills, or link them for Claude Code. |
+| `wiki tips` | Features your own wikis suggest you'd get something out of. |
 | `wiki stats [range]` | How often each wiki answered the questions it was checked for. |

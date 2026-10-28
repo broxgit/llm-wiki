@@ -60,6 +60,7 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - `scripts/migrate-to-plugin.sh` and the interactive parts of `wiki setup` in CI. Both ran by hand in fake homes on 2026-10-28; CI only shellchecks the script. Testing them needs a pseudo-terminal that works on Linux and macOS runners.
 - The plugin's data folder name. Docs hard-code `~/.claude/plugins/data/llm-wiki-llm-wiki`, seen on three machines. A fork under another marketplace name gets a different folder.
 - Sessions upgrading wikis on their own (plugin, 2026-10-28): whether they pull before upgrading, and two machines upgrading one shared collection at once.
+- Tips in real use: whether people act on them or mute them all. Look at the mutes after a few weeks and drop the tips everyone mutes. Usage before 2026-10-28 wasn't recorded, so early standup and find tips may point at features already used.
 - Patterns in real use: whether agents write `Feedback:` lines unprompted, and whether the thresholds are right.
 
 ## Decided against
@@ -69,6 +70,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Tips: features your wikis suggest (2026-10-28)
+
+- **Why:** most features, like seed, standup, stats, team skills and backfill, are invisible unless someone reads the docs, so they risked going unused.
+- **What changed:** `wiki tips` checks the person's own records for a reason to use each of eight features: a repository with docs but no wiki, skills only on this machine, journal entries but no standup, a young journal with older transcripts, two weeks of lookups, pages unchecked for 90 days, several wikis but no `find`, and delegation never used. The plugin's session hook passes on at most one per session, to mention at a stopping point, never right after compaction or during an upgrade. A shown tip rests 14 days, a muted one for good, and a used feature's tip stops. `wiki status` counts them. State is per machine in `~/.config/llm-wiki/tips`. It ran in 0.13 seconds on a 13-wiki collection.
 
 ### Team skills, and seed takes agent instructions (2026-10-28, handbook version 17)
 

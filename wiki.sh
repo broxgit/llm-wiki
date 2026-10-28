@@ -40,6 +40,7 @@ Usage: $WIKI_CMD <command> [options]
   stale [days]         List pages not verified in that many days (default 90).
   patterns             Recurring feedback across wikis, and which patterns are ready to propose.
   skills [link]        Team skills in the wikis, and link them into ~/.claude/skills.
+  tips [--mute NAME]   Features your own wikis suggest you'd get something out of.
   stats [range]        How often wikis answered the questions sessions checked them for (default 30d).
   delegation [off|ask|auto]  Show handoff mode and results by kind of work, or set the mode.
   upgrade <name|path>  Bring a wiki's handbook and scaffold files up to the template's.
@@ -538,6 +539,8 @@ cmd_status() {
       *) echo "secrets: another pre-commit hook is in place. To scan commits, $(hook_advice)" ;;
     esac
   fi
+  n="$(TIP_REPO="$PWD" tips_due | wc -l | tr -d ' ')"
+  [ "$n" -eq 0 ] || echo "tips:    $n feature(s) your wikis suggest trying. Run: $WIKI_CMD tips"
   n="$(setup_pending | wc -l | tr -d ' ')"
   if [ ! -f "$SETUP_STATE" ]; then
     echo "setup:   never run on this machine. Run: $WIKI_CMD setup"
@@ -1658,6 +1661,202 @@ EOF
   [ "$(skills_unlinked)" -eq 0 ] || echo "Link them for Claude Code: $WIKI_CMD skills link"
 }
 
+# ---- tips -------------------------------------------------------------------
+# Features nobody tries go unused. A tip points at something in this person's own
+# records that a feature would help with, and only then. The session hook shows
+# at most one per session, at a stopping point. A shown tip rests for two weeks, a
+# muted one for good, and a tip whose feature has been used goes away.
+TIPS_STATE="${XDG_CONFIG_HOME:-$HOME/.config}/llm-wiki/tips"
+TIPS_COOLDOWN_DAYS=14
+TIPS_ORDER="seed share-skill standup backfill stats stale find delegation"
+
+# tip_get <key>: the date recorded for used:<cmd>, shown:<tip> or muted:<tip>.
+tip_get() { [ -f "$TIPS_STATE" ] && awk -v k="$1" '$1 == k { d = $2 } END { if (d) print d }' "$TIPS_STATE"; return 0; }
+
+# tip_set <key>: record today's date for a key, replacing an older one.
+tip_set() {
+  local today tmp
+  today="$(date -u +%Y-%m-%d)"
+  mkdir -p "${TIPS_STATE%/*}"
+  [ -f "$TIPS_STATE" ] || printf '# Commands used, and tips shown or muted, on this machine. Written by wiki.sh.\n' > "$TIPS_STATE"
+  tmp="$TIPS_STATE.tmp"
+  awk -v k="$1" -v d="$today" '$1 != k' "$TIPS_STATE" > "$tmp" && printf '%s %s\n' "$1" "$today" >> "$tmp" && mv "$tmp" "$TIPS_STATE"
+}
+
+# record_use <command> [sub]: note that a feature was used, so its tip stops.
+record_use() {
+  case "$1:${2:-}" in
+    seed:* | standup:* | stats:* | find:* | stale:* | skills:* | delegation:*) tip_set "used:$1" ;;
+    journal:backfill) tip_set "used:backfill" ;;
+  esac
+  return 0
+}
+
+used() { [ -n "$(tip_get "used:$1")" ]; }
+
+# Each check prints one line, the tip with its evidence, or nothing. Cheap: the
+# session hook runs them. $TIP_REPO is the repository the session works in.
+tip_seed() {
+  local top name w pages docs
+  [ -n "${TIP_REPO:-}" ] || return 0
+  top="$(git -C "$TIP_REPO" rev-parse --show-toplevel 2>/dev/null)" || return 0
+  name="$(repo_name "$top")"
+  w="$(which_wiki "$name")"
+  if [ -n "$w" ]; then
+    ls "$WIKIS_DIR/$w"/raw/*-seed-* >/dev/null 2>&1 && return 0
+    pages="$(find "$WIKIS_DIR/$w/wiki" -name '*.md' ! -path '*/sources/*' 2>/dev/null | wc -l | tr -d ' ')"
+    [ "$pages" -lt 3 ] || return 0
+  fi
+  docs="$(seed_candidates "$top" | wc -l | tr -d ' ')"
+  [ "$docs" -ge 2 ] || return 0
+  if [ -n "$w" ]; then
+    echo "The $w wiki has only $pages page(s), but $name has $docs documents of its own, such as its README and agent instructions. \`wiki seed\`, run in the repository, copies them in to be compiled, so the wiki can answer questions about $name from day one."
+  else
+    echo "$name has no wiki yet, but it has $docs documents of its own, such as its README and agent instructions. \`wiki seed\`, run in the repository, starts its wiki from them."
+  fi
+}
+
+tip_share_skill() {
+  local d names="" n=0
+  [ -d "$SKILLS_DIR" ] && [ -d "$WIKIS_DIR/$SHARED" ] || return 0
+  for d in "$SKILLS_DIR"/*/; do
+    d="${d%/}"
+    [ -L "$d" ] && continue
+    [ -f "$d/SKILL.md" ] || continue
+    n=$((n + 1))
+    [ "$n" -gt 3 ] || names="$names${names:+, }${d##*/}"
+  done
+  [ "$n" -gt 0 ] || return 0
+  echo "$n skill(s) in ~/.claude/skills are only on this machine: $names$([ "$n" -le 3 ] || echo ", ..."). Moving one into ~/wikis/global/skills/ and running \`wiki skills link\` shares it with everyone who syncs the wikis, and keeps it working here."
+}
+
+tip_standup() {
+  local n
+  used standup && return 0
+  [ "$(journal_get enabled)" = yes ] || return 0
+  n="$(cat "$JOURNAL_DIR"/20[0-9][0-9]-[0-9][0-9]-[0-9][0-9].md 2>/dev/null | grep -c '^- ' || true)"
+  [ "${n:-0}" -ge 3 ] || return 0
+  echo "The journal holds $n entries, but no standup has been written from it yet. Asking \"give me my standup\" turns commits, journal entries and wiki notes into Yesterday, Today and Blockers."
+}
+
+tip_backfill() {
+  local first older
+  used backfill && return 0
+  [ "$(journal_get enabled)" = yes ] && [ -d "$HOME/.claude/projects" ] || return 0
+  first="$(ls "$JOURNAL_DIR"/20[0-9][0-9]-[0-9][0-9]-[0-9][0-9].md 2>/dev/null | head -n 1)"
+  first="${first##*/}"
+  first="${first%.md}"
+  [ -z "$first" ] || [[ ! "$first" < "$(days_ago 14)" ]] || return 0
+  older="$(find "$HOME/.claude/projects" -name '*.jsonl' -mtime +3 2>/dev/null | head -n 1)"
+  [ -n "$older" ] || return 0
+  echo "The journal ${first:+starts on $first}${first:-is empty}, but Claude Code kept transcripts of earlier sessions. \`wiki journal backfill --since 14d\` digests them, then \"backfill my journal\" fills in those days."
+}
+
+tip_stats() {
+  local n first low
+  [ -s "$STATS_FILE" ] || return 0
+  [ -z "$(tip_get used:stats)" ] || [[ "$(tip_get used:stats)" < "$(days_ago 30)" ]] || return 0
+  n="$(grep -c '^20' "$STATS_FILE" || true)"
+  first="$(grep -m 1 '^20' "$STATS_FILE" | cut -d , -f 1)"
+  [ "${n:-0}" -ge 20 ] && [[ "$first" < "$(days_ago 13)" ]] || return 0
+  low="$(awk -F, '$1 ~ /^20/ { n[$2]++; if ($3 ~ /^hit/) h[$2]++ }
+    END { for (w in n) if (n[w] >= 5 && h[w] / n[w] < 0.4) printf "%s (%d%%) ", w, 100 * h[w] / n[w] }' "$STATS_FILE")"
+  echo "Sessions have logged $n wiki lookups since $first.${low:+ Some wikis rarely answer: ${low% }.} \`wiki stats\` shows each wiki's hit rate, so you can see which ones earn their keep."
+}
+
+tip_stale() {
+  local d cutoff n=0 v
+  [ -z "$(tip_get used:stale)" ] || [[ "$(tip_get used:stale)" < "$(days_ago 30)" ]] || return 0
+  cutoff="$(days_ago 90)"
+  for d in "$WIKIS_DIR"/*/wiki; do
+    [ -d "$d" ] || continue
+    while IFS= read -r v; do
+      [[ "$v" < "$cutoff" ]] && n=$((n + 1))
+    done < <(grep -rh --include='*.md' --exclude-dir=sources '^verified:' "$d" 2>/dev/null | sed 's/^verified: *//')
+  done
+  [ "$n" -ge 3 ] || return 0
+  echo "$n wiki pages haven't been checked in over 90 days. \`wiki stale\` lists them, and \"re-verify the stale pages in <wiki>\" has an agent check them against the code."
+}
+
+tip_find() {
+  local d n=0
+  used find && return 0
+  for d in "$WIKIS_DIR"/*/; do is_wiki "${d%/}" && n=$((n + 1)); done
+  [ "$n" -ge 4 ] || return 0
+  echo "There are $n wikis. \`wiki find <word>\` searches all their indexes at once, when you don't know which project knows about something."
+}
+
+tip_delegation() {
+  used delegation && return 0
+  [ "$(deleg_mode)" = ask ] && [ ! -s "$DELEG_LOG" ] || return 0
+  [ -f "$WIKIS_DIR/WIKIS.md" ] && [ -n "$(find "$WIKIS_DIR/WIKIS.md" -mtime +7 2>/dev/null)" ] || return 0
+  echo "No work has been handed to a cheaper model yet. Sessions can give test runs and file sweeps to a sub-agent on a cheaper model, and \`wiki setup delegation\` sets whether they ask first."
+}
+
+# tips_due [all|first]: "<id><TAB><tip>" lines for tips that apply. Without "all",
+# only those not muted and not shown in the last two weeks. "first" stops at one.
+tips_due() {
+  local id text when
+  [ -d "$WIKIS_DIR" ] || return 0
+  for id in $TIPS_ORDER; do
+    if [ "${1:-}" != all ]; then
+      [ -z "$(tip_get "muted:$id")" ] || continue
+      when="$(tip_get "shown:$id")"
+      [ -z "$when" ] || [[ "$when" < "$(days_ago "$TIPS_COOLDOWN_DAYS")" ]] || continue
+    fi
+    text="$("tip_${id//-/_}" 2>/dev/null)"
+    [ -n "$text" ] || continue
+    printf '%s\t%s\n' "$id" "$text"
+    [ "${1:-}" != first ] || break
+  done
+  return 0
+}
+
+# tips [--next] [--mute ID] [--unmute ID] [--repo DIR]
+cmd_tips() {
+  local mode=list id="" line text
+  TIP_REPO="$PWD"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --next) mode=next; shift ;;
+      --mute) mode=mute; id="${2:-}"; shift 2 ;;
+      --unmute) mode=unmute; id="${2:-}"; shift 2 ;;
+      --repo) TIP_REPO="${2:-}"; shift 2 ;;
+      *) die "tips options: --next, --mute ID, --unmute ID, --repo DIR" ;;
+    esac
+  done
+  case "$mode" in
+    mute | unmute)
+      case " $TIPS_ORDER " in *" $id "*) ;; *) die "no tip called $id. Tips: $TIPS_ORDER" ;; esac
+      if [ "$mode" = mute ]; then
+        tip_set "muted:$id"
+        echo "tip $id muted. $WIKI_CMD tips --unmute $id brings it back."
+      else
+        [ ! -f "$TIPS_STATE" ] || { awk -v k="muted:$id" '$1 != k' "$TIPS_STATE" > "$TIPS_STATE.tmp" && mv "$TIPS_STATE.tmp" "$TIPS_STATE"; }
+        echo "tip $id unmuted"
+      fi
+      ;;
+    next)
+      # For the session hook: one tip, recorded as shown.
+      line="$(tips_due first)"
+      [ -n "$line" ] || return 0
+      tip_set "shown:${line%%$TAB*}"
+      printf '%s\n' "$line"
+      ;;
+    list)
+      line="$(tips_due all)"
+      if [ -z "$line" ]; then echo "No tips right now: nothing in your wikis points at an unused feature."; return 0; fi
+      while IFS="$TAB" read -r id text; do
+        if [ -n "$(tip_get "muted:$id")" ]; then printf '%s (muted)\n' "$id"; else printf '%s\n' "$id"; fi
+        printf '  %s\n\n' "$text"
+      done <<EOF
+$line
+EOF
+      echo "Mute one for good: $WIKI_CMD tips --mute <name>"
+      ;;
+  esac
+}
+
 # ---- stats ------------------------------------------------------------------
 # Agents log each wiki lookup to stats.csv in the collection: date,wiki,hit|miss.
 # A hit means the pages answered at least part of the question. stats sums it, so
@@ -2393,6 +2592,7 @@ setup_upgrade_needed() {
 [ $# -ge 1 ] || { usage; exit 1; }
 cmd="$1"
 shift
+record_use "$cmd" "${1:-}"
 if [ "$cmd" = journal ]; then
   cmd_journal "$@"
   exit 0
@@ -2407,6 +2607,10 @@ if [ "$cmd" = delegation ]; then
 fi
 if [ "$cmd" = setup ]; then
   cmd_setup "$@"
+  exit 0
+fi
+if [ "$cmd" = tips ]; then
+  cmd_tips "$@"
   exit 0
 fi
 if [ "$cmd" = seed ]; then

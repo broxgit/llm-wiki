@@ -148,7 +148,9 @@ tv="$(version_of "$ROOT/template/AGENTS.md")"
 # leave local changes that make the pull fail if a teammate already pushed the same
 # upgrade. upgrade never moves a wiki backwards.
 read_first="Before anything else, read $(t "$wiki")/AGENTS.md"
+upgrading=""
 if [ -n "$wv" ] && [ -n "$tv" ] && [ "$wv" -lt "$tv" ]; then
+  upgrading=1
   read_first="Its handbook is v$wv, older than the plugin's v$tv. First pull the collection if it has a remote, run \`wiki.sh upgrade --all\`, commit the result as \`wikis: handbook v$tv\` and push, and tell the user briefly what changed. Then read the new $(t "$wiki")/AGENTS.md"
 fi
 ctx="# llm-wiki
@@ -170,6 +172,18 @@ if [ -d "$HOME/.claude" ]; then
     ctx="$ctx
 
 New team skills from the wikis are linked and available: $linked"
+  fi
+fi
+# One tip a session about a feature this person's own wikis suggest they'd use. Not
+# right after compaction, which usually means mid-task, nor when the session starts
+# with an upgrade. wiki.sh keeps the cooldown and mutes.
+if [ "$compacted" = 0 ] && [ -z "$upgrading" ]; then
+  tab="$(printf '\t')"
+  tip="$("$WIKI_SH" tips --next --repo "$DIR" 2>/dev/null | head -n 1)"
+  if [ -n "$tip" ]; then
+    ctx="$ctx
+
+One tip for the user, from their own wikis. Mention it once, in a line or two, at a stopping point, never mid-task: ${tip#*"$tab"} If they don't want it suggested again, run \`wiki.sh tips --mute ${tip%%"$tab"*}\`."
   fi
 fi
 if [ "$compacted" = 1 ]; then
