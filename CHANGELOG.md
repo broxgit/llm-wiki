@@ -4,6 +4,19 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v19 (2026-10-28)
+
+Knowledge that holds beyond one project now reaches every project. Audits of two collections found general lessons stuck in project wikis, sessions that rarely opened the shared wiki, and corrections saved to the agent's own memory, where no other repository could see them.
+
+- Every session reads the shared wiki's index, and the `For agents` section of its conventions page, at session start, not only when its own wiki can't answer.
+- Before each capture, the agent asks whether another repository needs it. If so, it goes in the shared wiki or the owning wiki. The handbook now lists what belongs in the shared wiki: how you want agents to work, how shared libraries, internal tools and vendors behave, pipelines and environments, team practice, and guild decisions.
+- Knowledge goes in the wiki, not in the agent's own memory, which only reaches sessions in one folder. The plugin's session hook repeats this every session.
+- The shared wiki gets `wiki/conventions.md`, with `For agents` (working agreements) and `For code` sections. Setup and upgrade create it. Repeated corrections about how agents work land there.
+- Compile looks for a topic in other wikis before starting a page. Lint reports duplicated facts, stale copies after a rename, broken cross-wiki citations, project pages whose lesson holds elsewhere, and shared pages that lean on one project.
+- A session that finds its wiki some other way than by name runs `wiki cover`, so the next one finds it by name.
+- The weekly report counts recorded corrections, and flags a busy week with none.
+- Do: nothing. Sessions upgrade the wikis, and the upgrade creates the conventions page. Then fill in its `For agents` section with your working agreements, or ask a session to.
+
 ## v18 (2026-10-28)
 
 - Bulk compile. Five or more waiting notes, as after `wiki seed`, are compiled as one batch: read together, planned by topic, and each page written once, instead of rewriting the same page once per note.

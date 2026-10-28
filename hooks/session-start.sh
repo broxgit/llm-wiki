@@ -157,7 +157,8 @@ ctx="# llm-wiki
 
 \`wiki.sh\` here means $(t "$WIKI_SH"), the script the handbook refers to. In a terminal the user runs it as: $(t "$TYPE")
 
-This session's knowledge wiki is $(t "$wiki")${repo:+, for the repository $repo}. $read_first, its handbook, and follow it for the rest of the session. Its session-start steps say to read index.md next.
+This session's knowledge wiki is $(t "$wiki")${repo:+, for the repository $repo}. $read_first, its handbook, and follow it for the rest of the session. Its session-start steps say what to read next, including the shared wiki.
+Save knowledge in the wiki, not in your own memory: memory stays in this folder, and the wiki reaches every repository and teammate.
 ${note:+
 
 $note}"
