@@ -16,6 +16,7 @@ Commands are written as `wiki <command>`. From a clone without the link, that's 
 | "Don't save that", "off the record" | Leaves that one thing out. |
 | "Leave the wiki alone" | No wiki writes until you say otherwise. |
 | "What did I do yesterday?", "Give me my standup" | A standup from your commits, journal and notes. Plugin: `/llm-wiki:standup`. |
+| "Seed a wiki from this repo's docs" | Starts the repository's wiki from its README, `docs/` and decision records, so it isn't empty on day one. See [Start a wiki from a repository's docs](#start-a-wiki-from-a-repositorys-docs). |
 | "Backfill my journal" | Fills in past days from earlier sessions. See [Fill in past days](#fill-in-past-days). |
 | "That belongs in the billing-api wiki" | Moves knowledge to the wiki that owns it, after asking. |
 
@@ -143,6 +144,7 @@ Settings live in `~/wikis/journal/config`. Walk through them with `wiki setup jo
 | `exclude` | empty | Repositories and wikis to leave out, as comma-separated globs, such as `personal-*`. |
 | `save` | `no` | `yes` saves each report as `journal/YYYY-MM-DD-<format>.md`. |
 | `keep_days` | `0` | Deletes journal days older than this. `0` keeps everything. |
+| `max_commits` | `15` | Commits listed per repository in a report, newest first. `0` lists them all. Detailed reports always list them all. |
 
 ## Settings
 
@@ -152,6 +154,31 @@ Settings live in `~/wikis/journal/config`. Walk through them with `wiki setup jo
 - `wiki setup --new` asks only about what's new since you last ran it.
 - `wiki setup git`, `wiki setup journal` or `wiki setup delegation` reruns one section.
 - `wiki setup format` edits one journal setting.
+
+## Start a wiki from a repository's docs
+
+A new wiki is empty, so for its first few days it can't answer much. Most repositories already explain themselves, so start the wiki from that:
+
+```
+wiki seed ~/dev/billing-api
+```
+
+It copies the repository's README, top-level guides like `ARCHITECTURE.md` and `CONTRIBUTING.md`, its `docs/` folder, and decision records into the wiki's `raw/`, with a note saying where they came from. It takes only files git tracks, skips changelogs, licenses and dependencies, leaves out anything over 100KB, and stops at 20 documents. The next session in that repository compiles them, or say "compile". Run it without a path inside the repository. `--dry-run` shows what it would copy, `--max N` changes the limit, and running it again copies only what's new.
+
+With the plugin, a session in a repository that has no wiki offers to do this.
+
+The copies are the repository's docs as written, which can be out of date. The agent treats their claims about code as unchecked until it checks them against the code.
+
+## Is it paying off?
+
+Each time a session checks a wiki for a question, it logs whether the pages helped: a hit or a miss. The log stays on your machine.
+
+```
+wiki stats           # the last 30 days
+wiki stats week
+```
+
+A wiki with a low hit rate is missing pages for the questions you actually ask, or covers a repository you rarely need help with.
 
 ## Several sessions at once
 
@@ -172,3 +199,5 @@ Run `wiki` with no arguments for the full list. The ones you're likely to use:
 | `wiki new <name>` | Create a wiki. Usually the agent does this. |
 | `wiki cover <wiki> <repo>...` | One wiki for several repositories. |
 | `wiki unlock <name>` | Free a stuck compile lock. |
+| `wiki seed [<repo>]` | Start a wiki from a repository's own docs. |
+| `wiki stats [range]` | How often each wiki answered the questions it was checked for. |

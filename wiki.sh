@@ -30,12 +30,15 @@ Usage: $WIKI_CMD <command> [options]
   setup --list         Print current settings without asking.
   init                 Create the wiki collection at $(tilde "$WIKIS_DIR") and its shared wiki, $SHARED.
   new <name|path>      Create a wiki from the template. A bare name goes under $(tilde "$WIKIS_DIR").
+  seed [<repo>] [--wiki NAME] [--max N] [--dry-run]
+                       Start a wiki from a repository's own docs: README, docs/, ADRs.
   cover <wiki> <repo>...  Record that one wiki covers several repositories.
   which <repo>         Print the wiki that covers a repository.
   status               List wikis: handbook version, notes waiting, lock state.
   find <word>          Search every wiki's index for a word.
   stale [days]         List pages not verified in that many days (default 90).
   patterns             Recurring feedback across wikis, and which patterns are ready to propose.
+  stats [range]        How often wikis answered the questions sessions checked them for (default 30d).
   delegation [off|ask|auto]  Show handoff mode and results by kind of work, or set the mode.
   upgrade <name|path>  Bring a wiki's handbook and scaffold files up to the template's.
   upgrade --all        Do that for every wiki in the collection.
@@ -56,7 +59,7 @@ Usage: $WIKI_CMD <command> [options]
                        work in progress, open checks. An agent turns it into a report.
                        --since lastworkday|yesterday|today|week|lastweek|7d|DATE
                        --until DATE  --day DATE  --format standup|summary|detailed
-                       --only GLOB  --exclude GLOB  --save
+                       --only GLOB  --exclude GLOB  --max N  --save
 
   --git   With init: make the whole collection one git repo.
           With new:  make that wiki its own repo, unless it is already inside one.
@@ -213,6 +216,102 @@ cmd_which() {
 }
 
 # cover <wiki> <repo>...: record that one wiki covers several repositories.
+# ---- seed -------------------------------------------------------------------
+# A new wiki is empty, so nothing seems to happen for days. seed copies a
+# repository's own documents into its wiki's raw/, and the next session compiles
+# them. Only files git tracks, so build output and dependencies never come along.
+SEED_MAX_BYTES=100000
+
+# seed_candidates <repo top>: tracked documents worth compiling, most useful first.
+seed_candidates() {
+  git -C "$1" -c core.quotePath=false ls-files 2>/dev/null | awk '
+    { f = $0; l = tolower(f) }
+    l ~ /(^|\/)(node_modules|vendor|third_party|\.github)\// { next }
+    l ~ /(^|\/)(changelog|history|license|licence|notice|code_of_conduct|security|codeowners)[^\/]*$/ { next }
+    l !~ /\.(md|mdx|markdown|rst|adoc|txt)$/ { next }
+    {
+      n = split(l, p, "/"); base = p[n]
+      if (n == 1 && base ~ /^readme/) r = 0
+      else if (n == 1 && base ~ /^(architecture|design|contributing|development|overview)/) r = 1
+      else if (l ~ /(^|\/)(adr|adrs|decisions|rfc|rfcs)\//) r = 2
+      else if (l ~ /^(doc|docs|documentation)\//) r = 3
+      else if (base ~ /^readme/) r = 4
+      else next
+      printf "%d %d %s\n", r, n, f
+    }' | sort -k1,1n -k2,2n -k3 | cut -d ' ' -f 3-
+}
+
+# seed [<repo path>] [--wiki NAME] [--max N] [--dry-run]
+cmd_seed() {
+  local src="" wiki="" max=20 dry=0 top name root stamp commit f ext slug dest size
+  local n=0 more=0 already=0 big="" list=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --wiki) wiki="${2:-}"; shift 2 ;;
+      --max) max="${2:-}"; shift 2 ;;
+      --dry-run) dry=1; shift ;;
+      -*) die "seed options: --wiki NAME, --max N, --dry-run" ;;
+      *) [ -z "$src" ] || die "seed takes one repository"; src="$1"; shift ;;
+    esac
+  done
+  case "$max" in '' | *[!0-9]*) die "--max takes a number" ;; esac
+  top="$(git -C "${src:-.}" rev-parse --show-toplevel 2>/dev/null)" || die "${src:-this folder} isn't in a git repository"
+  name="$(repo_name "$top")"
+  [ -n "$wiki" ] || wiki="$(which_wiki "$name")"
+  [ -n "$wiki" ] || wiki="$name"
+  valid_name "$wiki" || die "\"$wiki\" can't be a wiki name. Pass one with --wiki."
+  root="$WIKIS_DIR/$wiki"
+  if [ "$dry" = 0 ] && ! is_wiki "$root"; then scaffold "$root" 0; fi
+  stamp="$(date -u +%Y-%m-%d-%H%M%S)"
+  commit="$(git -C "$top" rev-parse --short HEAD 2>/dev/null || echo none)"
+  while IFS= read -r f; do
+    [ -f "$top/$f" ] || continue
+    size="$(wc -c < "$top/$f" | tr -d ' ')"
+    [ "$size" -gt 0 ] || continue
+    if [ "$size" -gt "$SEED_MAX_BYTES" ]; then big="$big  $f ($((size / 1000))KB)"$'\n'; continue; fi
+    ext="${f##*.}"
+    slug="$(printf '%s' "${f%.*}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9][^a-z0-9]*/-/g; s/^-//; s/-$//')"
+    # Seeded before: the same document under any earlier stamp.
+    if ls "$root"/raw/*-seed-[0-9][0-9]-"$slug.$ext" >/dev/null 2>&1; then already=$((already + 1)); continue; fi
+    if [ "$n" -ge "$max" ]; then more=$((more + 1)); continue; fi
+    n=$((n + 1))
+    dest="$stamp-seed-$(printf '%02d' "$n")-$slug.$ext"
+    if [ "$dry" = 1 ]; then
+      echo "would copy: $f"
+    else
+      cp "$top/$f" "$root/raw/$dest"
+      echo "seeded:  $f"
+    fi
+    list="$list- raw/$dest: $f"$'\n'
+  done < <(seed_candidates "$top")
+  # A note first in ingest order, so the compile knows where the copies came from.
+  if [ "$dry" = 0 ] && [ "$n" -gt 0 ]; then
+    # Never overwrite: a second seed in the same second gets -2, as the handbook names captures.
+    dest="$stamp-seed-00-manifest.md"
+    f=2
+    while [ -e "$root/raw/$dest" ]; do dest="$stamp-seed-00-manifest-$f.md"; f=$((f + 1)); done
+    cat > "$root/raw/$dest" <<EOF
+Captured: $(date -u +%Y-%m-%d)
+
+# Seeded from the $name repository
+
+\`wiki.sh seed\` copied these documents from the $name repository at commit $commit. They are the repository's own docs, as its authors wrote them. Compile them like any source. Treat their claims about code as unchecked until checked against the code, and don't stamp \`commit\` on them before that.
+
+$list
+EOF
+  fi
+  [ -z "$big" ] || printf 'skipped, over %sKB:\n%s' "$((SEED_MAX_BYTES / 1000))" "$big"
+  [ "$already" -eq 0 ] || echo "skipped $already already seeded"
+  [ "$more" -eq 0 ] || echo "left out $more more. Rerun with a higher --max to take them too."
+  if [ "$n" -eq 0 ]; then
+    echo "nothing new to seed from $(tilde "$top")"
+  elif [ "$dry" = 1 ]; then
+    echo "$n document(s) would go into $(tilde "$root")"
+  else
+    echo "$n document(s) are waiting in $(tilde "$root/raw"). The next session there compiles them, or say \"compile $wiki\"."
+  fi
+}
+
 cmd_cover() {
   local wiki="$1" root repo owner
   shift
@@ -714,7 +813,8 @@ depth|number|advanced|4|How deep to search code_dirs for repositories.
 authors|text|advanced||Extra commit author emails or names, separated by commas. Each repository'"'"'s own user.email always counts.
 exclude|text|advanced||Repositories and wikis to leave out, as comma-separated globs, such as personal-*,scratch.
 save|yesno|advanced|no|yes: save each generated report in this folder as YYYY-MM-DD-<format>.md.
-keep_days|number|advanced|0|Delete day files older than this many days. 0 keeps everything.'
+keep_days|number|advanced|0|Delete day files older than this many days. 0 keeps everything.
+max_commits|number|advanced|15|Commits listed per repository in a report, newest first. 0 lists them all. Detailed reports always list them all.'
 JOURNAL_KEYS="$(printf '%s\n' "$JOURNAL_SETTINGS" | cut -d '|' -f 1 | tr '\n' ' ' | sed 's/ $//')"
 
 # journal_field <key> <n>: field n of a setting. 2 type, 3 level, 4 default, 5 description.
@@ -1187,7 +1287,7 @@ find_repos() {
 }
 
 cmd_standup() {
-  local since="" until="" day="" fmt="" save="" only="" arg
+  local since="" until="" day="" fmt="" save="" only="" max="" arg
   while [ $# -gt 0 ]; do
     case "$1" in
       --since) since="${2:-}"; shift ;;
@@ -1197,7 +1297,8 @@ cmd_standup() {
       --only) only="${2:-}"; shift ;;
       --exclude) STANDUP_EXCLUDE="${STANDUP_EXCLUDE:+$STANDUP_EXCLUDE,}${2:-}"; shift ;;
       --save) save=yes ;;
-      *) die "standup options: --since X, --until DATE, --day DATE, --format standup|summary|detailed, --only GLOB, --exclude GLOB, --save" ;;
+      --max) max="${2:-}"; shift ;;
+      *) die "standup options: --since X, --until DATE, --day DATE, --format standup|summary|detailed, --only GLOB, --exclude GLOB, --max N, --save" ;;
     esac
     shift
   done
@@ -1205,6 +1306,10 @@ cmd_standup() {
   since_ok "$arg" || die "--since takes lastworkday, yesterday, today, week, lastweek, a number of days like 7d, or a date"
   [ -z "$fmt" ] || case "$fmt" in standup | summary | detailed) ;; *) die "--format takes standup, summary, or detailed" ;; esac
   STANDUP_ONLY="$only"
+  # A busy repository can list 50 commits a day, which costs tokens and buries the rest.
+  [ -n "$max" ] || max="$(journal_get max_commits)"
+  case "$max" in '' | *[!0-9]*) die "--max takes a number" ;; esac
+  [ "${fmt:-$(journal_get format)}" != detailed ] || max=0
 
   local today ds start_date end_date start_local end_local s_utc e_utc end_label
   today="$(journal_today)"
@@ -1220,7 +1325,9 @@ cmd_standup() {
   fi
   start_local="$start_date $ds"
   if [ -z "$day" ] && [ -z "$until" ]; then
-    end_local="$(date '+%Y-%m-%d %H:%M')"; end_label="now"
+    # git compares to the second and this is to the minute, so end a minute ahead
+    # or work from the last few seconds is left out.
+    end_local="$(date -d '+1 minute' '+%Y-%m-%d %H:%M' 2>/dev/null || date -v+1M '+%Y-%m-%d %H:%M')"; end_label="now"
   else
     end_local="$(date_add "$end_date" 1) $ds"; end_label="$end_local"
   fi
@@ -1261,10 +1368,19 @@ cmd_standup() {
     # --since stops walking history at the first older commit, which hides newer work
     # under an old branch tip. --since-as-filter (git 2.37) checks every commit.
     lines="$(git -C "$r" log --all --no-merges "$@" "$since_flag=$start_local" --until="$end_local" \
-      --date=format-local:'%Y-%m-%d %H:%M' --format='- %cd %h %s' 2>/dev/null | sort -u || true)"
+      --date=format-local:'%Y-%m-%d %H:%M' --format='- %cd %h %s' 2>/dev/null | awk '!seen[$0]++' || true)"
     if [ -n "$lines" ]; then
-      n_repos=$((n_repos + 1)); n_commits=$((n_commits + $(printf '%s\n' "$lines" | wc -l)))
-      { echo; echo "### $name"; printf '%s\n' "$lines"; } >> "$out"
+      local count
+      count="$(printf '%s\n' "$lines" | wc -l | tr -d ' ')"
+      n_repos=$((n_repos + 1)); n_commits=$((n_commits + count))
+      { echo; echo "### $name"
+        # Newest first, as git lists them.
+        if [ "$max" -gt 0 ] && [ "$count" -gt "$max" ]; then
+          printf '%s\n' "$lines" | head -n "$max"
+          echo "- ($((count - max)) earlier commit(s) not listed)"
+        else
+          printf '%s\n' "$lines"
+        fi; } >> "$out"
     fi
     # Work in progress: uncommitted files, unpushed commits, a non-default branch.
     local dirty ahead br
@@ -1416,6 +1532,33 @@ EOF2
   echo "$total ready to propose. An agent proposes each at a stopping point, per rules/patterns.md."
 }
 
+# ---- stats ------------------------------------------------------------------
+# Agents log each wiki lookup to stats.csv in the collection: date,wiki,hit|miss.
+# A hit means the pages answered at least part of the question. stats sums it, so
+# you can tell whether a wiki earns its keep.
+STATS_FILE="$WIKIS_DIR/stats.csv"
+
+cmd_stats() {
+  local since="${1:-30d}" from
+  since_ok "$since" || die "stats takes a range: lastworkday, yesterday, today, week, lastweek, a number of days like 30d, or a date"
+  if [ ! -s "$STATS_FILE" ]; then
+    echo "No lookups logged yet. Sessions on handbook v16 or later log one line per question they check a wiki for."
+    return 0
+  fi
+  from="$(since_to_date "$(journal_today)" "$since")"
+  echo "Wiki lookups since $from"
+  awk -F, -v from="$from" '
+    NR == 1 && $1 == "date" { next }
+    $1 >= from && NF >= 3 { n[$2]++; if ($3 ~ /^hit/) h[$2]++; total++; hits += ($3 ~ /^hit/) }
+    END {
+      if (!total) { print "  none in this range"; exit }
+      printf "%-26s %7s %5s %6s %6s\n", "WIKI", "LOOKUPS", "HITS", "MISSES", "RATE"
+      for (w in n) printf "%-26s %7d %5d %6d %5.0f%%\n", w, n[w], h[w], n[w] - h[w], 100 * h[w] / n[w]
+      printf "%-26s %7d %5d %6d %5.0f%%\n", "all", total, hits, total - hits, 100 * hits / total
+    }' "$STATS_FILE"
+  echo "A wiki that keeps missing may be missing pages, or may not be worth keeping."
+}
+
 # ---- delegation -------------------------------------------------------------
 # delegation.md in the collection holds the user's handoff preferences: a mode
 # line, a table of work to model tiers, and an Auto list. Agents read it and
@@ -1475,12 +1618,13 @@ deleg_set_mode() {
   echo "delegation: mode $1"
 }
 
-# The preferences and the handoff log are one person's, so they stay on this
-# machine. In a shared collection, coworkers would otherwise overwrite each other's mode.
+# The preferences, the handoff log and the lookup stats are one person's, so they
+# stay on this machine. In a shared collection, coworkers would otherwise overwrite them.
 apply_delegation_ignore() {
   in_git_repo "$WIKIS_DIR" || return 0
   ensure_line "$WIKIS_DIR/.gitignore" "delegation.md"
   ensure_line "$WIKIS_DIR/.gitignore" "delegation-log.csv"
+  ensure_line "$WIKIS_DIR/.gitignore" "stats.csv"
   if [ -n "$(git -C "$WIKIS_DIR" ls-files delegation.md delegation-log.csv 2>/dev/null)" ]; then
     echo "note:    delegation files are tracked from before. To keep them on this machine only: git -C $(tilde "$WIKIS_DIR") rm --cached delegation.md delegation-log.csv"
   fi
@@ -1966,6 +2110,10 @@ if [ "$cmd" = setup ]; then
   cmd_setup "$@"
   exit 0
 fi
+if [ "$cmd" = seed ]; then
+  cmd_seed "$@"
+  exit 0
+fi
 if [ "$cmd" = cover ]; then
   [ $# -ge 2 ] || die "usage: $WIKI_CMD cover <wiki> <repo>..."
   cmd_cover "$@"
@@ -2015,6 +2163,7 @@ case "$cmd" in
   unlock) need_target; cmd_unlock "$(resolve "$target")" ;;
   claude) if [ "$want_print" = 1 ]; then claude_line; printf '\n'; else cmd_claude; fi ;;
   patterns) cmd_patterns ;;
+  stats) cmd_stats "${target:-30d}" ;;
   -h | --help | help) usage ;;
   *) usage; exit 1 ;;
 esac

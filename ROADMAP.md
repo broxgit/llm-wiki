@@ -13,24 +13,6 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 - **Not this:** invented abbreviations or JSON. In the same test, shorthand saved 2 points over terse plain words and JSON saved none. Abbreviations cost more tokens per word ("tmo" is 2 tokens, "timeout" is 1) and are harder for a model to read back.
 - **Open:** whether terse pages hurt answer quality. Test by asking the same questions against both versions of a page. Whether teammates still need to read pages comfortably.
 
-### Seed a wiki from its repository
-
-- **Why:** a new wiki is empty. Each repository already holds a README, docs, decision records, and merged PR descriptions. Ingesting those makes a wiki useful on day one.
-- **Sketch:** `./wiki.sh seed <name> <path to repo>` copies the chosen documents into `raw/`. The next session compiles them. Stamp pages with the repository's HEAD.
-- **Open:** which files to take by default. How to cap the size for a large repo. Whether PR descriptions are worth the API calls.
-
-### Capture before compaction
-
-- **Why:** compaction drops what the session knew. Anything not captured by then is gone. The `SessionStart` half of this item shipped with the plugin.
-- **Sketch:** a `PreCompact` hook in the plugin that holds compaction until the session has captured what it knows.
-- **Open:** whether blocking compaction is too heavy-handed. The handbook must stay usable without hooks.
-
-### Measure whether it pays
-
-- **Why:** nobody knows yet if the wikis save tokens or just move them.
-- **Sketch:** the agent appends one line per lookup to a local, git-ignored file: date, wiki, hit or miss. `./wiki.sh stats` shows hit rate per wiki.
-- **Open:** whether agents will log reliably. What hit rate means a wiki should be dropped.
-
 ## Later
 
 - **Merge requests in standups.** Reviews and MRs opened live in GitHub or GitLab, not in git history. Pulling them in would need an API token and a host per remote.
@@ -60,6 +42,8 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - The version 8 triggers in real use. They passed a dry run only.
 - A model other than Claude following the handbook.
 - Delegation in real use: whether sessions suggest handoffs at the right size, and whether the log shows real savings. The log records outcomes, not tokens. Token counts per handoff would need the tool's usage data.
+- Stats in real use: whether sessions log every lookup, and what hit rate means a wiki should go.
+- Seed in real use: how long compiling 20 seeded documents takes, and whether the pages are worth it.
 - Patterns in real use: whether agents write `Feedback:` lines unprompted, and whether the thresholds are right.
 
 ## Decided against
@@ -69,6 +53,13 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Day-one value, stats, and capture after compaction (2026-10-28, handbook version 16)
+
+- **Seed:** `wiki seed` copies a repository's tracked README, top-level guides, `docs/` and decision records into its wiki's `raw/`, most useful first, capped at 20 documents and 100KB each, with a manifest note saying where they came from and that their code claims are unchecked. Reruns copy only what's new. The plugin's hook offers it in a repository with no wiki. PR descriptions were left out: they need an API token.
+- **Capture after compaction:** a `PreCompact` hook can block compaction, but its output doesn't reach the model, so blocking would stall the session without prompting a capture. Instead the `SessionStart` hook, which runs again with `"source": "compact"`, asks the session to capture what the summary holds.
+- **Stats:** handbook step 6 under Query logs one line per question to `stats.csv`: hit or miss. `wiki stats` shows hit rates. Git ignores the file.
+- **Standup:** at most 15 commits per repository, newest first, via the `max_commits` setting or `--max`. Fixed on the way: "through now" cut off at the current minute, dropping the last few seconds of commits, and commits in the same minute were ordered by hash.
 
 ### CI and smoke tests (2026-10-28)
 
