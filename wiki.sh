@@ -307,6 +307,8 @@ cmd_status() {
     n="$(patterns_ledger "$d" | grep -c '^ready|' || true)"
     if [ "${n:-0}" -gt 0 ]; then note="$note  <- $n pattern(s) ready"; fi
     if [ -n "$tv" ] && [ "${v:-0}" -lt "$tv" ]; then note="$note  <- behind template v$tv, run: ./wiki.sh upgrade ${d##*/}"; fi
+    # Someone upgraded a shared wiki with a newer template than this clone.
+    if [ -n "$tv" ] && [ "${v:-0}" -gt "$tv" ]; then note="$note  <- ahead of your template v$tv, run: git -C $(tilde "$REPO") pull"; fi
     if [ -f "$d/repos.md" ] && grep -q '^- ' "$d/repos.md"; then
       note="$note  covers: $(sed -n 's/^- //p' "$d/repos.md" | tr '\n' ' ')"
     fi
@@ -377,7 +379,9 @@ upgrade_one() {
   is_wiki "$root" || die "$(tilde "$root") is not a wiki (needs AGENTS.md and index.md)"
   tv="$(version_of "$TEMPLATE/AGENTS.md")"
   wv="$(version_of "$root/AGENTS.md")"
-  if [ "${wv:-0}" -ge "${tv:-0}" ]; then
+  if [ "${wv:-0}" -gt "${tv:-0}" ]; then
+    echo "handbook: v$wv is newer than your template (v$tv), left alone. Update the template: git -C $(tilde "$REPO") pull"
+  elif [ "${wv:-0}" -eq "${tv:-0}" ]; then
     echo "handbook: already v${wv:-?}, nothing to replace"
   else
     # Outside git there is no history, so keep the old handbook beside the new one.
@@ -475,6 +479,8 @@ upgrade_commit_hint() {
   [ -n "$1" ] && in_git_repo "$WIKIS_DIR" || return 0
   tv="$(version_of "$TEMPLATE/AGENTS.md")"
   for d in $1; do paths="$paths $d"; done
+  # Upgrades can add ignore rules for the journal and delegation files.
+  if [ -n "$(cd "$WIKIS_DIR" && git status --porcelain -- .gitignore 2>/dev/null)" ]; then paths="$paths .gitignore"; fi
   # shellcheck disable=SC2086
   dirty="$(cd "$WIKIS_DIR" && git status --porcelain -- $paths 2>/dev/null | head -n 1)"
   [ -n "$dirty" ] || return 0
@@ -1299,7 +1305,8 @@ EOF2
 # ---- delegation -------------------------------------------------------------
 # delegation.md in the collection holds the user's handoff preferences: a mode
 # line, a table of work to model tiers, and an Auto list. Agents read it and
-# follow rules/delegation.md. delegation-log.csv records each handoff.
+# follow rules/delegation.md. delegation-log.csv records each handoff. Git
+# ignores both: they belong to one person on one machine.
 DELEG_FILE="$WIKIS_DIR/delegation.md"
 DELEG_LOG="$WIKIS_DIR/delegation-log.csv"
 
@@ -1309,7 +1316,7 @@ write_delegation_file() {
   cat > "$DELEG_FILE" <<'EOF2'
 # Delegation
 
-How sessions hand work to sub-agents on cheaper models. Edit this file freely. Agents read it and follow `rules/delegation.md` in any wiki. Change the mode with `./wiki.sh setup delegation`.
+How sessions hand work to sub-agents on cheaper models. This file is yours alone: git ignores it, so it never reaches coworkers or your other machines. Edit it freely. Agents read it and follow `rules/delegation.md` in any wiki. Change the mode with `./wiki.sh setup delegation`.
 
 mode: ask
 
@@ -1354,10 +1361,15 @@ deleg_set_mode() {
   echo "delegation: mode $1"
 }
 
-# The handoff log stays on this machine.
+# The preferences and the handoff log are one person's, so they stay on this
+# machine. In a shared collection, coworkers would otherwise overwrite each other's mode.
 apply_delegation_ignore() {
   in_git_repo "$WIKIS_DIR" || return 0
+  ensure_line "$WIKIS_DIR/.gitignore" "delegation.md"
   ensure_line "$WIKIS_DIR/.gitignore" "delegation-log.csv"
+  if [ -n "$(git -C "$WIKIS_DIR" ls-files delegation.md delegation-log.csv 2>/dev/null)" ]; then
+    echo "note:    delegation files are tracked from before. To keep them on this machine only: git -C $(tilde "$WIKIS_DIR") rm --cached delegation.md delegation-log.csv"
+  fi
 }
 
 cmd_delegation() {
@@ -1632,6 +1644,7 @@ setup_delegation() {
   setup_due delegation.mode || return 0
   section "Delegation"
   write_delegation_file | sed 's/^/  /'
+  apply_delegation_ignore | sed 's/^/  /'
   echo "Sessions can hand big, self-contained work, like test runs and file sweeps, to sub-agents on cheaper models."
   echo "off: never unless you ask. ask: suggest each one and wait for a yes. auto: do it and say so after."
   echo "Which kinds of work go to which model is a table in $(tilde "$DELEG_FILE"). Edit it any time."

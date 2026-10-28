@@ -5,7 +5,7 @@ Run when the user asks, or when a compile finds 10 or more ingests since the las
 Check for:
 
 - Broken links
-- Pages missing from the index, and index lines with no page
+- Pages missing from the index, index lines with no page, and two index lines for one page (a merge keeps both sides when two people edit the same line)
 - Orphans (no inbound links). Source summaries are exempt from both checks
 - Missing or incomplete frontmatter
 - Pages over the size limit

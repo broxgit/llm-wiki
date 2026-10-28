@@ -76,6 +76,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### Team-sharing fixes (2026-10-28, handbook version 14)
+
+- **Why:** the collection was built for one person. Shared with coworkers, three things broke: two people compiling one wiki conflicted in git, coworkers overwrote each other's delegation mode, and a stale template clone gave no sign.
+- **What changed:** each wiki's `.gitattributes` merges `index.md` and `log.md` with git's union driver, and lint reports a page indexed twice. `delegation.md` is git-ignored like its log. `status` flags a wiki ahead of the local template, and `upgrade` leaves it alone.
+
 ### Delegation to cheaper models (2026-10-27, handbook version 12)
 
 - **Why:** expensive models spent tokens on volume work, such as test runs, sweeps and boilerplate, that a cheaper model does as well.

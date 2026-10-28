@@ -159,7 +159,7 @@ The test for grouping: if one session routinely works across the repositories, t
 
 A session on your most capable model doesn't need to spend it on a test run or a sweep across 200 files. Sessions hand that kind of work to sub-agents on cheaper models and keep design, debugging and review for themselves. Handing off is only worth it when the work is big, needs nothing from the conversation, and its result can be checked, so the session checks before relying on it.
 
-Your preferences live in `~/wikis/delegation.md`:
+Your preferences live in `~/wikis/delegation.md`. Git ignores it, so each person and each machine keeps its own:
 
 - **mode:** `off` never hands off unless you ask. `ask`, the default, suggests each handoff in one line and waits for a yes. `auto` hands off and tells you after.
 - **Who does what:** a table of kinds of work, each with a model and effort. Rows marked `stay` never leave the session. Edit it to match the models your tool offers.
@@ -251,7 +251,9 @@ Make the collection one git repo (`./wiki.sh init --git`) and give it a remote. 
 2. Clone the collection repo to `~/wikis`.
 3. Run `./wiki.sh setup` from the template clone. It finds the cloned collection and asks the rest: this machine's commit email and SSH key, the session line, the journal. Then repeat Setup step 4.
 
-The handbook tells agents to pull before writing and to commit and push after, touching only the wiki folders they changed. Two people changing the same wiki resolve like any git conflict. Index and log conflicts keep both sides' lines.
+The handbook tells agents to pull before writing and to commit and push after, touching only the wiki folders they changed. When two people change the same wiki, each wiki's `.gitattributes` has git keep both sides' lines in `index.md` and `log.md`, so those merge on their own. A conflict inside a page resolves like any git conflict. The compile lock only covers sessions on one machine.
+
+The journal and `delegation.md` stay on each machine. `./wiki.sh status` says when a wiki's handbook is newer than your template clone, meaning a coworker upgraded it first. Pull the template.
 
 `WIKIS.md` at the top of the collection is what tells agents the folder is a collection. A single wiki can also be its own repo: `./wiki.sh new <path> --git`. A wiki inside some other repo is never committed by the agent.
 
@@ -288,6 +290,7 @@ template/          The scaffold. Copied whole to start a wiki.
   AGENTS.md        The core handbook. Loaded in every session.
   rules/           The rest of the handbook. Read on demand.
   CLAUDE.md        Imports the handbook for Claude Code.
+  .gitattributes   Lets git merge index.md and log.md from two people without a conflict.
   links.md         Shared wikis this one can fall back to.
   patterns.md      Recurring feedback, tallied toward a fix.
   repos.md         Repositories this wiki covers, when more than one.

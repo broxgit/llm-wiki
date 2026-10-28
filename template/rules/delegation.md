@@ -6,7 +6,7 @@ The goal: spend the expensive model on judgment, and a cheaper one on volume, wi
 
 ## The preferences file
 
-`delegation.md` in the wiki collection's top folder, the folder above this wiki, holds the user's choices. Read it once per session, the first time a handoff comes up.
+`delegation.md` in the wiki collection's top folder, the folder above this wiki, holds the user's choices. Read it once per session, the first time a handoff comes up. It belongs to one person on one machine, so git ignores it and its log. Never commit either.
 
 - `mode: off`: never hand off on your own. Do it only when the user asks.
 - `mode: ask`: suggest each handoff and wait for a yes. This is also the rule when the file is missing.

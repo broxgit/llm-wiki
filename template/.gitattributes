@@ -1,0 +1,4 @@
+# Agents only add lines to these two files, so when two people change them at
+# once, git keeps both sides' lines instead of stopping on a conflict.
+/index.md merge=union
+/log.md merge=union

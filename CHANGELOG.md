@@ -4,6 +4,16 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v14 (2026-10-28)
+
+For collections shared by a team, or by one person on several machines.
+
+- Two people compiling the same wiki no longer stop on a git conflict in `index.md` or `log.md`. Each wiki's new `.gitattributes` tells git to keep both sides' lines. Lint now reports an index line left twice by such a merge.
+- `delegation.md` is git-ignored, like its log. It holds one person's preferences, and in a shared collection coworkers were overwriting each other's mode.
+- `./wiki.sh status` flags a wiki whose handbook is newer than your template, as happens when a coworker upgrades a shared wiki first. `upgrade` leaves such a wiki alone and tells you to pull the template.
+- Do: run `./wiki.sh upgrade --all`. It adds `.gitattributes` to every wiki and `delegation.md` to the collection's `.gitignore`.
+- Do: if upgrade says the delegation files are tracked from before, run the `git rm --cached` command it prints, then commit. Each machine keeps its own copy.
+
 ## v13 (2026-10-28)
 
 - Fix: a wiki an agent creates by hand for another repository now gets `patterns.md`, as `wiki.sh new` already did. `rules/peers.md` was missing that step.
