@@ -25,6 +25,8 @@ Trigger: session start, a pause, five notes waiting, or the user says "ingest" o
 
 With a named source, ingest that source. With none, ingest every pending file in `raw/` in filename order. That is oldest first. A raw file is pending when `wiki/sources/` has no page with the same name, extension aside. Check by listing the two folders. Don't open files to check. Ignore dotfiles. A missing `wiki/sources/` folder means nothing has been ingested yet.
 
+With fewer than five pending files, compile them one at a time, as in the steps below. With five or more, as after `wiki seed`, compile them as one batch: see [Many files at once](#many-files-at-once).
+
 For each source:
 
 1. If it is not in `raw/` yet, capture it first.
@@ -35,6 +37,19 @@ For each source:
 6. If it has `Feedback:` lines, add each to `patterns.md` as `rules/patterns.md` says.
 
 After the last source, update `index.md` once and append one entry per source to `log.md`. Also stamp any page you confirmed against code this session (see Stale knowledge in `AGENTS.md`). Then report in one line: pages created, pages updated, corrections, conflicts.
+
+### Many files at once
+
+One file at a time means rewriting the same topic page once per file, and a session that spends its start compiling instead of helping. With five or more pending files:
+
+1. Read them together. `wiki.sh pending <wiki> --show` prints them in one go, oldest first, up to about 150KB. If it says more wait, finish this batch, then run it again for the next.
+2. Before writing, plan: group the claims across all the files by topic, and match each topic to an existing page or a new one. A topic only one file touches can stay on that file's own page.
+3. Write each topic page once, with every file's claims for it, each cited to its file.
+4. Write each file's summary page in `wiki/sources/`: one line on what it is, and links to the pages it fed.
+5. Steps 5 and 6 above still apply to every file: conflicts, and `Feedback:` lines.
+6. Finish as below: `index.md` once, and one `log.md` entry per file.
+
+Files named `*-seed-*` came from `wiki seed`: a repository's own docs, as its authors wrote them. Read the `seed-00-manifest` note first. It says which repository and commit they came from. Their claims about code are unchecked, so don't stamp `commit` from them, and where two of them disagree, the code decides once you check it.
 
 Last, before you release the lock, count the `ingest` entries in `log.md` that come after the most recent `lint` entry. At 10 or more, read `rules/lint.md` and lint now.
 

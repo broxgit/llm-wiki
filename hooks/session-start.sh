@@ -194,6 +194,6 @@ fi
 if [ "$waiting" -gt 0 ]; then
   ctx="$ctx
 
-$waiting note(s) in raw/ are waiting to be compiled. Session start says to compile them before the user's request."
+$waiting note(s) in raw/ are waiting to be compiled$([ "$waiting" -gt 10 ] && echo ". That's more than ten, so do the user's request first and compile at the next pause" || echo ", before the user's request"), as one batch if there are five or more: see the handbook's session start and rules/compile.md."
 fi
 emit "$ctx"

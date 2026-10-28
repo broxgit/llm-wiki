@@ -30,6 +30,8 @@ Usage: $WIKI_CMD <command> [options]
   setup --list         Print current settings without asking.
   init                 Create the wiki collection at $(tilde "$WIKIS_DIR") and its shared wiki, $SHARED.
   new <name|path>      Create a wiki from the template. A bare name goes under $(tilde "$WIKIS_DIR").
+  pending [<wiki>] [--show]
+                       Notes waiting to be compiled. --show prints a wiki's in one go.
   seed [<repo>] [--wiki NAME] [--max N] [--dry-run]
                        Start a wiki from a repository's own docs: README, agent
                        instructions, skills, docs/, decision records.
@@ -220,6 +222,71 @@ cmd_which() {
 }
 
 # cover <wiki> <repo>...: record that one wiki covers several repositories.
+# ---- pending ----------------------------------------------------------------
+# Waiting files, for a compile. --show prints them in one go, so an agent compiling
+# twenty seeded documents makes one call instead of twenty. Capped, so a big
+# backlog comes in batches.
+PENDING_SHOW_BYTES=150000
+
+# pending_files <wiki root>: raw files with no source page yet, oldest first.
+pending_files() {
+  local f b
+  for f in "$1"/raw/*; do
+    [ -f "$f" ] || continue
+    b="${f##*/}"
+    case "$b" in .*) continue ;; esac
+    [ -e "$1/wiki/sources/${b%.*}.md" ] || printf '%s\n' "$f"
+  done
+}
+
+# pending [<wiki>] [--show]
+cmd_pending() {
+  local wiki="" show=0 root f size total=0 n=0 left=0 d
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --show) show=1; shift ;;
+      -*) die "pending options: --show" ;;
+      *) wiki="$1"; shift ;;
+    esac
+  done
+  if [ -z "$wiki" ]; then
+    [ "$show" = 0 ] || die "pending --show needs a wiki name"
+    for d in "$WIKIS_DIR"/*/; do
+      d="${d%/}"
+      is_wiki "$d" || continue
+      n="$(pending_files "$d" | wc -l | tr -d ' ')"
+      [ "$n" -eq 0 ] || echo "${d##*/}: $n waiting"
+    done
+    return 0
+  fi
+  root="$(resolve "$wiki")"
+  is_wiki "$root" || die "$(tilde "$root") is not a wiki"
+  if [ "$show" = 0 ]; then
+    pending_files "$root" | while IFS= read -r f; do
+      printf '%s  %s bytes\n' "raw/${f##*/}" "$(wc -c < "$f" | tr -d ' ')"
+    done
+    return 0
+  fi
+  while IFS= read -r f; do
+    size="$(wc -c < "$f" | tr -d ' ')"
+    if [ "$n" -gt 0 ] && [ $((total + size)) -gt "$PENDING_SHOW_BYTES" ]; then
+      left=$((left + 1))
+      continue
+    fi
+    total=$((total + size))
+    n=$((n + 1))
+    printf '===== raw/%s\n' "${f##*/}"
+    cat "$f"
+    printf '\n'
+  done < <(pending_files "$root")
+  printf '===== %d file(s) shown' "$n"
+  if [ "$left" -gt 0 ]; then
+    printf '. %d more wait. Compile these first, then run this again for the rest.\n' "$left"
+  else
+    printf ', none left.\n'
+  fi
+}
+
 # ---- seed -------------------------------------------------------------------
 # A new wiki is empty, so nothing seems to happen for days. seed copies a
 # repository's own documents into its wiki's raw/, and the next session compiles
@@ -2611,6 +2678,10 @@ if [ "$cmd" = setup ]; then
 fi
 if [ "$cmd" = tips ]; then
   cmd_tips "$@"
+  exit 0
+fi
+if [ "$cmd" = pending ]; then
+  cmd_pending "$@"
   exit 0
 fi
 if [ "$cmd" = seed ]; then
