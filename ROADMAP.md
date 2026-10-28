@@ -13,11 +13,24 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 - **Not this:** invented abbreviations or JSON. In the same test, shorthand saved 2 points over terse plain words and JSON saved none. Abbreviations cost more tokens per word ("tmo" is 2 tokens, "timeout" is 1) and are harder for a model to read back.
 - **Open:** whether terse pages hurt answer quality. Test by asking the same questions against both versions of a page. Whether teammates still need to read pages comfortably.
 
+### Compile a seeded backlog in bulk
+
+- **Why:** `wiki seed` can leave 20 documents waiting, and the next session compiles them one at a time before it gets to what the person asked. For a coworker's first try, that's the slowest moment.
+- **Sketch:** a bulk mode in `rules/compile.md` for many pending files at once: read them all, then write pages once by topic. Still one source page and one log entry per file.
+- **Open:** how many files a session can read before the bulk read costs more than it saves.
+
+### Know whether sessions capture and compile
+
+- **Why:** `wiki stats` measures lookups only. Saving and compiling are the parts that failed in the first week (50 of 109 notes never compiled), and nothing measures them now.
+- **Sketch:** `wiki status` flags a wiki whose repository has commits in the last two weeks but no new notes in that time.
+- **Open:** wait for two weeks of `wiki stats` first. It may not be needed.
+
 ## Later
 
 - **Merge requests in standups.** Reviews and MRs opened live in GitHub or GitLab, not in git history. Pulling them in would need an API token and a host per remote.
-- **Backfill from more places.** Sessions in the Claude desktop app and claude.ai chats aren't in `~/.claude/projects`. An agent with chat search could add them.
+- **Backfill from more places.** The desktop app's Chat tab and claude.ai aren't in `~/.claude/projects`. An agent with chat search could add them. (The desktop Code tab is: checked 2026-10-28, its sessions show up in the backfill digest.)
 - **Team digest.** A weekly roll-up across several people's journals, for a lead. Needs a shared, opt-in journal location.
+- **Handbook cost per session.** Since the session hook stopped embedding the handbook (only a 2KB preview reached the model), every session reads `AGENTS.md`, about 14KB or 3,500 tokens. Terse page style would cut this too.
 - **Trim the core further.** `template/AGENTS.md` is about 2,900 tokens, up from 2,600 after version 8. "Other wikis" and "Sync" are the biggest sections left.
 - **Drop per-source summary pages.** Each raw note gets a summary page that only says where its claims live. The live collection has 59 of them. A single ledger file per wiki could track what has been ingested.
 - **Split work and personal collections.** One collection on a personal remote now holds work, client, and personal wikis. `WIKIS_DIR` already supports a second collection. The routing line would need to know about both.
@@ -44,6 +57,9 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - Delegation in real use: whether sessions suggest handoffs at the right size, and whether the log shows real savings. The log records outcomes, not tokens. Token counts per handoff would need the tool's usage data.
 - Stats in real use: whether sessions log every lookup, and what hit rate means a wiki should go.
 - Seed in real use: how long compiling 20 seeded documents takes, and whether the pages are worth it.
+- `scripts/migrate-to-plugin.sh` and the interactive parts of `wiki setup` in CI. Both ran by hand in fake homes on 2026-10-28; CI only shellchecks the script. Testing them needs a pseudo-terminal that works on Linux and macOS runners.
+- The plugin's data folder name. Docs hard-code `~/.claude/plugins/data/llm-wiki-llm-wiki`, seen on three machines. A fork under another marketplace name gets a different folder.
+- Sessions upgrading wikis on their own (plugin, 2026-10-28): whether they pull before upgrading, and two machines upgrading one shared collection at once.
 - Patterns in real use: whether agents write `Feedback:` lines unprompted, and whether the thresholds are right.
 
 ## Decided against
@@ -53,6 +69,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Sessions upgrade wikis on their own (2026-10-28)
+
+- **Why:** plugin updates arrived on their own, but the wikis stayed on the old handbook until someone ran `wiki upgrade --all` and committed, on every machine, after every handbook change.
+- **What changed:** when the session's wiki is behind the plugin's handbook, the session hook tells the session to pull, run `wiki upgrade --all`, commit and push one `wikis: handbook vN` commit, and say what changed, before reading the new handbook. The hook doesn't upgrade files itself: upgrading before the pull would leave local changes, and the pull would fail if a teammate had pushed the same upgrade. `upgrade` never moves a wiki backwards.
 
 ### Install in three steps (2026-10-28)
 

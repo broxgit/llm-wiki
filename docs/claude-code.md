@@ -75,7 +75,7 @@ Every change pushed to this repo is a new version.
 - **With auto-update on**, Claude Code fetches updates in the background.
 - **Without it**, run `claude plugin marketplace update llm-wiki`, then `claude plugin update llm-wiki@llm-wiki`.
 - **The `wiki` command** uses a new version as soon as it's installed. Sessions pick it up when they start: start a new one, or run `/reload-plugins` in a terminal session.
-- **When an update changes the handbook**, Claude tells you once. Run `wiki upgrade --all` to bring your wikis up to it, then commit as it says.
+- **When an update changes the handbook**, the next session brings your wikis up to it: it pulls, runs `wiki upgrade --all`, commits and pushes, then tells you what changed. Nothing for you to do.
 
 `claude plugin list` shows the installed version, which is the commit it came from.
 

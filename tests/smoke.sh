@@ -155,8 +155,15 @@ expect "outside a repository the hook uses the shared wiki" "$WIKIS_DIR/global" 
 expect "with no collection the hook says so" "no wiki collection" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; export WIKIS_DIR='$T/none'; hook '$T' | context"
 expect "after compaction the hook asks for a capture" "just compacted" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; hook '$T/projects/web' '{\"source\":\"compact\"}' | context"
 lacks "at startup the hook doesn't" "just compacted" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; hook '$T/projects/web' '{\"source\":\"startup\"}' | context"
+set_version "$WIKIS_DIR/demo/AGENTS.md" 12
+expect "when the handbook is behind, the session upgrades after pulling" "First pull the collection if it has a remote" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; hook '$T/projects/web' | context"
+set_version "$WIKIS_DIR/demo/AGENTS.md" "$TV"
+lacks "when it's current, nothing about upgrading" "upgrade --all" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; hook '$T/projects/web' | context"
+# The longest context: no wiki for the repository, just compacted, handbook behind.
+set_version "$WIKIS_DIR/global/AGENTS.md" 12
 mkdir -p "$T/projects/uncovered" && git -C "$T/projects/uncovered" init -q
 out="$(hook "$T/projects/uncovered" '{"source":"compact"}' | context 2>&1)"
+set_version "$WIKIS_DIR/global/AGENTS.md" "$TV"
 case "$out" in *"seed"*) ok "in a repository with no wiki the hook offers seed" ;; *) bad "in a repository with no wiki the hook offers seed" "$out" ;; esac
 n="$(printf '%s' "$out" | wc -c | tr -d ' ')"
 if [ "$n" -lt 2000 ]; then ok "the hook's longest context is short ($n chars)"; else bad "the hook's longest context is short ($n chars, limit 2000)"; fi
