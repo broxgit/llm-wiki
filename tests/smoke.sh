@@ -283,6 +283,24 @@ if [ "$n" -lt 2000 ]; then ok "with a tip the hook's context is still short ($n 
 lacks "no tip right after compaction" "One tip" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; hook '$T/projects/web' '{\"source\":\"compact\"}' | context"
 unset XDG_CONFIG_HOME
 
+section "Tab completion"
+expect "the first word completes to commands" "standup" "$W" __complete 1 st
+expect "journal set completes setting names" "max_commits" "$W" __complete 3 journal set ""
+expect "a choice setting completes its values" "summary" "$W" __complete 4 journal set format ""
+expect "tips --mute completes tip names" "share-skill" "$W" __complete 3 tips --mute ""
+expect "upgrade completes wiki names" "demo" "$W" __complete 2 upgrade ""
+expect "seed completes directories" "__dirs__" "$W" __complete 2 seed ""
+check "the bash script parses" bash -n <("$W" completion bash)
+"$W" completion bash > "$T/c.bash"
+out="$(bash -c "source '$T/c.bash'; COMP_WORDS=('$W' journal s); COMP_CWORD=2; _llm_wiki; echo \"\${COMPREPLY[*]}\"" 2>&1)"
+case "$out" in "show set") ok "bash completion passes each word on (bash 3.2 joins them otherwise)" ;; *) bad "bash completion passes each word on (bash 3.2 joins them otherwise)" "$out" ;; esac
+if command -v zsh >/dev/null 2>&1; then
+  check "the zsh script parses" zsh -n <("$W" completion zsh)
+else
+  skipped "zsh completion (zsh isn't installed)"
+fi
+refuse "completion needs a shell name" "$W" completion fish
+
 section "Weekly report"
 mkdir -p "$HOME/.claude/projects/p1"
 now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
