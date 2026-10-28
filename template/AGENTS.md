@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Handbook version 16.
+Handbook version 17.
 
 This folder is a knowledge base maintained by an LLM agent. Any agent working here follows this file. It needs no vendor features. Plain markdown, plain files.
 
@@ -28,6 +28,7 @@ log.md       Append-only record of changes.
 links.md     Shared wikis this one can fall back to.
 repos.md     Repositories this wiki covers, when it covers more than one.
 patterns.md  Recurring feedback and repeated work, tallied toward a fix.
+skills/      Team skills: repeated procedures as <name>/SKILL.md.
 raw/         Immutable sources. New files only.
 wiki/        Compiled pages. The agent writes these.
 data/        Structured data (CSV, SQLite). Queried, not read.

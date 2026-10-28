@@ -202,6 +202,41 @@ case "$out" in *CHANGELOG* | *node_modules* | *notes.md*) bad "seed leaves out c
 check "seed goes into the wiki that covers the repository" bash -c "ls '$WIKIS_DIR/demo/raw/' | grep -q 'seed-01-readme.md'"
 check "seed writes a manifest note" bash -c "grep -q 'docs/deploy.md' '$WIKIS_DIR'/demo/raw/*-seed-00-manifest.md"
 expect "seeding again copies nothing" "nothing new to seed" "$W" seed "$A"
+A2="$T/projects/agents"
+mkdir -p "$A2/.claude/skills/release" "$A2/.github/workflows" "$A2/services/api"
+for f in CLAUDE.md AGENTS.md .cursorrules .github/copilot-instructions.md .github/workflows/ci.md .claude/skills/release/SKILL.md services/api/CLAUDE.md; do
+  printf '# %s\n' "$f" > "$A2/$f"
+done
+git -C "$A2" init -q && git -C "$A2" add -A && git -C "$A2" commit -qm init
+out="$("$W" seed "$A2" 2>&1)"
+for want in "seeded:  CLAUDE.md" "seeded:  AGENTS.md" "seeded:  .cursorrules" "seeded:  .github/copilot-instructions.md" "seeded:  .claude/skills/release/SKILL.md" "seeded:  services/api/CLAUDE.md"; do
+  case "$out" in *"$want"*) ok "seed takes agent instructions: ${want#seeded:  }" ;; *) bad "seed takes agent instructions: ${want#seeded:  }" "$out" ;; esac
+done
+case "$out" in *workflows*) bad "seed skips CI workflow files" "$out" ;; *) ok "seed skips CI workflow files" ;; esac
+check "a file with no extension is copied as .txt" bash -c "ls '$WIKIS_DIR/agents/raw/' | grep -q 'seed-[0-9]*-cursorrules.txt'"
+
+section "Team skills"
+SK="$HOME/.claude/skills"
+mkdir -p "$SK/go-expert" && printf -- '---\nname: go-expert\ndescription: mine\n---\n' > "$SK/go-expert/SKILL.md"
+mkskill() { mkdir -p "$1" && printf -- '---\nname: %s\ndescription: %s\n---\n\nSteps.\n' "${1##*/}" "$2" > "$1/SKILL.md"; }
+expect "with none, skills says how they arrive" "No team skills yet" "$W" skills
+mkskill "$WIKIS_DIR/global/skills/bump-proto" "Bump a shared proto everywhere."
+mkskill "$WIKIS_DIR/demo/skills/deploy" "Deploy demo."
+mkskill "$WIKIS_DIR/agents/skills/deploy" "Deploy agents."
+mkskill "$WIKIS_DIR/global/skills/go-expert" "Someone else's go-expert."
+expect "skills lists them with descriptions" "Bump a shared proto everywhere." "$W" skills
+expect "skills link links a skill" "linked:  bump-proto" "$W" skills link
+check "the link points into the wiki" test "$SK/bump-proto" -ef "$WIKIS_DIR/global/skills/bump-proto"
+check "two wikis' same-named skills get their wiki's name" bash -c "test -L '$SK/demo-deploy' && test -L '$SK/agents-deploy'"
+check "a skill from elsewhere is left alone" bash -c "! test -L '$SK/go-expert' && grep -q mine '$SK/go-expert/SKILL.md'"
+expect "skills shows the clash" "clash" "$W" skills
+expect "linking again changes nothing" "nothing new to link" "$W" skills link
+rm -r "$WIKIS_DIR/agents/skills/deploy"
+"$W" skills link >/dev/null
+check "a deleted skill's link is removed" test ! -e "$SK/agents-deploy"
+check "and the survivor takes its own name" bash -c "test '$SK/deploy' -ef '$WIKIS_DIR/demo/skills/deploy' && ! test -e '$SK/demo-deploy'"
+mkskill "$WIKIS_DIR/global/skills/rotate-keys" "Rotate keys."
+expect "the session hook links new team skills and says so" "available: rotate-keys" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; hook '$T/projects/web' | context"
 
 section "Stats"
 expect "stats with no log says so" "No lookups logged yet" "$W" stats

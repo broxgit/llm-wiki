@@ -31,13 +31,15 @@ Usage: $WIKI_CMD <command> [options]
   init                 Create the wiki collection at $(tilde "$WIKIS_DIR") and its shared wiki, $SHARED.
   new <name|path>      Create a wiki from the template. A bare name goes under $(tilde "$WIKIS_DIR").
   seed [<repo>] [--wiki NAME] [--max N] [--dry-run]
-                       Start a wiki from a repository's own docs: README, docs/, ADRs.
+                       Start a wiki from a repository's own docs: README, agent
+                       instructions, skills, docs/, decision records.
   cover <wiki> <repo>...  Record that one wiki covers several repositories.
   which <repo>         Print the wiki that covers a repository.
   status               List wikis: handbook version, notes waiting, lock state.
   find <word>          Search every wiki's index for a word.
   stale [days]         List pages not verified in that many days (default 90).
   patterns             Recurring feedback across wikis, and which patterns are ready to propose.
+  skills [link]        Team skills in the wikis, and link them into ~/.claude/skills.
   stats [range]        How often wikis answered the questions sessions checked them for (default 30d).
   delegation [off|ask|auto]  Show handoff mode and results by kind of work, or set the mode.
   upgrade <name|path>  Bring a wiki's handbook and scaffold files up to the template's.
@@ -223,20 +225,26 @@ cmd_which() {
 # them. Only files git tracks, so build output and dependencies never come along.
 SEED_MAX_BYTES=100000
 
-# seed_candidates <repo top>: tracked documents worth compiling, most useful first.
+# seed_candidates <repo top>: tracked documents worth compiling, most useful first:
+# the README, agent instructions and top-level guides, skills and editor rules,
+# decision records, docs/, then READMEs and agent instructions further down.
 seed_candidates() {
   git -C "$1" -c core.quotePath=false ls-files 2>/dev/null | awk '
-    { f = $0; l = tolower(f) }
-    l ~ /(^|\/)(node_modules|vendor|third_party|\.github)\// { next }
+    { f = $0; l = tolower(f); n = split(l, p, "/"); base = p[n] }
+    l ~ /(^|\/)(node_modules|vendor|third_party)\// { next }
+    # How agents should work in this repository: often its best-kept docs.
+    l == "claude.md" || l == "agents.md" || l == "gemini.md" || l == ".cursorrules" || l == ".windsurfrules" \
+      || l == ".github/copilot-instructions.md" { printf "1 %d %s\n", n, f; next }
+    l ~ /^\.claude\/skills\/[^\/]+\/skill\.md$/ || l ~ /^\.cursor\/rules\/[^\/]+\.(md|mdc)$/ { printf "2 %d %s\n", n, f; next }
+    l ~ /(^|\/)\.github\// { next }
     l ~ /(^|\/)(changelog|history|license|licence|notice|code_of_conduct|security|codeowners)[^\/]*$/ { next }
     l !~ /\.(md|mdx|markdown|rst|adoc|txt)$/ { next }
     {
-      n = split(l, p, "/"); base = p[n]
       if (n == 1 && base ~ /^readme/) r = 0
       else if (n == 1 && base ~ /^(architecture|design|contributing|development|overview)/) r = 1
       else if (l ~ /(^|\/)(adr|adrs|decisions|rfc|rfcs)\//) r = 2
       else if (l ~ /^(doc|docs|documentation)\//) r = 3
-      else if (base ~ /^readme/) r = 4
+      else if (base ~ /^(readme|claude\.md|agents\.md)/) r = 4
       else next
       printf "%d %d %s\n", r, n, f
     }' | sort -k1,1n -k2,2n -k3 | cut -d ' ' -f 3-
@@ -244,7 +252,7 @@ seed_candidates() {
 
 # seed [<repo path>] [--wiki NAME] [--max N] [--dry-run]
 cmd_seed() {
-  local src="" wiki="" max=20 dry=0 top name root stamp commit f ext slug dest size
+  local src="" wiki="" max=20 dry=0 top name root stamp commit f ext stem slug dest size
   local n=0 more=0 already=0 big="" list=""
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -270,8 +278,12 @@ cmd_seed() {
     size="$(wc -c < "$top/$f" | tr -d ' ')"
     [ "$size" -gt 0 ] || continue
     if [ "$size" -gt "$SEED_MAX_BYTES" ]; then big="$big  $f ($((size / 1000))KB)"$'\n'; continue; fi
-    ext="${f##*.}"
-    slug="$(printf '%s' "${f%.*}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9][^a-z0-9]*/-/g; s/^-//; s/-$//')"
+    # A file with no extension, like .cursorrules, is copied as .txt.
+    case "${f##*/}" in
+      .*.* | [!.]*.*) ext="${f##*.}"; stem="${f%.*}" ;;
+      *) ext=txt; stem="$f" ;;
+    esac
+    slug="$(printf '%s' "$stem" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9][^a-z0-9]*/-/g; s/^-//; s/-$//')"
     # Seeded before: the same document under any earlier stamp.
     if ls "$root"/raw/*-seed-[0-9][0-9]-"$slug.$ext" >/dev/null 2>&1; then already=$((already + 1)); continue; fi
     if [ "$n" -ge "$max" ]; then more=$((more + 1)); continue; fi
@@ -639,6 +651,10 @@ cmd_upgrade_all() {
   echo "== delegation"
   write_delegation_file
   apply_delegation_ignore
+  if [ -d "$HOME/.claude" ]; then
+    echo "== skills"
+    skills_link quiet
+  fi
   upgrade_summary "$from" "$behind"
 }
 
@@ -1537,6 +1553,111 @@ EOF2
   echo "$total ready to propose. An agent proposes each at a stopping point, per rules/patterns.md."
 }
 
+# ---- skills -----------------------------------------------------------------
+# A skill that comes out of a pattern lives in the wiki that owns it, as
+# <wiki>/skills/<name>/SKILL.md, so everyone who syncs the collection gets it and a
+# fix reaches everyone. Claude Code finds skills in ~/.claude/skills, so `skills
+# link` links each one there. Skills that didn't come from the wikis are left alone.
+SKILLS_DIR="${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}"
+TAB="$(printf '\t')"
+
+# collection_skills: one line per skill, tab-separated: wiki, name, folder, link name.
+# The link name is the skill's own, or wiki-name when two wikis use the same name.
+collection_skills() {
+  local d sk
+  for d in "$WIKIS_DIR"/*/; do
+    d="${d%/}"
+    is_wiki "$d" || continue
+    for sk in "$d"/skills/*/; do
+      sk="${sk%/}"
+      [ -f "$sk/SKILL.md" ] || continue
+      printf '%s\t%s\t%s\n' "${d##*/}" "${sk##*/}" "$sk"
+    done
+  done | awk -F '\t' '{ line[NR] = $0; name[NR] = $2; seen[$2]++ }
+    END { for (i = 1; i <= NR; i++) { split(line[i], f, "\t"); print line[i] "\t" (seen[name[i]] > 1 ? f[1] "-" f[2] : f[2]) } }'
+}
+
+# skill_description <folder>: the description line from SKILL.md's frontmatter.
+skill_description() {
+  sed -n '/^---$/,/^---$/s/^description: *//p' "$1/SKILL.md" | head -n 1 | cut -c 1-90
+}
+
+# skills_link [quiet]: link every collection skill into ~/.claude/skills, and remove
+# links into the collection whose skill is gone or renamed. Prints what it changed.
+skills_link() {
+  local quiet="${1:-}" all wiki name src dest l target n=0
+  all="$(collection_skills)"
+  [ -n "$all" ] || [ -d "$SKILLS_DIR" ] || return 0
+  mkdir -p "$SKILLS_DIR"
+  while IFS="$TAB" read -r wiki name src dest; do
+    [ -n "$dest" ] || continue
+    if [ -L "$SKILLS_DIR/$dest" ] && [ "$SKILLS_DIR/$dest" -ef "$src" ]; then continue; fi
+    if [ -e "$SKILLS_DIR/$dest" ] || [ -L "$SKILLS_DIR/$dest" ]; then
+      case "$(readlink "$SKILLS_DIR/$dest" 2>/dev/null)" in
+        "$WIKIS_DIR"/*) ;;
+        *)
+          [ -n "$quiet" ] || echo "skipped: $(tilde "$SKILLS_DIR/$dest") is a skill that didn't come from the wikis, so $wiki's $name isn't linked"
+          continue
+          ;;
+      esac
+    fi
+    ln -sfn "$src" "$SKILLS_DIR/$dest"
+    n=$((n + 1))
+    echo "linked:  $dest (from $wiki)"
+  done <<EOF
+$all
+EOF
+  for l in "$SKILLS_DIR"/*; do
+    [ -L "$l" ] || continue
+    target="$(readlink "$l")"
+    case "$target" in "$WIKIS_DIR"/*) ;; *) continue ;; esac
+    if [ ! -f "$l/SKILL.md" ] || ! printf '%s\n' "$all" | cut -f 4 | grep -qxF -- "${l##*/}"; then
+      rm "$l"
+      echo "removed: ${l##*/} (no longer in the wikis)"
+    fi
+  done
+  [ -n "$quiet" ] || [ "$n" -gt 0 ] || echo "nothing new to link"
+}
+
+# skills_unlinked: how many collection skills linking would add. A name already
+# taken by a skill from elsewhere doesn't count: linking can't fix it.
+skills_unlinked() {
+  local wiki name src dest n=0
+  while IFS="$TAB" read -r wiki name src dest; do
+    [ -n "$dest" ] || continue
+    [ "$SKILLS_DIR/$dest" -ef "$src" ] && continue
+    if [ -e "$SKILLS_DIR/$dest" ]; then case "$(readlink "$SKILLS_DIR/$dest" 2>/dev/null)" in "$WIKIS_DIR"/*) ;; *) continue ;; esac; fi
+    n=$((n + 1))
+  done <<EOF
+$(collection_skills)
+EOF
+  echo "$n"
+}
+
+cmd_skills() {
+  local wiki name src dest state
+  case "${1:-list}" in
+    link) skills_link; return 0 ;;
+    list) ;;
+    *) die "skills commands: list, link" ;;
+  esac
+  if [ -z "$(collection_skills)" ]; then
+    echo "No team skills yet. When a procedure keeps coming up, an agent proposes one, and it lands in <wiki>/skills/."
+    return 0
+  fi
+  printf '%-22s %-26s %-9s %s\n' "WIKI" "SKILL" "LINKED" "DESCRIPTION"
+  while IFS="$TAB" read -r wiki name src dest; do
+    [ -n "$dest" ] || continue
+    if [ "$SKILLS_DIR/$dest" -ef "$src" ]; then state=yes
+    elif [ -e "$SKILLS_DIR/$dest" ] && ! case "$(readlink "$SKILLS_DIR/$dest" 2>/dev/null)" in "$WIKIS_DIR"/*) true ;; *) false ;; esac; then state=clash
+    else state=no; fi
+    printf '%-22s %-26s %-9s %s\n' "$wiki" "$dest" "$state" "$(skill_description "$src")"
+  done <<EOF
+$(collection_skills)
+EOF
+  [ "$(skills_unlinked)" -eq 0 ] || echo "Link them for Claude Code: $WIKI_CMD skills link"
+}
+
 # ---- stats ------------------------------------------------------------------
 # Agents log each wiki lookup to stats.csv in the collection: date,wiki,hit|miss.
 # A hit means the pages answered at least part of the question. stats sums it, so
@@ -2110,6 +2231,17 @@ setup_journal_key() {
   setup_mark "journal.$key"
 }
 
+# Team skills from the wikis, linked for Claude Code. A check: quiet when nothing is new.
+setup_skills() {
+  local n
+  [ -d "$HOME/.claude" ] || return 0
+  n="$(skills_unlinked)"
+  [ "$n" -gt 0 ] || return 0
+  section "Team skills"
+  echo "The wikis hold $n skill(s) that Claude Code can't see yet. Linking puts them in $(tilde "$SKILLS_DIR")."
+  if ask_yn "Link them?" y; then skills_link quiet | sed 's/^/  /'; fi
+}
+
 setup_journal() {
   local k due="" adv=""
   for k in $JOURNAL_KEYS; do
@@ -2185,7 +2317,7 @@ Usage: $WIKI_CMD setup [--new | --list | <section> | <setting>]
 EOF
         return 0
         ;;
-      collection | git | claude | plugin | upgrade | journal | delegation | git.identity) what="$a" ;;
+      collection | git | claude | plugin | upgrade | skills | journal | delegation | git.identity) what="$a" ;;
       journal.*)
         [ -n "$(journal_field "${a#journal.}" 2)" ] || die "no journal setting called ${a#journal.}. Settings: $JOURNAL_KEYS"
         what="$a"
@@ -2221,6 +2353,7 @@ EOF
       setup_journal_key "${what#journal.}"
       ;;
     plugin) SETUP_MODE=all; setup_plugin ;;
+    skills) setup_skills ;;
     '')
       setup_plugin
       setup_collection
@@ -2228,6 +2361,7 @@ EOF
       setup_claude
       setup_upgrade
       setup_delegation
+      setup_skills
       setup_journal
       ;;
   esac
@@ -2332,6 +2466,7 @@ case "$cmd" in
   patterns) cmd_patterns ;;
   link) cmd_link "$( [ "$want_yes" = 1 ] && echo --yes)" ;;
   stats) cmd_stats "${target:-30d}" ;;
+  skills) cmd_skills "${target:-list}" ;;
   -h | --help | help) usage ;;
   *) usage; exit 1 ;;
 esac

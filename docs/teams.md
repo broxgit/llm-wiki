@@ -42,6 +42,7 @@ Each person who opens the repository and trusts the folder is asked to install i
 - **Agents sync on their own.** They pull before writing, commit after compiling, and push, touching only the wiki folders they changed.
 - **Merges mostly take care of themselves.** Each wiki's `.gitattributes` has git keep both sides' lines in `index.md` and `log.md`, the two files every compile touches. A conflict inside a page stops the agent, and it asks you.
 - **Secrets are blocked.** A pre-commit hook runs [gitleaks](https://github.com/gitleaks/gitleaks) on every commit to the collection and refuses one that holds a key, token or password. The agent then redacts it and tells you. Everyone needs gitleaks installed: `brew install gitleaks`. Without it, commits go through with a warning, and `wiki status` says they aren't scanned.
+- **Skills are shared.** A skill in a wiki's `skills/` folder reaches everyone who syncs the collection. See [Team skills](using.md#team-skills).
 - **Some things stay on each machine:** the journal, `delegation.md`, and setup answers. Git ignores them.
 - **Handbook versions.** When one person upgrades the shared wikis to a newer handbook, `wiki status` tells everyone else their template is behind. Plugin users with auto-update get the new version on their own. Clone users pull the template.
 

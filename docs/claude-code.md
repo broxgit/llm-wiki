@@ -62,6 +62,7 @@ It syncs your collection, installs gitleaks and the plugin, turns on auto-update
   | `/llm-wiki:compile [wiki]` | Turn waiting notes into pages now |
   | `/llm-wiki:standup [options]` | Your standup, from commits, journal and notes |
 
+- **Links team skills.** Skills your team keeps in the wikis show up in Claude Code without anyone installing them. See [Team skills](using.md#team-skills).
 - **Offers to start an empty wiki from the repository's own docs**, with [`wiki seed`](using.md#start-a-wiki-from-a-repositorys-docs).
 - **Saves before forgetting.** Right after the conversation is compacted, it asks Claude to capture anything in the summary that the wiki doesn't hold yet.
 - **Keeps the `wiki` command current.** The plugin's files move to a new folder with every update. The `wiki` command lives in a folder that doesn't move, and each session points it at the newest version.

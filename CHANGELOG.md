@@ -4,6 +4,14 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v17 (2026-10-28)
+
+- Team skills. When a repeated procedure becomes a skill, it now lives in the wiki that owns it, as `skills/<name>/SKILL.md`, instead of in one person's `~/.claude/skills`. Everyone who syncs the collection gets it, and a fix reaches everyone.
+- `wiki skills` lists them. `wiki skills link` links them into `~/.claude/skills` for Claude Code. The plugin links new ones at every session start, and `upgrade` and `setup` link them too. A skill of yours with the same name is left alone.
+- Skills keep the steps and cite wiki pages for facts, so a corrected page corrects the skill. Each wiki's index lists its skills, so other agents can follow them as how-tos.
+- `wiki seed` also takes a repository's agent instructions (`CLAUDE.md`, `AGENTS.md`, Cursor and Copilot rules) and its `.claude/skills/`.
+- Do: nothing. Sessions upgrade the wikis on their own. To share a skill you already have, move its folder into `~/wikis/global/skills/` or a project wiki's `skills/`, then run `wiki skills link`.
+
 ## v16 (2026-10-28)
 
 - Hit-rate stats. Agents log one line per question they check a wiki for, `hit` or `miss`, to `stats.csv` in the collection. It stays on each machine. `wiki stats` shows each wiki's hit rate, so you can tell which wikis earn their keep.

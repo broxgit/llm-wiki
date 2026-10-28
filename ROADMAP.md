@@ -70,6 +70,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### Team skills, and seed takes agent instructions (2026-10-28, handbook version 17)
+
+- **Why:** a skill that came out of a repeated procedure landed in one person's `~/.claude/skills`, so the rest of the team never got it, and nothing kept it current. And `wiki seed` skipped `CLAUDE.md`, `AGENTS.md` and a repository's skills, often its best-kept guidance.
+- **What changed:** skills live in the owning wiki as `skills/<name>/SKILL.md`, listed in its index. They keep the steps and cite wiki pages for facts. `wiki skills` lists them, and `wiki skills link` links them into `~/.claude/skills`, prefixing a wiki's name when two share a skill name, never touching a skill from elsewhere, and removing links to deleted skills. The plugin's hook links new ones every session, as do `upgrade` and `setup`. Checked: Claude Code loads a symlinked skill folder, even mid-session. `wiki seed` now also takes `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, Cursor, Windsurf and Copilot rules, and `.claude/skills/`.
+
 ### Sessions upgrade wikis on their own (2026-10-28)
 
 - **Why:** plugin updates arrived on their own, but the wikis stayed on the old handbook until someone ran `wiki upgrade --all` and committed, on every machine, after every handbook change.
