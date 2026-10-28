@@ -57,7 +57,7 @@ The goal: a session working in repository A that needs a client from repository 
 - **Unknown owner.** The agent searches the indexes by keyword. `wiki find <word>` does the same for you.
 - **Shared knowledge.** Anything that holds beyond one project goes in the shared wiki: how you want agents to work, how shared libraries, internal tools and vendors behave, pipelines and environments, team practice, guild decisions. Before saving anything, the agent asks whether another repository would need it. Every session reads the shared wiki's index at its start, so what's there gets used.
 - **Working agreements.** The shared wiki's `wiki/conventions.md` has a `For agents` section: how you want agents to work with you in every repository, such as when to commit, how to write, and when to ask. Every session reads it at its start. Corrections you repeat land there.
-- **The wiki, not the agent's memory.** Some agents keep notes of their own, per project folder, which no other repository sees. The handbook tells them to save to the wiki instead.
+- **The wiki, not the agent's memory.** Some agents keep notes of their own, per project folder, which no other repository sees. The handbook tells them to save to the wiki instead, and [`wiki harvest`](#bring-in-claude-codes-own-memory) brings in what they saved before.
 
 Keep work and personal knowledge in separate collections. Set `WIKIS_DIR` to use a second one.
 
@@ -84,6 +84,17 @@ When you correct the agent, paste review comments on code it wrote, or watch it 
 A pattern is ready after 3 sightings, or 2 when they are review comments or come from different repositories. A "no" is remembered. `wiki patterns` shows what every wiki is tracking.
 
 Paste merge request comments into the session that wrote the code. They are the best evidence there is.
+
+## Bring in Claude Code's own memory
+
+Claude Code keeps notes of its own: corrections, working rules, project facts. It saves them per project folder, so a rule saved while working in one repository never reaches another, or a teammate. `wiki harvest` copies them into the wikis:
+
+```
+wiki harvest --dry-run    # where each note would go
+wiki harvest
+```
+
+Notes about you, and corrections, go to the shared wiki, headed for its `For agents` conventions. Project facts go to the wiki of the project they were saved in. Notes from a folder with no known project go to the shared wiki, and the next compile files them where they belong. Each wiki gets a note saying where every copy came from. Your Claude Code memory is never edited or deleted, and running it again copies only what's new or changed. A tip mentions it when there's memory to bring in.
 
 ## Team skills
 
@@ -236,6 +247,7 @@ Run `wiki` with no arguments for the full list. The ones you're likely to use:
 | `wiki cover <wiki> <repo>...` | One wiki for several repositories. |
 | `wiki unlock <name>` | Free a stuck compile lock. |
 | `wiki seed [<repo>]` | Start a wiki from a repository's own docs. |
+| `wiki harvest` | Copy Claude Code's own memory notes into the wikis. |
 | `wiki pending [<wiki>]` | Notes waiting to be compiled. |
 | `wiki skills [link]` | List team skills, or link them for Claude Code. |
 | `wiki tips` | Features your own wikis suggest you'd get something out of. |
