@@ -11,6 +11,7 @@
 - **`wiki: command not found`.** Plugin: run `~/.claude/plugins/data/llm-wiki-llm-wiki/bin/wiki link`, then open a new terminal. If that file doesn't exist, start a Claude Code session once first. Clone: link it with `ln -s <clone>/wiki.sh ~/.local/bin/wiki`. Either way, `~/.local/bin` must be on your `PATH`.
 - **`wiki` says it can't find the llm-wiki plugin.** Claude Code's record of the plugin points at a folder that's gone. Run `claude plugin list` to check it's installed, and reinstall it if not.
 - **Auto-update is off.** `wiki status` says so. Run `wiki setup plugin` to turn it on.
+- **Tab completion doesn't work.** Run `wiki setup completion`, then open a new terminal. `wiki setup --list` shows whether it's on.
 - **`wiki setup` says it needs a terminal.** It asks questions, so run it in a terminal, not through the agent. `wiki setup --list` shows the current values anywhere.
 
 ## Day to day

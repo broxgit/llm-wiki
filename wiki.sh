@@ -30,6 +30,8 @@ Usage: $WIKI_CMD <command> [options]
   setup --list         Print current settings without asking.
   init                 Create the wiki collection at $(tilde "$WIKIS_DIR") and its shared wiki, $SHARED.
   new <name|path>      Create a wiki from the template. A bare name goes under $(tilde "$WIKIS_DIR").
+  harvest [--dry-run]  Copy Claude Code's own memory notes into the wikis, where every
+                       repo and teammate can use them.
   pending [<wiki>] [--show]
                        Notes waiting to be compiled. --show prints a wiki's in one go.
   seed [<repo>] [--wiki NAME] [--max N] [--dry-run]
@@ -287,6 +289,96 @@ cmd_pending() {
     printf '. %d more wait. Compile these first, then run this again for the rest.\n' "$left"
   else
     printf ', none left.\n'
+  fi
+}
+
+# ---- harvest ----------------------------------------------------------------
+# Some agents keep notes of their own. Claude Code saves them per project folder,
+# in ~/.claude/projects/<folder>/memory/, and only sessions in that folder load
+# them, so a rule saved while working in one repo never reaches another. harvest
+# copies them into the wikis' raw/ to be compiled. It never edits or deletes them.
+
+# memory_project <project folder>: the wiki a Claude Code project folder belongs to.
+# Its transcripts record the working folder, mapped the way the report does.
+memory_project() {
+  local cwd name w part
+  cwd="$(cat "$1"/*.jsonl 2>/dev/null | grep -m 1 -o '"cwd":"[^"]*"' | sed 's/^"cwd":"//; s/"$//' || true)"
+  [ -n "$cwd" ] || return 0
+  if top="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)"; then name="$(repo_name "$top")"; else name="${cwd##*/}"; fi
+  w="$(which_wiki "$name")"
+  if [ -z "$w" ]; then
+    # A scratch folder inside a project, such as politiboop/sweeps/b41, belongs to it.
+    local IFS=/
+    for part in $cwd; do [ -n "$part" ] && [ -n "$(which_wiki "$part")" ] && w="$(which_wiki "$part")"; done
+  fi
+  printf '%s' "$w"
+}
+
+# memory_type <file>: user, feedback, project, reference, or nothing.
+memory_type() { sed -n '/^---$/,/^---$/s/^ *type: *\([a-z]*\).*/\1/p' "$1" | head -n 1; }
+
+# harvest [--from DIR] [--dry-run]
+cmd_harvest() {
+  local from="$HOME/.claude/projects" dry=0 dir f type wiki slug stamp dest n=0 same=0 g d man
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --from) from="${2:-}"; shift 2 ;;
+      --dry-run) dry=1; shift ;;
+      *) die "harvest options: --from DIR, --dry-run" ;;
+    esac
+  done
+  [ -d "$from" ] || die "no Claude Code projects at $(tilde "$from")"
+  is_wiki "$WIKIS_DIR/$SHARED" || die "there's no shared wiki at $(tilde "$WIKIS_DIR/$SHARED"). Run: $WIKI_CMD setup"
+  stamp="$(date -u +%Y-%m-%d-%H%M%S)"
+  man="$(mktemp)"
+  for dir in "$from"/*/; do
+    dir="${dir%/}"
+    [ -d "$dir/memory" ] || continue
+    wiki="$(memory_project "$dir")"
+    for f in "$dir"/memory/*.md; do
+      [ -f "$f" ] || continue
+      [ "${f##*/}" = MEMORY.md ] && continue
+      type="$(memory_type "$f")"
+      # Notes about the user, and corrections, are how agents should work everywhere.
+      case "$type" in
+        user | feedback) g="$SHARED" ;;
+        *) g="${wiki:-$SHARED}" ;;
+      esac
+      slug="$(basename "$f" .md | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9][^a-z0-9]*/-/g; s/^-//; s/-$//')"
+      # The same note harvested before, from any folder: skip it.
+      for d in "$WIKIS_DIR/$g"/raw/*-harvest-*; do
+        [ -f "$d" ] && cmp -s "$f" "$d" && { same=$((same + 1)); continue 2; }
+      done
+      n=$((n + 1))
+      dest="$stamp-harvest-$(printf '%02d' "$n")-$slug.md"
+      if [ "$dry" = 1 ]; then
+        printf 'would copy: %s -> %s (%s, from %s)\n' "$(tilde "$f")" "$g" "${type:-untyped}" "${wiki:-an unknown project}"
+      else
+        cp "$f" "$WIKIS_DIR/$g/raw/$dest"
+        printf '%s\t- raw/%s: %s note, saved while working in %s\n' "$g" "$dest" "${type:-untyped}" "${wiki:-an unknown project}" >> "$man"
+      fi
+    done
+  done
+  # One manifest per wiki, first in ingest order, saying where the copies came from.
+  if [ "$dry" = 0 ] && [ -s "$man" ]; then
+    for g in $(cut -f 1 "$man" | sort -u); do
+      {
+        printf 'Captured: %s\n\n# Harvested from Claude Code memory\n\n' "$(date -u +%Y-%m-%d)"
+        printf '%s\n\n' "\`wiki.sh harvest\` copied these notes from Claude Code's own memory, which only reaches sessions in the folder it was saved in. Compile them like any source. Each copy keeps its frontmatter, whose \`type\` says what it is: \`user\` and \`feedback\` notes are how the user wants agents to work, and belong in the shared wiki's \`wiki/conventions.md\` under \`## For agents\`. File everything else as AGENTS.md says under Ownership: a lesson that holds beyond one project goes in the shared wiki. Treat claims about code as unchecked until you check them. Some notes repeat what a wiki already says: merge them, don't copy. A note that turns out to be about one project only belongs in that project's wiki: each line below says where it was saved."
+        awk -F '\t' -v g="$g" '$1 == g { print $2 }' "$man"
+      } > "$WIKIS_DIR/$g/raw/$stamp-harvest-00-manifest.md"
+      printf '%s: %s note(s)\n' "$g" "$(awk -F '\t' -v g="$g" '$1 == g' "$man" | wc -l | tr -d ' ')"
+    done
+  fi
+  rm -f "$man"
+  if [ "$dry" = 0 ]; then mkdir -p "${HARVEST_STAMP%/*}" && touch "$HARVEST_STAMP"; fi
+  [ "$same" -eq 0 ] || echo "skipped $same already harvested"
+  if [ "$n" -eq 0 ]; then
+    echo "nothing new to harvest from $(tilde "$from")"
+  elif [ "$dry" = 1 ]; then
+    echo "$n note(s) would be copied. Nothing in $(tilde "$from") changes."
+  else
+    echo "$n note(s) copied into the wikis' raw/. The next sessions compile them; general ones end up in the shared wiki. Your Claude Code memory is unchanged."
   fi
 }
 
@@ -816,8 +908,10 @@ changelog_since() {
 # the upgrade added, go in: a wiki's own uncommitted notes and pages stay out. Pushing
 # is left to the session, as for any wiki commit.
 upgrade_commit() {
-  local d f paths="" tv
-  [ -n "$1" ] && in_git_repo "$WIKIS_DIR" || return 0
+  local d f paths="" tv msg
+  # Even with no wiki behind, an upgrade can change collection files, such as the
+  # ignore rules, so this runs every time.
+  in_git_repo "$WIKIS_DIR" || return 0
   tv="$(version_of "$TEMPLATE/AGENTS.md")"
   for d in $1; do
     for f in AGENTS.md CLAUDE.md rules .gitattributes .gitignore; do
@@ -839,12 +933,14 @@ upgrade_commit() {
   # shellcheck disable=SC2086
   [ -n "$(cd "$WIKIS_DIR" && git status --porcelain -- $paths 2>/dev/null | head -n 1)" ] || return 0
   # shellcheck disable=SC2086
-  if (cd "$WIKIS_DIR" && git add -- $paths && git commit -q -m "wikis: handbook v$tv" -- $paths) >/dev/null 2>&1; then
-    echo "${2}Committed the upgrade as \"wikis: handbook v$tv\"."
+  if [ -n "$1" ]; then msg="wikis: handbook v$tv"; else msg="wikis: update collection files"; fi
+  # shellcheck disable=SC2086
+  if (cd "$WIKIS_DIR" && git add -- $paths && git commit -q -m "$msg" -- $paths) >/dev/null 2>&1; then
+    echo "${2}Committed the upgrade as \"$msg\"."
     [ -z "$(git -C "$WIKIS_DIR" remote)" ] || echo "${2}Push it: git -C $(tilde "$WIKIS_DIR") push"
   else
     echo "${2}The upgrade isn't committed: git refused. Commit it yourself:"
-    echo "    git -C $(tilde "$WIKIS_DIR") add${paths} && git -C $(tilde "$WIKIS_DIR") commit -m \"wikis: handbook v$tv\""
+    echo "    git -C $(tilde "$WIKIS_DIR") add${paths} && git -C $(tilde "$WIKIS_DIR") commit -m \"$msg\""
   fi
 }
 
@@ -1802,7 +1898,7 @@ EOF
 # muted one for good, and a tip whose feature has been used goes away.
 TIPS_STATE="${XDG_CONFIG_HOME:-$HOME/.config}/llm-wiki/tips"
 TIPS_COOLDOWN_DAYS=14
-TIPS_ORDER="seed share-skill standup backfill stats stale find delegation"
+TIPS_ORDER="harvest seed share-skill standup backfill stats stale find delegation"
 
 # tip_get <key>: the date recorded for used:<cmd>, shown:<tip> or muted:<tip>.
 tip_get() { [ -f "$TIPS_STATE" ] && awk -v k="$1" '$1 == k { d = $2 } END { if (d) print d }' "$TIPS_STATE"; return 0; }
@@ -1821,6 +1917,8 @@ tip_set() {
 record_use() {
   case "$1:${2:-}" in
     seed:* | standup:* | stats:* | find:* | stale:* | skills:* | delegation:*) tip_set "used:$1" ;;
+    harvest:--dry-run) ;;
+    harvest:*) tip_set "used:harvest" ;;
     report:--due) ;;
     report:*) tip_set "used:report" ;;
     journal:backfill) tip_set "used:backfill" ;;
@@ -1832,6 +1930,20 @@ used() { [ -n "$(tip_get "used:$1")" ]; }
 
 # Each check prints one line, the tip with its evidence, or nothing. Cheap: the
 # session hook runs them. $TIP_REPO is the repository the session works in.
+HARVEST_STAMP="${TIPS_STATE%/*}/harvested"
+
+tip_harvest() {
+  local n folders newer=()
+  [ -d "$HOME/.claude/projects" ] || return 0
+  # Memory notes never harvested, or changed since the last harvest, to the second.
+  # The ${a[@]+...} form: bash 3.2 calls an empty array unbound under set -u.
+  [ ! -f "$HARVEST_STAMP" ] || newer=(-newer "$HARVEST_STAMP")
+  n="$(find "$HOME/.claude/projects" -path '*/memory/*.md' ! -name MEMORY.md ${newer[@]+"${newer[@]}"} 2>/dev/null | wc -l | tr -d ' ')"
+  [ "$n" -gt 0 ] || return 0
+  folders="$(find "$HOME/.claude/projects" -path '*/memory/*.md' ! -name MEMORY.md ${newer[@]+"${newer[@]}"} 2>/dev/null | sed 's#/memory/[^/]*$##' | sort -u | wc -l | tr -d ' ')"
+  echo "Claude Code holds $n note(s) of its own memory, across $folders project folder(s), that no other repository sees: working rules, corrections, project facts. \`wiki harvest\` copies them into the wikis, where every repository and teammate gets them. \`wiki harvest --dry-run\` shows where each would go first."
+}
+
 tip_seed() {
   local top name w pages docs
   [ -n "${TIP_REPO:-}" ] || return 0
@@ -1997,7 +2109,7 @@ EOF
 # Tab completion. `completion zsh|bash` prints a small script for the shell, which
 # asks `__complete` for candidates on every Tab. The candidates live here, so a
 # plugin update can't leave completion stale.
-COMMANDS="setup init new seed pending cover which status find stale patterns skills tips report stats delegation upgrade unlock claude link journal standup completion"
+COMMANDS="setup init new seed harvest pending cover which status find stale patterns skills tips report stats delegation upgrade unlock claude link journal standup completion"
 RANGES="lastworkday yesterday today week lastweek 7d 14d 30d"
 
 wiki_names() {
@@ -2038,6 +2150,7 @@ cmd_complete() {
     seed) [ "$i" -eq 2 ] && echo __dirs__; printf -- '--wiki\n--max\n--dry-run\n' ;;
     stale) printf '30\n90\n180\n' ;;
     skills) echo link ;;
+    harvest) printf -- '--dry-run\n--from\n' ;;
     tips) printf -- '--mute\n--unmute\n' ;;
     report) printf -- '--since\n' ;;
     stats) printf '%s\n' $RANGES ;;
@@ -2103,6 +2216,9 @@ completion_file() { printf '%s/llm-wiki/completion.%s' "${XDG_CONFIG_HOME:-$HOME
 # completion_shell: zsh or bash, from $SHELL, or nothing.
 completion_shell() { case "${SHELL##*/}" in zsh | bash) printf '%s' "${SHELL##*/}" ;; esac; return 0; }
 
+# completion_on <shell>: the shell's profile loads llm-wiki's completion.
+completion_on() { local prof; prof="$(completion_profile "$1")"; [ -f "$prof" ] && grep -qF "$(completion_file "$1")" "$prof"; }
+
 completion_profile() { case "$1" in zsh) printf '%s' "$HOME/.zshrc" ;; bash) printf '%s' "$HOME/.bashrc" ;; esac; }
 
 # Turn tab completion on: write the file, and source it from the profile.
@@ -2115,7 +2231,7 @@ setup_completion() {
   line="[ -f \"$f\" ] && source \"$f\""
   mkdir -p "${f%/*}"
   cmd_completion "$sh" > "$f"
-  if [ -f "$prof" ] && grep -qF "$f" "$prof"; then return 0; fi
+  completion_on "$sh" && return 0
   [ "$SETUP_MODE" = new ] && setup_done completion.$sh && return 0
   section "Tab completion"
   echo "Tab completion fills in commands, wiki names and settings when you press Tab after wiki."
@@ -2669,6 +2785,10 @@ setup_pending() {
   setup_done git || echo git
   if in_git_repo "$WIKIS_DIR"; then setup_done git.identity || echo git.identity; fi
   setup_done delegation.mode || echo delegation.mode
+  # Tab completion, asked once per machine unless the profile already loads it.
+  local sh
+  sh="$(completion_shell)"
+  if [ -n "$sh" ] && ! completion_on "$sh"; then setup_done "completion.$sh" || echo "completion.$sh"; fi
   setup_done journal.enabled || echo journal.enabled
   [ "$(journal_get enabled)" = yes ] || return 0
   for k in $JOURNAL_KEYS; do
@@ -2994,6 +3114,11 @@ setup_list() {
     echo "git                 not a repo"
   fi
   echo "claude              $(claude_state)"
+  if [ -n "$(completion_shell)" ]; then
+    printf '%-19s %s' "completion" "$(completion_on "$(completion_shell)" && echo "on ($(completion_shell))" || echo off)"
+    case "$pending" in *" completion."*) printf '  <- new' ;; esac
+    printf '\n'
+  fi
   printf '%-19s %s' "delegation.mode" "$(deleg_mode)"
   case "$pending" in *" delegation.mode "*) printf '  <- new' ;; esac
   printf '\n'
@@ -3008,7 +3133,7 @@ setup_list() {
   case "$pending" in *" git "* | *" git.identity "*) echo "(git questions not yet answered on this machine)" ;; esac
   echo
   echo "Change one:    $WIKI_CMD setup journal.<key>   or   $WIKI_CMD setup git.identity"
-  echo "Or a section:  $WIKI_CMD setup git | claude | upgrade | delegation | journal"
+  echo "Or a section:  $WIKI_CMD setup git | plugin | claude | upgrade | skills | completion | delegation | journal"
 }
 
 cmd_setup() {
@@ -3139,6 +3264,10 @@ if [ "$cmd" = tips ]; then
 fi
 if [ "$cmd" = report ]; then
   cmd_report "$@"
+  exit 0
+fi
+if [ "$cmd" = harvest ]; then
+  cmd_harvest "$@"
   exit 0
 fi
 if [ "$cmd" = pending ]; then

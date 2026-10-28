@@ -56,7 +56,7 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - Tips in real use: whether people act on them or mute them all. Look at the mutes after a few weeks and drop the tips everyone mutes. Usage before 2026-10-28 wasn't recorded, so early standup and find tips may point at features already used.
 - Bulk compile in real use: how long twenty seeded documents take, and whether planning by topic gives better pages than one at a time. No agent has run it yet.
 - The weekly report in real use: whether people ask for it, and whether the token estimate for wiki reads is close enough to be useful.
-- Shared knowledge in real use: whether sessions now file general lessons in the shared wiki, and whether they stop saving to their own memory. The weekly report's correction count is the first signal. Harvesting existing memory files is the next step.
+- Shared knowledge in real use: whether sessions now file general lessons in the shared wiki, and whether they stop saving to their own memory. The weekly report's correction count is the first signal. Whether harvested notes get filed in the right wiki at compile.
 - Patterns in real use: whether agents write `Feedback:` lines unprompted, and whether the thresholds are right.
 
 ## Decided against
@@ -66,6 +66,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Harvest Claude Code memory, and two setup fixes (2026-10-28)
+
+- **Why:** the work machine's audit found corrections and working rules saved to Claude Code's per-folder memory, 31 notes in 9 folders, where no other repository or teammate sees them. This machine had 60 in 6.
+- **What changed:** `wiki harvest` copies memory notes into the wikis' `raw/`. `user` and `feedback` notes go to the shared wiki, project and reference notes to the wiki of the folder they were saved in (found from that folder's transcripts), and the rest to the shared wiki. A manifest per wiki says where each came from. Identical notes are skipped on rerun, and the memory itself is never touched. A tip points at it when memory has notes newer than the last harvest. Fixed: `wiki setup --new` never asked about tab completion, and `wiki upgrade` didn't commit collection changes such as the anchored ignore rules when no wiki was behind. Also found while testing: bash 3.2 treats an empty array as unbound under `set -u`.
 
 ### Shared knowledge reaches every project (2026-10-28, handbook version 19)
 
