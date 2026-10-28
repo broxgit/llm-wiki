@@ -1,0 +1,27 @@
+#!/bin/sh
+# llm-wiki secret scan. Installed by wiki.sh; upgrade replaces it, so edit the copy in the template repo.
+# Agents commit to wikis on their own. This stops a pasted key or token from reaching the remote.
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "llm-wiki: gitleaks isn't installed, so this commit wasn't scanned for secrets. Install it: brew install gitleaks" >&2
+  exit 0
+fi
+
+# gitleaks 8.19 replaced `protect` with `git`.
+if gitleaks git --help >/dev/null 2>&1; then
+  gitleaks git --pre-commit --staged --redact --no-banner --no-color --log-level warn --verbose
+else
+  gitleaks protect --staged --redact --no-banner --no-color --log-level warn --verbose
+fi
+status=$?
+[ "$status" -eq 0 ] && exit 0
+
+cat >&2 <<'EOF'
+
+llm-wiki: commit refused. A staged file holds what looks like a secret (above).
+- Replace the secret with [REDACTED] in that file, even in raw/, then commit again.
+- If it isn't a secret, ask the user. With their OK, add its Fingerprint line to
+  .gitleaksignore at the top of this repo.
+- Never bypass the scan with --no-verify.
+EOF
+exit "$status"

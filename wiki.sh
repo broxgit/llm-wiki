@@ -142,6 +142,7 @@ scaffold() {
       echo "git:     already inside a repo, skipped"
     else
       git -C "$root" init -q
+      install_hook "$root"
       git -C "$root" add -A
       git -C "$root" commit -q -m "wiki: scaffold"
       echo "git:     initialized with a first commit"
@@ -229,10 +230,12 @@ init_collection() {
 git_init_collection() {
   if in_git_repo "$WIKIS_DIR"; then
     echo "git:     $(tilde "$WIKIS_DIR") is already in a repo, skipped"
+    install_hook "$WIKIS_DIR"
     return 0
   fi
   [ -f "$WIKIS_DIR/.gitignore" ] || printf '.DS_Store\n.compile-lock\n' > "$WIKIS_DIR/.gitignore"
   git -C "$WIKIS_DIR" init -q
+  install_hook "$WIKIS_DIR"
   apply_journal_commit
   apply_delegation_ignore
   echo "git:     $(tilde "$WIKIS_DIR") is now one repo for every wiki"
@@ -248,6 +251,65 @@ git_first_commit() {
   git -C "$WIKIS_DIR" add -A
   git -C "$WIKIS_DIR" commit -q -m "wikis: start collection"
   echo "git:     first commit made"
+}
+
+# ---- secret scan ------------------------------------------------------------
+# A pre-commit hook runs gitleaks over staged files, so a key an agent pasted into
+# a note never reaches the remote. It goes only in a repo that belongs to the
+# wikis: the collection, or a wiki that is its own repo. Never a project's repo.
+HOOK_SRC="$REPO/hooks/pre-commit"
+HOOK_MARK="# llm-wiki secret scan"
+
+# hook_file <repo dir>: where git looks for this repo's pre-commit hook.
+hook_file() {
+  local gd
+  gd="$(git -C "$1" rev-parse --git-common-dir 2>/dev/null)" || return 1
+  case "$gd" in /*) ;; *) gd="$1/$gd" ;; esac
+  printf '%s/hooks/pre-commit' "$gd"
+}
+
+# hook_state <repo dir>: ours, other (someone else's hook), hookspath, or none.
+hook_state() {
+  local f
+  if [ -n "$(git -C "$1" config --get core.hooksPath || true)" ]; then echo hookspath; return 0; fi
+  f="$(hook_file "$1")" || { echo none; return 0; }
+  if [ ! -f "$f" ]; then echo none
+  elif grep -qF "$HOOK_MARK" "$f"; then echo ours
+  else echo other
+  fi
+}
+
+# install_hook <repo dir>: put the hook in place, or bring ours up to date. Leaves other hooks alone.
+install_hook() {
+  local dir="$1" f
+  in_git_repo "$dir" && [ -f "$HOOK_SRC" ] || return 0
+  case "$(hook_state "$dir")" in
+    hookspath)
+      echo "note:    git here uses core.hooksPath, so the secret scan wasn't installed. To add it, call $(tilde "$HOOK_SRC") from your pre-commit hook."
+      return 0
+      ;;
+    other)
+      echo "note:    $(tilde "$dir") already has a pre-commit hook, left alone. To add the secret scan, call $(tilde "$HOOK_SRC") from it."
+      return 0
+      ;;
+  esac
+  f="$(hook_file "$dir")"
+  cmp -s "$HOOK_SRC" "$f" 2>/dev/null && return 0
+  mkdir -p "$(dirname "$f")"
+  cp "$HOOK_SRC" "$f"
+  chmod +x "$f"
+  echo "hook:    secret scan on commits in $(tilde "$dir")"
+  command -v gitleaks >/dev/null 2>&1 || echo "note:    gitleaks isn't installed, so commits aren't scanned yet. Install it: brew install gitleaks"
+}
+
+# wiki_repo <wiki root>: the repo a wiki's hook belongs in, if any: the wiki's own
+# repo, or the collection's. Prints nothing for a wiki inside some other project.
+wiki_repo() {
+  local top here
+  top="$(git -C "$1" rev-parse --show-toplevel 2>/dev/null)" || return 0
+  here="$(cd "$1" && pwd -P)"
+  if [ "$top" = "$here" ]; then printf '%s' "$1"; return 0; fi
+  if [ -f "$WIKIS_DIR/WIKIS.md" ] && [ "$top" = "$(cd "$WIKIS_DIR" && pwd -P)" ]; then printf '%s' "$WIKIS_DIR"; fi
 }
 
 cmd_init() {
@@ -319,6 +381,13 @@ cmd_status() {
     echo "journal: $(journal_get enabled), commit $(journal_get commit), entries $(journal_get entries)"
   fi
   if [ -f "$DELEG_FILE" ]; then echo "delegation: mode $(deleg_mode)"; fi
+  if in_git_repo "$WIKIS_DIR" && [ -f "$WIKIS_DIR/WIKIS.md" ]; then
+    case "$(hook_state "$WIKIS_DIR")" in
+      ours) command -v gitleaks >/dev/null 2>&1 || echo "secrets: commits aren't scanned, gitleaks isn't installed. Run: brew install gitleaks" ;;
+      none) echo "secrets: commits aren't scanned. Run: ./wiki.sh upgrade --all" ;;
+      *) echo "secrets: another pre-commit hook is in place. Call $(tilde "$HOOK_SRC") from it to scan commits." ;;
+    esac
+  fi
   n="$(setup_pending | wc -l | tr -d ' ')"
   if [ ! -f "$SETUP_STATE" ]; then
     echo "setup:   never run on this machine. Run: ./wiki.sh setup"
@@ -375,7 +444,7 @@ cmd_stale() {
 }
 
 upgrade_one() {
-  local root="$1" tv wv f
+  local root="$1" tv wv f r
   is_wiki "$root" || die "$(tilde "$root") is not a wiki (needs AGENTS.md and index.md)"
   tv="$(version_of "$TEMPLATE/AGENTS.md")"
   wv="$(version_of "$root/AGENTS.md")"
@@ -408,6 +477,8 @@ upgrade_one() {
     printf '.compile-lock\n' >> "$root/.gitignore"
     echo ".gitignore: added .compile-lock"
   fi
+  r="$(wiki_repo "$root")"
+  [ -z "$r" ] || install_hook "$r"
   echo "done:     $(tilde "$root")"
 }
 
@@ -1524,6 +1595,7 @@ setup_git() {
     fi
     setup_push_check
   fi
+  install_hook "$WIKIS_DIR" | sed 's/^/  /'
 }
 
 # Which account commits and pushes. Matters on a machine with work and personal keys.

@@ -4,6 +4,14 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v15 (2026-10-28)
+
+- Secret scan. A pre-commit hook runs `gitleaks` over every commit to the collection, or to a wiki that is its own repo, and refuses one that holds a key, token or password. `init --git`, `new --git`, `upgrade` and `setup git` install it. A wiki inside a project's repo never gets it.
+- When a commit is refused, agents replace the secret with `[REDACTED]`, even in `raw/`, commit again and tell you. A false positive needs your OK: add its fingerprint to `.gitleaksignore` at the top of the repo.
+- An existing pre-commit hook, or a `core.hooksPath` setting, is left alone. Upgrade says how to call the scan from yours.
+- Without `gitleaks` the hook lets commits through with a warning. `./wiki.sh status` says when commits aren't scanned.
+- Do: install gitleaks (`brew install gitleaks`), then run `./wiki.sh upgrade --all`.
+
 ## v14 (2026-10-28)
 
 For collections shared by a team, or by one person on several machines.

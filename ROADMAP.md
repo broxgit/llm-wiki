@@ -25,12 +25,6 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 - **Sketch:** Claude Code only. A `SessionStart` hook injects the wiki's index. A `PreCompact` hook holds compaction until the session has captured what it knows.
 - **Open:** how to find the right wiki from inside a hook. Whether blocking compaction is too heavy-handed. The handbook must stay usable without hooks.
 
-### Scan for secrets before pushing
-
-- **Why:** agents commit and push on their own. "Never store secrets" is a rule, not a check.
-- **Sketch:** a pre-commit hook in the collection repo that runs a secret scanner over staged files. `./wiki.sh init --git` installs it.
-- **Open:** which scanner. What the agent should do when a commit is refused.
-
 ### Measure whether it pays
 
 - **Why:** nobody knows yet if the wikis save tokens or just move them.
@@ -75,6 +69,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Scan for secrets before pushing (2026-10-28, handbook version 15)
+
+- **Why:** agents commit and push on their own. "Never store secrets" was a rule, not a check, and a team collection spreads a leak to everyone.
+- **What changed:** `hooks/pre-commit` runs gitleaks over staged files. `init --git`, `new --git`, `upgrade` and `setup git` install it in the collection or a wiki's own repo, never a project's repo, and leave an existing hook or `core.hooksPath` alone. A refused commit tells the agent to redact, even in `raw/`, and never to use `--no-verify`. Without gitleaks the hook warns and lets the commit through, and `status` says so.
 
 ### Team-sharing fixes (2026-10-28, handbook version 14)
 

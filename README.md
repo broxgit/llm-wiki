@@ -253,6 +253,8 @@ Make the collection one git repo (`./wiki.sh init --git`) and give it a remote. 
 
 The handbook tells agents to pull before writing and to commit and push after, touching only the wiki folders they changed. When two people change the same wiki, each wiki's `.gitattributes` has git keep both sides' lines in `index.md` and `log.md`, so those merge on their own. A conflict inside a page resolves like any git conflict. The compile lock only covers sessions on one machine.
 
+Agents push to that remote on their own, so `init --git` installs a pre-commit hook that runs [gitleaks](https://github.com/gitleaks/gitleaks) and refuses a commit holding a key, token or password. Install it on each machine: `brew install gitleaks`. Without it, commits go through with a warning, and `./wiki.sh status` says they aren't scanned.
+
 The journal and `delegation.md` stay on each machine. `./wiki.sh status` says when a wiki's handbook is newer than your template clone, meaning a coworker upgraded it first. Pull the template.
 
 `WIKIS.md` at the top of the collection is what tells agents the folder is a collection. A single wiki can also be its own repo: `./wiki.sh new <path> --git`. A wiki inside some other repo is never committed by the agent.
@@ -266,6 +268,7 @@ The journal and `delegation.md` stay on each machine. `./wiki.sh status` says wh
 - **It saves too much or too little.** Edit the capture list under "Act without being asked" in `template/AGENTS.md`, bump the version, then upgrade.
 - **An answer came from an out-of-date page.** Tell the agent what changed. It files a correction. `./wiki.sh stale` shows what else hasn't been checked in a while.
 - **A wiki's handbook is behind the template.** `./wiki.sh status` flags it. `./wiki.sh upgrade --all` brings every wiki up to date, then says what changed since the version each wiki was on and what to do about it: commit the upgrade, refresh the session line, look at new settings. Outside git it keeps the old handbook as `AGENTS.md.bak`.
+- **A commit was refused for a secret.** The agent replaces it with `[REDACTED]` and commits again. If it isn't a secret, add the `Fingerprint` line gitleaks printed to `.gitleaksignore` at the top of the collection.
 - **An agent's commit won't push.** Run `./wiki.sh setup git`. It sets the repo's commit email and SSH key and test-pushes. A machine with a work key and a personal key usually needs the key named for this repo.
 
 ## Change the rules
@@ -297,6 +300,7 @@ template/          The scaffold. Copied whole to start a wiki.
   raw/             Immutable sources.
   wiki/            Compiled pages.
   data/            Structured data (CSV, SQLite).
+hooks/pre-commit   The secret scan that init --git and upgrade install in wiki repos.
 skills/llm-wiki/   Optional Claude skill that finds, runs, and scaffolds wikis.
 ```
 
