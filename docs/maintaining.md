@@ -24,6 +24,8 @@ template/          The scaffold, copied whole to start a wiki.
 skills/llm-wiki/   The Claude skill that finds, runs, and scaffolds wikis.
 .claude-plugin/    The plugin manifest, and the marketplace that lists it.
 commands/          The plugin's slash commands.
+scripts/
+  migrate-to-plugin.sh  Moves a machine from the clone-and-line setup to the plugin.
 hooks/
   hooks.json       The plugin's session hook, which runs session-start.sh.
   session-start.sh Finds the session's wiki, points the session at it, and keeps the wiki command current.

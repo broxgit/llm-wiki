@@ -37,6 +37,17 @@ The desktop app's **Chat** tab and claude.ai on the web are not Claude Code and 
 
 Joining a team that already has a shared collection? Do [Teams](teams.md#join-a-shared-collection) before step 5.
 
+## Moving from the old setup
+
+Set up before the plugin existed, with a clone of this repo and a line in `~/.claude/CLAUDE.md`? One script does all of the above and tidies up. In the old clone:
+
+```
+git pull
+./scripts/migrate-to-plugin.sh
+```
+
+It syncs your collection, installs gitleaks and the plugin, turns on auto-update, removes the old line, sets up the `wiki` command, upgrades your wikis, and asks before committing or pushing. It backs up each file it changes, and it's safe to run again.
+
 ## Check that it works
 
 1. In a new session, ask: "What does your llm-wiki session context say?" Claude should quote a few lines naming the wiki for the repository you're in. If it has never heard of it, the plugin didn't load. See [Troubleshooting](troubleshooting.md).
