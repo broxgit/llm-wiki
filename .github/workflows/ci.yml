@@ -1,0 +1,49 @@
+# Every push to main reaches plugin users with auto-update on, so nothing merges
+# to main without these passing. See docs/maintaining.md.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck -S warning wiki.sh hooks/session-start.sh hooks/pre-commit scripts/migrate-to-plugin.sh tests/smoke.sh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Validate the plugin and marketplace
+        run: npx --yes @anthropic-ai/claude-code@2.1.170 plugin validate .
+
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install gitleaks (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+            | sudo tar xz -C /usr/local/bin gitleaks
+      - name: Install gitleaks (macOS)
+        if: runner.os == 'macOS'
+        run: brew install gitleaks
+      # macOS runners put a newer bash first on the PATH. Most Macs run Apple's
+      # bash 3.2, so test with that one.
+      - name: Use Apple's bash 3.2 (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p "$RUNNER_TEMP/bash32"
+          ln -s /bin/bash "$RUNNER_TEMP/bash32/bash"
+          echo "$RUNNER_TEMP/bash32" >> "$GITHUB_PATH"
+      - name: Smoke tests
+        run: |
+          bash --version | head -n 1
+          tests/smoke.sh
