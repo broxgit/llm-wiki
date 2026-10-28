@@ -6,40 +6,35 @@ The desktop app's **Chat** tab and claude.ai on the web are not Claude Code and 
 
 ## Install
 
-1. In a terminal, add this repo as a plugin marketplace and install the plugin:
+1. In a terminal, install the plugin:
 
    ```
    claude plugin marketplace add broxgit/llm-wiki
    claude plugin install llm-wiki@llm-wiki
    ```
 
-2. Turn on auto-update. Marketplaces outside Anthropic's own start with it off, and without it you never get fixes. Open `~/.claude/settings.json`, find `"llm-wiki"` under `"extraKnownMarketplaces"`, and add `"autoUpdate": true` beside its `"source"`:
-
-   ```json
-   "llm-wiki": {
-     "source": { "source": "github", "repo": "broxgit/llm-wiki" },
-     "autoUpdate": true
-   }
-   ```
-
-   In a terminal Claude Code session, `/plugin` > Marketplaces > `llm-wiki` > Enable auto-update does the same.
-3. Start a new session: run `claude` in a repository, or open a new Code-tab session in the desktop app. If the desktop app doesn't pick up the plugin, quit and reopen it.
-4. In that session, say "set up the wiki command". Claude links a small `wiki` script into `~/.local/bin`, so your terminal can run it.
-5. In a terminal, run:
+2. Start a Claude Code session: run `claude` in any repository, or open a new Code-tab session in the desktop app. That gives the plugin a moment to set up its `wiki` command. You can close the session straight away. If the desktop app doesn't pick up the plugin, quit and reopen it.
+3. In a terminal, run setup once:
 
    ```
-   wiki setup
+   ~/.claude/plugins/data/llm-wiki-llm-wiki/bin/wiki setup
    ```
 
-   It asks one question at a time, and Enter takes the suggested answer. It creates your wiki collection in `~/wikis`, makes it a git repo, and walks through the [work journal](using.md#work-journal-and-standups).
-6. Install gitleaks, which stops agents from committing a secret: `brew install gitleaks`.
-7. If you added the wiki line to `~/.claude/CLAUDE.md` with an older version of this template, delete it. The plugin does its job, and both would point the session at the handbook twice.
+   It asks one question at a time, and Enter takes the suggested answer. It:
+   - makes `wiki` a command in every terminal, so from now on you type just `wiki`
+   - turns on auto-update, which Claude Code leaves off for marketplaces outside Anthropic's own
+   - creates your wiki collection in `~/wikis` and makes it a git repo
+   - installs [gitleaks](https://github.com/gitleaks/gitleaks) with Homebrew, which stops agents from committing a secret
+   - removes the wiki line from `~/.claude/CLAUDE.md` if an older version of this template put it there
+   - walks through the [work journal](using.md#work-journal-and-standups)
 
-Joining a team that already has a shared collection? Do [Teams](teams.md#join-a-shared-collection) before step 5.
+   If it says it added `~/.local/bin` to your `PATH`, open a new terminal before typing `wiki`.
+
+Joining a team that already has a shared collection? Do [Teams](teams.md#join-a-shared-collection) before step 3.
 
 ## Moving from the old setup
 
-Set up before the plugin existed, with a clone of this repo and a line in `~/.claude/CLAUDE.md`? One script does all of the above and tidies up. In the old clone:
+Set up before the plugin existed, with a clone of this repo and a line in `~/.claude/CLAUDE.md`? One script does the steps above and tidies up. In the old clone:
 
 ```
 git pull

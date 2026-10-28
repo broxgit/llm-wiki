@@ -73,7 +73,7 @@ PY
   [ -n "\$path" ] && [ -x "\$path/wiki.sh" ] && target="\$path/wiki.sh"
 fi
 [ -x "\$target" ] || { echo "wiki: can't find the llm-wiki plugin. Check it with: claude plugin list" >&2; exit 1; }
-LLM_WIKI_CMD=wiki exec "\$target" "\$@"
+LLM_WIKI_CMD=wiki LLM_WIKI_SHIM="$CMD" exec "\$target" "\$@"
 EOF
 )"
   if [ "$(cat "$CMD" 2>/dev/null)" != "$shim" ]; then
@@ -85,7 +85,7 @@ TYPE="${CMD:-$WIKI_SH}"
 [ -n "$CMD" ] && [ "$(command -v wiki 2>/dev/null)" -ef "$CMD" ] && TYPE="wiki"
 LINK=""
 if [ -n "$CMD" ] && [ "$TYPE" != wiki ]; then
-  LINK="\`wiki\` isn't on the user's PATH yet. If they ask to set up the wiki command, or the first time you give them a wiki.sh command to run, link it: \`mkdir -p ~/.local/bin && ln -sf \"$CMD\" ~/.local/bin/wiki\`. If ~/.local/bin isn't on their PATH, say which line to add to their shell profile. Offer this once, not every reply."
+  LINK="\`wiki\` isn't a command in the user's terminal yet. If they ask to set up the wiki command, or the first time you give them a wiki.sh command to run, offer to run \`\"$CMD\" link\`. It links it into a folder on their PATH. If it says ~/.local/bin isn't on their PATH, ask before running \`\"$CMD\" link --yes\`, which adds it to their shell profile. Offer this once, not every reply."
 fi
 
 if [ ! -d "$WIKIS_DIR" ]; then
