@@ -3,13 +3,23 @@
 # Works with the bash that ships on macOS (3.2) and on Linux.
 set -euo pipefail
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Follow symlinks, such as ~/.local/bin/wiki, to the real script: template/ sits beside it.
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+  dir="$(cd "$(dirname "$src")" && pwd)"
+  src="$(readlink "$src")"
+  case "$src" in /*) ;; *) src="$dir/$src" ;; esac
+done
+REPO="$(cd "$(dirname "$src")" && pwd)"
 TEMPLATE="$REPO/template"
 WIKIS_DIR="${WIKIS_DIR:-$HOME/wikis}"
 SHARED="global"
 # The command people type, for messages. The plugin's stable `wiki` command sets
-# LLM_WIKI_CMD. A clone is run as ./wiki.sh.
-WIKI_CMD="${LLM_WIKI_CMD:-./wiki.sh}"
+# LLM_WIKI_CMD. Run as wiki.sh, it's ./wiki.sh from the clone; through a link, the link's name.
+case "${0##*/}" in
+  wiki.sh) WIKI_CMD="${LLM_WIKI_CMD:-./wiki.sh}" ;;
+  *) WIKI_CMD="${LLM_WIKI_CMD:-${0##*/}}" ;;
+esac
 
 usage() {
   cat <<EOF
@@ -31,6 +41,7 @@ Usage: $WIKI_CMD <command> [options]
   upgrade --all        Do that for every wiki in the collection.
   unlock <name|path>   Free a stuck compile lock.
   claude               Add the wiki line to ~/.claude/CLAUDE.md so every session finds its wiki.
+  claude --print       Print the line, for another agent's instruction file.
 
   journal              Show the work journal's settings and today's entry count.
   journal on | off     Turn the journal on or off. It is on by default.
@@ -1962,11 +1973,13 @@ if [ "$cmd" = cover ]; then
 fi
 want_git=0
 want_all=0
+want_print=0
 target=""
 for arg in "$@"; do
   case "$arg" in
     --git) want_git=1 ;;
     --all) want_all=1 ;;
+    --print) want_print=1 ;;
     -h | --help) usage; exit 0 ;;
     -*) die "unknown option: $arg" ;;
     *) [ -z "$target" ] || die "too many arguments"; target="$arg" ;;
@@ -2000,7 +2013,7 @@ case "$cmd" in
     if [ "$want_all" = 1 ]; then cmd_upgrade_all; else need_target; cmd_upgrade_one "$(resolve "$target")"; fi
     ;;
   unlock) need_target; cmd_unlock "$(resolve "$target")" ;;
-  claude) cmd_claude ;;
+  claude) if [ "$want_print" = 1 ]; then claude_line; printf '\n'; else cmd_claude; fi ;;
   patterns) cmd_patterns ;;
   -h | --help | help) usage ;;
   *) usage; exit 1 ;;

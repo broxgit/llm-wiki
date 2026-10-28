@@ -44,9 +44,14 @@ fi
 # How the user runs it in a terminal: `wiki` once it's on their PATH, the full path until then.
 TYPE="${CMD:-$WIKI_SH}"
 [ -n "$CMD" ] && [ "$(command -v wiki 2>/dev/null)" -ef "$CMD" ] && TYPE="wiki"
+LINK=""
+if [ -n "$CMD" ] && [ "$TYPE" != wiki ]; then
+  LINK="\`wiki\` isn't on the user's PATH yet. If they ask to set up the wiki command, or the first time you give them a wiki.sh command to run, link it: \`mkdir -p ~/.local/bin && ln -sf \"$CMD\" ~/.local/bin/wiki\`. If ~/.local/bin isn't on their PATH, say which line to add to their shell profile. Offer this once, not every reply."
+fi
 
 if [ ! -d "$WIKIS_DIR" ]; then
-  emit "llm-wiki plugin: there is no wiki collection at $WIKIS_DIR yet, so this session has no wiki. If the user asks about wikis, tell them to run this in a terminal: $TYPE setup"
+  emit "llm-wiki plugin: there is no wiki collection at $WIKIS_DIR yet, so this session has no wiki. If the user asks about wikis, tell them to run this in a terminal: $TYPE setup${LINK:+
+$LINK}"
 fi
 
 # The repository's name: the last part of its remote URL, or its folder name.
@@ -99,9 +104,9 @@ $note
 }
 wiki.sh, the template repo's script that the handbook and its rules refer to, is at: $WIKI_SH
 When the user runs it in a terminal, the command is: $TYPE"
-if [ -n "$CMD" ] && [ "$TYPE" != wiki ]; then
+if [ -n "$LINK" ]; then
   ctx="$ctx
-\`wiki\` isn't on the user's PATH yet. The first time you give them a wiki.sh command to run, offer once to make it one word: \`ln -s \"$CMD\" ~/.local/bin/wiki\` when ~/.local/bin is on their PATH, or an alias in their shell profile."
+$LINK"
 fi
 if [ "$waiting" -gt 0 ]; then
   ctx="$ctx

@@ -1,0 +1,174 @@
+# Using it
+
+Once it's set up, you mostly just work. The agent checks the wiki, saves what matters, and keeps the pages tidy without being asked. This page covers what it does, what you can ask for, and the extras.
+
+Commands are written as `wiki <command>`. From a clone without the link, that's `./wiki.sh <command>`.
+
+## What to say
+
+| Say | What happens |
+|---|---|
+| Nothing | The agent checks the wiki before answering, and saves decisions and findings at stopping points. |
+| "Save this" | Saves what you just pointed at as a note now. |
+| "Save this session" | Saves everything this session established. Plugin: `/llm-wiki:save`. |
+| "Ingest" or "compile" | Turns waiting notes into pages now. Plugin: `/llm-wiki:compile`. |
+| "Lint" | Health check: broken links, stale pages, duplicates, open questions. |
+| "Don't save that", "off the record" | Leaves that one thing out. |
+| "Leave the wiki alone" | No wiki writes until you say otherwise. |
+| "What did I do yesterday?", "Give me my standup" | A standup from your commits, journal and notes. Plugin: `/llm-wiki:standup`. |
+| "Backfill my journal" | Fills in past days from earlier sessions. See [Fill in past days](#fill-in-past-days). |
+| "That belongs in the billing-api wiki" | Moves knowledge to the wiki that owns it, after asking. |
+
+## What the agent does on its own
+
+- **Query.** It checks the wikis before answering anything they might cover.
+- **Capture.** It saves a note when the conversation produces a decision, direction from you, an established or corrected fact, a solved problem, or a research finding. It doesn't log finished work, since the code and git history already hold that. It captures at stopping points, about one or two notes an hour in a long session.
+- **Compile.** It turns waiting notes into wiki pages at session start, at a pause, and whenever five are waiting.
+- **Lint.** It runs a health check once 10 compiles have passed since the last one.
+
+It tells you briefly what it wrote. It asks before resolving a contradiction or merging, deleting, or restructuring pages. If it doubts a fact you gave it, it files the fact, marks it with a `Check` line, and says so.
+
+**Stale knowledge.** Each page records when its claims were last confirmed and, for claims about code, the commit. Before the agent writes code or publishes something that depends on a page, it checks the page against the code or the cited source, when that's at hand, and files a correction if the page is wrong. When it answers from a page more than 90 days old that it couldn't check, it says when the page was last verified. `wiki stale` lists those pages.
+
+## Where things live
+
+```
+~/wikis/                 Your collection: one git repo for every wiki.
+  global/                The shared wiki: tooling, conventions, glossary.
+  billing-api/           One wiki per project, named after its repository.
+    raw/                 Notes and sources as captured. Never edited.
+    wiki/                The compiled pages.
+    index.md             One line per page. Sessions read this first.
+  journal/               Your work journal. Stays on this machine.
+  delegation.md          Your handoff preferences. Stays on this machine.
+```
+
+Every wiki is plain markdown. Read pages in any editor, on GitHub, or in Obsidian.
+
+## Many repositories
+
+The goal: a session working in repository A that needs a client from repository D finds what any earlier session learned about that client.
+
+- **One wiki per project, found by repository name.** The wiki for a repository is named after it, the last part of its remote URL, so the wiki for a dependency is found by name, with no search and no configuration.
+- **Knowledge lives with its owner.** What a session learns about D's client goes in D's wiki, even when the session is working in A. A's wiki keeps only what's specific to how A uses it, and cites D's page.
+- **Look before reading source.** When work touches another repository, the agent reads that repository's wiki index before answering from its code.
+- **Wikis appear on demand.** The first session with something to file about a repository creates its wiki.
+- **Unknown owner.** The agent searches the indexes by keyword. `wiki find <word>` does the same for you.
+- **Shared knowledge.** Third-party libraries, tooling, and conventions go in the shared wiki.
+
+Keep work and personal knowledge in separate collections. Set `WIKIS_DIR` to use a second one.
+
+### One project, several repositories
+
+Some repositories are really one product: one piece of work touches several, and the same facts matter to all of them. Give those one wiki:
+
+```
+wiki new my-product
+wiki cover my-product repo-one repo-two repo-three
+```
+
+A session in any of them then uses `my-product`. The test: if one session routinely works across the repositories, they are one wiki. If each is worked on alone and they only call each other, keep them separate.
+
+## Stop repeating yourself
+
+When you correct the agent, paste review comments on code it wrote, or watch it do the same steps again, it notes that. Once the same thing has come up a few times, it asks one question with the evidence and offers a fix:
+
+- **The same review comment keeps coming back.** It becomes a line on the project's conventions page, and agents check code against it before calling the work done.
+- **You keep correcting how a shared library is used.** The rule goes in that library's wiki, so every repository that calls the library gets it.
+- **The same procedure in different repositories** becomes a skill, or a how-to page for agents without skills.
+- **The same mechanical steps over and over** become a small script.
+
+A pattern is ready after 3 sightings, or 2 when they are review comments or come from different repositories. A "no" is remembered. `wiki patterns` shows what every wiki is tracking.
+
+Paste merge request comments into the session that wrote the code. They are the best evidence there is.
+
+## Hand work to cheaper models
+
+A session on your most capable model doesn't need to spend it on a test run or a sweep across 200 files. Sessions hand that kind of work to sub-agents on cheaper models, check what comes back, and keep design, debugging and review for themselves. This needs an agent that can run sub-agents on a chosen model, such as Claude Code.
+
+Your preferences live in `~/wikis/delegation.md`:
+
+- **mode:** `off` never hands off unless you ask. `ask`, the default, suggests each handoff and waits for a yes. `auto` hands off and tells you after.
+- **Who does what:** kinds of work, each with a model and effort. Rows marked `stay` never leave the session. Edit it to match the models you use.
+- **Auto:** kinds of work you've approved without asking. After you say yes to the same kind three times, the session offers to add it.
+
+`wiki setup delegation` sets the mode. `wiki delegation` shows how often each kind of handoff came back fine, needed fixing, or was redone.
+
+## Work journal and standups
+
+Ask "what did I do yesterday?" or "give me my standup", and the agent answers from what you actually did:
+
+- **Your commits** in every repository under your code folders, matched to each repository's `user.email`.
+- **Journal entries.** One line the agent writes at a stopping point for work that leaves no commit: an investigation, a review, a dead end, a deploy.
+- **Wiki notes and changes** in the range.
+- **Work in progress:** uncommitted files, unpushed commits, open branches. These become "Today".
+- **Open `Check` and `Conflict` lines** in the wikis. These become "Blockers".
+
+`wiki standup` gathers that material. The agent writes it up as a standup, a summary by project, or a detailed report.
+
+```
+wiki standup                      # last workday through now
+wiki standup --since week --format summary --exclude 'personal-*'
+wiki standup --day 2026-10-21 --only 'billing-*'
+```
+
+The journal is personal. It sits beside the wikis, not in one, and isn't committed unless you set `commit` to `yes`. Add a line yourself with `wiki journal note <project> "what you did"`.
+
+### Fill in past days
+
+The journal starts empty, but Claude Code keeps a transcript of every session.
+
+```
+wiki journal backfill --since 14d
+```
+
+This writes a short digest, `~/wikis/journal/backfill.md`, per day and project: what you asked for, which files changed, how it ended. It needs `python3`. Then tell an agent "backfill my journal". It writes entries from the digest and deletes it.
+
+### Journal settings
+
+Settings live in `~/wikis/journal/config`. Walk through them with `wiki setup journal`, change one with `wiki journal set <key> <value>`, and see them with `wiki journal`.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `enabled` | `yes` | Turns the whole feature on or off. Also `wiki journal on` and `off`. |
+| `commit` | `no` | `yes` commits and pushes journal files with the wikis. `no` keeps them on this machine. |
+| `entries` | `yes` | `no` stops the agent writing journal lines. Reports still use commits and wiki notes. |
+| `format` | `standup` | Default report shape: `standup`, `summary`, or `detailed`. |
+| `since` | `lastworkday` | Default range: `lastworkday`, `yesterday`, `today`, `week`, `lastweek`, a number of days like `7d`, or a date. |
+| `day_starts` | `04:00` | Work before this local time counts toward the previous day. |
+| `workdays` | `12345` | Days that count as workdays, 1 for Monday. A Monday standup then covers Friday. |
+| `code_dirs` | `~/dev` | Folders to search for repositories, separated by colons. |
+| `depth` | `4` | How deep to search them. |
+| `authors` | empty | Extra commit emails or names that are you, separated by commas. |
+| `exclude` | empty | Repositories and wikis to leave out, as comma-separated globs, such as `personal-*`. |
+| `save` | `no` | `yes` saves each report as `journal/YYYY-MM-DD-<format>.md`. |
+| `keep_days` | `0` | Deletes journal days older than this. `0` keeps everything. |
+
+## Settings
+
+`wiki setup` walks through every setting. Rerun it any time. It shows what you have and changes only what you change.
+
+- `wiki setup --list` prints every setting and marks the ones still at their default.
+- `wiki setup --new` asks only about what's new since you last ran it.
+- `wiki setup git`, `wiki setup journal` or `wiki setup delegation` reruns one section.
+- `wiki setup format` edits one journal setting.
+
+## Several sessions at once
+
+Safe. Saving a note adds one new file and touches nothing else, so any number of sessions can save at once. Compiling changes shared files, so a lock keeps it to one session per wiki. A session that finds the lock held skips compiling and carries on.
+
+## All commands
+
+Run `wiki` with no arguments for the full list. The ones you're likely to use:
+
+| Command | What it does |
+|---|---|
+| `wiki status` | Every wiki: notes waiting, lock, handbook version, what's due. |
+| `wiki find <word>` | Search every wiki's index. |
+| `wiki stale [days]` | Pages not verified in that many days, 90 by default. |
+| `wiki patterns` | Recurring feedback, and which patterns are ready. |
+| `wiki standup` | Raw material for a standup. |
+| `wiki upgrade --all` | Bring every wiki's handbook up to the template's. |
+| `wiki new <name>` | Create a wiki. Usually the agent does this. |
+| `wiki cover <wiki> <repo>...` | One wiki for several repositories. |
+| `wiki unlock <name>` | Free a stuck compile lock. |

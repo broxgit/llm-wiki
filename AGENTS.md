@@ -31,7 +31,7 @@ The collection's `journal/` folder holds the user's work journal. It is personal
 
 ## Working on this repo itself
 
-Edit the handbook, the skill, or the README only when the user asks. The handbook is `template/AGENTS.md` plus `template/rules/`. When any of it changes, bump the version in `template/AGENTS.md` and add a section for that version to `CHANGELOG.md`, written for the person upgrading: what changed, and `- Do:` lines for anything they need to do. `./wiki.sh upgrade` prints it. Keep `template/AGENTS.md` short: it loads in every session, so anything a session needs only sometimes belongs in `rules/`.
+Edit the handbook, the skill, the README, or `docs/` only when the user asks. `docs/maintaining.md` is the maintainer's guide. The handbook is `template/AGENTS.md` plus `template/rules/`. When any of it changes, bump the version in `template/AGENTS.md` and add a section for that version to `CHANGELOG.md`, written for the person upgrading: what changed, and `- Do:` lines for anything they need to do. `./wiki.sh upgrade` prints it. Keep `template/AGENTS.md` short: it loads in every session, so anything a session needs only sometimes belongs in `rules/`.
 
 A new journal setting is one line in `JOURNAL_SETTINGS` in `wiki.sh`. It reaches the config file, validation, and `setup --new` from there. Anything else the user configures gets a step in `cmd_setup`, recorded with `setup_mark`, so `setup --new` asks about it once on each machine.
 
