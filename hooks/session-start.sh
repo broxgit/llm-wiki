@@ -38,14 +38,44 @@ emit() {
 
 # A stable terminal command. The plugin's folder changes with every update, and old
 # folders are deleted, so people can't type that path. The data folder survives
-# updates. Point the command at this version, rewriting it only when it changes.
+# updates, so the command lives there.
+#
+# `claude plugin update` installs a new version without a session starting, so the
+# command can't rely on this hook to repoint it. It asks Claude Code's own record,
+# installed_plugins.json, for the current install folder every time it runs, and
+# falls back to this version. A plugin run from a clone (a local marketplace) has
+# no versioned folder, so it isn't looked up.
 CMD=""
+KEY=""
+case "$ROOT" in
+  "$HOME"/.claude/plugins/cache/*/*/*)
+    plugin_dir="${ROOT%/*}"
+    KEY="${plugin_dir##*/}@$(basename "${plugin_dir%/*}")"
+    ;;
+esac
 if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
   CMD="$CLAUDE_PLUGIN_DATA/bin/wiki"
-  shim="#!/bin/sh
-# The llm-wiki plugin's terminal command. Its session hook rewrites this file when the plugin updates.
-[ -x \"$WIKI_SH\" ] || { echo \"wiki: the llm-wiki plugin has updated. Start a Claude Code session once to refresh this command.\" >&2; exit 1; }
-LLM_WIKI_CMD=wiki exec \"$WIKI_SH\" \"\$@\""
+  shim="$(cat <<EOF
+#!/bin/sh
+# The llm-wiki plugin's terminal command, written by the plugin's session hook.
+# It runs the version Claude Code says is installed, so an update counts at once.
+target="$WIKI_SH"
+key="$KEY"
+installed="\$HOME/.claude/plugins/installed_plugins.json"
+if [ -n "\$key" ] && [ -f "\$installed" ] && command -v python3 >/dev/null 2>&1; then
+  path="\$(python3 - "\$installed" "\$key" 2>/dev/null <<'PY'
+import json, sys
+entries = json.load(open(sys.argv[1])).get("plugins", {}).get(sys.argv[2], [])
+entries = sorted(entries, key=lambda e: e.get("scope") != "user")
+print(entries[0].get("installPath", "") if entries else "")
+PY
+)"
+  [ -n "\$path" ] && [ -x "\$path/wiki.sh" ] && target="\$path/wiki.sh"
+fi
+[ -x "\$target" ] || { echo "wiki: can't find the llm-wiki plugin. Check it with: claude plugin list" >&2; exit 1; }
+LLM_WIKI_CMD=wiki exec "\$target" "\$@"
+EOF
+)"
   if [ "$(cat "$CMD" 2>/dev/null)" != "$shim" ]; then
     mkdir -p "${CMD%/*}" && printf '%s\n' "$shim" > "$CMD" && chmod +x "$CMD" || CMD=""
   fi

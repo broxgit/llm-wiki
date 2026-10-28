@@ -205,6 +205,27 @@ expect "stats computes a wiki's hit rate" "50%" "$W" stats
 expect "stats totals every wiki" "67%" "$W" stats
 lacks "stats leaves out lookups before the range" "25%" "$W" stats
 
+section "Plugin updates reach the wiki command"
+# Two installed versions side by side, as Claude Code leaves them after an update.
+# v2's template says v98, so status shows which version ran.
+C1="$HOME/.claude/plugins/cache/mk/llm-wiki/v1"
+C2="$HOME/.claude/plugins/cache/mk/llm-wiki/v2"
+mkdir -p "$C1" "$C2"
+(cd "$REPO" && tar cf - --exclude .git --exclude tests .) | (cd "$C1" && tar xf -)
+(cd "$REPO" && tar cf - --exclude .git --exclude tests .) | (cd "$C2" && tar xf -)
+set_version "$C2/template/AGENTS.md" 98
+CLAUDE_PLUGIN_ROOT="$C1" CLAUDE_PLUGIN_DATA="$T/pdata" CLAUDE_PROJECT_DIR="$T" bash "$C1/hooks/session-start.sh" </dev/null >/dev/null
+check "the hook writes the command for an installed plugin" test -x "$T/pdata/bin/wiki"
+lacks "with no install record, the command runs its own version" "v98" "$T/pdata/bin/wiki" status
+printf '{"version":2,"plugins":{"llm-wiki@mk":[{"scope":"user","installPath":"%s","version":"v2"}]}}\n' "$C2" > "$HOME/.claude/plugins/installed_plugins.json"
+expect "after an update, the command runs the new version at once" "behind template v98" "$T/pdata/bin/wiki" status
+rm -rf "$C1"
+expect "it still works once the old version is deleted" "behind template v98" "$T/pdata/bin/wiki" status
+printf '{"version":2,"plugins":{"llm-wiki@mk":[{"scope":"user","installPath":"%s/gone"}]}}\n' "$HOME" > "$HOME/.claude/plugins/installed_plugins.json"
+expect "a record pointing nowhere gives a clear error" "can't find the llm-wiki plugin" "$T/pdata/bin/wiki" status
+check "a plugin run from a clone never looks up a version" grep -q 'key=""' "$T/data/bin/wiki"
+rm -f "$HOME/.claude/plugins/installed_plugins.json"
+
 section "Journal and standup"
 expect "journal note writes an entry" "journal:" "$W" journal note demo "smoke test entry"
 refuse "journal note refuses a future day" "$W" journal note --day 2999-01-01 demo "too early"
