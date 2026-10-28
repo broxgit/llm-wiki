@@ -13,6 +13,8 @@ Check for pending files first. Take the lock only when there is something to com
 3. Read the file back. If the token is yours, you hold the lock. If not, another session got there first. Don't compile.
 4. When the compile work ends, write `free`. Do this even if the work failed.
 
+`wiki.sh lock <wiki>` does steps 1 to 3, and exits with an error if another session holds the lock. `wiki.sh lock <wiki> --release` does step 4, and `--renew` rewrites the time. Use them when you have the script.
+
 If you can't get the current time, treat any `held` line as held. If compile work runs past 20 minutes, rewrite the line with a fresh time.
 
 Once you hold the lock, read the last 10 entries of `log.md`.
@@ -23,7 +25,7 @@ Once you hold the lock, read the last 10 entries of `log.md`.
 
 Trigger: session start, a pause, five notes waiting, or the user says "ingest" or "compile".
 
-With a named source, ingest that source. With none, ingest every pending file in `raw/` in filename order. That is oldest first. A raw file is pending when `wiki/sources/` has no page with the same name, extension aside. Check by listing the two folders. Don't open files to check. Ignore dotfiles. A missing `wiki/sources/` folder means nothing has been ingested yet.
+With a named source, ingest that source. With none, ingest every pending file in `raw/` in filename order. That is oldest first. A raw file is pending when `wiki/sources/` has no page with the same name, extension aside. Check with `wiki.sh pending <wiki>`, or by listing the two folders. Don't open files to check. Ignore dotfiles. A missing `wiki/sources/` folder means nothing has been ingested yet.
 
 With fewer than five pending files, compile them one at a time, as in the steps below. With five or more, as after `wiki seed`, compile them as one batch: see [Many files at once](#many-files-at-once).
 
@@ -97,7 +99,7 @@ Keep it under 300 lines. Past that, split into one index file per category and m
 
 ## log.md
 
-Newest entry at the bottom. Append only.
+Newest entry at the bottom. Append only. `wiki.sh log <wiki> ingest "<title>" --created <page> --updated <page> --conflicts <n>` appends a well-formed entry and prints the counts for your one-line report. It also takes `lint` with `--fixed` and `--reported`, and `--corrections` and `--patterns`.
 
 ```markdown
 ## 2026-01-15 ingest: Source title

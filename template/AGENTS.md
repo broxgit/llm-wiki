@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Handbook version 19.
+Handbook version 20.
 
 This folder is a knowledge base maintained by an LLM agent. Any agent working here follows this file. It needs no vendor features. Plain markdown, plain files.
 
@@ -111,6 +111,8 @@ Trigger: your own judgment (see Act without being asked), or the user says "save
 2. Before writing, ask of each item: would another repository need this? If so, it belongs in the shared wiki or the wiki that owns it, not here. See Ownership under Other wikis. One conversation can make notes in several wikis.
 3. For a chat, write a note instead. Plain markdown, no frontmatter, first line `Captured: YYYY-MM-DD` in UTC. Include decisions, facts, open questions, links cited. Keep only what the user said or confirmed, what you checked against code or a source, and what came from a cited source. Leave out agent speculation.
 4. Name the file `YYYY-MM-DD-HHMMSS-short-slug.ext`, using the UTC date and time of capture. Read it from the clock, for example with `date -u +%Y-%m-%d-%H%M%S`. Never estimate or round it. The timestamp sets ingest order and keeps names unique. If you can't get the time, use the date alone and tell the user. If the name is taken, add `-2`, `-3`, and so on. Never overwrite.
+
+`wiki.sh capture <wiki> <slug>` does steps 3 and 4: pipe the note in, and it adds the `Captured:` line and names the file from the clock, never rounded, never overwriting. `wiki.sh capture <wiki> --copy FILE` stores a document unchanged. Use it when you have the script. Without it, follow the steps by hand.
 5. Report the path in one line. Capture itself never touches `wiki/`, `index.md`, or `log.md`. Compiling the note is a separate step.
 
 Save knowledge in the wiki, not in your tool's own memory. Some agents keep notes of their own, per project folder. A rule saved there only reaches sessions in that folder, while the wiki reaches every repository and every teammate. When you would save a correction, a working rule, or a fact about a project or tool to your own memory, capture it in the wiki instead.
@@ -151,7 +153,8 @@ Rules for both kinds:
 
 This section applies in two cases. One: this folder is the top level of a git repo. Two: this folder's parent is a wiki collection, meaning a git repo whose top level holds a `WIKIS.md` file. In a collection, commit only the wiki folders you changed. If this wiki sits inside any other repo, or has no git, skip this section and leave commits to the user.
 
-- Pull before any write, if the repo has a remote.
+- `wiki.sh sync <wiki> -m "<message>"` does the commit, pull and push below for one wiki: it commits only that wiki's folder, pulls with a merge, and pushes. Use it when you have the script.
+- Pull before any write, if the repo has a remote. Pull with a merge (`git pull --no-rebase`), never a rebase or a stash: other sessions may have uncommitted notes in other wikis, and a rebase refuses to run while they're there.
 - Commit at each compile: every changed file, waiting captures included, in one commit per wiki. Don't commit each capture by itself. If you captured and no compile follows before the user's current request is done, commit the captures then.
 - Start commit messages with the wiki's name: `<wiki>: ingest <title>`, `<wiki>: ingest 6 notes`, `<wiki>: capture 3 notes`, `<wiki>: lint`.
 - Push after each commit if the repo has a remote. If the push is rejected, pull and push again, once.
