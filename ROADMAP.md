@@ -19,11 +19,11 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 - **Sketch:** `./wiki.sh seed <name> <path to repo>` copies the chosen documents into `raw/`. The next session compiles them. Stamp pages with the repository's HEAD.
 - **Open:** which files to take by default. How to cap the size for a large repo. Whether PR descriptions are worth the API calls.
 
-### Hooks for the two moments that matter
+### Capture before compaction
 
-- **Why:** instructions are suggestions. A hook runs every time.
-- **Sketch:** Claude Code only. A `SessionStart` hook injects the wiki's index. A `PreCompact` hook holds compaction until the session has captured what it knows.
-- **Open:** how to find the right wiki from inside a hook. Whether blocking compaction is too heavy-handed. The handbook must stay usable without hooks.
+- **Why:** compaction drops what the session knew. Anything not captured by then is gone. The `SessionStart` half of this item shipped with the plugin.
+- **Sketch:** a `PreCompact` hook in the plugin that holds compaction until the session has captured what it knows.
+- **Open:** whether blocking compaction is too heavy-handed. The handbook must stay usable without hooks.
 
 ### Measure whether it pays
 
@@ -56,6 +56,7 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - Git sync between two people or two machines. Pull, commit, and push from one machine worked in real use on 2026-10-01.
 - Two sessions taking the compile lock in the same second.
 - A wiki with two shared wikis listed in `links.md`.
+- The plugin in a real Claude Code session: the hook and commands ran by hand and the manifests validate, but no session has loaded it.
 - Real scale: hundreds of wikis, hundreds of pages. Real use so far is 10 wikis and 53 pages.
 - The version 8 triggers in real use. They passed a dry run only.
 - A model other than Claude following the handbook.
@@ -69,6 +70,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Claude Code plugin (2026-10-28)
+
+- **Why:** a line in `CLAUDE.md` relies on the agent choosing to act on it, the skill had to be zipped and uploaded by hand, and coworkers needed several setup steps.
+- **What changed:** the repo is a plugin and its own marketplace. A `SessionStart` hook finds the session's wiki the way `wiki.sh which` does and loads its handbook and index, with the waiting-note count and a note when the handbook is behind. It runs again after `/clear` and compaction. Commands: `status`, `save`, `compile`, `standup`. The plugin carries `wiki.sh` and the template, and `wiki.sh` skips the `CLAUDE.md` line when run from the plugin, since a line naming the plugin's versioned folder would break on update. The manifest has no `version`, so each pushed commit is an update.
 
 ### Scan for secrets before pushing (2026-10-28, handbook version 15)
 

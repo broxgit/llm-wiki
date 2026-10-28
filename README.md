@@ -20,7 +20,7 @@ This repo holds the rules and the scaffold. It is not a wiki. Each wiki lives in
 12. [Troubleshooting](#troubleshooting)
 13. [Change the rules](#change-the-rules)
 14. [What's here](#whats-here)
-15. [Install the skill](#install-the-skill)
+15. [Install the Claude Code plugin](#install-the-claude-code-plugin)
 
 ## Setup, once per machine
 
@@ -60,9 +60,11 @@ You need an agent that can read and write files on this machine. Any model works
    - Claude Code: start it with `--add-dir ~/wikis`, or approve the prompt the first time it reaches for the folder.
    - Claude desktop app: add both folders to the session.
 
-5. Optional, Claude only. [Install the skill](#install-the-skill).
+5. Claude Code: [install the plugin](#install-the-claude-code-plugin). It finds each session's wiki for you, so you can skip the next section.
 
 ## Use it in every new session
+
+With the [Claude Code plugin](#install-the-claude-code-plugin) installed, skip this section: its session hook does this job. For other tools, or Claude Code without the plugin:
 
 One line in your tool's user-level instruction file covers every repository on the machine. For Claude Code that file is `~/.claude/CLAUDE.md`, and this command adds the line:
 
@@ -301,13 +303,36 @@ template/          The scaffold. Copied whole to start a wiki.
   wiki/            Compiled pages.
   data/            Structured data (CSV, SQLite).
 hooks/pre-commit   The secret scan that init --git and upgrade install in wiki repos.
-skills/llm-wiki/   Optional Claude skill that finds, runs, and scaffolds wikis.
+hooks/hooks.json   The plugin's session hook, which runs hooks/session-start.sh.
+commands/          The plugin's slash commands: status, save, compile, standup.
+.claude-plugin/    The plugin manifest, and the marketplace that lists it.
+skills/llm-wiki/   The Claude skill that finds, runs, and scaffolds wikis. Ships with the plugin.
 ```
 
 Once in use, a wiki also holds `index.md` (one line per page) and `log.md` (the change record).
 
 The script only does file work. It never overwrites a file. The one time it touches a remote is in `setup`: it adds the remote you name and test-pushes with `--dry-run`, which sends nothing. Run `./wiki.sh` with no arguments for the command list. Set `WIKIS_DIR` to keep wikis somewhere other than `~/wikis`.
 
-## Install the skill
+## Install the Claude Code plugin
 
-Optional, Claude only. Zip the `skills/llm-wiki` folder with the folder at the zip root and add it under Customize > Skills. Without the skill, the lines above do the same job.
+This repo is also a Claude Code plugin marketplace. In Claude Code:
+
+```
+/plugin marketplace add broxgit/llm-wiki
+/plugin install llm-wiki@llm-wiki
+```
+
+Restart Claude Code. Updates arrive with `/plugin update llm-wiki`, or on their own if auto-update is on for the marketplace. The plugin brings:
+
+- **A session hook.** At every session start, and again after `/clear` or compaction, it finds the wiki that covers the repository the session works in, the same way `./wiki.sh which` does, and loads that wiki's handbook and index into the session. It also says how many notes are waiting and whether the handbook is behind. The agent can't skip it, unlike a line in `CLAUDE.md`. Outside any repository, or for a repository with no wiki yet, it loads the shared wiki.
+- **The skill**, so there's no zip to upload.
+- **Commands:**
+  - `/llm-wiki:status`: what needs attention across your wikis.
+  - `/llm-wiki:save [focus]`: save what this session established into the right wikis, then compile.
+  - `/llm-wiki:compile [wiki]`: compile waiting notes now.
+  - `/llm-wiki:standup [options]`: your standup, with the same options as `./wiki.sh standup`.
+- **Its own copy of `wiki.sh` and the template.** Sessions use it, so a plugin update also updates the handbook that `upgrade` installs.
+
+You still need a collection: run `./wiki.sh setup` from a clone once per machine. If you added the wiki line to `~/.claude/CLAUDE.md` before, delete it. The hook does its job, and both would load the handbook twice.
+
+Other agents, and the Claude desktop and web apps, don't run Claude Code plugins. Use the line from [Use it in every new session](#use-it-in-every-new-session) there. For the Claude apps, zip the `skills/llm-wiki` folder with the folder at the zip root and add it under Customize > Skills.

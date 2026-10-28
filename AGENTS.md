@@ -35,4 +35,6 @@ Edit the handbook, the skill, or the README only when the user asks. The handboo
 
 A new journal setting is one line in `JOURNAL_SETTINGS` in `wiki.sh`. It reaches the config file, validation, and `setup --new` from there. Anything else the user configures gets a step in `cmd_setup`, recorded with `setup_mark`, so `setup --new` asks about it once on each machine.
 
+The repo is also a Claude Code plugin: `.claude-plugin/` holds the manifest and the marketplace, `commands/` the slash commands, and `hooks/hooks.json` the session hook. Check changes to them with `claude plugin validate .`.
+
 `ROADMAP.md` lists planned improvements and what is still untested. When you finish an item, move it to Done and say what changed.

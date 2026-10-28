@@ -606,8 +606,13 @@ cmd_unlock() {
 
 CLAUDE_FILE="$HOME/.claude/CLAUDE.md"
 
-# claude_state: current, old (an older wiki line), or missing.
+# This copy came with the Claude Code plugin. Its session hook does the line's job,
+# and a line naming this folder would break when the plugin updates.
+from_plugin() { case "$REPO" in "$HOME/.claude/plugins/"*) return 0 ;; esac; return 1; }
+
+# claude_state: current, old (an older wiki line), or missing. With the plugin, current.
 claude_state() {
+  if from_plugin; then echo current; return 0; fi
   if [ -f "$CLAUDE_FILE" ] && grep -qxF "$(claude_line)" "$CLAUDE_FILE"; then
     echo current
   elif [ -f "$CLAUDE_FILE" ] && grep -qF "knowledge wikis live in" "$CLAUDE_FILE"; then
@@ -625,6 +630,10 @@ claude_line() {
 
 cmd_claude() {
   local f="$CLAUDE_FILE" line tmp
+  if from_plugin; then
+    echo "This wiki.sh came with the llm-wiki Claude Code plugin. Its session hook finds each session's wiki, so no line is needed."
+    return 0
+  fi
   line="$(claude_line)"
   mkdir -p "$HOME/.claude"
   if [ -f "$f" ] && grep -qF "knowledge wikis live in" "$f"; then
@@ -1673,6 +1682,10 @@ setup_claude() {
   state="$(claude_state)"
   [ "$SETUP_MODE" = new ] && [ "$state" = current ] && return 0
   section "Claude Code"
+  if from_plugin; then
+    echo "The llm-wiki plugin's session hook finds each session's wiki. No line in $(tilde "$CLAUDE_FILE") is needed."
+    return 0
+  fi
   case "$state" in
     current) echo "$(tilde "$CLAUDE_FILE") has the current wiki line. Every session finds its wiki." ;;
     old)

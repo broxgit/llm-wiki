@@ -1,0 +1,10 @@
+{
+  "name": "llm-wiki",
+  "description": "Markdown knowledge wikis your agent keeps for each project: loads the right wiki at session start, captures decisions, compiles notes into pages.",
+  "author": {
+    "name": "Brock Berrett"
+  },
+  "homepage": "https://github.com/broxgit/llm-wiki",
+  "repository": "https://github.com/broxgit/llm-wiki",
+  "keywords": ["knowledge-base", "wiki", "memory", "markdown", "standup"]
+}

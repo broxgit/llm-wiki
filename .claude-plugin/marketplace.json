@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "llm-wiki",
+  "description": "LLM-maintained markdown wikis, one per project.",
+  "owner": {
+    "name": "Brock Berrett"
+  },
+  "plugins": [
+    {
+      "name": "llm-wiki",
+      "description": "Markdown knowledge wikis your agent keeps for each project: loads the right wiki at session start, captures decisions, compiles notes into pages.",
+      "source": "./",
+      "category": "productivity"
+    }
+  ]
+}
