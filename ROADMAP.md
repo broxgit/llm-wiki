@@ -67,6 +67,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### Bookkeeping commands (2026-10-28, handbook version 20)
+
+- **Why:** a review of two weeks of real use found the handbook's by-hand bookkeeping going wrong. In one collection: 61 `date -u` calls to name captures, 13 names rounded to `:00` and 9 with no time, 26 of 73 notes without `Captured:`, 58 shell calls on locks, and a rebase-pull that refused to run while another wiki had uncommitted notes. A digest delete was also refused by a safety check.
+- **What changed:** `wiki capture`, `wiki lock`, `wiki log`, `wiki sync`, `wiki delegation log` and `wiki journal backfill --done`. The handbook names each one and keeps the steps by hand. Pulls are merges, never rebases or stashes.
+
 ### Harvest Claude Code memory, and two setup fixes (2026-10-28)
 
 - **Why:** the work machine's audit found corrections and working rules saved to Claude Code's per-folder memory, 31 notes in 9 folders, where no other repository or teammate sees them. This machine had 60 in 6.

@@ -56,7 +56,7 @@ Before you rely on the result, check it the way criterion 3 promised: run the te
 
 ## The log
 
-After each handoff, append one line to `delegation-log.csv` in the collection's top folder. Create it with this header if it's missing:
+After each handoff, log it: `wiki.sh delegation log <kind> <model> <effort> <ok|fixed|redone>`. Without the script, append one line to `delegation-log.csv` in the collection's top folder. Create it with this header if it's missing:
 
 ```
 date,project,kind,model,effort,result

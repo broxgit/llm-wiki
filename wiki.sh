@@ -30,6 +30,12 @@ Usage: $WIKI_CMD <command> [options]
   setup --list         Print current settings without asking.
   init                 Create the wiki collection at $(tilde "$WIKIS_DIR") and its shared wiki, $SHARED.
   new <name|path>      Create a wiki from the template. A bare name goes under $(tilde "$WIKIS_DIR").
+  capture <wiki> <slug>  Save a note piped on stdin in raw/, named from the clock.
+                       --copy FILE stores a document unchanged instead.
+  lock <wiki> [--release|--renew]  Take, release or renew the compile lock.
+  log <wiki> <type> [title] [--created P] [--updated P] [--fixed T] [--reported T]
+                       Append a log.md entry and print its counts.
+  sync <wiki> [-m MSG] Commit this wiki's changes, pull with a merge, and push.
   harvest [--dry-run]  Copy Claude Code's own memory notes into the wikis, where every
                        repo and teammate can use them.
   pending [<wiki>] [--show]
@@ -50,6 +56,7 @@ Usage: $WIKI_CMD <command> [options]
                        rate, and what needs you. An agent writes it up.
   stats [range]        How often wikis answered the questions sessions checked them for (default 30d).
   delegation [off|ask|auto]  Show handoff mode and results by kind of work, or set the mode.
+  delegation log <kind> <model> <effort> <ok|fixed|redone>  Record one handoff.
   upgrade <name|path>  Bring a wiki's handbook and scaffold files up to the template's.
   upgrade --all        Do that for every wiki in the collection.
   unlock <name|path>   Free a stuck compile lock.
@@ -62,7 +69,7 @@ Usage: $WIKI_CMD <command> [options]
   journal set <key> <value>  Change a setting. See $(tilde "$WIKIS_DIR")/journal/config.
   journal note [--day DATE] [--at HH:MM] <project> <text>
                        Add one line to today's journal, or a past day's.
-  journal backfill [--since 14d] [--until DATE]
+  journal backfill [--since 14d] [--until DATE] [--done]
                        Digest past Claude Code sessions into journal/backfill.md.
                        An agent turns the digest into entries.
   journal path | prune Print today's journal file. Delete days older than keep_days.
@@ -227,6 +234,214 @@ cmd_which() {
 }
 
 # cover <wiki> <repo>...: record that one wiki covers several repositories.
+# ---- bookkeeping ------------------------------------------------------------
+# The mechanical steps of capturing and compiling, as commands. Done by hand,
+# agents rounded capture times, skipped the Captured line, and spent dozens of
+# shell calls on locks and log entries. The handbook names these commands, and
+# keeps the by-hand steps for agents without the script.
+
+# wiki_root <name or path>: the wiki's folder, or an error.
+wiki_root() {
+  local root
+  [ -n "${1:-}" ] || die "name a wiki"
+  root="$(resolve "$1")"
+  is_wiki "$root" || die "$(tilde "$root") is not a wiki"
+  printf '%s' "$root"
+}
+
+# iso_epoch <YYYY-MM-DDTHH:MM:SSZ>: seconds since 1970, or nothing.
+iso_epoch() {
+  date -u -d "$1" +%s 2>/dev/null || date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$1" +%s 2>/dev/null || true
+}
+
+# capture <wiki> <slug> [--copy FILE]
+cmd_capture() {
+  local wiki="" slug="" copy="" root stamp name ext stem n=2 tmp
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --copy) copy="${2:-}"; shift 2 ;;
+      -*) die "capture options: --copy FILE" ;;
+      *) if [ -z "$wiki" ]; then wiki="$1"; elif [ -z "$slug" ]; then slug="$1"; else die "capture takes a wiki and a slug"; fi; shift ;;
+    esac
+  done
+  root="$(wiki_root "$wiki")"
+  if [ -n "$copy" ]; then
+    [ -f "$copy" ] || die "no file at $copy"
+    case "${copy##*/}" in
+      ?*.*) ext="${copy##*.}"; stem="${copy##*/}"; stem="${stem%.*}" ;;
+      *) ext=txt; stem="${copy##*/}" ;;
+    esac
+    [ -n "$slug" ] || slug="$stem"
+  else
+    ext=md
+    [ -n "$slug" ] || die "capture needs a short slug for the name, such as decided-postgres"
+    [ ! -t 0 ] || die "capture reads the note from stdin: pipe it in, or use a heredoc"
+  fi
+  slug="$(printf '%s' "$slug" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9][^a-z0-9]*/-/g; s/^-//; s/-$//')"
+  [ -n "$slug" ] || die "that slug has no letters or digits"
+  # The clock, to the second, in UTC. The name sets ingest order, so never round it.
+  stamp="$(date -u +%Y-%m-%d-%H%M%S)"
+  name="$stamp-$slug.$ext"
+  while [ -e "$root/raw/$name" ]; do name="$stamp-$slug-$n.$ext"; n=$((n + 1)); done
+  mkdir -p "$root/raw"
+  if [ -n "$copy" ]; then
+    cp "$copy" "$root/raw/$name"
+  else
+    tmp="$(mktemp)"
+    cat > "$tmp"
+    if [ ! -s "$tmp" ]; then rm -f "$tmp"; die "capture got an empty note"; fi
+    {
+      head -n 1 "$tmp" | grep -q '^Captured: ' || printf 'Captured: %s\n\n' "$(date -u +%Y-%m-%d)"
+      cat "$tmp"
+    } > "$root/raw/$name"
+    rm -f "$tmp"
+  fi
+  echo "captured: raw/$name in $(tilde "$root")"
+}
+
+# lock <wiki> [--release | --renew]: the compile lock, as rules/compile.md describes.
+cmd_lock() {
+  local wiki="" mode=take root f line tok when now age then_
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --release) mode=release; shift ;;
+      --renew) mode=renew; shift ;;
+      -*) die "lock options: --release, --renew" ;;
+      *) wiki="$1"; shift ;;
+    esac
+  done
+  root="$(wiki_root "$wiki")"
+  f="$root/.compile-lock"
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  line="$(head -n 1 "$f" 2>/dev/null || true)"
+  case "$mode" in
+    release)
+      printf 'free\n' > "$f"
+      echo "released: $(tilde "$root")"
+      ;;
+    renew)
+      case "$line" in held\ *) ;; *) die "the lock on $(tilde "$root") isn't held" ;; esac
+      tok="$(printf '%s' "$line" | awk '{ print $2 }')"
+      printf 'held %s %s\n' "$tok" "$now" > "$f"
+      echo "renewed: $tok, $now"
+      ;;
+    take)
+      case "$line" in
+        held\ *)
+          when="$(printf '%s' "$line" | awk '{ print $3 }')"
+          then_="$(iso_epoch "$when")"
+          age=0
+          [ -z "$then_" ] || age=$(( $(date -u +%s) - then_ ))
+          # Older than 30 minutes is stale. A time we can't read counts as held.
+          if [ -z "$then_" ] || [ "$age" -lt 1800 ]; then
+            echo "held: another session has held the lock on $(tilde "$root") since $when. Don't compile it now; carry on, and the notes wait for a later pause."
+            exit 1
+          fi
+          ;;
+      esac
+      tok="$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"
+      printf 'held %s %s\n' "$tok" "$now" > "$f"
+      # Read it back: if another session wrote in between, it's theirs.
+      if [ "$(head -n 1 "$f")" != "held $tok $now" ]; then
+        echo "held: another session took the lock on $(tilde "$root") first. Don't compile it now."
+        exit 1
+      fi
+      echo "locked: $(tilde "$root"), token $tok. When compiling ends, even if it failed: $WIKI_CMD lock ${wiki} --release"
+      ;;
+  esac
+}
+
+# log <wiki> <type> [<title>] [--created P]... [--updated P]... [--fixed T]... [--reported T]...
+#   [--corrections N] [--conflicts N] [--patterns N]
+cmd_log() {
+  local wiki="" type="" title="" root lines="" nc=0 nu=0 nf=0 nr=0 corrections="" conflicts="" patterns="" v f
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --created) lines="$lines- created: ${2:-}"$'\n'; nc=$((nc + 1)); shift 2 ;;
+      --updated) lines="$lines- updated: ${2:-}"$'\n'; nu=$((nu + 1)); shift 2 ;;
+      --fixed) lines="$lines- fixed: ${2:-}"$'\n'; nf=$((nf + 1)); shift 2 ;;
+      --reported) lines="$lines- reported: ${2:-}"$'\n'; nr=$((nr + 1)); shift 2 ;;
+      --corrections | --conflicts | --patterns)
+        v="${2:-}"
+        case "$v" in '' | *[!0-9]*) die "$1 takes a number" ;; esac
+        case "$1" in --corrections) corrections="$v" ;; --conflicts) conflicts="$v" ;; --patterns) patterns="$v" ;; esac
+        shift 2
+        ;;
+      -*) die "log options: --created P, --updated P, --fixed T, --reported T, --corrections N, --conflicts N, --patterns N" ;;
+      *) if [ -z "$wiki" ]; then wiki="$1"; elif [ -z "$type" ]; then type="$1"; else title="${title:+$title }$1"; fi; shift ;;
+    esac
+  done
+  root="$(wiki_root "$wiki")"
+  case "$type" in
+    ingest) [ -n "$title" ] || die "an ingest entry needs the source page's title"; conflicts="${conflicts:-0}" ;;
+    lint | restructure | resolve) ;;
+    *) die "log types: ingest, lint, restructure, resolve" ;;
+  esac
+  [ -z "$corrections" ] || lines="$lines- corrections: $corrections"$'\n'
+  [ -z "$patterns" ] || lines="$lines- patterns: $patterns"$'\n'
+  [ -z "$conflicts" ] || lines="$lines- conflicts: $conflicts"$'\n'
+  f="$root/log.md"
+  [ -f "$f" ] || printf '# Log\n' > "$f"
+  # A blank line before the entry, whatever the file ended with.
+  if [ -n "$(tail -c 1 "$f")" ]; then printf '\n' >> "$f"; fi
+  printf '\n## %s %s%s\n%s' "$(date -u +%Y-%m-%d)" "$type" "${title:+: $title}" "$lines" >> "$f"
+  case "$type" in
+    ingest) echo "logged: ingest: $title. $nc created, $nu updated${corrections:+, $corrections correction(s)}, ${conflicts} conflict(s)" ;;
+    lint) echo "logged: lint. $nf fixed, $nr reported" ;;
+    *) echo "logged: $type${title:+: $title}. $nc created, $nu updated" ;;
+  esac
+}
+
+# sync <wiki> [-m MESSAGE]: commit this wiki's changes, pull, and push.
+cmd_sync() {
+  local wiki="" msg="" root repo path top err
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -m) msg="${2:-}"; shift 2 ;;
+      -*) die "sync options: -m MESSAGE" ;;
+      *) wiki="$1"; shift ;;
+    esac
+  done
+  root="$(wiki_root "$wiki")"
+  top="$(git -C "$root" rev-parse --show-toplevel 2>/dev/null || true)"
+  if [ -n "$top" ] && [ "$top" = "$(cd "$root" && pwd -P)" ]; then
+    repo="$root"; path="."
+  elif [ -n "$top" ] && [ -f "$WIKIS_DIR/WIKIS.md" ] && [ "$top" = "$(cd "$WIKIS_DIR" && pwd -P)" ]; then
+    repo="$WIKIS_DIR"; path="${root##*/}"
+  else
+    echo "$(tilde "$root") isn't in a repo the wikis own, so there's nothing to sync. Commits are up to you there."
+    return 0
+  fi
+  [ -n "$msg" ] || msg="${root##*/}: update"
+  # Only this wiki: other sessions may have notes waiting, uncommitted, in other wikis.
+  git -C "$repo" add -A -- "$path"
+  if ! git -C "$repo" diff --cached --quiet -- "$path"; then
+    if ! err="$(git -C "$repo" commit -q -m "$msg" -- "$path" 2>&1)"; then
+      printf '%s\n' "$err"
+      die "the commit was refused. If the secret scan stopped it, redact the secret as the handbook says, then sync again."
+    fi
+    echo "committed: $msg"
+  else
+    echo "nothing to commit in ${root##*/}"
+  fi
+  [ -n "$(git -C "$repo" remote)" ] || { echo "no remote, so nothing to pull or push"; return 0; }
+  # A merge, never a rebase or a stash: a rebase refuses to run while another
+  # wiki has uncommitted notes, and a merge doesn't mind them.
+  if ! err="$(git -C "$repo" pull -q --no-rebase --no-edit 2>&1)"; then
+    if [ -n "$(git -C "$repo" ls-files -u)" ]; then
+      git -C "$repo" ls-files -u | awk '{ print $4 }' | sort -u | sed 's/^/  conflict: /'
+      die "the pull hit a merge conflict. index.md and log.md merge on their own; for a page, stop and ask the user."
+    fi
+    printf '%s\n' "$err"
+    die "the pull failed. If uncommitted changes in another wiki clash with what came in, run $WIKI_CMD sync for that wiki first."
+  fi
+  if ! git -C "$repo" push -q 2>/dev/null; then
+    # Someone pushed in between: pull and push once more.
+    git -C "$repo" pull -q --no-rebase --no-edit && git -C "$repo" push -q || die "the push was rejected twice. Ask the user."
+  fi
+  echo "synced: pulled and pushed $(tilde "$repo")"
+}
+
 # ---- pending ----------------------------------------------------------------
 # Waiting files, for a compile. --show prints them in one go, so an agent compiling
 # twenty seeded documents makes one call instead of twenty. Capped, so a big
@@ -1328,7 +1543,14 @@ journal_backfill() {
       --since) since="${2:-}"; shift 2 ;;
       --until) until="${2:-}"; shift 2 ;;
       --from) from="${2:-}"; shift 2 ;;
-      *) die "backfill options: --since lastworkday|yesterday|week|lastweek|14d|DATE, --until DATE, --from DIR" ;;
+      --done)
+        # The agent has written the entries. Removing the digest here, not with an
+        # agent's rm, keeps a safety check from refusing it as destructive.
+        rm -f "$JOURNAL_DIR/backfill.md"
+        echo "removed: $(tilde "$JOURNAL_DIR/backfill.md")"
+        return 0
+        ;;
+      *) die "backfill options: --since lastworkday|yesterday|week|lastweek|14d|DATE, --until DATE, --from DIR, --done" ;;
     esac
   done
   since_ok "$since" || die "--since takes lastworkday, yesterday, today, week, lastweek, a number of days like 14d, or a date"
@@ -2109,7 +2331,7 @@ EOF
 # Tab completion. `completion zsh|bash` prints a small script for the shell, which
 # asks `__complete` for candidates on every Tab. The candidates live here, so a
 # plugin update can't leave completion stale.
-COMMANDS="setup init new seed harvest pending cover which status find stale patterns skills tips report stats delegation upgrade unlock claude link journal standup completion"
+COMMANDS="setup init new seed harvest capture lock log sync pending cover which status find stale patterns skills tips report stats delegation upgrade unlock claude link journal standup completion"
 RANGES="lastworkday yesterday today week lastweek 7d 14d 30d"
 
 wiki_names() {
@@ -2146,6 +2368,14 @@ cmd_complete() {
   case "$cmd" in
     new | unlock | pending | find) [ "$i" -eq 2 ] && wiki_names; [ "$cmd" = pending ] && echo --show ;;
     upgrade) wiki_names; echo --all ;;
+    capture) [ "$i" -eq 2 ] && wiki_names; echo --copy ;;
+    lock) [ "$i" -eq 2 ] && wiki_names; printf -- '--release\n--renew\n' ;;
+    sync) [ "$i" -eq 2 ] && wiki_names; echo -m ;;
+    log)
+      if [ "$i" -eq 2 ]; then wiki_names
+      elif [ "$i" -eq 3 ]; then printf 'ingest\nlint\nrestructure\nresolve\n'
+      else printf -- '--created\n--updated\n--fixed\n--reported\n--corrections\n--conflicts\n--patterns\n'; fi
+      ;;
     cover) [ "$i" -eq 2 ] && wiki_names ;;
     seed) [ "$i" -eq 2 ] && echo __dirs__; printf -- '--wiki\n--max\n--dry-run\n' ;;
     stale) printf '30\n90\n180\n' ;;
@@ -2154,7 +2384,10 @@ cmd_complete() {
     tips) printf -- '--mute\n--unmute\n' ;;
     report) printf -- '--since\n' ;;
     stats) printf '%s\n' $RANGES ;;
-    delegation) printf 'off\nask\nauto\n' ;;
+    delegation)
+      if [ "$i" -eq 2 ]; then printf 'off\nask\nauto\nlog\n'
+      elif [ "${2:-}" = log ] && [ "$i" -eq 6 ]; then printf 'ok\nfixed\nredone\n'; fi
+      ;;
     claude) echo --print ;;
     link) echo --yes ;;
     init) echo --git ;;
@@ -2585,11 +2818,30 @@ apply_delegation_ignore() {
   fi
 }
 
+# deleg_log <kind> <model> <effort> <ok|fixed|redone> [--project NAME]: one handoff.
+deleg_log() {
+  local project="" top
+  [ $# -ge 4 ] || die "usage: $WIKI_CMD delegation log <kind> <model> <effort> <ok|fixed|redone> [--project NAME]"
+  local kind="$1" model="$2" effort="$3" result="$4"
+  shift 4
+  [ "${1:-}" != --project ] || project="${2:-}"
+  case "$result" in ok | fixed | redone) ;; *) die "the result is ok, fixed or redone" ;; esac
+  case "$kind$model$effort$project" in *,*) die "no commas: the log is CSV" ;; esac
+  if [ -z "$project" ]; then
+    top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+    if [ -n "$top" ]; then project="$(repo_name "$top")"; else project=-; fi
+  fi
+  [ -s "$DELEG_LOG" ] || printf 'date,project,kind,model,effort,result\n' > "$DELEG_LOG"
+  printf '%s,%s,%s,%s,%s,%s\n' "$(date -u +%Y-%m-%d)" "$project" "$kind" "$model" "$effort" "$result" >> "$DELEG_LOG"
+  echo "logged: $kind on $model ($effort), $result, for $project"
+}
+
 cmd_delegation() {
   case "${1:-show}" in
     off | ask | auto) deleg_set_mode "$1"; return 0 ;;
+    log) shift; deleg_log "$@"; return 0 ;;
     show) ;;
-    *) die "delegation commands: show, off, ask, auto" ;;
+    *) die "delegation commands: show, off, ask, auto, log" ;;
   esac
   if [ ! -f "$DELEG_FILE" ]; then
     echo "no $(tilde "$DELEG_FILE") yet. Mode is ask by default. $WIKI_CMD setup delegation creates it."
@@ -3266,6 +3518,12 @@ if [ "$cmd" = report ]; then
   cmd_report "$@"
   exit 0
 fi
+case "$cmd" in
+  capture) cmd_capture "$@"; exit 0 ;;
+  lock) cmd_lock "$@"; exit 0 ;;
+  log) cmd_log "$@"; exit 0 ;;
+  sync) cmd_sync "$@"; exit 0 ;;
+esac
 if [ "$cmd" = harvest ]; then
   cmd_harvest "$@"
   exit 0

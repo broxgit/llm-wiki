@@ -246,6 +246,8 @@ Run `wiki` with no arguments for the full list. The ones you're likely to use:
 | `wiki new <name>` | Create a wiki. Usually the agent does this. |
 | `wiki cover <wiki> <repo>...` | One wiki for several repositories. |
 | `wiki unlock <name>` | Free a stuck compile lock. |
+| `wiki capture <wiki> <slug>` | Save a note piped in, named from the clock. Mostly for agents. |
+| `wiki lock`, `wiki log`, `wiki sync` | The compile lock, a log entry, and commit-pull-push for one wiki. Mostly for agents. |
 | `wiki seed [<repo>]` | Start a wiki from a repository's own docs. |
 | `wiki harvest` | Copy Claude Code's own memory notes into the wikis. |
 | `wiki pending [<wiki>]` | Notes waiting to be compiled. |

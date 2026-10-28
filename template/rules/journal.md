@@ -42,7 +42,7 @@ When the user asks to fill in the journal for past days:
 3. Use only what the digest shows. Where it doesn't show how something ended, say so: "no result recorded". Don't guess.
 4. Skip blocks that only committed code, did wiki bookkeeping, or worked on the journal. Skip a project on a day whose file already has entries for it.
 5. A block named after the wikis folder or the template repo is wiki or tooling work. Name the entry after the project the prompts were about.
-6. Delete `backfill.md` when done. Tell the user how many entries you wrote for each day.
+6. Remove `backfill.md` when done, with `wiki.sh journal backfill --done`. Removing it with your own delete command may be refused as destructive. Tell the user how many entries you wrote for each day.
 
 ## Reports
 

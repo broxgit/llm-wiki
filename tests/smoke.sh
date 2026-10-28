@@ -344,6 +344,45 @@ out="$(hook "$T/projects/web" '{"source":"startup"}' | context 2>&1)"
 case "$out" in *"weekly wiki report is due"*) ok "the session hook offers the weekly report" ;; *) bad "the session hook offers the weekly report" "$out" ;; esac
 case "$out" in *"One tip"*) bad "a week with a report offer has no tip" "$out" ;; *) ok "a week with a report offer has no tip" ;; esac
 
+section "Bookkeeping commands"
+out="$(printf 'We picked Postgres.\n' | "$W" capture demo "Decided Postgres!" 2>&1)"
+case "$out" in *"captured: raw/20"*"-decided-postgres.md"*) ok "capture names a note from the clock and the slug" ;; *) bad "capture names a note from the clock and the slug" "$out" ;; esac
+f="$(ls "$WIKIS_DIR"/demo/raw/*-decided-postgres.md | head -n 1)"
+check "capture adds the Captured line" bash -c "head -n 1 '$f' | grep -q '^Captured: '"
+check "capture's name has seconds, not a guess" bash -c "basename '$f' | grep -Eq '^20[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]{6}-'"
+printf 'Captured: 2026-01-01\n\nAlready has it.\n' | "$W" capture demo decided-postgres >/dev/null
+check "a second capture in the same second never overwrites" bash -c "ls '$WIKIS_DIR'/demo/raw/ | grep -q 'decided-postgres-2.md' || [ \$(ls '$WIKIS_DIR'/demo/raw/ | grep -c decided-postgres) -ge 2 ]"
+check "a note that has the line keeps just one" bash -c "[ \$(cat '$WIKIS_DIR'/demo/raw/*decided-postgres*.md | grep -c '^Captured:') -eq 2 ]"
+printf 'pdf bytes\n' > "$T/spec.pdf"
+expect "capture --copy stores a document unchanged" "spec.pdf" "$W" capture demo --copy "$T/spec.pdf"
+refuse "capture refuses an empty note" bash -c "'$W' capture demo empty </dev/null"
+expect "lock takes a free lock" "locked:" "$W" lock demo
+refuse "lock refuses a held one" "$W" lock demo
+expect "lock --renew rewrites the time" "renewed:" "$W" lock demo --renew
+expect "lock --release frees it" "released:" "$W" lock demo --release
+printf 'held abc123 2020-01-01T00:00:00Z\n' > "$WIKIS_DIR/demo/.compile-lock"
+expect "a lock older than 30 minutes is taken" "locked:" "$W" lock demo
+"$W" lock demo --release >/dev/null
+expect "log prints the counts" "2 created, 1 updated" "$W" log demo ingest "Note: smoke" --created wiki/sources/a.md --created wiki/x.md --updated wiki/y.md
+check "log writes the handbook's format" bash -c "tail -n 5 '$WIKIS_DIR/demo/log.md' | grep -q '^- conflicts: 0' && grep -q '^## 20[0-9-]* ingest: Note: smoke' '$WIKIS_DIR/demo/log.md'"
+refuse "log needs a title for an ingest" "$W" log demo ingest
+expect "delegation log records a handoff" "logged: test run" "$W" delegation log "test run" sonnet low ok --project demo
+check "and the log is CSV with a header" bash -c "head -n 1 '$WIKIS_DIR/delegation-log.csv' | grep -q '^date,project,kind'"
+refuse "delegation log refuses an unknown result" "$W" delegation log x sonnet low maybe
+printf 'digest\n' > "$WIKIS_DIR/journal/backfill.md"
+expect "backfill --done removes the digest" "removed:" "$W" journal backfill --done
+check "and it's gone" test ! -e "$WIKIS_DIR/journal/backfill.md"
+# sync: the failure from real use was a rebase-pull refusing a dirty collection.
+git -C "$WIKIS_DIR" config pull.rebase true
+git -C "$T/clone2" pull -q --no-rebase --no-edit >/dev/null 2>&1 || true
+printf 'x\n' > "$T/clone2/global/raw/2026-01-01-000000-from-a-teammate.md"
+git -C "$T/clone2" add -A && git -C "$T/clone2" commit -qm "global: capture" && git -C "$T/clone2" push -q
+printf 'waiting\n' > "$WIKIS_DIR/global/raw/2026-01-02-000000-uncommitted.md"
+expect "sync commits one wiki and pulls past another wiki's uncommitted note" "synced:" "$W" sync demo -m "demo: smoke sync"
+check "the teammate's note came in" test -f "$WIKIS_DIR/global/raw/2026-01-01-000000-from-a-teammate.md"
+check "the other wiki's note stayed uncommitted" bash -c "git -C '$WIKIS_DIR' status --short | grep -q 'global/raw/2026-01-02-000000-uncommitted.md'"
+rm -f "$WIKIS_DIR/global/raw/2026-01-02-000000-uncommitted.md"
+
 section "Harvest Claude Code memory"
 M="$HOME/.claude/projects/-x-web"
 mkdir -p "$M/memory" "$HOME/.claude/projects/-x-unknown/memory"

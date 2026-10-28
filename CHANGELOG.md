@@ -4,6 +4,18 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v20 (2026-10-28)
+
+Commands for the mechanical parts of capturing and compiling. A review of two weeks of real use found agents rounding capture times, skipping the `Captured:` line, and spending dozens of shell calls on locks, log entries and pulls, which also failed on a dirty collection.
+
+- `wiki capture <wiki> <slug>` saves a note piped on stdin, named from the clock and never overwriting, with the `Captured:` line added. `--copy FILE` stores a document unchanged.
+- `wiki lock <wiki>`, `--release` and `--renew` run the compile lock.
+- `wiki log <wiki> <type> [title]` appends a well-formed `log.md` entry and prints its counts.
+- `wiki sync <wiki>` commits only that wiki's folder, pulls with a merge, and pushes. A rebase-pull failed whenever another wiki had uncommitted notes, so the handbook now says to pull with a merge, never a rebase or a stash.
+- `wiki delegation log` records a handoff, and `wiki journal backfill --done` removes the digest, which an agent's own delete could be refused.
+- The handbook names each command, and keeps the steps by hand for agents without the script.
+- Do: nothing. Sessions upgrade the wikis on their own.
+
 ## v19 (2026-10-28)
 
 Knowledge that holds beyond one project now reaches every project. Audits of two collections found general lessons stuck in project wikis, sessions that rarely opened the shared wiki, and corrections saved to the agent's own memory, where no other repository could see them.
