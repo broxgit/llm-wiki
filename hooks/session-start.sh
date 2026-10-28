@@ -203,7 +203,7 @@ fi
 if [ "$compacted" = 1 ]; then
   ctx="$ctx
 
-This session was just compacted. First capture whatever in the summary the wiki doesn't hold yet, as the handbook's Capture section says."
+This session was just compacted. Before you answer anything, even the user's message, capture whatever in the summary the wiki doesn't hold yet, as the handbook's Capture section says. It can't wait for a stopping point: the summary is all that's left."
 fi
 if [ "$waiting" -gt 0 ]; then
   ctx="$ctx

@@ -64,6 +64,7 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - Bulk compile in real use: how long twenty seeded documents take, and whether planning by topic gives better pages than one at a time. No agent has run it yet.
 - The weekly report in real use: whether people ask for it, and whether the token estimate for wiki reads is close enough to be useful.
 - Shared knowledge in real use: whether sessions now file general lessons in the shared wiki, and whether they stop saving to their own memory. The weekly report's correction count is the first signal. Whether harvested notes get filed in the right wiki at compile.
+- Capture after compaction in real use: whether sessions capture before answering when the user's message arrives with the hook's message. On 2026-10-28 one session answered first and captured a turn late, which led to the "before you answer anything" wording. Watch for raw notes timed just after a compaction.
 - Patterns in real use: whether agents write `Feedback:` lines unprompted, and whether the thresholds are right.
 
 ## Decided against
