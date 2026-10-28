@@ -70,6 +70,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### CI and smoke tests (2026-10-28)
+
+- **Why:** every commit on `main` reaches plugin users with auto-update on, and nothing checked a commit before it went out.
+- **What changed:** `tests/smoke.sh` holds 54 checks built from the session's manual tests: collection and wiki commands, the files a new wiki gets, upgrade and the ahead-of-template guard, a two-clone union merge, the secret scan with a fake token, the session hook's output and its 2,000-character budget, the `wiki` command, symlinks, plugin mode, journal and standup. It runs in a temp `HOME` in about four seconds. GitHub Actions runs it on Linux and on macOS with Apple's bash 3.2, plus shellcheck and `claude plugin validate`. Sabotaging a copy of the repo (no `.gitattributes`, an oversized hook, a disabled scan) made the matching tests fail.
+
 ### Claude Code plugin (2026-10-28)
 
 - **Why:** a line in `CLAUDE.md` relies on the agent choosing to act on it, the skill had to be zipped and uploaded by hand, and coworkers needed several setup steps.

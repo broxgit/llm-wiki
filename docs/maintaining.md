@@ -24,6 +24,8 @@ template/          The scaffold, copied whole to start a wiki.
 skills/llm-wiki/   The Claude skill that finds, runs, and scaffolds wikis.
 .claude-plugin/    The plugin manifest, and the marketplace that lists it.
 commands/          The plugin's slash commands.
+tests/smoke.sh     Smoke tests for wiki.sh, the hook and the secret scan. CI runs them.
+.github/workflows/ CI: shellcheck, plugin validation, and the smoke tests on Linux and macOS.
 scripts/
   migrate-to-plugin.sh  Moves a machine from the clone-and-line setup to the plugin.
 hooks/
@@ -47,11 +49,16 @@ A journal setting is one line in `JOURNAL_SETTINGS` in `wiki.sh`: key, type, bas
 
 ## Release
 
-Pushing to the default branch is the release. The plugin has no version number, so every pushed commit reaches plugin users with auto-update on. Before pushing:
+Merging to `main` is the release. The plugin has no version number, so every commit on `main` reaches plugin users with auto-update on, and a broken one breaks everyone's sessions at once. So:
 
-- `shellcheck -S warning wiki.sh hooks/session-start.sh hooks/pre-commit`
-- `claude plugin validate .` after any change to `.claude-plugin/`, `commands/` or `hooks/hooks.json`. The one warning, no `version`, is on purpose.
-- Docs: a change people will notice belongs in the setup guides or [Using it](using.md), not only in the CHANGELOG.
+1. Work on a branch.
+2. Run the smoke tests: `tests/smoke.sh`. They take a few seconds, run in a temp folder with their own `HOME`, and never touch your wikis. Install gitleaks first, or the secret-scan tests are skipped.
+3. Push the branch and open a pull request. CI runs shellcheck, `claude plugin validate`, and the smoke tests on Linux and on macOS with Apple's bash 3.2.
+4. Merge when CI is green.
+
+Add a smoke test when you fix a bug or add a command. Each one is a line or two: see the helpers at the top of `tests/smoke.sh`.
+
+A change people will notice belongs in the setup guides or [Using it](using.md), not only in the CHANGELOG. The one `claude plugin validate` warning, no `version`, is on purpose.
 
 To try a change before pushing it, install the plugin from your clone: `claude plugin marketplace add <path to clone>`, then `claude plugin install llm-wiki@llm-wiki`. A marketplace added from a local path runs straight from your working tree, so a new session picks up your edits. Switch back with `claude plugin marketplace remove llm-wiki` and the install steps in [Set up with Claude Code](claude-code.md).
 
