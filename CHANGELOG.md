@@ -4,6 +4,16 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v16 (2026-10-28)
+
+- Hit-rate stats. Agents log one line per question they check a wiki for, `hit` or `miss`, to `stats.csv` in the collection. It stays on each machine. `wiki stats` shows each wiki's hit rate, so you can tell which wikis earn their keep.
+- `wiki seed [<repo>]` starts a wiki from a repository's own docs: its README, top-level guides, `docs/`, and decision records. It copies them into `raw/`, with a note saying where they came from, and the next session compiles them. With the plugin, a session in a repository with no wiki offers to do this.
+- With the plugin, a session that was just compacted is asked to capture what the summary holds that the wiki doesn't.
+- `wiki standup` lists at most 15 commits per repository, newest first, and says how many it left out. The `max_commits` journal setting, or `--max`, changes it. Detailed reports list them all.
+- Do: run `wiki upgrade --all`. It also adds `stats.csv` to the collection's `.gitignore`.
+- Do: run `wiki setup --new` to see the new `max_commits` setting.
+- Do: in a repository whose wiki is empty or missing, try `wiki seed`.
+
 ## v15 (2026-10-28)
 
 - Secret scan. A pre-commit hook runs `gitleaks` over every commit to the collection, or to a wiki that is its own repo, and refuses one that holds a key, token or password. `init --git`, `new --git`, `upgrade` and `setup git` install it. A wiki inside a project's repo never gets it.

@@ -6,5 +6,12 @@
   },
   "homepage": "https://github.com/broxgit/llm-wiki",
   "repository": "https://github.com/broxgit/llm-wiki",
-  "keywords": ["knowledge-base", "wiki", "memory", "markdown", "standup"]
+  "keywords": [
+    "knowledge-base",
+    "wiki",
+    "memory",
+    "markdown",
+    "standup"
+  ],
+  "license": "MIT"
 }

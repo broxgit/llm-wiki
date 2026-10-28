@@ -138,7 +138,8 @@ fi
 
 section "Session hook"
 mkdir -p "$T/projects/web" && git -C "$T/projects/web" init -q
-hook() { CLAUDE_PLUGIN_ROOT="$REPO" CLAUDE_PLUGIN_DATA="$T/data" CLAUDE_PROJECT_DIR="$1" bash "$REPO/hooks/session-start.sh"; }
+# hook <project dir> [stdin json]
+hook() { printf '%s' "${2:-}" | CLAUDE_PLUGIN_ROOT="$REPO" CLAUDE_PLUGIN_DATA="$T/data" CLAUDE_PROJECT_DIR="$1" bash "$REPO/hooks/session-start.sh"; }
 # context <json>: the additionalContext from hook output, or a parse error.
 context() {
   python3 -c 'import json, sys
@@ -152,6 +153,13 @@ n="$(printf '%s' "$out" | wc -c | tr -d ' ')"
 if [ "$n" -lt 2000 ]; then ok "the hook's context is short ($n chars)"; else bad "the hook's context is short ($n chars, limit 2000)"; fi
 expect "outside a repository the hook uses the shared wiki" "$WIKIS_DIR/global" bash -c "$(declare -f hook context); T='$T' REPO='$REPO' WIKIS_DIR='$WIKIS_DIR'; hook '$T' | context"
 expect "with no collection the hook says so" "no wiki collection" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; export WIKIS_DIR='$T/none'; hook '$T' | context"
+expect "after compaction the hook asks for a capture" "just compacted" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; hook '$T/projects/web' '{\"source\":\"compact\"}' | context"
+lacks "at startup the hook doesn't" "just compacted" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; hook '$T/projects/web' '{\"source\":\"startup\"}' | context"
+mkdir -p "$T/projects/uncovered" && git -C "$T/projects/uncovered" init -q
+out="$(hook "$T/projects/uncovered" '{"source":"compact"}' | context 2>&1)"
+case "$out" in *"seed"*) ok "in a repository with no wiki the hook offers seed" ;; *) bad "in a repository with no wiki the hook offers seed" "$out" ;; esac
+n="$(printf '%s' "$out" | wc -c | tr -d ' ')"
+if [ "$n" -lt 2000 ]; then ok "the hook's longest context is short ($n chars)"; else bad "the hook's longest context is short ($n chars, limit 2000)"; fi
 check "the hook writes the wiki command" test -x "$T/data/bin/wiki"
 expect "the wiki command runs wiki.sh" "WIKI" "$T/data/bin/wiki" status
 expect "the wiki command's messages say wiki" "Run: wiki init" env WIKIS_DIR="$T/none" "$T/data/bin/wiki" status
@@ -166,11 +174,50 @@ mkdir -p "$P"
 expect "from the plugin, claude skips the CLAUDE.md line" "came with the llm-wiki Claude Code plugin" "$P/wiki.sh" claude
 check "from the plugin, CLAUDE.md is untouched" test ! -e "$HOME/.claude/CLAUDE.md"
 
+section "Seed"
+A="$T/projects/api"
+mkdir -p "$A/docs/adr" "$A/node_modules/pkg" "$A/src"
+printf '# API\n\nThe billing API.\n' > "$A/README.md"
+printf '# Use Postgres\n' > "$A/docs/adr/0001-postgres.md"
+printf '# Deploying\n' > "$A/docs/deploy.md"
+printf '# Changes\n' > "$A/CHANGELOG.md"
+printf '# Not ours\n' > "$A/node_modules/pkg/README.md"
+printf '# Code notes\n' > "$A/src/notes.md"
+awk 'BEGIN { for (i = 0; i < 3000; i++) print "a long line of filler text for the size cap test" }' > "$A/docs/huge.md"
+git -C "$A" init -q && git -C "$A" add README.md docs src CHANGELOG.md && git -C "$A" commit -qm init
+expect "a dry run lists what it would copy" "would copy: README.md" "$W" seed "$A" --dry-run
+check "a dry run writes nothing" bash -c "! ls '$WIKIS_DIR/demo/raw/' | grep -q seed"
+out="$("$W" seed "$A" 2>&1)"
+for want in "seeded:  README.md" "seeded:  docs/adr/0001-postgres.md" "seeded:  docs/deploy.md" "docs/huge.md"; do
+  case "$out" in *"$want"*) ok "seed: $want" ;; *) bad "seed: $want" "$out" ;; esac
+done
+case "$out" in *CHANGELOG* | *node_modules* | *notes.md*) bad "seed leaves out changelogs, dependencies and stray notes" "$out" ;; *) ok "seed leaves out changelogs, dependencies and stray notes" ;; esac
+check "seed goes into the wiki that covers the repository" bash -c "ls '$WIKIS_DIR/demo/raw/' | grep -q 'seed-01-readme.md'"
+check "seed writes a manifest note" bash -c "grep -q 'docs/deploy.md' '$WIKIS_DIR'/demo/raw/*-seed-00-manifest.md"
+expect "seeding again copies nothing" "nothing new to seed" "$W" seed "$A"
+
+section "Stats"
+expect "stats with no log says so" "No lookups logged yet" "$W" stats
+check "stats.csv is git-ignored" git -C "$WIKIS_DIR" check-ignore -q stats.csv
+today="$(date -u +%Y-%m-%d)"
+printf 'date,wiki,result\n%s,demo,hit\n%s,demo,miss\n%s,global,hit\n2000-01-01,demo,miss\n' "$today" "$today" "$today" > "$WIKIS_DIR/stats.csv"
+expect "stats computes a wiki's hit rate" "50%" "$W" stats
+expect "stats totals every wiki" "67%" "$W" stats
+lacks "stats leaves out lookups before the range" "25%" "$W" stats
+
 section "Journal and standup"
 expect "journal note writes an entry" "journal:" "$W" journal note demo "smoke test entry"
 refuse "journal note refuses a future day" "$W" journal note --day 2999-01-01 demo "too early"
 expect "standup includes the journal entry" "smoke test entry" "$W" standup --since 2d
 refuse "journal set validates values" "$W" journal set format weird
+C="$T/code/busy"
+mkdir -p "$C" && git -C "$C" init -q
+for i in 1 2 3 4 5 6 7 8 9 10 11 12; do git -C "$C" commit -q --allow-empty -m "busy commit $i"; done
+"$W" journal set code_dirs "$T/code" >/dev/null
+expect "standup caps commits per repository" "(7 earlier commit(s) not listed)" "$W" standup --since 2d --max 5
+expect "the cap keeps the newest commit" "busy commit 12" "$W" standup --since 2d --max 5
+lacks "the cap drops the older ones" "busy commit 7" "$W" standup --since 2d --max 5
+expect "detailed reports list every commit" "busy commit 1" "$W" standup --since 2d --max 5 --format detailed
 
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ]

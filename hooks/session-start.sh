@@ -12,6 +12,15 @@ WIKIS_DIR="${WIKIS_DIR:-$HOME/wikis}"
 export WIKIS_DIR
 DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 
+# Claude Code sends JSON on stdin. Its "source" says why the session started:
+# startup, resume, clear, compact or fork. Read with a timeout, so a run by hand
+# with nothing piped in can't hang.
+input=""
+line=""
+while IFS= read -r -t 1 line; do input="$input$line"; done
+input="$input$line"
+case "$input" in *'"source":"compact"'* | *'"source": "compact"'*) compacted=1 ;; *) compacted=0 ;; esac
+
 # emit <text>: hand text to Claude Code as additional context, JSON-escaped without jq.
 emit() {
   printf '%s' "$1" | awk '
@@ -78,7 +87,8 @@ if [ -z "$wiki" ]; then
   [ -f "$WIKIS_DIR/global/AGENTS.md" ] || exit 0
   wiki="$WIKIS_DIR/global"
   if [ -n "$repo" ]; then
-    note="No wiki covers the repository $repo yet, so the shared wiki is this session's wiki. The first time there is something to file about $repo, create its wiki: $WIKI_SH new $repo"
+    note="No wiki covers the repository $repo yet, so the shared wiki is this session's wiki. The first time there is something to file about $repo, create its wiki: $WIKI_SH new $repo
+Before that, mention once that $repo's own README and docs can start its wiki, and run this if the user agrees: $WIKI_SH seed \"$top\""
   else
     note="This session isn't in a repository, so the shared wiki is its wiki."
   fi
@@ -110,6 +120,11 @@ When the user runs it in a terminal, the command is: $TYPE"
 if [ -n "$LINK" ]; then
   ctx="$ctx
 $LINK"
+fi
+if [ "$compacted" = 1 ]; then
+  ctx="$ctx
+
+This session was just compacted. Before going on, capture anything in the summary that a later session would want and that the wiki doesn't hold yet, as the handbook's Capture section says. Then carry on with the user's request."
 fi
 if [ "$waiting" -gt 0 ]; then
   ctx="$ctx

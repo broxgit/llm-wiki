@@ -6,6 +6,7 @@ For whoever changes the rules, the script or the plugin. Work in a clone.
 
 ```
 README.md          The landing page.
+LICENSE            MIT.
 docs/              Setup guides, using it, teams, troubleshooting, this page.
 AGENTS.md          Tells an agent this is the template and how to start a wiki from it.
 CLAUDE.md          Imports AGENTS.md for Claude Code.
