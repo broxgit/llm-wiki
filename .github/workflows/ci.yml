@@ -37,6 +37,7 @@ jobs:
             macOS-X64) asset=darwin_x64 ;;
             *) echo "no gitleaks build for ${{ runner.os }}-${{ runner.arch }}"; exit 1 ;;
           esac
+          sudo mkdir -p /usr/local/bin
           curl -sSfL --retry 5 --retry-all-errors \
             "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_${asset}.tar.gz" \
             | sudo tar xz -C /usr/local/bin gitleaks
