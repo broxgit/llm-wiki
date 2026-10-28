@@ -36,6 +36,11 @@ emit() {
 
 [ -x "$WIKI_SH" ] || exit 0
 
+# t <path>: the path with ~ for the home folder. Shorter, and a shell expands it in a
+# command as long as it isn't quoted.
+# shellcheck disable=SC2088
+t() { case "$1" in "$HOME"/*) printf '~/%s' "${1#"$HOME"/}" ;; *) printf '%s' "$1" ;; esac; }
+
 # A stable terminal command. The plugin's folder changes with every update, and old
 # folders are deleted, so people can't type that path. The data folder survives
 # updates, so the command lives there.
@@ -85,7 +90,7 @@ TYPE="${CMD:-$WIKI_SH}"
 [ -n "$CMD" ] && [ "$(command -v wiki 2>/dev/null)" -ef "$CMD" ] && TYPE="wiki"
 LINK=""
 if [ -n "$CMD" ] && [ "$TYPE" != wiki ]; then
-  LINK="\`wiki\` isn't a command in the user's terminal yet. If they ask to set up the wiki command, or the first time you give them a wiki.sh command to run, offer to run \`\"$CMD\" link\`. It links it into a folder on their PATH. If it says ~/.local/bin isn't on their PATH, ask before running \`\"$CMD\" link --yes\`, which adds it to their shell profile. Offer this once, not every reply."
+  LINK="\`wiki\` isn't a command in their terminal yet. When they ask, or the first time you give them a command to run, offer once to run \`$(t "$CMD") link\`, which links it onto their PATH. If it reports that ~/.local/bin isn't on their PATH, ask before running \`$(t "$CMD") link --yes\`, which edits their shell profile."
 fi
 
 if [ ! -d "$WIKIS_DIR" ]; then
@@ -117,8 +122,7 @@ if [ -z "$wiki" ]; then
   [ -f "$WIKIS_DIR/global/AGENTS.md" ] || exit 0
   wiki="$WIKIS_DIR/global"
   if [ -n "$repo" ]; then
-    note="No wiki covers the repository $repo yet, so the shared wiki is this session's wiki. The first time there is something to file about $repo, create its wiki: $WIKI_SH new $repo
-Before that, mention once that $repo's own README and docs can start its wiki, and run this if the user agrees: $WIKI_SH seed \"$top\""
+    note="No wiki covers $repo yet, so the shared wiki is this session's. Create $repo's wiki with \`wiki.sh new $repo\` when there's something to file. Before that, offer once to start it from the repository's own docs with \`wiki.sh seed\`, run in the repository."
   else
     note="This session isn't in a repository, so the shared wiki is its wiki."
   fi
@@ -139,14 +143,22 @@ tv="$(version_of "$ROOT/template/AGENTS.md")"
 # Keep this short. Claude Code shows the model only a short preview of a long hook
 # output and saves the rest to a file, so the handbook itself can't ride along here.
 # The first lines must carry the instruction to read it.
+# A plugin update brings a newer handbook, and the wikis should follow without anyone
+# running upgrade by hand. The session does it, after pulling: upgrading first would
+# leave local changes that make the pull fail if a teammate already pushed the same
+# upgrade. upgrade never moves a wiki backwards.
+read_first="Before anything else, read $(t "$wiki")/AGENTS.md"
+if [ -n "$wv" ] && [ -n "$tv" ] && [ "$wv" -lt "$tv" ]; then
+  read_first="Its handbook is v$wv, older than the plugin's v$tv. First pull the collection if it has a remote, run \`wiki.sh upgrade --all\`, commit the result as \`wikis: handbook v$tv\` and push, and tell the user briefly what changed. Then read the new $(t "$wiki")/AGENTS.md"
+fi
 ctx="# llm-wiki
 
-This session's knowledge wiki is $wiki${repo:+, for the repository $repo}. Before anything else, read $wiki/AGENTS.md, its handbook, and follow it for the rest of the session. Its session-start steps say to read index.md next.
+\`wiki.sh\` here means $(t "$WIKI_SH"), the script the handbook refers to. In a terminal the user runs it as: $(t "$TYPE")
+
+This session's knowledge wiki is $(t "$wiki")${repo:+, for the repository $repo}. $read_first, its handbook, and follow it for the rest of the session. Its session-start steps say to read index.md next.
 ${note:+
-$note
-}
-wiki.sh, the template repo's script that the handbook and its rules refer to, is at: $WIKI_SH
-When the user runs it in a terminal, the command is: $TYPE"
+
+$note}"
 if [ -n "$LINK" ]; then
   ctx="$ctx
 $LINK"
@@ -154,16 +166,11 @@ fi
 if [ "$compacted" = 1 ]; then
   ctx="$ctx
 
-This session was just compacted. Before going on, capture anything in the summary that a later session would want and that the wiki doesn't hold yet, as the handbook's Capture section says. Then carry on with the user's request."
+This session was just compacted. First capture whatever in the summary the wiki doesn't hold yet, as the handbook's Capture section says."
 fi
 if [ "$waiting" -gt 0 ]; then
   ctx="$ctx
 
 $waiting note(s) in raw/ are waiting to be compiled. Session start says to compile them before the user's request."
-fi
-if [ -n "$wv" ] && [ -n "$tv" ] && [ "$wv" -lt "$tv" ]; then
-  ctx="$ctx
-
-This wiki's handbook is v$wv and the plugin's template is v$tv. Tell the user once: run $TYPE upgrade --all"
 fi
 emit "$ctx"

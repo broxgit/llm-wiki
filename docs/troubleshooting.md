@@ -23,7 +23,7 @@
 
 ## Git and updates
 
-- **A wiki's handbook is behind.** `wiki upgrade --all` brings every wiki up to date, then says what changed and what to do next. Outside git it keeps the old handbook as `AGENTS.md.bak`.
+- **A wiki's handbook is behind.** With the plugin, the next session upgrades it on its own. Otherwise `wiki upgrade --all` brings every wiki up to date, then says what changed and what to do next. Outside git it keeps the old handbook as `AGENTS.md.bak`.
 - **A wiki is ahead of your template.** A teammate upgraded it with a newer template. Plugin: `claude plugin marketplace update llm-wiki` in a terminal, then start a new session. Clone: `git pull` in the clone.
 - **A commit was refused for a secret.** The agent replaces it with `[REDACTED]` and commits again. If it isn't a secret, add the `Fingerprint` line gitleaks printed to `.gitleaksignore` at the top of the collection.
 - **An agent's commit won't push.** Run `wiki setup git`. It sets the repo's commit email and SSH key and test-pushes. A machine with a work key and a personal key usually needs the key named for this repo.
