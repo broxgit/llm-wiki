@@ -151,7 +151,7 @@ read_first="Before anything else, read $(t "$wiki")/AGENTS.md"
 upgrading=""
 if [ -n "$wv" ] && [ -n "$tv" ] && [ "$wv" -lt "$tv" ]; then
   upgrading=1
-  read_first="Its handbook is v$wv, older than the plugin's v$tv. First pull the collection if it has a remote, run \`wiki.sh upgrade --all\`, commit the result as \`wikis: handbook v$tv\` and push, and tell the user briefly what changed. Then read the new $(t "$wiki")/AGENTS.md"
+  read_first="Its handbook is v$wv, older than the plugin's v$tv. First pull the collection if it has a remote, then run \`wiki.sh upgrade --all\`. It commits the upgrade itself. Push it, and tell the user briefly what changed. Then read the new $(t "$wiki")/AGENTS.md"
 fi
 ctx="# llm-wiki
 
@@ -177,7 +177,18 @@ fi
 # One tip a session about a feature this person's own wikis suggest they'd use. Not
 # right after compaction, which usually means mid-task, nor when the session starts
 # with an upgrade. wiki.sh keeps the cooldown and mutes.
+# Once a week, the report: tokens, what the wikis gained, and what waits on a person.
+# A week with a report offer gets no tip, so there's only ever one nudge.
+report_due=""
 if [ "$compacted" = 0 ] && [ -z "$upgrading" ]; then
+  report_due="$("$WIKI_SH" report --due 2>/dev/null)"
+  if [ -n "$report_due" ]; then
+    ctx="$ctx
+
+The weekly wiki report is due. At a stopping point, offer it once, in a line. If the user wants it, run \`wiki.sh report\` and write it up as its first lines say."
+  fi
+fi
+if [ "$compacted" = 0 ] && [ -z "$upgrading" ] && [ -z "$report_due" ]; then
   tab="$(printf '\t')"
   tip="$("$WIKI_SH" tips --next --repo "$DIR" 2>/dev/null | head -n 1)"
   if [ -n "$tip" ]; then

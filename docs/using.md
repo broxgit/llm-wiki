@@ -188,6 +188,17 @@ wiki stats week
 
 A wiki with a low hit rate is missing pages for the questions you actually ask, or covers a repository you rarely need help with.
 
+## Weekly report
+
+Once a week, Claude offers a short report on the wikis, at a stopping point. Ask for it any time with "give me my wiki report", or run `wiki report` to see the raw material.
+
+- **Tokens:** what Claude Code spent per project over the week, from its own session records, and roughly how much of that went into reading the wikis. The wiki share is an estimate, from the size of what sessions read.
+- **What the wikis gained:** notes captured, notes compiled, pages created and updated, skills added.
+- **Lookups:** how often each wiki answered the questions it was checked for.
+- **Needs you:** what's waiting on a person. Open contradictions, proposed fixes nobody has answered, a pile of notes waiting to be compiled, pages unchecked for 90 days, and tips you muted. The report leads with this when there's anything in it.
+
+`wiki report --since lastweek`, or any range `standup` takes, changes the period. A week with a report offer gets no tip, so there's only one nudge.
+
 ## Tips
 
 Some features only help once you know they exist. When something in your own wikis suggests one would help, Claude mentions it, at most once a session and only at a stopping point. For example: a repository you're working in has docs but no wiki, a skill of yours lives only on this machine, or the journal has entries but you've never asked for a standup.
@@ -222,4 +233,5 @@ Run `wiki` with no arguments for the full list. The ones you're likely to use:
 | `wiki pending [<wiki>]` | Notes waiting to be compiled. |
 | `wiki skills [link]` | List team skills, or link them for Claude Code. |
 | `wiki tips` | Features your own wikis suggest you'd get something out of. |
+| `wiki report` | The weekly report: tokens, what the wikis gained, lookups, and what needs you. |
 | `wiki stats [range]` | How often each wiki answered the questions it was checked for. |

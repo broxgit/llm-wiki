@@ -64,6 +64,7 @@ It syncs your collection, installs gitleaks and the plugin, turns on auto-update
 
 - **Links team skills.** Skills your team keeps in the wikis show up in Claude Code without anyone installing them. See [Team skills](using.md#team-skills).
 - **Offers to start an empty wiki from the repository's own docs**, with [`wiki seed`](using.md#start-a-wiki-from-a-repositorys-docs).
+- **Offers a weekly report**: tokens per project, what the wikis gained, and what's waiting on you. See [Weekly report](using.md#weekly-report).
 - **Suggests features you haven't tried**, one at most per session, when your own wikis show a reason. See [Tips](using.md#tips).
 - **Saves before forgetting.** Right after the conversation is compacted, it asks Claude to capture anything in the summary that the wiki doesn't hold yet.
 - **Keeps the `wiki` command current.** The plugin's files move to a new folder with every update. The `wiki` command lives in a folder that doesn't move, and each session points it at the newest version.

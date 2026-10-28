@@ -55,7 +55,7 @@ Merging to `main` is the release. The plugin has no version number, so every com
 1. Work on a branch.
 2. Run the smoke tests: `tests/smoke.sh`. They take a few seconds, run in a temp folder with their own `HOME`, and never touch your wikis. Install gitleaks first, or the secret-scan tests are skipped.
 3. Push the branch and open a pull request. CI runs shellcheck, `claude plugin validate`, and the smoke tests on Linux and on macOS with Apple's bash 3.2.
-4. Merge when CI is green.
+4. Merge when CI is green. GitHub enforces this: `main` is protected, so it takes a pull request with all three CI checks passing, for admins too. In an emergency, untick "Do not allow bypassing the above settings" in the repository's Settings → Branches, and tick it again afterwards.
 
 Add a smoke test when you fix a bug or add a command. Each one is a line or two: see the helpers at the top of `tests/smoke.sh`.
 
