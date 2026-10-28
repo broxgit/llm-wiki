@@ -26,6 +26,7 @@ The desktop app's **Chat** tab and claude.ai on the web are not Claude Code and 
    - creates your wiki collection in `~/wikis` and makes it a git repo
    - installs [gitleaks](https://github.com/gitleaks/gitleaks) with Homebrew, which stops agents from committing a secret
    - removes the wiki line from `~/.claude/CLAUDE.md` if an older version of this template put it there
+   - turns on tab completion for `wiki` in zsh or bash
    - walks through the [work journal](using.md#work-journal-and-standups)
 
    If it says it added `~/.local/bin` to your `PATH`, open a new terminal before typing `wiki`.

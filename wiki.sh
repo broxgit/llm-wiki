@@ -43,6 +43,7 @@ Usage: $WIKI_CMD <command> [options]
   patterns             Recurring feedback across wikis, and which patterns are ready to propose.
   skills [link]        Team skills in the wikis, and link them into ~/.claude/skills.
   tips [--mute NAME]   Features your own wikis suggest you'd get something out of.
+  completion zsh|bash  Print tab completion for a shell. wiki setup turns it on.
   report [--since R]   Weekly look: tokens per project, what the wikis gained, hit
                        rate, and what needs you. An agent writes it up.
   stats [range]        How often wikis answered the questions sessions checked them for (default 30d).
@@ -1949,6 +1950,139 @@ EOF
   esac
 }
 
+# ---- completion -------------------------------------------------------------
+# Tab completion. `completion zsh|bash` prints a small script for the shell, which
+# asks `__complete` for candidates on every Tab. The candidates live here, so a
+# plugin update can't leave completion stale.
+COMMANDS="setup init new seed pending cover which status find stale patterns skills tips report stats delegation upgrade unlock claude link journal standup completion"
+RANGES="lastworkday yesterday today week lastweek 7d 14d 30d"
+
+wiki_names() {
+  local d
+  for d in "$WIKIS_DIR"/*/; do d="${d%/}"; is_wiki "$d" && printf '%s\n' "${d##*/}"; done
+  return 0
+}
+
+# complete_choices <journal key>: the values a journal setting takes, if it's a choice.
+complete_choices() {
+  local type
+  type="$(journal_field "$1" 2)"
+  case "$type" in
+    yesno) printf 'yes\nno\n' ;;
+    since) printf '%s\n' $RANGES ;;
+    */*) printf '%s\n' "${type//\//$'\n'}" ;;
+  esac
+}
+
+# __complete <index> <word>...: candidates for the word at index (1 is the command).
+cmd_complete() {
+  local i="$1" k
+  shift
+  local cmd="${1:-}" prev=""
+  [ "$i" -gt 1 ] && prev="$(eval "printf '%s' \"\${$((i - 1)):-}\"")"
+  if [ "$i" -le 1 ]; then printf '%s\n' $COMMANDS; return 0; fi
+  case "$prev" in
+    --since) printf '%s\n' $RANGES; return 0 ;;
+    --format) printf 'standup\nsummary\ndetailed\n'; return 0 ;;
+    --mute | --unmute) printf '%s\n' $TIPS_ORDER; return 0 ;;
+    --wiki) wiki_names; return 0 ;;
+    --repo | --from) echo __dirs__; return 0 ;;
+  esac
+  case "$cmd" in
+    new | unlock | pending | find) [ "$i" -eq 2 ] && wiki_names; [ "$cmd" = pending ] && echo --show ;;
+    upgrade) wiki_names; echo --all ;;
+    cover) [ "$i" -eq 2 ] && wiki_names ;;
+    seed) [ "$i" -eq 2 ] && echo __dirs__; printf -- '--wiki\n--max\n--dry-run\n' ;;
+    stale) printf '30\n90\n180\n' ;;
+    skills) echo link ;;
+    tips) printf -- '--mute\n--unmute\n' ;;
+    report) printf -- '--since\n' ;;
+    stats) printf '%s\n' $RANGES ;;
+    delegation) printf 'off\nask\nauto\n' ;;
+    claude) echo --print ;;
+    link) echo --yes ;;
+    init) echo --git ;;
+    completion) printf 'zsh\nbash\n' ;;
+    setup)
+      printf -- '--new\n--list\ncollection\ngit\ngit.identity\nclaude\nplugin\nupgrade\nskills\ndelegation\njournal\n'
+      for k in $JOURNAL_KEYS; do printf 'journal.%s\n' "$k"; done
+      ;;
+    journal)
+      if [ "$i" -eq 2 ]; then printf 'show\non\noff\nset\nnote\nbackfill\npath\nprune\n'; return 0; fi
+      case "${2:-}" in
+        set) if [ "$i" -eq 3 ]; then printf '%s\n' $JOURNAL_KEYS; elif [ "$i" -eq 4 ]; then complete_choices "${3:-}"; fi ;;
+        backfill) printf -- '--since\n--until\n--from\n' ;;
+        note) printf -- '--day\n--at\n'; wiki_names ;;
+      esac
+      ;;
+    standup) printf -- '--since\n--until\n--day\n--format\n--only\n--exclude\n--max\n--save\n' ;;
+  esac
+  return 0
+}
+
+cmd_completion() {
+  case "${1:-}" in
+    zsh)
+      cat <<'EOF'
+# Tab completion for llm-wiki's wiki command. Written by `wiki completion zsh`.
+_llm_wiki() {
+  local -a c
+  c=("${(@f)$(${words[1]} __complete $((CURRENT - 1)) ${words[2,-1]} 2>/dev/null)}")
+  if [[ "${c[1]}" == __dirs__ ]]; then _files -/; return; fi
+  compadd -a c
+}
+(( $+functions[compdef] )) || { autoload -Uz compinit && compinit -i; }
+compdef _llm_wiki wiki wiki.sh
+EOF
+      ;;
+    bash)
+      cat <<'EOF'
+# Tab completion for llm-wiki's wiki command. Written by `wiki completion bash`.
+_llm_wiki() {
+  local cur="${COMP_WORDS[COMP_CWORD]}" out
+  # Set IFS only after this: bash 3.2 joins "${COMP_WORDS[@]:1}" when IFS is a newline.
+  out="$("${COMP_WORDS[0]}" __complete "$COMP_CWORD" "${COMP_WORDS[@]:1}" 2>/dev/null)"
+  local IFS=$'\n'
+  if [ "${out%%$'\n'*}" = __dirs__ ]; then COMPREPLY=($(compgen -d -- "$cur")); return; fi
+  COMPREPLY=($(compgen -W "$out" -- "$cur"))
+}
+complete -F _llm_wiki wiki wiki.sh ./wiki.sh
+EOF
+      ;;
+    *) die "completion takes zsh or bash" ;;
+  esac
+}
+
+# The file a shell profile sources for completion. Rewritten on every setup, so
+# it follows updates; the profile line never changes.
+completion_file() { printf '%s/llm-wiki/completion.%s' "${XDG_CONFIG_HOME:-$HOME/.config}" "$1"; }
+
+# completion_shell: zsh or bash, from $SHELL, or nothing.
+completion_shell() { case "${SHELL##*/}" in zsh | bash) printf '%s' "${SHELL##*/}" ;; esac; return 0; }
+
+completion_profile() { case "$1" in zsh) printf '%s' "$HOME/.zshrc" ;; bash) printf '%s' "$HOME/.bashrc" ;; esac; }
+
+# Turn tab completion on: write the file, and source it from the profile.
+setup_completion() {
+  local sh f prof line
+  sh="$(completion_shell)"
+  [ -n "$sh" ] || return 0
+  f="$(completion_file "$sh")"
+  prof="$(completion_profile "$sh")"
+  line="[ -f \"$f\" ] && source \"$f\""
+  mkdir -p "${f%/*}"
+  cmd_completion "$sh" > "$f"
+  if [ -f "$prof" ] && grep -qF "$f" "$prof"; then return 0; fi
+  [ "$SETUP_MODE" = new ] && setup_done completion.$sh && return 0
+  section "Tab completion"
+  echo "Tab completion fills in commands, wiki names and settings when you press Tab after wiki."
+  if ask_yn "Turn it on? It adds one line to $(tilde "$prof")." y; then
+    ensure_line "$prof" "$line"
+    echo "  added. Open a new terminal to use it."
+  fi
+  setup_mark "completion.$sh"
+}
+
 # ---- report -----------------------------------------------------------------
 # A weekly look at whether the wikis earn their keep, and what waits on a person.
 # Tokens come from Claude Code's transcripts, which record each reply's usage.
@@ -2841,7 +2975,7 @@ Usage: $WIKI_CMD setup [--new | --list | <section> | <setting>]
 EOF
         return 0
         ;;
-      collection | git | claude | plugin | upgrade | skills | journal | delegation | git.identity) what="$a" ;;
+      collection | git | claude | plugin | upgrade | skills | completion | journal | delegation | git.identity) what="$a" ;;
       journal.*)
         [ -n "$(journal_field "${a#journal.}" 2)" ] || die "no journal setting called ${a#journal.}. Settings: $JOURNAL_KEYS"
         what="$a"
@@ -2878,6 +3012,7 @@ EOF
       ;;
     plugin) SETUP_MODE=all; setup_plugin ;;
     skills) setup_skills ;;
+    completion) SETUP_MODE=all; setup_completion ;;
     '')
       setup_plugin
       setup_collection
@@ -2886,6 +3021,7 @@ EOF
       setup_upgrade
       setup_delegation
       setup_skills
+      setup_completion
       setup_journal
       ;;
   esac
@@ -2932,6 +3068,14 @@ if [ "$cmd" = delegation ]; then
 fi
 if [ "$cmd" = setup ]; then
   cmd_setup "$@"
+  exit 0
+fi
+if [ "$cmd" = __complete ]; then
+  cmd_complete "$@"
+  exit 0
+fi
+if [ "$cmd" = completion ]; then
+  cmd_completion "$@"
   exit 0
 fi
 if [ "$cmd" = tips ]; then

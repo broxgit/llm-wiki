@@ -210,6 +210,10 @@ Some features only help once you know they exist. When something in your own wik
 
 Tips come from the plugin's session hook, so other agents don't show them on their own. Run `wiki tips` now and then instead.
 
+## Tab completion
+
+Press Tab after `wiki` to fill in commands, wiki names, journal settings and their values, tip names, and folders for `wiki seed`. `wiki setup` offers to turn it on for zsh or bash: it adds one line to `~/.zshrc` or `~/.bashrc` that loads a small file in `~/.config/llm-wiki/`. Setup rewrites that file each time, and the candidates come from `wiki` itself, so updates never leave completion stale. Rerun the step alone with `wiki setup completion`.
+
 ## Several sessions at once
 
 Safe. Saving a note adds one new file and touches nothing else, so any number of sessions can save at once. Compiling changes shared files, so a lock keeps it to one session per wiki. A session that finds the lock held skips compiling and carries on.
@@ -233,5 +237,6 @@ Run `wiki` with no arguments for the full list. The ones you're likely to use:
 | `wiki pending [<wiki>]` | Notes waiting to be compiled. |
 | `wiki skills [link]` | List team skills, or link them for Claude Code. |
 | `wiki tips` | Features your own wikis suggest you'd get something out of. |
+| `wiki completion zsh\|bash` | Tab completion for your shell. `wiki setup` turns it on. |
 | `wiki report` | The weekly report: tokens, what the wikis gained, lookups, and what needs you. |
 | `wiki stats [range]` | How often each wiki answered the questions it was checked for. |

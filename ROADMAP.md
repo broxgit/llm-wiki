@@ -66,6 +66,10 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### Tab completion (2026-10-28)
+
+- **What changed:** `wiki completion zsh|bash` prints a small script that asks `wiki __complete` for candidates on every Tab: commands, wiki names, journal settings and their values, tip names, ranges, and folders for `seed`. `wiki setup` writes it to `~/.config/llm-wiki/` and adds one line to the shell profile, after asking. The candidates live in `wiki.sh`, so updates can't leave completion stale. Found while testing: bash 3.2 joins `"${COMP_WORDS[@]:1}"` into one word when `IFS` is a newline, so the script sets `IFS` only afterwards.
+
 ### Weekly report, and two fixes it found (2026-10-28)
 
 - **Why:** to show whether the wikis earn their keep, and to gather what waits on a person into one weekly list instead of more nudges.
