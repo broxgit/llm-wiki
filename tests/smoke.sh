@@ -162,6 +162,8 @@ lacks "when it's current, nothing about upgrading" "upgrade --all" bash -c "$(de
 # The longest context: no wiki for the repository, just compacted, handbook behind.
 set_version "$WIKIS_DIR/global/AGENTS.md" 12
 mkdir -p "$T/projects/uncovered" && git -C "$T/projects/uncovered" init -q
+mkdir -p "$T/projects/uncovered-docs/docs" && printf '# U\n' > "$T/projects/uncovered-docs/README.md" && printf '# G\n' > "$T/projects/uncovered-docs/docs/guide.md"
+git -C "$T/projects/uncovered-docs" init -q && git -C "$T/projects/uncovered-docs" add -A && git -C "$T/projects/uncovered-docs" commit -qm init
 out="$(hook "$T/projects/uncovered" '{"source":"compact"}' | context 2>&1)"
 set_version "$WIKIS_DIR/global/AGENTS.md" "$TV"
 case "$out" in *"seed"*) ok "in a repository with no wiki the hook offers seed" ;; *) bad "in a repository with no wiki the hook offers seed" "$out" ;; esac
@@ -237,6 +239,32 @@ check "a deleted skill's link is removed" test ! -e "$SK/agents-deploy"
 check "and the survivor takes its own name" bash -c "test '$SK/deploy' -ef '$WIKIS_DIR/demo/skills/deploy' && ! test -e '$SK/demo-deploy'"
 mkskill "$WIKIS_DIR/global/skills/rotate-keys" "Rotate keys."
 expect "the session hook links new team skills and says so" "available: rotate-keys" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; hook '$T/projects/web' | context"
+
+section "Tips"
+export XDG_CONFIG_HOME="$T/config"
+"$W" new extra-one >/dev/null
+"$W" new extra-two >/dev/null
+expect "tips names the evidence for a tip" "wikis. \`wiki find" "$W" tips
+expect "a skill only on this machine gets a sharing tip" "only on this machine: go-expert" "$W" tips
+expect "a repository with docs and no wiki gets a seed tip" "has no wiki yet" "$W" tips --repo "$T/projects/uncovered-docs"
+first="$("$W" tips --next | cut -f 1)"
+second="$("$W" tips --next | cut -f 1)"
+if [ -n "$first" ] && [ -n "$second" ] && [ "$first" != "$second" ]; then ok "a shown tip rests while the next one shows ($first, then $second)"; else bad "a shown tip rests while the next one shows ($first, then $second)"; fi
+check "the shown tips are recorded" grep -q "^shown:$first " "$T/config/llm-wiki/tips"
+expect "a tip can be muted" "muted" "$W" tips --mute find
+lacks "a muted tip never comes up next" "find" bash -c "for i in 1 2 3 4 5 6 7 8; do '$W' tips --next; done"
+refuse "muting an unknown tip fails" "$W" tips --mute nonsense
+"$W" tips --unmute find >/dev/null
+"$W" find canary >/dev/null
+lacks "using a feature retires its tip" "wiki find <word>" "$W" tips
+rm -f "$T/config/llm-wiki/tips"
+expect "status mentions tips" "Run: $W tips" env LLM_WIKI_CMD="$W" "$W" status
+out="$(hook "$T/projects/uncovered" '{"source":"startup"}' | context 2>&1)"
+case "$out" in *"One tip for the user"*) ok "the session hook passes on one tip" ;; *) bad "the session hook passes on one tip" "$out" ;; esac
+n="$(printf '%s' "$out" | wc -c | tr -d ' ')"
+if [ "$n" -lt 2000 ]; then ok "with a tip the hook's context is still short ($n chars)"; else bad "with a tip the hook's context is still short ($n chars, limit 2000)"; fi
+lacks "no tip right after compaction" "One tip" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; hook '$T/projects/web' '{\"source\":\"compact\"}' | context"
+unset XDG_CONFIG_HOME
 
 section "Stats"
 expect "stats with no log says so" "No lookups logged yet" "$W" stats
