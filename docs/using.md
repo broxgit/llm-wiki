@@ -171,7 +171,7 @@ A new wiki is empty, so for its first few days it can't answer much. Most reposi
 wiki seed ~/dev/billing-api
 ```
 
-It copies the repository's README, its agent instructions (`CLAUDE.md`, `AGENTS.md`, Cursor and Copilot rules), its Claude skills, top-level guides like `ARCHITECTURE.md` and `CONTRIBUTING.md`, its `docs/` folder, and decision records into the wiki's `raw/`, with a note saying where they came from. It takes only files git tracks, skips changelogs, licenses and dependencies, leaves out anything over 100KB, and stops at 20 documents. The next session in that repository compiles them, or say "compile". Run it without a path inside the repository. `--dry-run` shows what it would copy, `--max N` changes the limit, and running it again copies only what's new.
+It copies the repository's README, its agent instructions (`CLAUDE.md`, `AGENTS.md`, Cursor and Copilot rules), its Claude skills, top-level guides like `ARCHITECTURE.md` and `CONTRIBUTING.md`, its `docs/` folder, and decision records into the wiki's `raw/`, with a note saying where they came from. It takes only files git tracks, skips changelogs, licenses and dependencies, leaves out anything over 100KB, and stops at 20 documents. The next session in that repository compiles them as one batch: it reads them together and writes each page once. With more than ten waiting, it does what you asked first and compiles at the next pause. Say "compile" to have it done now. Run it without a path inside the repository. `--dry-run` shows what it would copy, `--max N` changes the limit, and running it again copies only what's new.
 
 With the plugin, a session in a repository that has no wiki offers to do this.
 
@@ -219,6 +219,7 @@ Run `wiki` with no arguments for the full list. The ones you're likely to use:
 | `wiki cover <wiki> <repo>...` | One wiki for several repositories. |
 | `wiki unlock <name>` | Free a stuck compile lock. |
 | `wiki seed [<repo>]` | Start a wiki from a repository's own docs. |
+| `wiki pending [<wiki>]` | Notes waiting to be compiled. |
 | `wiki skills [link]` | List team skills, or link them for Claude Code. |
 | `wiki tips` | Features your own wikis suggest you'd get something out of. |
 | `wiki stats [range]` | How often each wiki answered the questions it was checked for. |

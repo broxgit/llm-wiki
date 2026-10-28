@@ -13,12 +13,6 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 - **Not this:** invented abbreviations or JSON. In the same test, shorthand saved 2 points over terse plain words and JSON saved none. Abbreviations cost more tokens per word ("tmo" is 2 tokens, "timeout" is 1) and are harder for a model to read back.
 - **Open:** whether terse pages hurt answer quality. Test by asking the same questions against both versions of a page. Whether teammates still need to read pages comfortably.
 
-### Compile a seeded backlog in bulk
-
-- **Why:** `wiki seed` can leave 20 documents waiting, and the next session compiles them one at a time before it gets to what the person asked. For a coworker's first try, that's the slowest moment.
-- **Sketch:** a bulk mode in `rules/compile.md` for many pending files at once: read them all, then write pages once by topic. Still one source page and one log entry per file.
-- **Open:** how many files a session can read before the bulk read costs more than it saves.
-
 ### Know whether sessions capture and compile
 
 - **Why:** `wiki stats` measures lookups only. Saving and compiling are the parts that failed in the first week (50 of 109 notes never compiled), and nothing measures them now.
@@ -34,7 +28,6 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 - **Trim the core further.** `template/AGENTS.md` is about 2,900 tokens, up from 2,600 after version 8. "Other wikis" and "Sync" are the biggest sections left.
 - **Drop per-source summary pages.** Each raw note gets a summary page that only says where its claims live. The live collection has 59 of them. A single ledger file per wiki could track what has been ingested.
 - **Split work and personal collections.** One collection on a personal remote now holds work, client, and personal wikis. `WIKIS_DIR` already supports a second collection. The routing line would need to know about both.
-- **Compile a backlog in bulk.** A wiki with dozens of waiting notes compiles one source at a time. A bulk mode could read them all, then write pages once.
 - **Search page text, not just indexes.** `./wiki.sh find` reads `index.md` only. Past a few hundred pages per wiki it should search page bodies too.
 - **Reach sessions with no file access.** A chat session that can't read files can't use a wiki. A small MCP server over the collection would fix that.
 - **Review flow for teams.** Agents push straight to the collection. A team may want a weekly digest of changes, or pull requests.
@@ -61,6 +54,7 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - The plugin's data folder name. Docs hard-code `~/.claude/plugins/data/llm-wiki-llm-wiki`, seen on three machines. A fork under another marketplace name gets a different folder.
 - Sessions upgrading wikis on their own (plugin, 2026-10-28): whether they pull before upgrading, and two machines upgrading one shared collection at once.
 - Tips in real use: whether people act on them or mute them all. Look at the mutes after a few weeks and drop the tips everyone mutes. Usage before 2026-10-28 wasn't recorded, so early standup and find tips may point at features already used.
+- Bulk compile in real use: how long twenty seeded documents take, and whether planning by topic gives better pages than one at a time. No agent has run it yet.
 - Patterns in real use: whether agents write `Feedback:` lines unprompted, and whether the thresholds are right.
 
 ## Decided against
@@ -70,6 +64,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Bulk compile (2026-10-28, handbook version 18)
+
+- **Why:** `wiki seed` can leave 20 documents waiting, and a session compiled them one at a time, rewriting the same topic page once per document, before it got to what the person asked.
+- **What changed:** with five or more waiting, `rules/compile.md` has the session read them together, plan pages by topic, write each page once, then write the per-file summary pages. `wiki pending <wiki> --show` prints the waiting files in one call, up to about 150KB, and says when more wait. Seeded files get their own note: read the manifest first, and treat their code claims as unchecked. With more than ten waiting, a session does the person's request first and compiles at the next pause; the hook says so.
 
 ### Tips: features your wikis suggest (2026-10-28)
 

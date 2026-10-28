@@ -217,6 +217,21 @@ done
 case "$out" in *workflows*) bad "seed skips CI workflow files" "$out" ;; *) ok "seed skips CI workflow files" ;; esac
 check "a file with no extension is copied as .txt" bash -c "ls '$WIKIS_DIR/agents/raw/' | grep -q 'seed-[0-9]*-cursorrules.txt'"
 
+section "Pending and bulk compile"
+expect "pending lists what waits in each wiki" "demo:" "$W" pending
+expect "pending <wiki> lists its files" "seed-01-readme.md" "$W" pending demo
+out="$("$W" pending demo --show 2>&1)"
+case "$out" in *"===== raw/"*"The billing API."*"none left"*) ok "pending --show prints the files in one go" ;; *) bad "pending --show prints the files in one go" "$out" ;; esac
+"$W" new bulk >/dev/null
+for i in 1 2 3; do awk 'BEGIN { for (i = 0; i < 1200; i++) print "a line of filler for the bulk compile size cap test" }' > "$WIKIS_DIR/bulk/raw/2026-01-0$i-000000-big-$i.md"; done
+expect "pending --show stops at its size cap and says more wait" "1 more wait" "$W" pending bulk --show
+refuse "pending --show needs a wiki" "$W" pending --show
+for i in 01 02 03 04 05 06 07 08 09 10 11; do printf 'Captured: 2026-01-01\n\nNote %s.\n' "$i" > "$WIKIS_DIR/bulk/raw/2026-01-01-0000$i-note-$i.md"; done
+"$W" cover bulk bulkrepo >/dev/null
+mkdir -p "$T/projects/bulkrepo" && git -C "$T/projects/bulkrepo" init -q
+expect "with more than ten waiting, the session does the request first" "more than ten, so do the user's request first" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; hook '$T/projects/bulkrepo' | context"
+lacks "with a few waiting, it compiles first" "more than ten" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; hook '$T/projects/web' | context"
+
 section "Team skills"
 SK="$HOME/.claude/skills"
 mkdir -p "$SK/go-expert" && printf -- '---\nname: go-expert\ndescription: mine\n---\n' > "$SK/go-expert/SKILL.md"

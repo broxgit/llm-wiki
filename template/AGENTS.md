@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Handbook version 17.
+Handbook version 18.
 
 This folder is a knowledge base maintained by an LLM agent. Any agent working here follows this file. It needs no vendor features. Plain markdown, plain files.
 
@@ -38,7 +38,7 @@ data/        Structured data (CSV, SQLite). Queried, not read.
 
 1. If Sync applies to this wiki and its repo has a remote, pull.
 2. Read `index.md`. Nothing else yet.
-3. List `raw/` and `wiki/sources/`. A missing `wiki/sources/` means nothing is compiled yet. If notes are waiting, compile them before you start on the user's request, and say so in one line. If another session holds the lock, go on without it.
+3. List `raw/` and `wiki/sources/`. A missing `wiki/sources/` means nothing is compiled yet. If notes are waiting, compile them before you start on the user's request, and say so in one line. With more than ten waiting, do the user's request first and compile at the next pause, and say that instead. If another session holds the lock, go on without it.
 
 Do not bulk-read `wiki/`. The index exists so you don't have to.
 

@@ -4,6 +4,13 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v18 (2026-10-28)
+
+- Bulk compile. Five or more waiting notes, as after `wiki seed`, are compiled as one batch: read together, planned by topic, and each page written once, instead of rewriting the same page once per note.
+- `wiki pending <wiki> --show` prints a wiki's waiting notes in one go, so an agent reads twenty documents in one step. `wiki pending` lists what waits in every wiki.
+- With more than ten notes waiting, a session does what you asked first and compiles at the next pause, instead of making you wait.
+- Do: nothing. Sessions upgrade the wikis on their own.
+
 ## v17 (2026-10-28)
 
 - Team skills. When a repeated procedure becomes a skill, it now lives in the wiki that owns it, as `skills/<name>/SKILL.md`, instead of in one person's `~/.claude/skills`. Everyone who syncs the collection gets it, and a fix reaches everyone.
