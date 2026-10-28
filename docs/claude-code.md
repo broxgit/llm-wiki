@@ -77,8 +77,9 @@ After that, you mostly don't do anything. [Using it](using.md) covers what Claud
 
 Every change pushed to this repo is a new version.
 
-- **With auto-update on**, Claude Code fetches updates in the background. They load in your next session. In a terminal session, `/reload-plugins` loads one right away.
-- **Without it**, run `claude plugin marketplace update llm-wiki` in a terminal, then start a new session.
+- **With auto-update on**, Claude Code fetches updates in the background.
+- **Without it**, run `claude plugin marketplace update llm-wiki`, then `claude plugin update llm-wiki@llm-wiki`.
+- **The `wiki` command** uses a new version as soon as it's installed. Sessions pick it up when they start: start a new one, or run `/reload-plugins` in a terminal session.
 - **When an update changes the handbook**, Claude tells you once. Run `wiki upgrade --all` to bring your wikis up to it, then commit as it says.
 
 `claude plugin list` shows the installed version, which is the commit it came from.

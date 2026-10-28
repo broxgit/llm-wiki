@@ -9,7 +9,7 @@
   - Without the plugin: run `./wiki.sh claude`, or paste the line from [A session that's already running](other-agents.md#a-session-thats-already-running). In Claude Code, `/context` lists the instruction files that loaded.
 - **The agent can't read or write the wiki.** It lacks access to `~/wikis`. Start Claude Code with `--add-dir ~/wikis`, or approve the prompt the first time it reaches for the folder. In the desktop app, add the folder to the session.
 - **`wiki: command not found`.** Plugin: in a session, say "set up the wiki command". Clone: link it with `ln -s <clone>/wiki.sh ~/.local/bin/wiki`. Either way, `~/.local/bin` must be on your `PATH`.
-- **`wiki` says the plugin has updated.** The command still points at the old version, which Claude Code deleted. Start one Claude Code session and it points at the new one.
+- **`wiki` says it can't find the llm-wiki plugin.** Claude Code's record of the plugin points at a folder that's gone. Run `claude plugin list` to check it's installed, and reinstall it if not.
 - **`wiki setup` says it needs a terminal.** It asks questions, so run it in a terminal, not through the agent. `wiki setup --list` shows the current values anywhere.
 
 ## Day to day
