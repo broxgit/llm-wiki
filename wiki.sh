@@ -36,6 +36,8 @@ Usage: $WIKI_CMD <command> [options]
   log <wiki> <type> [title] [--created P] [--updated P] [--fixed T] [--reported T]
                        Append a log.md entry and print its counts.
   sync <wiki> [-m MSG] Commit this wiki's changes, pull with a merge, and push.
+  index <wiki> [--check]  Bring index.md in step with the pages' frontmatter, in place.
+  lint <wiki>... | --all  The mechanical lint checks. Reports, changes nothing.
   harvest [--dry-run]  Copy Claude Code's own memory notes into the wikis, where every
                        repo and teammate can use them.
   pending [<wiki>] [--show]
@@ -465,6 +467,256 @@ cmd_sync() {
     git -C "$repo" pull -q --no-rebase --no-edit && git -C "$repo" push -q || die "the push was rejected twice. Ask the user."
   fi
   echo "synced: pulled and pushed $(tilde "$repo")"
+}
+
+# ---- index and lint ---------------------------------------------------------
+# The mechanical half of compiling and linting. index keeps index.md in step with
+# the pages' frontmatter, in place: an index's order and headings are the wiki's
+# own. lint reports the checks a script can do, and changes nothing; the checks
+# that need judgment stay with the agent. Both read the files fresh every run.
+
+need_python() { command -v python3 >/dev/null 2>&1 || die "$1 needs python3"; }
+
+# index <wiki> [--check]
+cmd_index() {
+  local wiki="" check=0 root
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --check) check=1; shift ;;
+      -*) die "index options: --check" ;;
+      *) wiki="$1"; shift ;;
+    esac
+  done
+  root="$(wiki_root "$wiki")"
+  need_python "index"
+  python3 - "$root" "$check" <<'PY'
+import os, re, sys
+root, check = sys.argv[1], sys.argv[2] == "1"
+CATS = {"concepts": "Concepts", "howto": "How-to", "decisions": "Decisions", "entities": "Entities"}
+
+def front(path):
+    fm = {}
+    with open(path, errors="replace") as f:
+        text = f.read()
+    m = re.match(r"---\n(.*?)\n---\n", text, re.S)
+    if m:
+        for line in m.group(1).splitlines():
+            k, sep, v = line.partition(":")
+            if sep and not line.startswith((" ", "\t")):
+                fm[k.strip()] = v.strip().strip('"').strip("'")
+    return fm
+
+pages = {}   # index path -> (title, summary, category)
+wroot = os.path.join(root, "wiki")
+for d, dirs, files in os.walk(wroot):
+    rel = os.path.relpath(d, wroot)
+    if rel.split(os.sep)[0] == "sources":
+        continue
+    for f in files:
+        if not f.endswith(".md"):
+            continue
+        path = os.path.relpath(os.path.join(d, f), root)
+        top = rel.split(os.sep)[0]
+        if rel == ".":
+            cat = "Conventions" if f == "conventions.md" else "Pages"
+        else:
+            cat = CATS.get(top, top.replace("-", " ").capitalize())
+        fm = front(os.path.join(d, f))
+        pages[path] = (fm.get("title", ""), fm.get("summary", ""), cat)
+sroot = os.path.join(root, "skills")
+if os.path.isdir(sroot):
+    for name in sorted(os.listdir(sroot)):
+        sk = os.path.join(sroot, name, "SKILL.md")
+        if os.path.isfile(sk):
+            fm = front(sk)
+            pages[f"skills/{name}/SKILL.md"] = (fm.get("name", name), fm.get("description", ""), "Skills")
+
+ipath = os.path.join(root, "index.md")
+lines = open(ipath).read().splitlines() if os.path.exists(ipath) else ["# Index"]
+entry = re.compile(r"^- \[(.*?)\]\((.*?)\)(?::\s*(.*))?$")
+out, seen = [], set()
+updated = removed = dups = 0
+nofront, changes = [], []
+for line in lines:
+    m = entry.match(line)
+    if not m:
+        out.append(line); continue
+    title, path, summary = m.group(1), m.group(2), m.group(3) or ""
+    if path not in pages:
+        removed += 1; changes.append(f"  removed, no such page: {path}"); continue
+    if path in seen:
+        dups += 1; changes.append(f"  removed a duplicate line: {path}"); continue
+    seen.add(path)
+    t, s, _ = pages[path]
+    if not t or not s:
+        nofront.append(path)
+    new = f"- [{t or title}]({path}): {s or summary}"
+    if new != line:
+        updated += 1
+        # Say what changed: when the index held the better text, the page's own
+        # summary is what needs fixing, and the agent should see that.
+        changes.append(f"  updated from the page's frontmatter: {path}\n    was: {summary}" if summary != (s or summary) else f"  updated: {path}")
+    out.append(new)
+added = 0
+for path in sorted(p for p in pages if p not in seen):
+    t, s, cat = pages[path]
+    if not t or not s:
+        nofront.append(path)
+    new = f"- [{t or os.path.basename(path)}]({path}): {s}".rstrip(": ")
+    head = f"## {cat}"
+    if head in out:
+        i = out.index(head) + 1
+        while i < len(out) and not out[i].startswith("## "):
+            i += 1
+        while i > 0 and out[i - 1] == "":
+            i -= 1
+        out.insert(i, new)
+    else:
+        if out and out[-1] != "":
+            out.append("")
+        out += [head, new]
+    added += 1
+    changes.append(f"  added under {head[3:]}: {path}")
+
+changed = out != lines
+print(f"index: {updated} updated, {added} added, {removed} removed, {dups} duplicate(s)" + ("" if changed else ", nothing to change"))
+for c in changes:
+    print(c)
+if any("was:" in c for c in changes):
+    print("  If a line's old text was better, put it in that page's summary, then run index again.")
+for p in sorted(set(nofront)):
+    print(f"  no title or summary in frontmatter: {p}")
+n = sum(1 for l in out if entry.match(l))
+if n > 300:
+    print(f"  {n} lines: past 300, split the index by category, as rules/compile.md says")
+if changed and not check:
+    with open(ipath, "w") as f:
+        f.write("\n".join(out) + "\n")
+elif changed and check:
+    sys.exit(1)
+PY
+}
+
+# lint <wiki>... [--all]
+cmd_lint() {
+  local all=0 roots=() w d
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --all) all=1; shift ;;
+      -*) die "lint options: --all" ;;
+      *) roots+=("$(wiki_root "$1")"); shift ;;
+    esac
+  done
+  if [ "$all" = 1 ]; then
+    for d in "$WIKIS_DIR"/*/; do d="${d%/}"; is_wiki "$d" && roots+=("$d"); done
+  fi
+  [ "${#roots[@]}" -gt 0 ] || die "name a wiki, or --all"
+  need_python "lint"
+  python3 - "$WIKIS_DIR" "$SHARED" "$(days_ago 180)" "${roots[@]}" <<'PY'
+import os, re, sys
+wikis, shared, stale_cut = sys.argv[1], sys.argv[2], sys.argv[3]
+roots = sys.argv[4:]
+link = re.compile(r"\]\(([^)\s#]+\.md)(?:#[^)]*)?\)")
+cite = re.compile(r"(?<![\w/.-])([a-z0-9][a-z0-9._-]*):((?:wiki|skills)/[^\s)`'\",;]+?\.md)")
+entry = re.compile(r"^- \[(.*?)\]\((.*?)\)")
+total = 0
+
+def body_and_front(text):
+    m = re.match(r"---\n(.*?)\n---\n", text, re.S)
+    if not m:
+        return text, None
+    fm = {}
+    for line in m.group(1).splitlines():
+        k, sep, v = line.partition(":")
+        if sep and not line.startswith((" ", "\t")):
+            fm[k.strip()] = v.strip().strip('"').strip("'")
+    return text[m.end():], fm
+
+for root in roots:
+    name = os.path.basename(root)
+    found = {}
+    def add(kind, item):
+        found.setdefault(kind, []).append(item)
+    pages = []
+    for d, dirs, files in os.walk(os.path.join(root, "wiki")):
+        pages += [os.path.join(d, f) for f in files if f.endswith(".md")]
+    inbound = {}
+    for p in pages:
+        rel = os.path.relpath(p, root)
+        source = rel.startswith("wiki/sources/")
+        text = open(p, errors="replace").read()
+        body, fm = body_and_front(text)
+        if fm is None:
+            add("no frontmatter", rel)
+        else:
+            miss = [k for k in ("title", "summary", "updated", "verified") if not fm.get(k)]
+            if miss:
+                add("frontmatter missing " + ", ".join(miss), rel)
+            if len(fm.get("summary", "")) > 120:
+                add("summary over 120 characters", rel)
+            v = fm.get("verified", "")
+            if not source and v and v < stale_cut:
+                add("not verified in 180 days", f"{rel} (verified {v})")
+        if not source and len(body.split()) > 1500:
+            add("over 1,500 words", f"{rel} ({len(body.split())} words)")
+        for target in link.findall(body):
+            if target.startswith(("http:", "https:")):
+                continue
+            t = os.path.normpath(os.path.join(os.path.dirname(p), target))
+            if not os.path.exists(t):
+                add("broken link", f"{rel} -> {target}")
+            else:
+                inbound[os.path.relpath(t, root)] = inbound.get(os.path.relpath(t, root), 0) + 1
+        for w, path in cite.findall(body):
+            if not os.path.isdir(os.path.join(wikis, w)):
+                continue
+            if not os.path.exists(os.path.join(wikis, w, path)):
+                add("broken citation", f"{rel} -> {w}:{path}")
+            elif name == shared and w != shared and not source:
+                add("shared page cites a project page: check it stands on its own", f"{rel} -> {w}:{path}")
+        for line in body.splitlines():
+            m = re.match(r"^> \*\*(Check|Conflict):\*\*", line)
+            if m and not source:
+                add("open " + m.group(1), rel)
+    # The index against the pages.
+    ipath = os.path.join(root, "index.md")
+    listed = {}
+    if os.path.exists(ipath):
+        for line in open(ipath).read().splitlines():
+            m = entry.match(line)
+            if m:
+                listed[m.group(2)] = listed.get(m.group(2), 0) + 1
+    for path, n in listed.items():
+        if not os.path.exists(os.path.join(root, path)):
+            add("index line with no page", path)
+        if n > 1:
+            add("listed twice in the index", path)
+    for p in pages:
+        rel = os.path.relpath(p, root)
+        if rel.startswith("wiki/sources/"):
+            continue
+        if rel not in listed:
+            add("page missing from the index", rel)
+        if not inbound.get(rel) and os.path.basename(rel) != "conventions.md":
+            add("orphan: no page links to it", rel)
+    # Waiting notes.
+    raw = os.path.join(root, "raw")
+    waiting = [f for f in (os.listdir(raw) if os.path.isdir(raw) else []) if not f.startswith(".")
+               and not os.path.exists(os.path.join(root, "wiki", "sources", os.path.splitext(f)[0] + ".md"))]
+    if waiting:
+        found[f"notes waiting to be compiled ({len(waiting)})"] = []
+    n = sum(len(v) or 1 for v in found.values())
+    total += n
+    print(f"== {name}: {n} finding(s)" if n else f"== {name}: clean")
+    for kind, items in found.items():
+        print(f"  {kind}: {len(items)}" if items else f"  {kind}")
+        for i in items[:8]:
+            print(f"    {i}")
+        if len(items) > 8:
+            print(f"    ... and {len(items) - 8} more")
+if total:
+    print("\nFix the mechanical ones without asking: links, index lines (wiki index), frontmatter. Ask before merging, deleting or moving pages.")
+PY
 }
 
 # ---- pending ----------------------------------------------------------------
@@ -2356,7 +2608,7 @@ EOF
 # Tab completion. `completion zsh|bash` prints a small script for the shell, which
 # asks `__complete` for candidates on every Tab. The candidates live here, so a
 # plugin update can't leave completion stale.
-COMMANDS="setup init new seed harvest capture lock log sync pending cover which status find stale patterns skills tips report stats delegation upgrade unlock claude link journal standup completion"
+COMMANDS="setup init new seed harvest capture lock log sync index lint pending cover which status find stale patterns skills tips report stats delegation upgrade unlock claude link journal standup completion"
 RANGES="lastworkday yesterday today week lastweek 7d 14d 30d"
 
 wiki_names() {
@@ -2396,6 +2648,8 @@ cmd_complete() {
     capture) [ "$i" -eq 2 ] && wiki_names; echo --copy ;;
     lock) [ "$i" -eq 2 ] && wiki_names; printf -- '--release\n--renew\n' ;;
     sync) [ "$i" -eq 2 ] && wiki_names; echo -m ;;
+    index) [ "$i" -eq 2 ] && wiki_names; echo --check ;;
+    lint) wiki_names; echo --all ;;
     log)
       if [ "$i" -eq 2 ]; then wiki_names
       elif [ "$i" -eq 3 ]; then printf 'ingest\nlint\nrestructure\nresolve\n'
@@ -3595,6 +3849,8 @@ case "$cmd" in
   lock) cmd_lock "$@"; exit 0 ;;
   log) cmd_log "$@"; exit 0 ;;
   sync) cmd_sync "$@"; exit 0 ;;
+  index) cmd_index "$@"; exit 0 ;;
+  lint) cmd_lint "$@"; exit 0 ;;
 esac
 if [ "$cmd" = harvest ]; then
   cmd_harvest "$@"
