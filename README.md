@@ -12,13 +12,15 @@ This repo holds the rules and the scaffold. It is not a wiki. Each wiki lives in
 4. [Check that it works](#check-that-it-works)
 5. [What the agent does on its own](#what-the-agent-does-on-its-own)
 6. [Many repositories](#many-repositories)
-7. [Work journal and standups](#work-journal-and-standups)
-8. [Run several sessions at once](#run-several-sessions-at-once)
-9. [Share it with a team or a second machine](#share-it-with-a-team-or-a-second-machine)
-10. [Troubleshooting](#troubleshooting)
-11. [Change the rules](#change-the-rules)
-12. [What's here](#whats-here)
-13. [Install the skill](#install-the-skill)
+7. [Hand work to cheaper models](#hand-work-to-cheaper-models)
+8. [Stop repeating yourself](#stop-repeating-yourself)
+9. [Work journal and standups](#work-journal-and-standups)
+10. [Run several sessions at once](#run-several-sessions-at-once)
+11. [Share it with a team or a second machine](#share-it-with-a-team-or-a-second-machine)
+12. [Troubleshooting](#troubleshooting)
+13. [Change the rules](#change-the-rules)
+14. [What's here](#whats-here)
+15. [Install the skill](#install-the-skill)
 
 ## Setup, once per machine
 
@@ -266,7 +268,7 @@ The handbook tells agents to pull before writing and to commit and push after, t
 
 ## Change the rules
 
-The handbook is `template/AGENTS.md` plus the files in `template/rules/`. `AGENTS.md` loads in every session, so it holds only what every session needs. The rules files are read on demand: compile, conflicts, lint, peers.
+The handbook is `template/AGENTS.md` plus the files in `template/rules/`. `AGENTS.md` loads in every session, so it holds only what every session needs. The rules files are read on demand: compile, conflicts, lint, peers, journal, patterns, delegation.
 
 Edit any of them, bump the version at the top of `template/AGENTS.md`, add a section for the new version to `CHANGELOG.md`, and run `./wiki.sh upgrade --all` (or `./wiki.sh setup --new`) to roll it out.
 
@@ -281,7 +283,7 @@ AGENTS.md          Tells an agent this is the template and how to start a wiki f
 CLAUDE.md          Imports AGENTS.md for Claude Code.
 ROADMAP.md         Planned improvements, untested areas, and what was decided against.
 CHANGELOG.md       What each handbook version changed. upgrade prints the parts you missed.
-wiki.sh            Setup and upkeep: setup, init, new, cover, which, status, find, stale, upgrade, unlock, claude, journal, standup.
+wiki.sh            Setup and upkeep: setup, init, new, cover, which, status, find, stale, patterns, delegation, upgrade, unlock, claude, journal, standup.
 template/          The scaffold. Copied whole to start a wiki.
   AGENTS.md        The core handbook. Loaded in every session.
   rules/           The rest of the handbook. Read on demand.

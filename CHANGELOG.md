@@ -4,6 +4,12 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v13 (2026-10-28)
+
+- Fix: a wiki an agent creates by hand for another repository now gets `patterns.md`, as `wiki.sh new` already did. `rules/peers.md` was missing that step.
+- `wiki.sh new` refuses names with spaces or characters a repository name can't have, and resolves `..` in paths. `wiki.sh find` no longer matches index headings.
+- Do: run `./wiki.sh upgrade --all`. It also adds `patterns.md` to any wiki that lacks one.
+
 ## v12 (2026-10-27)
 
 - Delegation. Sessions hand large, self-contained work whose results can be checked, like test runs, file sweeps and boilerplate, to sub-agents on cheaper models. Design, debugging and review stay in the session.

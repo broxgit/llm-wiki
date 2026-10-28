@@ -9,7 +9,7 @@ Do this when you have something to file and no wiki is named after the owning re
 1. Name it after the repository: the last part of its remote URL, or its folder name when it has no remote. Put it beside this wiki.
 2. Copy this wiki's `AGENTS.md`, `CLAUDE.md`, `links.md`, `.gitignore`, and `rules/` folder into it.
 3. Add `raw/`, `wiki/`, and `data/` folders.
-4. Create `index.md` containing `# Index`, `log.md` containing `# Log`, and `repos.md` containing `# Repositories`. Don't copy this wiki's `repos.md`.
+4. Create `index.md` containing `# Index`, `log.md` containing `# Log`, `repos.md` containing `# Repositories`, and `patterns.md` containing `# Patterns`. Don't copy this wiki's `repos.md` or `patterns.md`.
 
 ## One wiki for several repositories
 

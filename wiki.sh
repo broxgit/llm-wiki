@@ -64,14 +64,34 @@ tilde() {
   esac
 }
 
+# Drop . and .. from an absolute path without touching the disk. The path may not exist yet.
+normalize() {
+  local IFS=/ part out=""
+  for part in $1; do
+    case "$part" in
+      '' | .) ;;
+      ..) out="${out%/*}" ;;
+      *) out="$out/$part" ;;
+    esac
+  done
+  printf '%s' "${out:-/}"
+}
+
 # Turn a bare name or a path into an absolute path.
 # shellcheck disable=SC2088
 resolve() {
   case "$1" in
-    /*) printf '%s' "$1" ;;
-    "~/"*) printf '%s' "$HOME/${1:2}" ;;
-    */*) printf '%s' "$PWD/$1" ;;
+    /*) normalize "$1" ;;
+    "~/"*) normalize "$HOME/${1:2}" ;;
+    */*) normalize "$PWD/$1" ;;
     *) printf '%s' "$WIKIS_DIR/$1" ;;
+  esac
+}
+
+# A wiki is named after a repository, so its name must be one a repository can have.
+valid_name() {
+  case "$1" in
+    '' | .* | -* | *[!A-Za-z0-9._-]*) return 1 ;;
   esac
 }
 
@@ -311,7 +331,8 @@ cmd_find() {
   for d in "$WIKIS_DIR"/*/; do
     d="${d%/}"
     [ -f "$d/index.md" ] || continue
-    hits="$(grep -i -F -- "$word" "$d/index.md" || true)"
+    # Headings like "# Index" and "## Concepts" aren't entries.
+    hits="$(grep -v '^#' "$d/index.md" | grep -i -F -- "$word" || true)"
     [ -n "$hits" ] || continue
     found=1
     echo "${d##*/}:"
@@ -1837,6 +1858,8 @@ case "$cmd" in
   init) cmd_init "$want_git" ;;
   new)
     need_target
+    valid_name "${target##*/}" \
+      || die "\"${target##*/}\" can't be a wiki name. Use the repository's name: letters, digits, dots, dashes, underscores."
     case "$target" in
       */*) ;;
       *)
