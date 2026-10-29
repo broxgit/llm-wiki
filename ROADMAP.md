@@ -53,7 +53,7 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - A wiki with two shared wikis listed in `links.md`.
 - Real scale: hundreds of wikis, hundreds of pages. Real use so far is 10 wikis and 53 pages.
 - The version 8 triggers in real use. They passed a dry run only.
-- A model other than Claude following the handbook.
+- A model other than Claude following the handbook. First run, 2026-10-29, Gemini in Antigravity outside a repository: it followed the session line and the session-start steps, but couldn't find `wiki.sh` (exit 127), since the line gave its path only inside two commands. The line now says what `wiki.sh` means. Capture, compile and sync in a real repository are still untried.
 - Delegation in real use: whether sessions suggest handoffs at the right size, and whether the log shows real savings. The log records outcomes, not tokens. Token counts per handoff would need the tool's usage data.
 - Stats in real use: whether sessions log every lookup, and what hit rate means a wiki should go.
 - Seed in real use: how long compiling 20 seeded documents takes, and whether the pages are worth it.

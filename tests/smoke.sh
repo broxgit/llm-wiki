@@ -81,6 +81,7 @@ expect "find searches indexes" "Deploy flow" "$W" find canary
 expect "find skips index headings" "no index mentions" "$W" find Index
 expect "claude --print prints the line" "knowledge wikis live in" "$W" claude --print
 check "claude --print writes nothing" test ! -e "$HOME/.claude/CLAUDE.md"
+expect "the line says what wiki.sh means, for agents without the hook" "Wherever their handbooks say \`wiki.sh\`, run" "$W" claude --print
 
 section "What a new wiki gets"
 for f in .gitattributes .gitignore patterns.md links.md repos.md rules/peers.md rules/compile.md; do
@@ -191,6 +192,8 @@ P="$HOME/.claude/plugins/cache/llm-wiki/llm-wiki/abc123"
 mkdir -p "$P"
 (cd "$REPO" && tar cf - --exclude .git --exclude tests .) | (cd "$P" && tar xf -)
 expect "from the plugin, claude skips the CLAUDE.md line" "came with the llm-wiki Claude Code plugin" "$P/wiki.sh" claude
+expect "from the plugin, claude --print names the stable command" "plugins/data/llm-wiki-llm-wiki/bin/wiki which" "$P/wiki.sh" claude --print
+lacks "from the plugin, claude --print never names the versioned folder" "abc123" "$P/wiki.sh" claude --print
 check "from the plugin, CLAUDE.md is untouched" test ! -e "$HOME/.claude/CLAUDE.md"
 set_version "$WIKIS_DIR/demo/AGENTS.md" 999
 out="$("$P/wiki.sh" status 2>&1)"
