@@ -61,6 +61,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### Gemini's tokens in the weekly report (2026-10-29)
+
+- **Why:** the report counted Claude Code's tokens only, so a week's work in Antigravity was invisible in it.
+- **What changed:** with Antigravity installed, `wiki report` adds a "Tokens (Gemini in Antigravity)" table from each transcript step's `input_tokens`, `cache_read_tokens` and `output_tokens`, with an estimate of wiki reads. A conversation counts toward the project its file paths and `git -C` folders point at most. It's a separate table, since the models count tokens differently and are priced differently.
+
 ### Work and personal collections (2026-10-29)
 
 - **Why:** one collection on a personal remote held work, client and personal wikis together.
