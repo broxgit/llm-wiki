@@ -276,6 +276,12 @@ wiki_root() {
   printf '%s' "$root"
 }
 
+# cant_write <path>: the error for a write that failed, with the usual cause.
+cant_write() {
+  printf "can't write %s. If this runs inside an agent's sandbox, allow %s there, or run the command outside the sandbox. Nothing was saved." \
+    "$(tilde "$1")" "$(tilde "$WIKIS_DIR")"
+}
+
 # iso_epoch <YYYY-MM-DDTHH:MM:SSZ>: seconds since 1970, or nothing.
 iso_epoch() {
   date -u -d "$1" +%s 2>/dev/null || date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$1" +%s 2>/dev/null || true
@@ -310,17 +316,25 @@ cmd_capture() {
   stamp="$(date -u +%Y-%m-%d-%H%M%S)"
   name="$stamp-$slug.$ext"
   while [ -e "$root/raw/$name" ]; do name="$stamp-$slug-$n.$ext"; n=$((n + 1)); done
-  mkdir -p "$root/raw"
+  # Check every write. A failed redirect on a { } group didn't stop the script,
+  # and a sandboxed agent (Antigravity, 2026-10-29) was told "captured" for a note
+  # that was never written. So the note is built in a temp file and copied in one
+  # checked step.
+  mkdir -p "$root/raw" 2>/dev/null || die "$(cant_write "$root/raw")"
   if [ -n "$copy" ]; then
-    cp "$copy" "$root/raw/$name"
+    cp "$copy" "$root/raw/$name" 2>/dev/null || die "$(cant_write "$root/raw/$name")"
   else
     tmp="$(mktemp)"
     cat > "$tmp"
     if [ ! -s "$tmp" ]; then rm -f "$tmp"; die "capture got an empty note"; fi
-    {
-      head -n 1 "$tmp" | grep -q '^Captured: ' || printf 'Captured: %s\n\n' "$(date -u +%Y-%m-%d)"
-      cat "$tmp"
-    } > "$root/raw/$name"
+    if ! head -n 1 "$tmp" | grep -q '^Captured: '; then
+      { printf 'Captured: %s\n\n' "$(date -u +%Y-%m-%d)"; cat "$tmp"; } > "$tmp.note"
+      mv "$tmp.note" "$tmp"
+    fi
+    if ! cp "$tmp" "$root/raw/$name" 2>/dev/null; then
+      rm -f "$tmp"
+      die "$(cant_write "$root/raw/$name")"
+    fi
     rm -f "$tmp"
   fi
   echo "captured: raw/$name in $(tilde "$root")"
@@ -343,13 +357,13 @@ cmd_lock() {
   line="$(head -n 1 "$f" 2>/dev/null || true)"
   case "$mode" in
     release)
-      printf 'free\n' > "$f"
+      printf 'free\n' 2>/dev/null > "$f" || die "$(cant_write "$f")"
       echo "released: $(tilde "$root")"
       ;;
     renew)
       case "$line" in held\ *) ;; *) die "the lock on $(tilde "$root") isn't held" ;; esac
       tok="$(printf '%s' "$line" | awk '{ print $2 }')"
-      printf 'held %s %s\n' "$tok" "$now" > "$f"
+      printf 'held %s %s\n' "$tok" "$now" 2>/dev/null > "$f" || die "$(cant_write "$f")"
       echo "renewed: $tok, $now"
       ;;
     take)
@@ -367,7 +381,7 @@ cmd_lock() {
           ;;
       esac
       tok="$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"
-      printf 'held %s %s\n' "$tok" "$now" > "$f"
+      printf 'held %s %s\n' "$tok" "$now" 2>/dev/null > "$f" || die "$(cant_write "$f")"
       # Read it back: if another session wrote in between, it's theirs.
       if [ "$(head -n 1 "$f")" != "held $tok $now" ]; then
         echo "held: another session took the lock on $(tilde "$root") first. Don't compile it now."
@@ -408,10 +422,10 @@ cmd_log() {
   [ -z "$patterns" ] || lines="$lines- patterns: $patterns"$'\n'
   [ -z "$conflicts" ] || lines="$lines- conflicts: $conflicts"$'\n'
   f="$root/log.md"
-  [ -f "$f" ] || printf '# Log\n' > "$f"
+  [ -f "$f" ] || { printf '# Log\n' 2>/dev/null > "$f"; } || die "$(cant_write "$f")"
   # A blank line before the entry, whatever the file ended with.
-  if [ -n "$(tail -c 1 "$f")" ]; then printf '\n' >> "$f"; fi
-  printf '\n## %s %s%s\n%s' "$(date -u +%Y-%m-%d)" "$type" "${title:+: $title}" "$lines" >> "$f"
+  if [ -n "$(tail -c 1 "$f")" ]; then printf '\n' 2>/dev/null >> "$f" || true; fi
+  printf '\n## %s %s%s\n%s' "$(date -u +%Y-%m-%d)" "$type" "${title:+: $title}" "$lines" 2>/dev/null >> "$f" || die "$(cant_write "$f")"
   case "$type" in
     ingest) echo "logged: ingest: $title. $nc created, $nu updated${corrections:+, $corrections correction(s)}, ${conflicts} conflict(s)" ;;
     lint) echo "logged: lint. $nf fixed, $nr reported" ;;

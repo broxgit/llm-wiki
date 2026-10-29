@@ -374,6 +374,19 @@ check "a note that has the line keeps just one" bash -c "[ \$(cat '$WIKIS_DIR'/d
 printf 'pdf bytes\n' > "$T/spec.pdf"
 expect "capture --copy stores a document unchanged" "spec.pdf" "$W" capture demo --copy "$T/spec.pdf"
 refuse "capture refuses an empty note" bash -c "'$W' capture demo empty </dev/null"
+# An agent's sandbox can block writes to the wikis. Each command must say so and
+# fail, never report a capture, lock or log entry that wasn't written.
+chmod 555 "$WIKIS_DIR/demo/raw"
+out="$(printf 'x\n' | "$W" capture demo blocked 2>&1)" && bad "capture fails when it can't write the note (it succeeded)" "$out" || ok "capture fails when it can't write the note"
+case "$out" in *"Nothing was saved"*) ok "and says nothing was saved" ;; *) bad "and says nothing was saved" "$out" ;; esac
+chmod 755 "$WIKIS_DIR/demo/raw"
+check "and leaves no note behind" bash -c "! ls '$WIKIS_DIR'/demo/raw/ | grep -q blocked"
+printf 'free\n' > "$WIKIS_DIR/demo/.compile-lock" && chmod 444 "$WIKIS_DIR/demo/.compile-lock"
+refuse "lock fails when it can't write the lock" "$W" lock demo
+chmod 644 "$WIKIS_DIR/demo/.compile-lock"
+chmod 444 "$WIKIS_DIR/demo/log.md"
+refuse "log fails when it can't write log.md" "$W" log demo ingest "Note: blocked" --conflicts 0
+chmod 644 "$WIKIS_DIR/demo/log.md"
 expect "lock takes a free lock" "locked:" "$W" lock demo
 refuse "lock refuses a held one" "$W" lock demo
 expect "lock --renew rewrites the time" "renewed:" "$W" lock demo --renew
