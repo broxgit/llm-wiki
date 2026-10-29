@@ -30,7 +30,6 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 - **Reach sessions with no file access.** A chat session that can't read files can't use a wiki. A small MCP server over the collection would fix that.
 - **Review flow for teams.** Agents push straight to the collection. A team may want a weekly digest of changes, or pull requests.
 - **Obsidian.** Add `.obsidian/` to the template's `.gitignore` if anyone opens wikis as vaults.
-- **Dependency map.** A table of which repository owns which client or package, built from module files, kept in the shared wiki's `data/`.
 
 ## Untested
 
@@ -65,9 +64,14 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### Dependency map (2026-10-29)
+
+- **Why:** an agent changing a shared package couldn't tell which of your repositories use it, or which repository owns a package it saw imported.
+- **What changed:** `wiki deps` reads `go.mod`, `package.json` and `pyproject.toml` (three folders deep, skipping nested repositories, `node_modules` and `vendor`) in the repositories under `code_dirs`. It lists which repository owns each package, and which of your repositories use another's. A Go import counts toward the module that contains it. By default it covers only repositories a wiki in the collection covers, so another context's repositories don't leak in; `--all` takes them all, and `exclude` still applies. `--write` saves `data/dependencies.csv` in the shared wiki, with the columns kind, repo, ecosystem, package, owner and file.
+
 ### Allow rules for the wiki commands (2026-10-29)
 
-- **Why:** the handbook has agents commit and push the wikis with `wiki sync`, but Claude Code's auto mode stops a push and asks, and a session can't grant itself the permission. A v24 compile in smarketing ended with its changes uncommitted.
+- **Why:** the handbook has agents commit and push the wikis with `wiki sync`, but Claude Code's auto mode stops a push and asks, and a session can't grant itself the permission. A v24 compile in one wiki ended with its changes uncommitted.
 - **What changed:** `wiki setup` (or `setup permissions`) offers allow rules in `~/.claude/settings.json` for `start`, `capture`, `lock`, `log`, `index` and `sync`, in each spelling sessions use: the plugin's stable command or the clone's script, with `~` and in full, and plain `wiki`. It merges with what's there and keeps a backup. `wiki permissions` prints them for pasting. Adding them stays a person's step at a terminal on purpose: there is no non-interactive way for a session to add them.
 
 ### Handbook version 24: no summary page per source (2026-10-29)

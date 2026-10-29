@@ -604,6 +604,25 @@ fm far "nothere@$old"
 lacks "a repository with no clone falls back to dates quietly" "far.md" "$W" stale 90
 rm -f "$WIKIS_DIR"/demo/wiki/{far,near,gone,bare}.md
 
+section "Dependency map"
+D="$T/code/deps"
+mkdir -p "$D/lib" "$D/app/web" "$D/app/inner"
+git -C "$D/lib" init -q; git -C "$D/app" init -q; git -C "$D/app/inner" init -q
+printf 'module example.com/me/lib\n\ngo 1.22\n' > "$D/lib/go.mod"
+printf 'module example.com/me/app\n\nrequire (\n\texample.com/me/lib/sub v1.2.0\n\tgithub.com/other/thing v0.1.0\n)\n' > "$D/app/go.mod"
+printf '{"name":"@me/web","dependencies":{"react":"19"}}\n' > "$D/app/web/package.json"
+printf '{"name":"inner-only"}\n' > "$D/app/inner/package.json"
+out="$("$W" deps --all 2>&1)"
+for want in "lib owns go example.com/me/lib" "app owns npm @me/web (web/package.json)" "app uses lib's go example.com/me/lib/sub"; do
+  case "$out" in *"$want"*) ok "deps: $want" ;; *) bad "deps: $want" "$out" ;; esac
+done
+case "$out" in *"app owns npm inner-only"*) bad "deps counts a nested repository under its own name" "$out" ;; *) ok "deps counts a nested repository under its own name" ;; esac
+case "$out" in *"github.com/other/thing"*) bad "deps lists only uses of your own repositories' packages" "$out" ;; *) ok "deps lists only uses of your own repositories' packages" ;; esac
+lacks "by default deps leaves out repositories no wiki covers" "example.com/me/lib" "$W" deps
+"$W" deps --all --write >/dev/null 2>&1
+check "deps --write saves the shared wiki's data/dependencies.csv" grep -q '^uses,app,go,example.com/me/lib/sub,lib,' "$WIKIS_DIR/global/data/dependencies.csv"
+rm -rf "$D" "$WIKIS_DIR/global/data/dependencies.csv"
+
 section "Session start in one call"
 git -C "$WIKIS_DIR" add -A >/dev/null 2>&1; git -C "$WIKIS_DIR" commit -qm "smoke: before start" >/dev/null 2>&1; git -C "$WIKIS_DIR" push -q >/dev/null 2>&1
 git -C "$T/clone2" pull -q --no-rebase --no-edit >/dev/null 2>&1
