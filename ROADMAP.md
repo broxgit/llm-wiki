@@ -70,6 +70,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **Why:** work done in Antigravity never reached the journal, so standups missed it.
 - **What changed:** `wiki journal backfill` also digests `~/.gemini/antigravity/brain/*/…/transcript_full.jsonl`. A conversation doesn't record its workspace, so it goes under the project its file paths and `git -C` folders point at most. The digest marks how many sessions were Gemini's, with the user's prompts, files written or edited, a commit or `wiki.sh sync`, and the last reply. On 2026-10-29 it filed 8 conversations under workout-app, llm-wiki and global correctly.
 
+### Antigravity grants for llm-wiki (2026-10-29)
+
+- **Why:** Gemini asked before every wiki file it read and every `wiki.sh` command it ran, because Antigravity grants one path or command at a time unless told otherwise.
+- **What changed:** `wiki setup antigravity` offers grants in `userSettings.globalPermissionGrants.allow` (`~/.gemini/config/config.json`, where "Always allow" writes): read and write `~/wikis`, read the template, and `command(wiki.sh)` in both spellings. Folder grants cover everything under them. Setup checks the list is where expected before writing, keeps a backup, and adds nothing beyond llm-wiki's own needs. `wiki permissions` prints them; `setup --list` and `--new` report missing ones.
+
 ### Allow rules for the wiki commands (2026-10-29)
 
 - **Why:** the handbook has agents commit and push the wikis with `wiki sync`, but Claude Code's auto mode stops a push and asks, and a session can't grant itself the permission. A v24 compile in smarketing ended with its changes uncommitted.

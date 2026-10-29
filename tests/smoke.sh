@@ -664,6 +664,14 @@ check "without touching the llm-wiki skill" test -f "$HOME/.gemini/config/plugin
 rm "$HOME/.gemini/config/plugins/llm-wiki/skills/bump-proto"
 "$W" upgrade --all >/dev/null 2>&1
 check "upgrade --all links team skills into the plugin too" test -L "$HOME/.gemini/config/plugins/llm-wiki/skills/bump-proto"
+mkdir -p "$HOME/.gemini/config" && printf '{"userSettings":{"globalPermissionGrants":{"allow":["command(ls)"]}}}\n' > "$HOME/.gemini/config/config.json"
+out="$("$W" permissions 2>&1)"
+case "$out" in *"Antigravity grants"*"\"read_file($WIKIS_DIR)\","*"\"write_file($WIKIS_DIR)\","*"command("*"wiki"*) ok "permissions lists Antigravity's grants for the wikis and wiki.sh" ;; *) bad "permissions lists Antigravity's grants for the wikis and wiki.sh" "$out" ;; esac
+expect "setup --list counts the missing Antigravity grants" "grant(s) missing" "$W" setup --list
+"$W" permissions 2>/dev/null | sed -n '/^"read_file('"$(printf '%s' "$WIKIS_DIR" | sed 's#/#\\/#g')"')",/,$p' | sed 's/,$//' | python3 -c 'import json,sys; p=sys.argv[1]; s=json.load(open(p)); s["userSettings"]["globalPermissionGrants"]["allow"]+= [json.loads(l) for l in sys.stdin.read().splitlines()]; json.dump(s,open(p,"w"))' "$HOME/.gemini/config/config.json"
+expect "once present, setup --list says so" "grants in place" "$W" setup --list
+printf '{"something":"else"}\n' > "$HOME/.gemini/config/config.json"
+lacks "an unexpected config.json isn't touched or reported on" "grant" "$W" setup --list
 rm -rf "$HOME/.gemini"
 
 section "Compiled without summary pages (v24)"
