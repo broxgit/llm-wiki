@@ -196,7 +196,7 @@ P="$HOME/.claude/plugins/cache/llm-wiki/llm-wiki/abc123"
 mkdir -p "$P"
 (cd "$REPO" && tar cf - --exclude .git --exclude tests .) | (cd "$P" && tar xf -)
 expect "from the plugin, claude skips the CLAUDE.md line" "came with the llm-wiki Claude Code plugin" "$P/wiki.sh" claude
-expect "from the plugin, claude --print names the stable command" "plugins/data/llm-wiki-llm-wiki/bin/wiki which" "$P/wiki.sh" claude --print
+expect "from the plugin, claude --print names the stable command" "plugins/data/llm-wiki-llm-wiki/bin/wiki start" "$P/wiki.sh" claude --print
 lacks "from the plugin, claude --print never names the versioned folder" "abc123" "$P/wiki.sh" claude --print
 check "from the plugin, CLAUDE.md is untouched" test ! -e "$HOME/.claude/CLAUDE.md"
 set_version "$WIKIS_DIR/demo/AGENTS.md" 999
@@ -575,6 +575,41 @@ expect "standup caps commits per repository" "(7 earlier commit(s) not listed)" 
 expect "the cap keeps the newest commit" "busy commit 12" "$W" standup --since 2d --max 5
 lacks "the cap drops the older ones" "busy commit 7" "$W" standup --since 2d --max 5
 expect "detailed reports list every commit" "busy commit 1" "$W" standup --since 2d --max 5 --format detailed
+
+section "Commit distance"
+R="$T/code/demo"
+mkdir -p "$R" && git -C "$R" init -q && git -C "$R" commit -q --allow-empty -m first
+old="$(git -C "$R" rev-parse --short HEAD)"
+for i in $(seq 1 55); do git -C "$R" commit -q --allow-empty -m "c$i"; done
+new="$(git -C "$R" rev-parse --short HEAD)"
+fm() { printf -- '---\ntitle: %s\nsummary: x\nupdated: 2026-10-29\nverified: %s\ncommit: %s\n---\n\nBody.\n' "$1" "$(date -u +%Y-%m-%d)" "$2" > "$WIKIS_DIR/demo/wiki/$1.md"; }
+fm far "demo@$old"; fm near "demo@$new"; fm gone "demo@deadbee"; fm bare "$old"
+out="$("$W" stale 90 2>&1)"
+case "$out" in *"far.md  (55 commits behind demo)"*) ok "stale counts commits a page is behind its repository" ;; *) bad "stale counts commits a page is behind its repository" "$out" ;; esac
+case "$out" in *"near.md"*) bad "a page at the repository's HEAD isn't stale" "$out" ;; *) ok "a page at the repository's HEAD isn't stale" ;; esac
+case "$out" in *"gone.md  (commit deadbee not found in demo)"*) ok "stale reports a commit the repository doesn't have" ;; *) bad "stale reports a commit the repository doesn't have" "$out" ;; esac
+case "$out" in *"bare.md"*"write repo@hash"*) ok "a bare commit in a wiki over several repositories is flagged" ;; *) bad "a bare commit in a wiki over several repositories is flagged" "$out" ;; esac
+expect "lint reports a commit far behind" "commit far behind its repository" "$W" lint demo
+fm far "nothere@$old"
+lacks "a repository with no clone falls back to dates quietly" "far.md" "$W" stale 90
+rm -f "$WIKIS_DIR"/demo/wiki/{far,near,gone,bare}.md
+
+section "Session start in one call"
+git -C "$WIKIS_DIR" add -A >/dev/null 2>&1; git -C "$WIKIS_DIR" commit -qm "smoke: before start" >/dev/null 2>&1; git -C "$WIKIS_DIR" push -q >/dev/null 2>&1
+git -C "$T/clone2" pull -q --no-rebase --no-edit >/dev/null 2>&1
+printf 'Captured: 2026-10-29\n\nFrom the other machine.\n' > "$T/clone2/demo/raw/2026-10-29-000000-other.md"
+git -C "$T/clone2" add -A && git -C "$T/clone2" commit -qm "demo: capture 1 note" && git -C "$T/clone2" push -q
+out="$("$W" start web 2>&1)"
+case "$out" in *"wiki: "*"/demo, for the repository web"*) ok "start finds the wiki for a repository" ;; *) bad "start finds the wiki for a repository" "$out" ;; esac
+case "$out" in *"pull: up to date"*) ok "start pulls the collection" ;; *) bad "start pulls the collection" "$out" ;; esac
+check "and the pull brought the other machine's note" test -f "$WIKIS_DIR/demo/raw/2026-10-29-000000-other.md"
+case "$out" in *"===== "*"/demo/index.md"*"===== "*"/global/index.md (global)"*"For agents, from"*"===== Waiting to be compiled"*"/demo: "*"note(s)"*) ok "start prints the indexes, For agents and what waits, in that order" ;; *) bad "start prints the indexes, For agents and what waits, in that order" "$out" ;; esac
+expect "start points at the handbook" "/demo/AGENTS.md, the handbook" "$W" start web
+expect "start with no wiki for the repository uses the shared one" "No wiki covers brand-new yet" "$W" start brand-new
+git -C "$WIKIS_DIR" remote set-url origin "$T/nowhere.git"
+out="$("$W" start web 2>&1)" && ok "a failed pull doesn't fail start" || bad "a failed pull doesn't fail start" "$out"
+case "$out" in *"pull: failed"*"pull before your first write"*) ok "and says so, with what to do" ;; *) bad "and says so, with what to do" "$out" ;; esac
+git -C "$WIKIS_DIR" remote set-url origin "$T/remote.git"
 
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ]

@@ -6,6 +6,12 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 
 ## Next
 
+### Retire the per-source summary pages (handbook version 24)
+
+- **Why:** each raw note gets a page in `wiki/sources/` that only points at the pages it fed. The live collection has 59. They cost a write per note at compile, and `log.md` plus each page's `sources:` already record the same thing.
+- **Sketch:** `wiki log ... --source raw/<file>` records the note in the ingest entry. A note counts as compiled when `log.md` names it, a page's `sources:` lists it, or its old summary page exists, so nothing needs migrating. Drop the summary step from `rules/compile.md`. One helper decides "compiled" for `pending`, `status`, `lint`, the report and the session hook.
+- **Risk:** a teammate whose plugin hasn't updated still decides by summary pages, and would compile new notes a second time. Ship with a CHANGELOG `Do:` to update first, and keep it apart from other changes so its savings can be measured.
+
 ### Terse page style
 
 - **Why:** agents read pages far more often than people do. Measured on one sample page, terse notes in plain words used 56% of the tokens of default prose. The body alone used 45%.
@@ -67,6 +73,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Handbook version 23: `wiki start`, and staleness in commits (2026-10-29)
+
+- **Why:** Gemini skipped the session-start pull in every run, and session start took five or six calls without the plugin's hook. `lint.md` asked for pages far behind their repository's HEAD, which no command checked.
+- **What changed:** `wiki start` finds the wiki, pulls with a timeout and the collection's own SSH command, and prints the indexes, `For agents` and what waits. A failed pull is a warning. The handbook's session start and the session line for other agents run it. `stale` and `lint` count commits behind for pages with a `commit` stamp, report commits a repository doesn't have, and bare hashes in wikis over several repositories, using clones under `code_dirs`.
 
 ### Handbook version 22: mechanical checks named, and Gemini's review (2026-10-29)
 

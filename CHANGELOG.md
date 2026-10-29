@@ -4,6 +4,15 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v23 (2026-10-29)
+
+Session start in one call, and staleness that counts commits. Both from the test with Gemini, which skipped the session-start pull in every run.
+
+- `wiki start` finds the wiki for the folder you're in, pulls the collection, and prints what session start reads: this wiki's index, each shared wiki's index and `For agents` section, and what waits. A failed pull is a warning, not an error. The handbook's session start runs it, and keeps the steps by hand for agents without the script.
+- The session line for other agents (`wiki claude --print`) runs `wiki start` instead of `wiki which`.
+- `wiki stale` and `wiki lint` also report a page whose `commit` is 50 or more commits behind its repository, a commit the repository doesn't have, and a bare hash in a wiki that covers several repositories. They find repositories under the journal's `code_dirs`. Without a clone, days still apply.
+- Do: if you put the session line in another agent's instruction file, such as `~/.gemini/GEMINI.md`, replace it with the new output of `wiki claude --print`. `wiki setup --new` updates `~/.claude/CLAUDE.md` for you.
+
 ## v22 (2026-10-29)
 
 From the first test with an agent other than Claude (Gemini in Antigravity) and its review of this repo.
