@@ -26,9 +26,7 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 - **Team digest.** A weekly roll-up across several people's journals, for a lead. Needs a shared, opt-in journal location.
 - **Handbook cost per session.** Since the session hook stopped embedding the handbook (only a 2KB preview reached the model), every session reads `AGENTS.md`, about 14KB or 3,500 tokens. Terse page style would cut this too.
 - **Trim the core further.** `template/AGENTS.md` is about 2,900 tokens, up from 2,600 after version 8. "Other wikis" and "Sync" are the biggest sections left.
-- **Drop per-source summary pages.** Each raw note gets a summary page that only says where its claims live. The live collection has 59 of them. A single ledger file per wiki could track what has been ingested.
 - **Split work and personal collections.** One collection on a personal remote now holds work, client, and personal wikis. `WIKIS_DIR` already supports a second collection. The routing line would need to know about both.
-- **Search page text, not just indexes.** `./wiki.sh find` reads `index.md` only. Past a few hundred pages per wiki it should search page bodies too.
 - **Reach sessions with no file access.** A chat session that can't read files can't use a wiki. A small MCP server over the collection would fix that.
 - **Review flow for teams.** Agents push straight to the collection. A team may want a weekly digest of changes, or pull requests.
 - **Obsidian.** Add `.obsidian/` to the template's `.gitignore` if anyone opens wikis as vaults.
@@ -38,15 +36,14 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 
 Things that have never been run for real. Treat them as unproven until crossed off.
 
-- `wiki.sh` on macOS: `setup`, `journal backfill`, `unlock` and `claude`. Every other command ran cleanly on macOS (bash 3.2, BSD `date`) on 2026-10-28.
-- `wiki.sh setup` on macOS. It ran only in a Linux pseudo-terminal. The SSH key test push never ran against a real SSH host.
-- `wiki.sh journal backfill` on macOS, and on transcripts from Claude Code versions other than the one it was written against. It needs `python3`.
+- `wiki.sh unlock` and `claude` on macOS. `setup` and `journal backfill` have since run on Macs in real use (2026-10-28 and 2026-10-29); every other command ran cleanly on macOS (bash 3.2, BSD `date`) on 2026-10-28.
+- `wiki.sh journal backfill` on transcripts from Claude Code versions other than the one it was written against. It needs `python3`.
 - Git sync between two people or two machines. Pull, commit, and push from one machine worked in real use on 2026-10-01.
 - Two sessions taking the compile lock in the same second.
 - A wiki with two shared wikis listed in `links.md`.
 - Real scale: hundreds of wikis, hundreds of pages. Real use so far is 10 wikis and 53 pages.
 - The version 8 triggers in real use. They passed a dry run only.
-- A model other than Claude pulling at session start. Gemini in Antigravity skipped the pull in all four runs on 2026-10-29, at least once because its sandbox blocked git. Retest with the sandbox allowing `~/wikis` before changing the handbook. Other models (Codex, Cursor, Copilot) are still untried.
+- Agents other than Claude pulling at session start. Gemini in Antigravity skipped the pull in all four runs on 2026-10-29, at least once because its sandbox blocked git. Since the Antigravity plugin, its SessionStart hook pulls outside the sandbox (worked in its first live run); watch that it keeps working. Other agents (Codex, Cursor, Copilot) are still untried.
 - Delegation in real use: whether sessions suggest handoffs at the right size, and whether the log shows real savings. The log records outcomes, not tokens. Token counts per handoff would need the tool's usage data.
 - Stats in real use: whether sessions log every lookup, and what hit rate means a wiki should go.
 - Seed in real use: how long compiling 20 seeded documents takes, and whether the pages are worth it.
