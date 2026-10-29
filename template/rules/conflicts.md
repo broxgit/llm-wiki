@@ -20,4 +20,4 @@ Only the user resolves a contradiction. When they do, keep the winning claim, no
 
 Tell the user in your reply as well. Remove the line once a source settles it.
 
-**Source summaries.** Pages under `wiki/sources/` describe only their own source, so don't rewrite or flag them. When a later source corrects or contradicts one, add a single line to that summary linking to the page with the current claim. Bump its `updated` date and list it in the log entry.
+**Source summaries.** Pages under `wiki/sources/`, which wikis from before v24 have, describe only their own source, so don't rewrite or flag them. When a later source corrects or contradicts one, add a single line to that summary linking to the page with the current claim. Bump its `updated` date and list it in the log entry.

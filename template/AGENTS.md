@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Handbook version 23.
+Handbook version 24.
 
 This folder is a knowledge base maintained by an LLM agent. Any agent working here follows this file. It needs no vendor features. Plain markdown, plain files.
 
@@ -40,7 +40,7 @@ Run `wiki.sh start` in the repository you're working in, or `wiki.sh start <repo
 
 1. If Sync applies to this wiki and its repo has a remote, pull.
 2. Read `index.md`, then each shared wiki's `index.md` and the `## For agents` section of its `wiki/conventions.md`. Shared wikis are listed in `links.md`. Nothing else yet. Shared knowledge only helps if you know it's there, and the agreements in `For agents` apply to every session.
-3. List `raw/` and `wiki/sources/`. A missing `wiki/sources/` means nothing is compiled yet. If notes are waiting, compile them before you start on the user's request, and say so in one line. With more than ten waiting, do the user's request first and compile at the next pause, and say that instead. If another session holds the lock, go on without it.
+3. Find the notes in `raw/` not compiled yet, with `wiki.sh pending <wiki>`. By hand: a note is compiled once an ingest entry in `log.md` names it in a `- source:` line, or a page lists it in `sources:`. If notes are waiting, compile them before you start on the user's request, and say so in one line. With more than ten waiting, do the user's request first and compile at the next pause, and say that instead. If another session holds the lock, go on without it.
 
 Do not bulk-read `wiki/`. The index exists so you don't have to.
 

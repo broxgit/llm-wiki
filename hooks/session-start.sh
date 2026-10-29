@@ -132,12 +132,8 @@ fi
 [ -f "$wiki/AGENTS.md" ] || exit 0
 
 # What needs doing at session start, so the agent doesn't have to look.
-waiting=0
-for f in "$wiki"/raw/*; do
-  [ -f "$f" ] || continue
-  b="${f##*/}"
-  [ -e "$wiki/wiki/sources/${b%.*}.md" ] || waiting=$((waiting + 1))
-done
+# wiki.sh decides what counts as compiled, so the two never disagree.
+waiting="$("$WIKI_SH" pending "$wiki" 2>/dev/null | grep -c '^raw/' || true)"
 version_of() { sed -n 's/^Handbook version \([0-9][0-9]*\).*/\1/p' "$1" 2>/dev/null | head -n 1; }
 wv="$(version_of "$wiki/AGENTS.md")"
 tv="$(version_of "$ROOT/template/AGENTS.md")"
