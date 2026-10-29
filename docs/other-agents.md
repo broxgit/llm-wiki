@@ -47,7 +47,7 @@ The line tells the agent where `wiki.sh` is. The handbooks name its commands (`w
 - **A SessionStart hook** that runs `wiki start` for the open project and hands its output to the conversation: the wiki, a pull, the indexes, `For agents`, and what waits. The model starts with it instead of spending its first calls on it.
 - **The llm-wiki skill.**
 
-Add it any time with `wiki setup antigravity`, then quit and reopen Antigravity once so it finds the new plugin. Later updates reach new conversations on their own. If `~/.gemini/GEMINI.md` still has the wiki line from before, setup offers to remove it, so conversations don't get it twice.
+Add it any time with `wiki setup antigravity`, then quit and reopen Antigravity once so it finds the new plugin. The same step offers Antigravity grants for what llm-wiki needs: read and write `~/wikis`, read the template, and run `wiki.sh`. Without them Gemini asks before each file and command. `wiki permissions` prints them. It adds nothing else: grants for git, npm and the like are yours to choose. Later updates reach new conversations on their own. If `~/.gemini/GEMINI.md` still has the wiki line from before, setup offers to remove it, so conversations don't get it twice.
 
 Antigravity has separate settings for files and for commands, and the second matters here:
 

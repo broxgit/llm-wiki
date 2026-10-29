@@ -69,6 +69,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **Why:** an agent changing a shared package couldn't tell which of your repositories use it, or which repository owns a package it saw imported.
 - **What changed:** `wiki deps` reads `go.mod`, `package.json` and `pyproject.toml` (three folders deep, skipping nested repositories, `node_modules` and `vendor`) in the repositories under `code_dirs`. It lists which repository owns each package, and which of your repositories use another's. A Go import counts toward the module that contains it. By default it covers only repositories a wiki in the collection covers, so another context's repositories don't leak in; `--all` takes them all, and `exclude` still applies. `--write` saves `data/dependencies.csv` in the shared wiki, with the columns kind, repo, ecosystem, package, owner and file.
 
+### Antigravity grants for llm-wiki (2026-10-29)
+
+- **Why:** Gemini asked before every wiki file it read and every `wiki.sh` command it ran, because Antigravity grants one path or command at a time unless told otherwise.
+- **What changed:** `wiki setup antigravity` offers grants in `userSettings.globalPermissionGrants.allow` (`~/.gemini/config/config.json`, where "Always allow" writes): read and write `~/wikis`, read the template, and `command(wiki.sh)` in both spellings. Folder grants cover everything under them. Setup checks the list is where expected before writing, keeps a backup, and adds nothing beyond llm-wiki's own needs. `wiki permissions` prints them; `setup --list` and `--new` report missing ones.
+
 ### Allow rules for the wiki commands (2026-10-29)
 
 - **Why:** the handbook has agents commit and push the wikis with `wiki sync`, but Claude Code's auto mode stops a push and asks, and a session can't grant itself the permission. A v24 compile in one wiki ended with its changes uncommitted.
