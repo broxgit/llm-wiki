@@ -50,7 +50,8 @@ Usage: $WIKI_CMD <command> [options]
   start [<repo>]       Session start in one call: find the wiki, pull, print the indexes,
                        For agents and what waits. Defaults to the current folder.
   permissions          Print the Claude Code allow rules for the wiki commands that
-                       write. wiki setup permissions adds them for you.
+                       write, and Antigravity's grants when it's installed. wiki setup
+                       permissions and wiki setup antigravity add them.
   which <repo>         Print the wiki that covers a repository.
   status               List wikis: handbook version, notes waiting, lock state.
   find <word>          Search every wiki's index, then page text, for a word.
@@ -3821,6 +3822,7 @@ setup_pending() {
   case "$(agy_state)" in
     old) echo antigravity ;;
     missing) setup_done antigravity || echo antigravity ;;
+    current) setup_done antigravity.grants || ! agy_grants_missing | grep -q . || echo antigravity.grants ;;
   esac
   [ "$(agy_state)" != current ] || ! grep -qF "knowledge wikis live in" "$AGY_HOME/GEMINI.md" 2>/dev/null || echo antigravity.line
   # Tab completion, asked once per machine unless the profile already loads it.
@@ -4195,7 +4197,7 @@ setup_list() {
   fi
   echo "claude              $(claude_state)"
   [ ! -d "$HOME/.claude" ] || echo "permissions         $(n="$(perm_missing | wc -l | tr -d ' ')"; [ "$n" -eq 0 ] && echo "wiki commands allowed" || echo "$n allow rule(s) missing")"
-  [ "$(agy_state)" = none ] || echo "antigravity         plugin $(agy_state)"
+  [ "$(agy_state)" = none ] || echo "antigravity         plugin $(agy_state)$(m="$(agy_grants_missing 2>/dev/null)" && { n="$(printf '%s' "$m" | grep -c . || true)"; [ "$n" -eq 0 ] && echo ", grants in place" || echo ", $n grant(s) missing"; })"
   if [ -n "$(completion_shell)" ]; then
     printf '%-19s %s' "completion" "$(completion_on "$(completion_shell)" && echo "on ($(completion_shell))" || echo off)"
     case "$pending" in *" completion."*) printf '  <- new' ;; esac
@@ -4218,6 +4220,74 @@ setup_list() {
   echo "Or a section:  $WIKI_CMD setup git | plugin | claude | upgrade | skills | completion | delegation | journal"
 }
 
+# Antigravity's grants: what lets Gemini read and write the wikis and run wiki.sh
+# without a prompt per file. They live in userSettings.globalPermissionGrants.allow
+# in config.json, where "Always allow" writes; a grant on a folder covers what's
+# under it. Antigravity documents no format for this file, so setup checks that the
+# list is there before writing, keeps a backup, and touches no other grant.
+AGY_CONFIG="$AGY_HOME/config/config.json"
+
+# agy_grants: the grants llm-wiki needs, one per line.
+agy_grants() {
+  local w full t
+  w="$(agy_cmd)"
+  # agy_cmd writes ~ for the home folder. The tilde is meant literally.
+  # shellcheck disable=SC2088
+  case "$w" in "~/"*) full="$HOME/${w:2}" ;; *) full="$w" ;; esac
+  # The template: this clone, or the folder that holds every version of the plugin.
+  if from_plugin; then t="${REPO%/*}"; else t="$REPO"; fi
+  printf '%s\n' "read_file($WIKIS_DIR)" "write_file($WIKIS_DIR)" "read_file($t)" "command($full)" "command($w)" | awk '!seen[$0]++'
+}
+
+# agy_grants_missing: the needed grants not in the live list. Prints nothing, and
+# fails, when the live list isn't where we expect it.
+agy_grants_missing() {
+  [ -f "$AGY_CONFIG" ] && command -v python3 >/dev/null 2>&1 || return 1
+  agy_grants | python3 -c '
+import json, sys
+try:
+    allow = json.load(open(sys.argv[1]))["userSettings"]["globalPermissionGrants"]["allow"]
+    assert isinstance(allow, list)
+except Exception:
+    sys.exit(1)
+for g in sys.stdin.read().splitlines():
+    if g not in allow:
+        print(g)' "$AGY_CONFIG"
+}
+
+agy_grants_add() {
+  cp "$AGY_CONFIG" "$AGY_CONFIG.bak-$(date +%Y%m%d-%H%M%S)" || return 1
+  agy_grants_missing | python3 -c '
+import json, sys
+path = sys.argv[1]
+s = json.load(open(path))
+allow = s["userSettings"]["globalPermissionGrants"]["allow"]
+for g in sys.stdin.read().splitlines():
+    if g and g not in allow:
+        allow.append(g)
+with open(path, "w") as out:
+    json.dump(s, out, indent=2)
+    out.write("\n")' "$AGY_CONFIG"
+}
+
+# setup_agy_grants: the grants half of the Antigravity step.
+setup_agy_grants() {
+  local missing n
+  if ! missing="$(agy_grants_missing)"; then
+    [ "$SETUP_MODE" = new ] || echo "Antigravity's grant list isn't where llm-wiki expects it ($(tilde "$AGY_CONFIG"), userSettings.globalPermissionGrants), so nothing was changed. Approve wiki commands when Gemini asks, with Always allow."
+    return 0
+  fi
+  n="$(printf '%s' "$missing" | grep -c . || true)"
+  [ "$n" -gt 0 ] || { [ "$SETUP_MODE" = new ] || echo "Gemini may read and write the wikis and run wiki.sh without asking."; return 0; }
+  if [ "$SETUP_MODE" = new ] && setup_done antigravity.grants; then return 0; fi
+  echo "Gemini asks before each file it reads in the wikis and each wiki.sh command it runs, unless Antigravity has grants for them:"
+  printf '%s\n' "$missing" | sed 's/^/  /'
+  if ask_yn "Add them to Antigravity's grants?" y; then
+    if agy_grants_add; then echo "  added (backup beside $(tilde "$AGY_CONFIG")). Quit and reopen Antigravity, or it may save its old list over this."; else echo "  couldn't change $(tilde "$AGY_CONFIG")."; fi
+  fi
+  setup_mark antigravity.grants
+}
+
 # Antigravity: offer the llm-wiki plugin when Antigravity is installed, keep it
 # current, and retire the session line pasted into ~/.gemini/GEMINI.md before it.
 setup_antigravity() {
@@ -4225,7 +4295,8 @@ setup_antigravity() {
   state="$(agy_state)"
   [ "$state" != none ] || return 0
   if [ "$SETUP_MODE" = new ] && { [ "$state" = current ] || { [ "$state" = missing ] && setup_done antigravity; }; } \
-    && ! grep -qF "knowledge wikis live in" "$gm" 2>/dev/null; then
+    && ! grep -qF "knowledge wikis live in" "$gm" 2>/dev/null \
+    && { setup_done antigravity.grants || ! agy_grants_missing | grep -q .; }; then
     return 0
   fi
   section "Antigravity"
@@ -4255,6 +4326,7 @@ setup_antigravity() {
       [ -s "$gm" ] || rm -f "$gm"
     fi
   fi
+  [ "$(agy_state)" = missing ] || setup_agy_grants
 }
 
 cmd_setup() {
@@ -4403,6 +4475,14 @@ case "$cmd" in
     perm_rules | sed 's/.*/"&",/'
     n="$(perm_missing | wc -l | tr -d ' ')"
     echo "$n of these are missing from ~/.claude/settings.json. $WIKI_CMD setup permissions adds them." >&2
+    if [ "$(agy_state)" != none ]; then
+      echo >&2
+      echo "Antigravity grants, for userSettings.globalPermissionGrants.allow in $(tilde "$AGY_CONFIG"):" >&2
+      agy_grants | sed 's/.*/"&",/'
+      if m="$(agy_grants_missing)"; then
+        echo "$(printf '%s' "$m" | grep -c . || true) of these are missing. $WIKI_CMD setup antigravity adds them." >&2
+      fi
+    fi
     exit 0
     ;;
   capture) cmd_capture "$@"; exit 0 ;;
