@@ -55,6 +55,10 @@ Usage: $WIKI_CMD <command> [options]
   which <repo>         Print the wiki that covers a repository.
   status               List wikis: handbook version, notes waiting, lock state.
   find <word>          Search every wiki's index, then page text, for a word.
+  deps [--all] [--write]
+                       Which repository owns which package, and which use each other's,
+                       from go.mod, package.json and pyproject.toml. --write saves it
+                       to the shared wiki's data/dependencies.csv.
   stale [days]         List pages not verified in that many days (default 90), or 50
                        commits behind their repository's clone under code_dirs.
   patterns             Recurring feedback across wikis, and which patterns are ready to propose.
@@ -1918,6 +1922,109 @@ cmd_claude() {
   echo "  $line"
 }
 
+# ---- deps -------------------------------------------------------------------
+# deps [--all] [--write]: which repository owns which package, and which of your
+# repositories use each other's, from their module files: go.mod, package.json and
+# pyproject.toml. By default only repositories a wiki in this collection covers, so
+# repositories from another context don't leak in; --all takes every repository
+# under code_dirs. --write saves it as the shared wiki's data/dependencies.csv.
+cmd_deps() {
+  local all=0 write=0 map out
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --all) all=1; shift ;;
+      --write) write=1; shift ;;
+      *) die "deps options: --all, --write" ;;
+    esac
+  done
+  [ -d "$WIKIS_DIR" ] || die "no wikis at $(tilde "$WIKIS_DIR")"
+  need_python "deps"
+  map="$(repo_map)"
+  [ -n "$map" ] || die "no repositories under code_dirs ($(journal_get code_dirs)). Set it with: $WIKI_CMD journal set code_dirs <folders>"
+  out=""
+  [ "$write" = 0 ] || { mkdir -p "$WIKIS_DIR/$SHARED/data"; out="$WIKIS_DIR/$SHARED/data/dependencies.csv"; }
+  DEPS_REPOS="$map" python3 - "$WIKIS_DIR" "$all" "$out" "$(journal_get exclude)" <<'PY'
+import csv, fnmatch, json, os, re, sys
+from pathlib import Path
+wikis, all_, out, exclude = sys.argv[1], sys.argv[2] == "1", sys.argv[3], [g for g in sys.argv[4].split(",") if g]
+
+# Names a wiki covers: every wiki's own name, and every repos.md entry.
+known = set()
+for d in Path(wikis).iterdir():
+    if (d / "AGENTS.md").is_file():
+        known.add(d.name)
+        rp = d / "repos.md"
+        if rp.is_file():
+            known |= {l[2:].strip() for l in rp.read_text(errors="replace").splitlines() if l.startswith("- ")}
+
+repos = {}
+for line in os.environ.get("DEPS_REPOS", "").splitlines():
+    name, path = line.split("\t", 1)
+    if path in repos.values(): continue
+    if not all_ and name not in known: continue
+    if any(fnmatch.fnmatch(name, g) for g in exclude): continue
+    repos[name] = path
+
+SKIP = {"node_modules", "vendor", ".git", "dist", "build", ".venv", "venv"}
+def module_files(root):
+    for d, dirs, files in os.walk(root):
+        # A folder that is a repository of its own is counted under its own name.
+        dirs[:] = [x for x in dirs if x not in SKIP and not x.startswith(".") and not os.path.exists(os.path.join(d, x, ".git"))]
+        if d.count(os.sep) - root.count(os.sep) >= 3: dirs[:] = []
+        for f in files:
+            if f in ("go.mod", "package.json", "pyproject.toml"):
+                yield os.path.join(d, f)
+
+owns, uses = [], []   # (repo, ecosystem, package, file) / (repo, ecosystem, dependency)
+for repo, root in sorted(repos.items()):
+    for f in module_files(root):
+        rel = os.path.relpath(f, root)
+        text = open(f, errors="replace").read()
+        if f.endswith("go.mod"):
+            m = re.search(r"^module\s+(\S+)", text, re.M)
+            if m: owns.append((repo, "go", m.group(1), rel))
+            for dep in re.findall(r"^\s*(?:require\s+)?([a-z0-9.\-]+\.[a-z]+/\S+)\s+v\S+", text, re.M):
+                uses.append((repo, "go", dep))
+        elif f.endswith("package.json"):
+            try: p = json.loads(text)
+            except ValueError: continue
+            if p.get("name"): owns.append((repo, "npm", p["name"], rel))
+            for k in ("dependencies", "devDependencies", "peerDependencies"):
+                for dep in (p.get(k) or {}):
+                    uses.append((repo, "npm", dep))
+        else:
+            m = re.search(r'^\[project\][^\[]*?^name\s*=\s*"([^"]+)"', text, re.M | re.S)
+            if m: owns.append((repo, "python", m.group(1), rel))
+            block = re.search(r'^\[project\][^\[]*?^dependencies\s*=\s*\[(.*?)\]', text, re.M | re.S)
+            for dep in re.findall(r'"\s*([A-Za-z0-9_.\-]+)', block.group(1) if block else ""):
+                uses.append((repo, "python", dep))
+
+owner = {(eco, pkg): repo for repo, eco, pkg, _ in owns}
+# Go: a dependency on any package inside a module counts as using that module.
+def owned(eco, dep):
+    if (eco, dep) in owner: return owner[(eco, dep)]
+    if eco == "go":
+        for (e, pkg), r in owner.items():
+            if e == "go" and dep.startswith(pkg + "/"): return r
+    return None
+internal = sorted({(r, eco, dep, owned(eco, dep)) for r, eco, dep in uses if owned(eco, dep) and owned(eco, dep) != r})
+
+print(f"{len(repos)} repositor{'y' if len(repos) == 1 else 'ies'}, {len(owns)} package(s) owned, {len(internal)} use(s) of each other's")
+for repo, eco, pkg, rel in sorted(owns):
+    print(f"  {repo} owns {eco} {pkg}" + ("" if rel in ("go.mod", "package.json", "pyproject.toml") else f" ({rel})"))
+for r, eco, dep, o in internal:
+    print(f"  {r} uses {o}'s {eco} {dep}")
+if out:
+    with open(out, "w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["kind", "repo", "ecosystem", "package", "owner", "file"])
+        for repo, eco, pkg, rel in sorted(owns): w.writerow(["owns", repo, eco, pkg, repo, rel])
+        for r, eco, dep, o in internal: w.writerow(["uses", r, eco, dep, o, ""])
+    print(f"wrote: {out.replace(os.path.expanduser('~'), '~', 1)}")
+PY
+  [ -z "$out" ] || echo "If the shared wiki has no page for this dataset yet, compile one: what it is, its columns, how to refresh it ($WIKI_CMD deps --write)."
+}
+
 # ---- journal ----------------------------------------------------------------
 # The journal lives beside the wikis in $WIKIS_DIR/journal. One file per day of
 # entries, plus a config file. Dates are local time, shifted by day_starts so
@@ -3060,7 +3167,7 @@ EOF
 # Tab completion. `completion zsh|bash` prints a small script for the shell, which
 # asks `__complete` for candidates on every Tab. The candidates live here, so a
 # plugin update can't leave completion stale.
-COMMANDS="setup init new start permissions seed harvest capture lock log sync index lint pending cover which status find stale patterns skills tips report stats delegation upgrade unlock claude link journal standup completion"
+COMMANDS="setup init new start deps permissions seed harvest capture lock log sync index lint pending cover which status find stale patterns skills tips report stats delegation upgrade unlock claude link journal standup completion"
 RANGES="lastworkday yesterday today week lastweek 7d 14d 30d"
 
 wiki_names() {
@@ -4520,6 +4627,7 @@ if [ "$cmd" = report ]; then
 fi
 case "$cmd" in
   __agy-start) cmd_agy_start; exit 0 ;;
+  deps) cmd_deps "$@"; exit 0 ;;
   permissions)
     # The allow rules setup offers, as JSON lines to paste into permissions.allow.
     perm_rules | sed 's/.*/"&",/'
