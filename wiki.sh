@@ -83,7 +83,8 @@ Usage: $WIKI_CMD <command> [options]
   journal note [--day DATE] [--at HH:MM] <project> <text>
                        Add one line to today's journal, or a past day's.
   journal backfill [--since 14d] [--until DATE] [--done]
-                       Digest past Claude Code sessions into journal/backfill.md.
+                       Digest past Claude Code sessions and Gemini's Antigravity
+                       conversations into journal/backfill.md.
                        An agent turns the digest into entries.
   journal path | prune Print today's journal file. Delete days older than keep_days.
   standup [options]    Gather what you did: commits, journal lines, wiki notes,
@@ -2303,8 +2304,9 @@ cmd_journal_note() {
   journal_note "$1" "$(shift; printf '%s ' "$@" | sed 's/ $//')" "$day" "$at"
 }
 
-# journal backfill: digest past Claude Code sessions into journal/backfill.md.
-# An agent then writes entries from it. See rules/journal.md.
+# journal backfill: digest past Claude Code sessions, and Gemini conversations in
+# Antigravity, into journal/backfill.md. An agent then writes entries from it. See
+# rules/journal.md.
 journal_backfill() {
   local since="14d" until="" from="$HOME/.claude/projects" today start out
   while [ $# -gt 0 ]; do
@@ -2323,21 +2325,21 @@ journal_backfill() {
     esac
   done
   since_ok "$since" || die "--since takes lastworkday, yesterday, today, week, lastweek, a number of days like 14d, or a date"
-  [ -d "$from" ] || die "no Claude Code sessions at $(tilde "$from"). Use --from DIR."
+  [ -d "$from" ] || [ -d "$AGY_HOME/antigravity/brain" ] || die "no Claude Code sessions at $(tilde "$from"), and no Antigravity conversations. Use --from DIR."
   command -v python3 >/dev/null 2>&1 || die "backfill needs python3 to read session files"
   write_journal_config >/dev/null
   today="$(journal_today)"
   start="$(since_to_date "$today" "$since")"
   until="${until:-$today}"
   out="$JOURNAL_DIR/backfill.md"
-  python3 - "$from" "$start" "$until" "$(journal_get day_starts)" "$WIKIS_DIR" "$(journal_get exclude)" "$out" <<'PY'
+  python3 - "$from" "$start" "$until" "$(journal_get day_starts)" "$WIKIS_DIR" "$(journal_get exclude)" "$out" "$AGY_HOME/antigravity/brain" <<'PY'
 # Digest Claude Code transcripts into one markdown file: per local day, per
 # project, the user's prompts, files changed, whether it committed, and how it ended.
 import json, os, re, subprocess, sys, fnmatch
 from datetime import datetime, timedelta, date
 from pathlib import Path
 
-sess_dir, start, end, day_starts, wikis, exclude, out = sys.argv[1:8]
+sess_dir, start, end, day_starts, wikis, exclude, out, agy_dir = sys.argv[1:9]
 start = date.fromisoformat(start); end = date.fromisoformat(end)
 ds_h, ds_m = (int(x) for x in day_starts.split(":"))
 excl = [g for g in exclude.split(",") if g]
@@ -2400,7 +2402,7 @@ def texts(content):
 # (day, project) -> record
 work = {}
 cutoff = datetime.combine(start - timedelta(days=1), datetime.min.time()).timestamp()
-files = [p for p in Path(sess_dir).rglob("*.jsonl") if p.stat().st_mtime >= cutoff]
+files = [p for p in Path(sess_dir).rglob("*.jsonl") if p.stat().st_mtime >= cutoff] if os.path.isdir(sess_dir) else []
 for f in files:
     recs = []
     for line in open(f, errors="replace"):
@@ -2422,7 +2424,7 @@ for f in files:
         p = project(r.get("cwd"))
         if p not in known and main: p = main
         if any(fnmatch.fnmatch(p, g) for g in excl): continue
-        w = work.setdefault((d, p), {"first": hm, "last": hm, "sessions": set(), "prompts": [], "files": [], "commit": False, "end": "", "branch": ""})
+        w = work.setdefault((d, p), {"first": hm, "last": hm, "sessions": set(), "prompts": [], "files": [], "commit": False, "end": "", "branch": "", "gemini": 0})
         w["first"] = min(w["first"], hm); w["last"] = max(w["last"], hm)
         w["sessions"].add(r.get("sessionId", f.stem))
         if r.get("gitBranch") and r["gitBranch"] != "HEAD": w["branch"] = r["gitBranch"]
@@ -2450,9 +2452,56 @@ for f in files:
                         if b not in w["files"]: w["files"].append(b)
                     if "git commit" in str(inp.get("command", "")): w["commit"] = True
 
+# Gemini conversations in Antigravity: one transcript per conversation, which
+# doesn't record its workspace. The project is the one its file paths and
+# `git -C` folders point at most often.
+agy = [p for p in Path(agy_dir).glob("*/.system_generated/logs/transcript_full.jsonl") if p.stat().st_mtime >= cutoff] if os.path.isdir(agy_dir) else []
+for f in agy:
+    steps = []
+    for line in open(f, errors="replace"):
+        try: steps.append(json.loads(line))
+        except ValueError: continue
+    seen = {}
+    for e in steps:
+        for c in e.get("tool_calls") or []:
+            a = c.get("args") or {}
+            dirs = [os.path.dirname(a["Path"])] if a.get("Path") else []
+            dirs += re.findall(r"-C\s+(\S+)", a.get("CommandLine") or "")
+            for dd in dirs:
+                dd = os.path.expanduser(dd)
+                if os.path.isdir(dd):
+                    p = project(dd)
+                    if p in known: seen[p] = seen.get(p, 0) + 1
+    p = max(seen, key=seen.get) if seen else "gemini"
+    if any(fnmatch.fnmatch(p, g) for g in excl): continue
+    conv = f.parts[-4]
+    for e in steps:
+        if not e.get("created_at"): continue
+        d, hm = local(e["created_at"])
+        if d < start or d > end: continue
+        w = work.setdefault((d, p), {"first": hm, "last": hm, "sessions": set(), "prompts": [], "files": [], "commit": False, "end": "", "branch": "", "gemini": 0})
+        w["first"] = min(w["first"], hm); w["last"] = max(w["last"], hm)
+        if conv not in w["sessions"]: w["gemini"] += 1
+        w["sessions"].add(conv)
+        c = e.get("content") or ""
+        if e.get("type") == "USER_INPUT" and isinstance(c, str):
+            t = c.split("<USER_REQUEST>")[-1].split("</USER_REQUEST>")[0]
+            t = clean(t, 240)
+            if t: w["prompts"].append((hm, t))
+        elif e.get("type") == "PLANNER_RESPONSE":
+            for call in e.get("tool_calls") or []:
+                a = call.get("args") or {}
+                if call.get("name") in ("write_file", "edit_file") and a.get("Path"):
+                    b = os.path.basename(a["Path"])
+                    if b not in w["files"]: w["files"].append(b)
+                if "git commit" in (a.get("CommandLine") or "") or "wiki.sh sync" in (a.get("CommandLine") or ""): w["commit"] = True
+            if not e.get("tool_calls") and isinstance(c, str):
+                t = clean(c, 400)
+                if t: w["end"] = t
+
 with open(out, "w") as o:
     o.write(f"# Session digest {start} to {end}\n\n")
-    o.write("Written by `wiki.sh journal backfill` from Claude Code transcripts. An agent turns this into journal entries, then this file can go.\n")
+    o.write("Written by `wiki.sh journal backfill` from Claude Code transcripts and Gemini's Antigravity conversations. An agent turns this into journal entries, then this file can go.\n")
     o.write("Times are local. Each block is one project on one day: the user's prompts, files changed, and the last thing the agent said.\n")
     day = None
     for (d, p) in sorted(work):
@@ -2461,6 +2510,7 @@ with open(out, "w") as o:
         if d != day:
             o.write(f"\n## {d}\n"); day = d
         meta = [f"{w['first']}-{w['last']}", f"{len(w['sessions'])} session(s)"]
+        if w["gemini"]: meta.append(f"{w['gemini']} in Gemini")
         if w["branch"]: meta.append(f"branch {w['branch']}")
         if w["commit"]: meta.append("ran git commit")
         o.write(f"\n### [{p}] {', '.join(meta)}\n")
@@ -2470,7 +2520,7 @@ with open(out, "w") as o:
         if w["files"]: o.write(f"- files changed: {', '.join(w['files'][:12])}{' ...' if len(w['files']) > 12 else ''}\n")
         if w["end"]: o.write(f"- last reply: {w['end']}\n")
 n = sum(1 for k in work if work[k]["prompts"])
-print(f"{n} project-day(s) from {len(files)} transcript file(s)")
+print(f"{n} project-day(s) from {len(files)} Claude Code transcript(s) and {len(agy)} Gemini conversation(s)")
 PY
   echo "digest:  $(tilde "$out") ($start to $until)"
   echo "Next: tell an agent \"backfill my journal from the digest\". It writes the entries, then deletes the digest."

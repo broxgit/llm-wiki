@@ -22,7 +22,7 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 ## Later
 
 - **Merge requests in standups.** Reviews and MRs opened live in GitHub or GitLab, not in git history. Pulling them in would need an API token and a host per remote.
-- **Backfill from more places.** The desktop app's Chat tab and claude.ai aren't in `~/.claude/projects`. An agent with chat search could add them. (The desktop Code tab is: checked 2026-10-28, its sessions show up in the backfill digest.)
+- **Backfill from more places.** The desktop app's Chat tab and claude.ai aren't on disk, so they're out of reach without an agent that has chat search. (The desktop Code tab is in `~/.claude/projects`, and Gemini's Antigravity conversations are read since 2026-10-29.)
 - **Team digest.** A weekly roll-up across several people's journals, for a lead. Needs a shared, opt-in journal location.
 - **Handbook cost per session.** Since the session hook stopped embedding the handbook (only a 2KB preview reached the model), every session reads `AGENTS.md`, about 14KB or 3,500 tokens. Terse page style would cut this too.
 - **Trim the core further.** `template/AGENTS.md` is about 2,900 tokens, up from 2,600 after version 8. "Other wikis" and "Sync" are the biggest sections left.
@@ -68,6 +68,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 - **Why:** an agent changing a shared package couldn't tell which of your repositories use it, or which repository owns a package it saw imported.
 - **What changed:** `wiki deps` reads `go.mod`, `package.json` and `pyproject.toml` (three folders deep, skipping nested repositories, `node_modules` and `vendor`) in the repositories under `code_dirs`. It lists which repository owns each package, and which of your repositories use another's. A Go import counts toward the module that contains it. By default it covers only repositories a wiki in the collection covers, so another context's repositories don't leak in; `--all` takes them all, and `exclude` still applies. `--write` saves `data/dependencies.csv` in the shared wiki, with the columns kind, repo, ecosystem, package, owner and file.
+
+### Backfill reads Gemini's Antigravity conversations (2026-10-29)
+
+- **Why:** work done in Antigravity never reached the journal, so standups missed it.
+- **What changed:** `wiki journal backfill` also digests `~/.gemini/antigravity/brain/*/…/transcript_full.jsonl`. A conversation doesn't record its workspace, so it goes under the project its file paths and `git -C` folders point at most. The digest marks how many sessions were Gemini's, with the user's prompts, files written or edited, a commit or `wiki.sh sync`, and the last reply. On 2026-10-29 it filed 8 conversations under workout-app, llm-wiki and global correctly.
 
 ### Antigravity grants for llm-wiki (2026-10-29)
 

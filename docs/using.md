@@ -148,13 +148,13 @@ The journal is personal. It sits beside the wikis, not in one, and isn't committ
 
 ### Fill in past days
 
-The journal starts empty, but Claude Code keeps a transcript of every session.
+The journal starts empty, but Claude Code keeps a transcript of every session, and Antigravity keeps one of every Gemini conversation.
 
 ```
 wiki journal backfill --since 14d
 ```
 
-This writes a short digest, `~/wikis/journal/backfill.md`, per day and project: what you asked for, which files changed, how it ended. It needs `python3`. Then tell an agent "backfill my journal". It writes entries from the digest and deletes it.
+This writes a short digest, `~/wikis/journal/backfill.md`, per day and project, from both: what you asked for, which files changed, how it ended. It needs `python3`. Then tell an agent "backfill my journal". It writes entries from the digest and deletes it.
 
 ### Journal settings
 
