@@ -255,8 +255,9 @@ Run `wiki` with no arguments for the full list. The ones you're likely to use:
 | Command | What it does |
 |---|---|
 | `wiki status` | Every wiki: notes waiting, lock, handbook version, what's due. |
-| `wiki find <word>` | Search every wiki's index. |
-| `wiki stale [days]` | Pages not verified in that many days, 90 by default. |
+| `wiki start` | Session start in one call: the wiki for this folder, a pull, the indexes, `For agents`, and what waits. Agents run it; you can too. |
+| `wiki find <word>` | Search every wiki's index, then page text. |
+| `wiki stale [days]` | Pages not verified in that many days, 90 by default, or 50 commits behind their repository. |
 | `wiki patterns` | Recurring feedback, and which patterns are ready. |
 | `wiki standup` | Raw material for a standup. |
 | `wiki upgrade --all` | Bring every wiki's handbook up to the template's. |

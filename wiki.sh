@@ -46,10 +46,13 @@ Usage: $WIKI_CMD <command> [options]
                        Start a wiki from a repository's own docs: README, agent
                        instructions, skills, docs/, decision records.
   cover <wiki> <repo>...  Record that one wiki covers several repositories.
+  start [<repo>]       Session start in one call: find the wiki, pull, print the indexes,
+                       For agents and what waits. Defaults to the current folder.
   which <repo>         Print the wiki that covers a repository.
   status               List wikis: handbook version, notes waiting, lock state.
-  find <word>          Search every wiki's index for a word.
-  stale [days]         List pages not verified in that many days (default 90).
+  find <word>          Search every wiki's index, then page text, for a word.
+  stale [days]         List pages not verified in that many days (default 90), or 50
+                       commits behind their repository's clone under code_dirs.
   patterns             Recurring feedback across wikis, and which patterns are ready to propose.
   skills [link]        Team skills in the wikis, and link them into ~/.claude/skills.
   tips [--mute NAME]   Features your own wikis suggest you'd get something out of.
@@ -258,6 +261,85 @@ which_miss() {
     echo "If $name belongs to one of them: $WIKI_CMD cover <wiki> $name"
   fi
   echo "If it's a project of its own, the first session with something to file creates its wiki: $WIKI_CMD new $name"
+}
+
+# start [<repo or folder>]: everything session start needs, in one call. Finds the
+# wiki, pulls the collection, and prints what the handbook says to read first: the
+# wiki's index, each shared wiki's index and For agents section, and what waits.
+# Agents without the plugin's hook made five or six calls for this, and skipped the
+# pull in every run of the first test with another agent (Gemini, 2026-10-29).
+cmd_start() {
+  local arg="${1:-$PWD}" repo="" top w="" wiki="" note="" out sshc tv v line sname spath d n
+  if [ -d "$arg" ]; then
+    if top="$(git -C "$arg" rev-parse --show-toplevel 2>/dev/null)"; then repo="$(repo_name "$top")"; fi
+  else
+    repo="$arg"
+  fi
+  [ -d "$WIKIS_DIR" ] || die "no wikis at $(tilde "$WIKIS_DIR"). Run: $WIKI_CMD setup"
+  if [ -n "$repo" ]; then w="$(which_wiki "$repo")"; [ -z "$w" ] || wiki="$WIKIS_DIR/$w"; fi
+  if [ -z "$wiki" ]; then
+    wiki="$WIKIS_DIR/$SHARED"
+    is_wiki "$wiki" || die "no wiki covers ${repo:-this folder}, and there's no shared wiki at $(tilde "$wiki")"
+    if [ -n "$repo" ]; then
+      note="No wiki covers $repo yet, so the shared wiki is this session's. Create $repo's wiki with \`$WIKI_CMD new $repo\` the first time there's something to file."
+    else
+      note="Not in a repository, so the shared wiki is this session's."
+    fi
+  fi
+  echo "wiki: $(tilde "$wiki")${repo:+, for the repository $repo}"
+  [ -z "$note" ] || echo "$note"
+  # The pull. A failure is a warning: offline, a sandbox, or another session pulling.
+  if in_git_repo "$WIKIS_DIR" && [ -n "$(git -C "$WIKIS_DIR" remote 2>/dev/null)" ]; then
+    # Keep the collection's own SSH command (setup may name a key there) and add a
+    # timeout, so an unreachable host can't hang the session.
+    sshc="${GIT_SSH_COMMAND:-$(git -C "$WIKIS_DIR" config --get core.sshCommand 2>/dev/null || echo ssh)}"
+    if out="$(GIT_SSH_COMMAND="$sshc -o ConnectTimeout=10 -o BatchMode=yes" git -C "$WIKIS_DIR" pull -q --no-rebase --no-edit 2>&1 </dev/null)"; then
+      echo "pull: up to date with the remote"
+    else
+      echo "pull: failed, so pages may be behind other machines. Carry on, and pull before your first write. git said: $(printf '%s' "$out" | head -n 1)"
+    fi
+  fi
+  tv="$(version_of "$TEMPLATE/AGENTS.md")"
+  v="$(version_of "$wiki/AGENTS.md")"
+  if [ -n "$tv" ] && [ "${v:-0}" -lt "$tv" ]; then
+    echo "handbook: v${v:-?}, behind v$tv. Run \`$WIKI_CMD upgrade --all\`, commit and push, then read the new AGENTS.md."
+  fi
+  echo "Read $(tilde "$wiki")/AGENTS.md, the handbook, if you haven't this session. Below is what its session start says to read next."
+  echo
+  echo "===== $(tilde "$wiki")/index.md"
+  cat "$wiki/index.md" 2>/dev/null || echo "(no index yet)"
+  # Shared wikis from links.md: "- name: path | purpose". Skip missing ones and this one.
+  while IFS= read -r line; do
+    sname="${line#- }"; sname="${sname%%:*}"
+    spath="${line#*: }"; spath="${spath%% |*}"
+    # links.md writes ~ for the home folder. The tilde is meant literally.
+    # shellcheck disable=SC2088
+    case "$spath" in "~/"*) spath="$HOME/${spath:2}" ;; esac
+    is_wiki "$spath" || continue
+    [ "$spath" -ef "$wiki" ] && continue
+    echo
+    echo "===== $(tilde "$spath")/index.md ($sname)"
+    cat "$spath/index.md" 2>/dev/null || true
+    if [ -f "$spath/wiki/conventions.md" ]; then
+      echo
+      echo "===== For agents, from $(tilde "$spath")/wiki/conventions.md"
+      awk '/^## For agents/ { on = 1; next } on && /^## / { exit } on' "$spath/wiki/conventions.md"
+    fi
+  done < <(grep '^- [^:]*: ' "$wiki/links.md" 2>/dev/null || true)
+  if [ "$wiki" -ef "$WIKIS_DIR/$SHARED" ] && [ -f "$wiki/wiki/conventions.md" ]; then
+    echo
+    echo "===== For agents, from $(tilde "$wiki")/wiki/conventions.md"
+    awk '/^## For agents/ { on = 1; next } on && /^## / { exit } on' "$wiki/wiki/conventions.md"
+  fi
+  echo
+  echo "===== Waiting to be compiled"
+  for d in "$wiki" $(grep '^- [^:]*: ' "$wiki/links.md" 2>/dev/null | sed 's/^[^:]*: *//; s/ |.*//; s#^~/#'"$HOME"'/#' || true); do
+    is_wiki "$d" || continue
+    if [ -n "$(unlisted "$d")" ]; then echo "$(tilde "$d"): unknown, can't read $(tilde "$(unlisted "$d")"). If this runs in an agent's sandbox, allow $(tilde "$WIKIS_DIR") there."; continue; fi
+    n="$(pending_files "$d" | wc -l | tr -d ' ')"
+    if [ "$n" -gt 0 ]; then echo "$(tilde "$d"): $n note(s). Compile them before the user's request, as the handbook's session start says, unless there are more than ten."
+    else echo "$(tilde "$d"): nothing waiting"; fi
+  done
 }
 
 # cover <wiki> <repo>...: record that one wiki covers several repositories.
@@ -619,7 +701,7 @@ PY
 
 # lint <wiki>... [--all]
 cmd_lint() {
-  local all=0 roots=() w d
+  local all=0 roots=() w d lag map
   while [ $# -gt 0 ]; do
     case "$1" in
       --all) all=1; shift ;;
@@ -632,10 +714,19 @@ cmd_lint() {
   fi
   [ "${#roots[@]}" -gt 0 ] || die "name a wiki, or --all"
   need_python "lint"
-  python3 - "$WIKIS_DIR" "$SHARED" "$(days_ago 180)" "${roots[@]}" <<'PY'
+  lag="$(mktemp)"
+  map="$(repo_map)"
+  if [ -n "$map" ]; then
+    for d in "${roots[@]}"; do commit_lag "$d" "$map" | sed "s#^#$d$TAB#"; done > "$lag"
+  fi
+  python3 - "$WIKIS_DIR" "$SHARED" "$(days_ago 180)" "$lag" "${roots[@]}" <<'PY'
 import os, re, sys
-wikis, shared, stale_cut = sys.argv[1], sys.argv[2], sys.argv[3]
-roots = sys.argv[4:]
+wikis, shared, stale_cut, lagfile = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+roots = sys.argv[5:]
+lag = {}
+for line in open(lagfile).read().splitlines():
+    root, page, what = line.split("\t", 2)
+    lag.setdefault(root, []).append((page, what.split()))
 link = re.compile(r"\]\(([^)\s#]+\.md)(?:#[^)]*)?\)")
 cite = re.compile(r"(?<![\w/.-])([a-z0-9][a-z0-9._-]*):((?:wiki|skills)/[^\s)`'\",;]+?\.md)")
 entry = re.compile(r"^- \[(.*?)\]\((.*?)\)")
@@ -724,6 +815,14 @@ for root in roots:
             add("page missing from the index", rel)
         if not inbound.get(rel) and os.path.basename(rel) != "conventions.md":
             add("orphan: no page links to it", rel)
+    # Commit stamps, from commit_lag.
+    for page, w in lag.get(root, []):
+        if w[0] == "behind":
+            add("commit far behind its repository", f"{page} ({w[1]} commits behind {w[2]})")
+        elif w[0] == "missing":
+            add("commit not found in its repository", f"{page} ({w[1]} in {w[2]})")
+        elif w[0] == "bare":
+            add("commit without repo@ in a wiki over several repositories", f"{page} ({w[1]})")
     # Waiting notes.
     raw = os.path.join(root, "raw")
     waiting = [f for f in (os.listdir(raw) if os.path.isdir(raw) else []) if not f.startswith(".")
@@ -742,6 +841,7 @@ for root in roots:
 if total:
     print("\nFix the mechanical ones without asking: links, index lines (wiki index), frontmatter. Ask before merging, deleting or moving pages.")
 PY
+  rm -f "$lag"
 }
 
 # ---- pending ----------------------------------------------------------------
@@ -1337,8 +1437,46 @@ days_ago() {
   date -u -d "$1 days ago" +%Y-%m-%d 2>/dev/null || date -u -v-"$1"d +%Y-%m-%d
 }
 
+# Commit distance. A page about code records the commit it was checked against.
+# Days alone mislead: a busy repository outdates a page in days, a quiet one not
+# in a year. So stale and lint also count the commits the repository has moved
+# since, when a clone is under code_dirs. No clone, no finding: days still apply.
+STALE_COMMITS=50
+
+# repo_map: "name<TAB>path" for each repository under code_dirs, first one wins.
+repo_map() {
+  find_repos 2>/dev/null | while IFS= read -r r; do printf '%s\t%s\n' "${r##*/}" "$r"; done | awk -F'\t' '!seen[$1]++'
+}
+
+# commit_lag <wiki root> <repo map>: one line per page with a commit stamp worth
+# reporting, tab-separated: page, then "behind N repo", "missing hash repo", or
+# "bare hash" (a wiki over several repositories must write repo@hash).
+commit_lag() {
+  local root="$1" map="$2" f c repo hash path multi=0 n
+  grep -q '^- ' "$root/repos.md" 2>/dev/null && multi=1
+  [ -d "$root/wiki" ] || return 0
+  while IFS= read -r f; do
+    c="$(awk 'NR == 1 && /^---$/ { fm = 1; next } fm && /^---$/ { exit } fm && /^commit:/ { sub(/^commit: */, ""); print; exit }' "$f" | tr -d '"'"'"' ')"
+    [ -n "$c" ] || continue
+    case "$c" in
+      *@*) repo="${c%@*}"; hash="${c##*@}" ;;
+      *)
+        if [ "$multi" = 1 ]; then printf '%s\tbare %s\n' "${f#"$root"/}" "$c"; continue; fi
+        repo="${root##*/}"; hash="$c" ;;
+    esac
+    path="$(printf '%s\n' "$map" | awk -F'\t' -v r="$repo" '$1 == r { print $2; exit }')"
+    [ -n "$path" ] || continue
+    if ! git -C "$path" cat-file -e "$hash^{commit}" 2>/dev/null; then
+      printf '%s\tmissing %s %s\n' "${f#"$root"/}" "$hash" "$repo"
+      continue
+    fi
+    n="$(git -C "$path" rev-list --count "$hash..HEAD" 2>/dev/null || echo 0)"
+    [ "${n:-0}" -lt "$STALE_COMMITS" ] || printf '%s\tbehind %s %s\n' "${f#"$root"/}" "$n" "$repo"
+  done < <(find "$root/wiki" -type f -name '*.md' ! -path '*/sources/*' | sort)
+}
+
 cmd_stale() {
-  local days="$1" cutoff d f v rel found=0
+  local days="$1" cutoff d f v rel map found=0
   case "$days" in
     '' | *[!0-9]*) die "stale takes a number of days" ;;
   esac
@@ -1360,7 +1498,23 @@ cmd_stale() {
       fi
     done < <(find "$d/wiki" -type f -name '*.md' ! -path '*/sources/*' | sort)
   done
-  [ "$found" = 1 ] || echo "nothing older than $days days (cutoff $cutoff)"
+  map="$(repo_map)"
+  if [ -n "$map" ]; then
+    for d in "$WIKIS_DIR"/*/; do
+      d="${d%/}"
+      is_wiki "$d" || continue
+      while IFS="$TAB" read -r rel v; do
+        [ -n "$rel" ] || continue
+        found=1
+        case "$v" in
+          behind*) set -- $v; echo "${d##*/}: $rel  ($2 commits behind $3)" ;;
+          missing*) set -- $v; echo "${d##*/}: $rel  (commit $2 not found in $3)" ;;
+          bare*) echo "${d##*/}: $rel  (commit ${v#bare } names no repository; this wiki covers several, so write repo@hash)" ;;
+        esac
+      done < <(commit_lag "$d" "$map")
+    done
+  fi
+  [ "$found" = 1 ] || echo "nothing older than $days days (cutoff $cutoff) or $STALE_COMMITS commits"
 }
 
 upgrade_one() {
@@ -1582,7 +1736,7 @@ claude_line() {
   local dir w
   dir="$(tilde "$WIKIS_DIR")"
   if from_plugin; then w="$(tilde "$(plugin_cmd)")"; else w="$(tilde "$REPO")/wiki.sh"; fi
-  printf '%s' "My knowledge wikis live in $dir, one folder per project, plus a shared one at $dir/$SHARED. Wherever their handbooks say \`wiki.sh\`, run \`$w\`. At session start, run \`$w which <repository-name>\` for the repository you are working in. Its name is the last part of its remote URL, or its folder name. The command prints the wiki that covers it. Read that wiki's AGENTS.md and follow it. If no wiki covers the repository, read $dir/$SHARED/AGENTS.md and follow that, and create the repository's wiki with \`$w new <repository-name>\` the first time you have something to file there. Outside any repository, use the shared wiki. If your tool can hand work to sub-agents on cheaper models, do it for large, self-contained work as $dir/delegation.md says, following $dir/$SHARED/rules/delegation.md."
+  printf '%s' "My knowledge wikis live in $dir, one folder per project, plus a shared one at $dir/$SHARED. Wherever their handbooks say \`wiki.sh\`, run \`$w\`. At session start, run \`$w start\` in the repository you are working in. It names the wiki that covers it, pulls, and prints what to read first. Read that wiki's AGENTS.md and follow it. If no wiki covers the repository, read $dir/$SHARED/AGENTS.md and follow that, and create the repository's wiki with \`$w new <repository-name>\` the first time you have something to file there. Outside any repository, use the shared wiki. If your tool can hand work to sub-agents on cheaper models, do it for large, self-contained work as $dir/delegation.md says, following $dir/$SHARED/rules/delegation.md."
 }
 
 cmd_claude() {
@@ -2699,7 +2853,7 @@ EOF
 # Tab completion. `completion zsh|bash` prints a small script for the shell, which
 # asks `__complete` for candidates on every Tab. The candidates live here, so a
 # plugin update can't leave completion stale.
-COMMANDS="setup init new seed harvest capture lock log sync index lint pending cover which status find stale patterns skills tips report stats delegation upgrade unlock claude link journal standup completion"
+COMMANDS="setup init new start seed harvest capture lock log sync index lint pending cover which status find stale patterns skills tips report stats delegation upgrade unlock claude link journal standup completion"
 RANGES="lastworkday yesterday today week lastweek 7d 14d 30d"
 
 wiki_names() {
@@ -4015,6 +4169,7 @@ case "$cmd" in
   find) [ -n "$target" ] || die "find needs a word"; cmd_find "$target" ;;
   which) [ -n "$target" ] || die "which needs a repository name"; cmd_which "$target" ;;
   stale) cmd_stale "${target:-90}" ;;
+  start) cmd_start ${target:+"$target"} ;;
   upgrade)
     if [ "$want_all" = 1 ]; then cmd_upgrade_all; else need_target; cmd_upgrade_one "$(resolve "$target")"; fi
     ;;
