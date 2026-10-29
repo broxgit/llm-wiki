@@ -707,7 +707,7 @@ case "$out" in *"000001-a.md"*) bad "a note named in a log entry is compiled" "$
 case "$out" in *"000001-b.md"*) bad "a note a page lists in sources: is compiled" "$out" ;; *) ok "a note a page lists in sources: is compiled" ;; esac
 case "$out" in *"000001-c.md"*) bad "a note with a summary page from before v24 is compiled" "$out" ;; *) ok "a note with a summary page from before v24 is compiled" ;; esac
 case "$out" in *"000001-d.md"*) ok "and an uncompiled note still waits" ;; *) bad "and an uncompiled note still waits" "$out" ;; esac
-expect "status counts the same one note" "v24 v24 1 free" bash -c "'$W' status | grep '^v24 ' | tr -s ' '"
+expect "status counts the same one note" "v24 v$TV 1 free" bash -c "'$W' status | grep '^v24 ' | tr -s ' '"
 expect "lint agrees: one note waiting" "notes waiting to be compiled (1)" "$W" lint v24
 section "Claude Code permissions"
 mkdir -p "$HOME/.claude" && printf '{"permissions":{"allow":["Bash(ls *)"]},"theme":"dark"}\n' > "$HOME/.claude/settings.json"

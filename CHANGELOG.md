@@ -4,6 +4,15 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v25 (2026-10-29)
+
+A shorter core. Every session reads `AGENTS.md`, so what only some sessions need moved into `rules/`: about 3,000 words became about 2,300.
+
+- "Other wikis" keeps the two rules every session needs, Ownership and Cite, don't copy. Finding peers, shared wikis, lookup by name, search, and missing wikis moved to `rules/peers.md`.
+- "Sync" is one paragraph: run `wiki.sh sync` after each compile, never rebase, stash or `--no-verify`. Committing by hand, merge conflicts and refused commits moved to a new `rules/sync.md`.
+- "Capture" leads with `wiki.sh capture` (and `--file`), with the by-hand naming rules after it.
+- Do: nothing. Sessions upgrade the wikis on their own.
+
 ## v24 (2026-10-29)
 
 No more summary page per source. Each raw note used to get a page in `wiki/sources/` that only pointed at the pages it fed: one more file written per note at every compile. The collection had 59.

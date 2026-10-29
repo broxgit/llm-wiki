@@ -24,8 +24,6 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 - **Merge requests in standups.** Reviews and MRs opened live in GitHub or GitLab, not in git history. Pulling them in would need an API token and a host per remote.
 - **Backfill from more places.** The desktop app's Chat tab and claude.ai aren't on disk, so they're out of reach without an agent that has chat search. (The desktop Code tab is in `~/.claude/projects`, and Gemini's Antigravity conversations are read since 2026-10-29.)
 - **Team digest.** A weekly roll-up across several people's journals, for a lead. Needs a shared, opt-in journal location.
-- **Handbook cost per session.** Since the session hook stopped embedding the handbook (only a 2KB preview reached the model), every session reads `AGENTS.md`, about 14KB or 3,500 tokens. Terse page style would cut this too.
-- **Trim the core further.** `template/AGENTS.md` is about 2,900 tokens, up from 2,600 after version 8. "Other wikis" and "Sync" are the biggest sections left.
 - **Split work and personal collections.** One collection on a personal remote now holds work, client, and personal wikis. `WIKIS_DIR` already supports a second collection. The routing line would need to know about both.
 - **Reach sessions with no file access.** A chat session that can't read files can't use a wiki. A small MCP server over the collection would fix that.
 - **Review flow for teams.** Agents push straight to the collection. A team may want a weekly digest of changes, or pull requests.
@@ -63,6 +61,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Handbook version 25: a shorter core (2026-10-29)
+
+- **Why:** every session reads `AGENTS.md`, about 3,000 words, though finding peers and committing by hand matter only some of the time.
+- **What changed:** about 2,300 words now. "Other wikis" keeps Ownership and Cite, don't copy; the rest moved to `rules/peers.md`. "Sync" is one paragraph around `wiki.sh sync`; the by-hand steps, conflicts and refused commits moved to a new `rules/sync.md`. "Capture" leads with `wiki.sh capture`. Terse page style, still in Next, would cut further once tested.
 
 ### Dependency map (2026-10-29)
 
