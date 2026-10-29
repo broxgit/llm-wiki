@@ -389,6 +389,7 @@ cmd_capture() {
       *) if [ -z "$wiki" ]; then wiki="$1"; elif [ -z "$slug" ]; then slug="$1"; else die "capture takes a wiki and a slug"; fi; shift ;;
     esac
   done
+  [ -z "$copy" ] || [ -z "$file" ] || die "capture takes --file NOTE or --copy FILE, not both"
   root="$(wiki_root "$wiki")"
   if [ -n "$copy" ]; then
     [ -f "$copy" ] || die "no file at $copy"
@@ -1452,8 +1453,13 @@ days_ago() {
 STALE_COMMITS=50
 
 # repo_map: "name<TAB>path" for each repository under code_dirs, first one wins.
+# Keyed by the name wikis use, from the remote URL, and by folder name too, since
+# a clone's folder can differ from its remote's name.
 repo_map() {
-  find_repos 2>/dev/null | while IFS= read -r r; do printf '%s\t%s\n' "${r##*/}" "$r"; done | awk -F'\t' '!seen[$1]++'
+  find_repos 2>/dev/null | while IFS= read -r r; do
+    printf '%s\t%s\n' "$(repo_name "$r")" "$r"
+    printf '%s\t%s\n' "${r##*/}" "$r"
+  done | awk -F'\t' '!seen[$1]++'
 }
 
 # commit_lag <wiki root> <repo map>: one line per page with a commit stamp worth
@@ -1584,9 +1590,11 @@ cmd_upgrade_all() {
   echo "== delegation"
   write_delegation_file
   apply_delegation_ignore
-  if [ -d "$HOME/.claude" ]; then
+  # Team skills into whichever agents are on this machine.
+  if [ -d "$HOME/.claude" ] || [ -d "$AGY_DIR" ]; then
     echo "== skills"
-    skills_link quiet
+    [ ! -d "$HOME/.claude" ] || skills_link_into "$SKILLS_DIR" quiet
+    [ ! -d "$AGY_DIR" ] || skills_link_into "$AGY_DIR/skills" quiet
   fi
   upgrade_summary "$from" "$behind"
 }
@@ -1822,6 +1830,8 @@ agy_write() {
     rm -f "$AGY_DIR/skills/llm-wiki"
     ln -s "$REPO/skills/llm-wiki" "$AGY_DIR/skills/llm-wiki"
   fi
+  # Team skills from the wikis, as `wiki skills link` gives Claude Code.
+  skills_link_into "$AGY_DIR/skills" quiet >/dev/null 2>&1 || true
 }
 
 # __agy-start: the plugin's SessionStart hook. Reads Antigravity's JSON on stdin,
@@ -2669,10 +2679,17 @@ skill_description() {
   sed -n '/^---$/,/^---$/s/^description: *//p' "$1/SKILL.md" | head -n 1 | cut -c 1-90
 }
 
-# skills_link [quiet]: link every collection skill into ~/.claude/skills, and remove
-# links into the collection whose skill is gone or renamed. Prints what it changed.
+# skills_link [quiet]: link every collection skill into ~/.claude/skills, and into
+# the Antigravity plugin's skills when it's installed. Prints what it changed.
 skills_link() {
-  local quiet="${1:-}" all wiki name src dest l target n=0
+  skills_link_into "$SKILLS_DIR" "${1:-}"
+  [ ! -d "$AGY_DIR" ] || skills_link_into "$AGY_DIR/skills" "${1:-}"
+}
+
+# skills_link_into <dir> [quiet]: link each collection skill into dir, and remove
+# links into the collection whose skill is gone or renamed. Leaves other skills alone.
+skills_link_into() {
+  local SKILLS_DIR="$1" quiet="${2:-}" all wiki name src dest l target n=0
   all="$(collection_skills)"
   [ -n "$all" ] || [ -d "$SKILLS_DIR" ] || return 0
   mkdir -p "$SKILLS_DIR"
@@ -2690,7 +2707,7 @@ skills_link() {
     fi
     ln -sfn "$src" "$SKILLS_DIR/$dest"
     n=$((n + 1))
-    echo "linked:  $dest (from $wiki)"
+    echo "linked:  $dest (from $wiki)$([ "$SKILLS_DIR" = "$AGY_DIR/skills" ] && echo ', for Antigravity')"
   done <<EOF
 $all
 EOF
