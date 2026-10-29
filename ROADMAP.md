@@ -53,7 +53,7 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - A wiki with two shared wikis listed in `links.md`.
 - Real scale: hundreds of wikis, hundreds of pages. Real use so far is 10 wikis and 53 pages.
 - The version 8 triggers in real use. They passed a dry run only.
-- A model other than Claude following the handbook. First run, 2026-10-29, Gemini in Antigravity outside a repository: it followed the session line and the session-start steps, but couldn't find `wiki.sh` (exit 127), since the line gave its path only inside two commands. The line now says what `wiki.sh` means. Capture, compile and sync in a real repository are still untried.
+- A model other than Claude pulling at session start. Gemini in Antigravity skipped the pull in all four runs on 2026-10-29, at least once because its sandbox blocked git. Retest with the sandbox allowing `~/wikis` before changing the handbook. Other models (Codex, Cursor, Copilot) are still untried.
 - Delegation in real use: whether sessions suggest handoffs at the right size, and whether the log shows real savings. The log records outcomes, not tokens. Token counts per handoff would need the tool's usage data.
 - Stats in real use: whether sessions log every lookup, and what hit rate means a wiki should go.
 - Seed in real use: how long compiling 20 seeded documents takes, and whether the pages are worth it.
@@ -74,6 +74,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### A model other than Claude: Gemini in Antigravity (2026-10-29)
+
+- **Why:** the handbook says it needs no vendor features, and this had never been checked.
+- **What changed:** Gemini 3.8 Flash in Antigravity ran a scripted test in a real repository: lookups, checking a page against code, captures, a correction, off the record, compile, sync, and recall in a fresh conversation. It followed the handbook apart from the session-start pull, and found three bugs: the session line didn't say where `wiki.sh` is (PR 19), `capture` reported success on a failed write (PR 20), and `pending` reported nothing waiting when it couldn't list `raw/` (PR 21). `docs/other-agents.md` now covers `~/.gemini/GEMINI.md`, sandboxes, and grading a run from its transcripts.
 
 ### `wiki index` and `wiki lint` (2026-10-28)
 
