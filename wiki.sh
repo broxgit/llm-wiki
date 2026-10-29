@@ -282,6 +282,12 @@ cant_write() {
     "$(tilde "$1")" "$(tilde "$WIKIS_DIR")"
 }
 
+# cant_read <path>: the error for a folder that can't be listed.
+cant_read() {
+  printf "can't read %s, so what's waiting there is unknown. If this runs inside an agent's sandbox, allow %s there, or run the command outside the sandbox." \
+    "$(tilde "$1")" "$(tilde "$WIKIS_DIR")"
+}
+
 # iso_epoch <YYYY-MM-DDTHH:MM:SSZ>: seconds since 1970, or nothing.
 iso_epoch() {
   date -u -d "$1" +%s 2>/dev/null || date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$1" +%s 2>/dev/null || true
@@ -772,7 +778,14 @@ cmd_pending() {
   fi
   root="$(resolve "$wiki")"
   is_wiki "$root" || die "$(tilde "$root") is not a wiki"
+  # A folder the shell can't list looks empty to a glob. Inside Antigravity's
+  # sandbox (2026-10-29) that said "nothing waiting" while five notes waited.
+  for d in "$root/raw" "$root/wiki/sources"; do
+    [ ! -d "$d" ] || ls "$d" >/dev/null 2>&1 || die "$(cant_read "$d")"
+  done
   if [ "$show" = 0 ]; then
+    n="$(pending_files "$root" | wc -l | tr -d ' ')"
+    [ "$n" -gt 0 ] || { echo "nothing waiting in $(tilde "$root")"; return 0; }
     pending_files "$root" | while IFS= read -r f; do
       printf '%s  %s bytes\n' "raw/${f##*/}" "$(wc -c < "$f" | tr -d ' ')"
     done
