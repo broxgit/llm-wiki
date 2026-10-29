@@ -427,6 +427,20 @@ refuse "log needs a title for an ingest" "$W" log demo ingest
 expect "delegation log records a handoff" "logged: test run" "$W" delegation log "test run" sonnet low ok --project demo
 check "and the log is CSV with a header" bash -c "head -n 1 '$WIKIS_DIR/delegation-log.csv' | grep -q '^date,project,kind'"
 refuse "delegation log refuses an unknown result" "$W" delegation log x sonnet low maybe
+# Gemini's Antigravity conversations go into the digest too, under the project
+# their file paths point at.
+G="$HOME/.gemini/antigravity/brain/conv1/.system_generated/logs"
+mkdir -p "$G" "$T/claude-empty"
+now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+{
+  printf '{"type":"USER_INPUT","created_at":"%s","content":"<USER_REQUEST>\\nAdd a cardio log screen\\n</USER_REQUEST>"}\n' "$now"
+  printf '{"type":"PLANNER_RESPONSE","created_at":"%s","tool_calls":[{"name":"write_file","args":{"Path":"%s/projects/web/cardio.ts"}}]}\n' "$now" "$T"
+  printf '{"type":"PLANNER_RESPONSE","created_at":"%s","content":"Added the cardio screen."}\n' "$now"
+} > "$G/transcript_full.jsonl"
+expect "backfill counts Gemini conversations" "1 Gemini conversation(s)" "$W" journal backfill --since 1d --from "$T/claude-empty"
+check "and files them under the project their paths point at" grep -q '^### \[demo\].*1 in Gemini' "$WIKIS_DIR/journal/backfill.md"
+check "with the user's prompt, the files changed and the last reply" bash -c "grep -q 'Add a cardio log screen' '$WIKIS_DIR/journal/backfill.md' && grep -q 'files changed: cardio.ts' '$WIKIS_DIR/journal/backfill.md' && grep -q 'last reply: Added the cardio screen.' '$WIKIS_DIR/journal/backfill.md'"
+rm -rf "$HOME/.gemini"
 printf 'digest\n' > "$WIKIS_DIR/journal/backfill.md"
 expect "backfill --done removes the digest" "removed:" "$W" journal backfill --done
 check "and it's gone" test ! -e "$WIKIS_DIR/journal/backfill.md"
