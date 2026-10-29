@@ -1499,16 +1499,21 @@ claude_state() {
   fi
 }
 
+# The session line, for any agent's user-level instruction file. Agents without
+# the plugin's hook learn the script's path only from here, so it says what the
+# handbook's `wiki.sh` means. A plugin's own folder changes with every update,
+# so from the plugin the line names the stable command instead.
 claude_line() {
-  local dir
+  local dir w
   dir="$(tilde "$WIKIS_DIR")"
-  printf '%s' "My knowledge wikis live in $dir, one folder per project, plus a shared one at $dir/$SHARED. At session start, run \`$(tilde "$REPO")/wiki.sh which <repository-name>\` for the repository you are working in. Its name is the last part of its remote URL, or its folder name. The command prints the wiki that covers it. Read that wiki's AGENTS.md and follow it. If no wiki covers the repository, read $dir/$SHARED/AGENTS.md and follow that, and create the repository's wiki with \`$(tilde "$REPO")/wiki.sh new <repository-name>\` the first time you have something to file there. Outside any repository, use the shared wiki. Hand large, self-contained work to sub-agents on cheaper models as $dir/delegation.md says, following $dir/$SHARED/rules/delegation.md."
+  if from_plugin; then w="$(tilde "$(plugin_cmd)")"; else w="$(tilde "$REPO")/wiki.sh"; fi
+  printf '%s' "My knowledge wikis live in $dir, one folder per project, plus a shared one at $dir/$SHARED. Wherever their handbooks say \`wiki.sh\`, run \`$w\`. At session start, run \`$w which <repository-name>\` for the repository you are working in. Its name is the last part of its remote URL, or its folder name. The command prints the wiki that covers it. Read that wiki's AGENTS.md and follow it. If no wiki covers the repository, read $dir/$SHARED/AGENTS.md and follow that, and create the repository's wiki with \`$w new <repository-name>\` the first time you have something to file there. Outside any repository, use the shared wiki. If your tool can hand work to sub-agents on cheaper models, do it for large, self-contained work as $dir/delegation.md says, following $dir/$SHARED/rules/delegation.md."
 }
 
 cmd_claude() {
   local f="$CLAUDE_FILE" line tmp
   if from_plugin; then
-    echo "This wiki.sh came with the llm-wiki Claude Code plugin. Its session hook finds each session's wiki, so no line is needed."
+    echo "This wiki.sh came with the llm-wiki Claude Code plugin. Its session hook finds each session's wiki, so no line is needed. For another agent, put the output of \`$WIKI_CMD claude --print\` in its instruction file."
     return 0
   fi
   line="$(claude_line)"
