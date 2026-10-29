@@ -396,6 +396,10 @@ check "a note that has the line keeps just one" bash -c "[ \$(cat '$WIKIS_DIR'/d
 printf 'pdf bytes\n' > "$T/spec.pdf"
 expect "capture --copy stores a document unchanged" "spec.pdf" "$W" capture demo --copy "$T/spec.pdf"
 refuse "capture refuses an empty note" bash -c "'$W' capture demo empty </dev/null"
+printf 'From a file.\n' > "$T/note.md"
+expect "capture --file reads the note from a file" "captured: raw/" "$W" capture demo from-file --file "$T/note.md"
+check "and adds the Captured line" bash -c "head -n 1 \"\$(ls '$WIKIS_DIR'/demo/raw/*-from-file.md)\" | grep -q '^Captured: '"
+refuse "capture --file needs the file to exist" "$W" capture demo nope --file "$T/nope.md"
 # An agent's sandbox can block writes to the wikis. Each command must say so and
 # fail, never report a capture, lock or log entry that wasn't written.
 chmod 555 "$WIKIS_DIR/demo/raw"
@@ -610,6 +614,28 @@ git -C "$WIKIS_DIR" remote set-url origin "$T/nowhere.git"
 out="$("$W" start web 2>&1)" && ok "a failed pull doesn't fail start" || bad "a failed pull doesn't fail start" "$out"
 case "$out" in *"pull: failed"*"pull before your first write"*) ok "and says so, with what to do" ;; *) bad "and says so, with what to do" "$out" ;; esac
 git -C "$WIKIS_DIR" remote set-url origin "$T/remote.git"
+
+section "Antigravity plugin"
+lacks "without Antigravity, setup --list says nothing about it" "antigravity" "$W" setup --list
+mkdir -p "$HOME/.gemini"
+expect "with Antigravity, setup --list shows the plugin missing" "plugin missing" "$W" setup --list
+expect "and setup --new would ask about it" "antigravity" bash -c "'$W' setup --list; true"
+out="$(printf '{"workspacePaths":["%s"],"conversationId":"c1"}' "$T/projects/web" | "$W" __agy-start)"
+msg="$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["injectSteps"][0]["systemMessage"]["systemMessage"])' 2>&1)"
+case "$msg" in *"wiki: "*"/demo, for the repository web"*"===== Waiting to be compiled"*) ok "the hook runs start for the open project and replies in Antigravity's format" ;; *) bad "the hook runs start for the open project and replies in Antigravity's format" "$out" ;; esac
+case "$msg" in *"Do not run start again"*) ok "and tells the model not to run start again" ;; *) bad "and tells the model not to run start again" "$msg" ;; esac
+case "$msg" in *"./wiki.sh"*|*" wiki.sh "*) bad "its commands are runnable paths, never ./wiki.sh" "$msg" ;; *) ok "its commands are runnable paths, never ./wiki.sh" ;; esac
+out="$(printf 'not json' | "$W" __agy-start)"
+case "$out" in *'"injectSteps"'*"Not in a repository"*) ok "bad input still gets a reply, for the shared wiki" ;; *) bad "bad input still gets a reply, for the shared wiki" "$out" ;; esac
+check "the hook doesn't create the plugin by itself" test ! -e "$HOME/.gemini/config/plugins/llm-wiki"
+mkdir -p "$HOME/.gemini/config/plugins/llm-wiki" && printf '{}' > "$HOME/.gemini/config/plugins/llm-wiki/plugin.json"
+printf '{}' | "$W" __agy-start >/dev/null
+expect "once installed, the hook keeps the plugin current" "plugin current" "$W" setup --list
+check "its rule names the wikis and the start hook" grep -q "SessionStart hook runs" "$HOME/.gemini/config/plugins/llm-wiki/rules/AGENTS.md"
+check "its hooks.json is Antigravity's flat SessionStart format" python3 -c "import json,sys; h=json.load(open(sys.argv[1]))['llm-wiki']['SessionStart'][0]; assert h['type']=='command' and h['command'].endswith(' __agy-start')" "$HOME/.gemini/config/plugins/llm-wiki/hooks.json"
+check "its plugin.json has only fields Antigravity reads" python3 -c "import json,sys; assert set(json.load(open(sys.argv[1]))) <= {'name','description','logo','suggestedPrompts','displayName','version','disabled'}" "$HOME/.gemini/config/plugins/llm-wiki/plugin.json"
+check "it links the llm-wiki skill" test -f "$HOME/.gemini/config/plugins/llm-wiki/skills/llm-wiki/SKILL.md"
+rm -rf "$HOME/.gemini"
 
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ]

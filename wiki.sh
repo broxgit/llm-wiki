@@ -31,7 +31,8 @@ Usage: $WIKI_CMD <command> [options]
   init                 Create the wiki collection at $(tilde "$WIKIS_DIR") and its shared wiki, $SHARED.
   new <name|path>      Create a wiki from the template. A bare name goes under $(tilde "$WIKIS_DIR").
   capture <wiki> <slug>  Save a note piped on stdin in raw/, named from the clock.
-                       --copy FILE stores a document unchanged instead.
+                       --file NOTE reads it from a file. --copy FILE stores a
+                       document unchanged instead.
   lock <wiki> [--release|--renew]  Take, release or renew the compile lock.
   log <wiki> <type> [title] [--created P] [--updated P] [--fixed T] [--reported T]
                        Append a log.md entry and print its counts.
@@ -375,13 +376,16 @@ iso_epoch() {
   date -u -d "$1" +%s 2>/dev/null || date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$1" +%s 2>/dev/null || true
 }
 
-# capture <wiki> <slug> [--copy FILE]
+# capture <wiki> <slug> [--file NOTE | --copy FILE]
+# --file reads the note from a file instead of stdin. Some agents approve a command
+# once and for all only when it has no pipe or heredoc (Antigravity, 2026-10-29).
 cmd_capture() {
-  local wiki="" slug="" copy="" root stamp name ext stem n=2 tmp
+  local wiki="" slug="" copy="" file="" root stamp name ext stem n=2 tmp
   while [ $# -gt 0 ]; do
     case "$1" in
       --copy) copy="${2:-}"; shift 2 ;;
-      -*) die "capture options: --copy FILE" ;;
+      --file) file="${2:-}"; shift 2 ;;
+      -*) die "capture options: --file NOTE, --copy FILE" ;;
       *) if [ -z "$wiki" ]; then wiki="$1"; elif [ -z "$slug" ]; then slug="$1"; else die "capture takes a wiki and a slug"; fi; shift ;;
     esac
   done
@@ -396,7 +400,11 @@ cmd_capture() {
   else
     ext=md
     [ -n "$slug" ] || die "capture needs a short slug for the name, such as decided-postgres"
-    [ ! -t 0 ] || die "capture reads the note from stdin: pipe it in, or use a heredoc"
+    if [ -n "$file" ]; then
+      [ -f "$file" ] || die "no file at $file"
+    else
+      [ ! -t 0 ] || die "capture reads the note from stdin, or from a file with --file NOTE"
+    fi
   fi
   slug="$(printf '%s' "$slug" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9][^a-z0-9]*/-/g; s/^-//; s/-$//')"
   [ -n "$slug" ] || die "that slug has no letters or digits"
@@ -413,7 +421,7 @@ cmd_capture() {
     cp "$copy" "$root/raw/$name" 2>/dev/null || die "$(cant_write "$root/raw/$name")"
   else
     tmp="$(mktemp)"
-    cat > "$tmp"
+    if [ -n "$file" ]; then cat "$file" > "$tmp"; else cat > "$tmp"; fi
     if [ ! -s "$tmp" ]; then rm -f "$tmp"; die "capture got an empty note"; fi
     if ! head -n 1 "$tmp" | grep -q '^Captured: '; then
       { printf 'Captured: %s\n\n' "$(date -u +%Y-%m-%d)"; cat "$tmp"; } > "$tmp.note"
@@ -1739,6 +1747,108 @@ claude_line() {
   printf '%s' "My knowledge wikis live in $dir, one folder per project, plus a shared one at $dir/$SHARED. Wherever their handbooks say \`wiki.sh\`, run \`$w\`. At session start, run \`$w start\` in the repository you are working in. It names the wiki that covers it, pulls, and prints what to read first. Read that wiki's AGENTS.md and follow it. If no wiki covers the repository, read $dir/$SHARED/AGENTS.md and follow that, and create the repository's wiki with \`$w new <repository-name>\` the first time you have something to file there. Outside any repository, use the shared wiki. If your tool can hand work to sub-agents on cheaper models, do it for large, self-contained work as $dir/delegation.md says, following $dir/$SHARED/rules/delegation.md."
 }
 
+# ---- Antigravity -------------------------------------------------------------
+# Google's Antigravity loads plugins from ~/.gemini/config/plugins/<name>/: rules
+# that are always on, a hooks.json, and skills. setup installs a small llm-wiki
+# plugin there, the counterpart of the Claude Code plugin: a rule that says where
+# the wikis are, and a SessionStart hook that runs `wiki start` and hands its
+# output to the conversation. Hooks run with the plugin folder as the working
+# directory, so the hook reads the open project from workspacePaths on stdin.
+AGY_HOME="${LLM_WIKI_AGY_HOME:-$HOME/.gemini}"
+AGY_DIR="$AGY_HOME/config/plugins/llm-wiki"
+
+# agy_cmd: the wiki.sh command the plugin names. From the Claude Code plugin, its
+# stable command, since the plugin's own folder changes with every update.
+agy_cmd() { if from_plugin; then tilde "$(plugin_cmd)"; else printf '%s/wiki.sh' "$(tilde "$REPO")"; fi; }
+
+agy_rule() {
+  local dir w
+  dir="$(tilde "$WIKIS_DIR")"
+  w="$(agy_cmd)"
+  cat <<EOF2
+# llm-wiki
+
+My knowledge wikis live in $dir, one folder per project, plus a shared one at $dir/$SHARED. Wherever their handbooks say \`wiki.sh\`, run \`$w\`.
+
+At the start of each conversation, this plugin's SessionStart hook runs \`$w start\` for the open project and adds its output as a system message: the wiki that covers the project, a pull of the collection, the indexes, the agreements under For agents, and the notes waiting. When that message is there, don't run \`start\` again: read that wiki's AGENTS.md and follow it. When it's missing, run \`$w start\` in the repository yourself, then do the same. If no wiki covers the repository, create one with \`$w new <repository-name>\` the first time you have something to file there.
+
+If you can hand work to sub-agents on cheaper models, do it for large, self-contained work as $dir/delegation.md says, following $dir/$SHARED/rules/delegation.md. Its model names may be Claude's tiers: read sonnet as flash, haiku as flash_lite, and opus as pro.
+EOF2
+}
+
+agy_hooks() {
+  cat <<EOF2
+{
+  "llm-wiki": {
+    "SessionStart": [
+      { "type": "command", "command": "$(agy_cmd) __agy-start", "timeout": 30 }
+    ]
+  }
+}
+EOF2
+}
+
+agy_manifest() {
+  cat <<'EOF2'
+{
+  "name": "llm-wiki",
+  "displayName": "LLM Wiki",
+  "description": "Points every conversation at your knowledge wiki for the open project, and loads its index and agreements at the start."
+}
+EOF2
+}
+
+# agy_state: none (no Antigravity here), missing, old, or current.
+agy_state() {
+  [ -d "$AGY_HOME" ] || { echo none; return 0; }
+  [ -f "$AGY_DIR/plugin.json" ] || { echo missing; return 0; }
+  if [ "$(cat "$AGY_DIR/rules/AGENTS.md" 2>/dev/null)" = "$(agy_rule)" ] \
+    && [ "$(cat "$AGY_DIR/hooks.json" 2>/dev/null)" = "$(agy_hooks)" ] \
+    && [ -e "$AGY_DIR/skills/llm-wiki/SKILL.md" ]; then
+    echo current
+  else
+    echo old
+  fi
+}
+
+# agy_write: write or refresh the plugin's files. The skill is a link into this
+# copy of the template, refreshed with the rest, so it follows plugin updates.
+agy_write() {
+  mkdir -p "$AGY_DIR/rules" "$AGY_DIR/skills" || return 1
+  [ "$(cat "$AGY_DIR/plugin.json" 2>/dev/null)" = "$(agy_manifest)" ] || agy_manifest > "$AGY_DIR/plugin.json"
+  [ "$(cat "$AGY_DIR/rules/AGENTS.md" 2>/dev/null)" = "$(agy_rule)" ] || agy_rule > "$AGY_DIR/rules/AGENTS.md"
+  [ "$(cat "$AGY_DIR/hooks.json" 2>/dev/null)" = "$(agy_hooks)" ] || agy_hooks > "$AGY_DIR/hooks.json"
+  if [ -d "$REPO/skills/llm-wiki" ] && ! [ "$AGY_DIR/skills/llm-wiki" -ef "$REPO/skills/llm-wiki" ]; then
+    rm -f "$AGY_DIR/skills/llm-wiki"
+    ln -s "$REPO/skills/llm-wiki" "$AGY_DIR/skills/llm-wiki"
+  fi
+}
+
+# __agy-start: the plugin's SessionStart hook. Reads Antigravity's JSON on stdin,
+# runs start for the first workspace, and prints the injectSteps reply. It never
+# fails the session: an error becomes part of the message.
+cmd_agy_start() {
+  local input dir out
+  input="$(cat)"
+  dir="$(printf '%s' "$input" | python3 -c '
+import json, sys
+try:
+    p = json.load(sys.stdin).get("workspacePaths") or []
+except Exception:
+    p = []
+p = p[0] if p else ""
+print(p[7:] if p.startswith("file://") else p)' 2>/dev/null || true)"
+  [ -n "$dir" ] && [ -d "$dir" ] || dir="$HOME"
+  # Antigravity runs the hook by its full path. Commands in the reply must be ones
+  # the model can run, not ./wiki.sh.
+  WIKI_CMD="$(agy_cmd)"
+  # Keep the plugin current, so an update reaches the next conversation.
+  [ ! -d "$AGY_DIR" ] || agy_write >/dev/null 2>&1 || true
+  out="$( (cmd_start "$dir") 2>&1 || true)"
+  printf 'llm-wiki: this plugin ran `%s start` for this conversation. Its output follows. Read the AGENTS.md of the wiki it names and follow it. Do not run start again.\n\n%s\n' "$(agy_cmd)" "$out" \
+    | python3 -c 'import json, sys; print(json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": sys.stdin.read()}}]}))'
+}
+
 cmd_claude() {
   local f="$CLAUDE_FILE" line tmp
   if from_plugin; then
@@ -2890,7 +3000,7 @@ cmd_complete() {
   case "$cmd" in
     new | unlock | pending | find) [ "$i" -eq 2 ] && wiki_names; [ "$cmd" = pending ] && echo --show ;;
     upgrade) wiki_names; echo --all ;;
-    capture) [ "$i" -eq 2 ] && wiki_names; echo --copy ;;
+    capture) [ "$i" -eq 2 ] && wiki_names; printf -- '--file\n--copy\n' ;;
     lock) [ "$i" -eq 2 ] && wiki_names; printf -- '--release\n--renew\n' ;;
     sync) [ "$i" -eq 2 ] && wiki_names; echo -m ;;
     index) [ "$i" -eq 2 ] && wiki_names; echo --check ;;
@@ -2917,7 +3027,7 @@ cmd_complete() {
     init) echo --git ;;
     completion) printf 'zsh\nbash\n' ;;
     setup)
-      printf -- '--new\n--list\ncollection\ngit\ngit.identity\nclaude\nplugin\nupgrade\nskills\ndelegation\njournal\n'
+      printf -- '--new\n--list\ncollection\ngit\ngit.identity\nclaude\nplugin\nantigravity\nupgrade\nskills\ndelegation\njournal\n'
       for k in $JOURNAL_KEYS; do printf 'journal.%s\n' "$k"; done
       ;;
     journal)
@@ -3293,14 +3403,14 @@ Modes: `off` never hands off unless you ask. `ask` suggests each handoff and wai
 
 | Work | Model | Effort |
 |---|---|---|
-| Searching or sweeping many files, gathering facts | sonnet | low |
-| Running tests or builds, summarizing failures | sonnet | low |
-| Link checks, data extraction, format conversions | haiku | low |
-| Boilerplate that copies an existing pattern | sonnet | medium |
-| First drafts of docs from code | sonnet | medium |
+| Searching or sweeping many files, gathering facts | sonnet / flash | low |
+| Running tests or builds, summarizing failures | sonnet / flash | low |
+| Link checks, data extraction, format conversions | haiku / flash_lite | low |
+| Boilerplate that copies an existing pattern | sonnet / flash | medium |
+| First drafts of docs from code | sonnet / flash | medium |
 | Design, debugging, code review, security, anything that needs this conversation | stay | - |
 
-Model names are tiers. Use the ones your tool offers.
+Model names are tiers: Claude's, then Gemini's. Use the ones your tool offers.
 
 ## Auto
 
@@ -3576,6 +3686,11 @@ setup_pending() {
   setup_done git || echo git
   if in_git_repo "$WIKIS_DIR"; then setup_done git.identity || echo git.identity; fi
   setup_done delegation.mode || echo delegation.mode
+  case "$(agy_state)" in
+    old) echo antigravity ;;
+    missing) setup_done antigravity || echo antigravity ;;
+  esac
+  [ "$(agy_state)" != current ] || ! grep -qF "knowledge wikis live in" "$AGY_HOME/GEMINI.md" 2>/dev/null || echo antigravity.line
   # Tab completion, asked once per machine unless the profile already loads it.
   local sh
   sh="$(completion_shell)"
@@ -3947,6 +4062,7 @@ setup_list() {
     echo "git                 not a repo"
   fi
   echo "claude              $(claude_state)"
+  [ "$(agy_state)" = none ] || echo "antigravity         plugin $(agy_state)"
   if [ -n "$(completion_shell)" ]; then
     printf '%-19s %s' "completion" "$(completion_on "$(completion_shell)" && echo "on ($(completion_shell))" || echo off)"
     case "$pending" in *" completion."*) printf '  <- new' ;; esac
@@ -3969,6 +4085,45 @@ setup_list() {
   echo "Or a section:  $WIKI_CMD setup git | plugin | claude | upgrade | skills | completion | delegation | journal"
 }
 
+# Antigravity: offer the llm-wiki plugin when Antigravity is installed, keep it
+# current, and retire the session line pasted into ~/.gemini/GEMINI.md before it.
+setup_antigravity() {
+  local state gm="$AGY_HOME/GEMINI.md" line
+  state="$(agy_state)"
+  [ "$state" != none ] || return 0
+  if [ "$SETUP_MODE" = new ] && { [ "$state" = current ] || { [ "$state" = missing ] && setup_done antigravity; }; } \
+    && ! grep -qF "knowledge wikis live in" "$gm" 2>/dev/null; then
+    return 0
+  fi
+  section "Antigravity"
+  case "$state" in
+    current) echo "The llm-wiki plugin for Antigravity is up to date." ;;
+    old)
+      agy_write && echo "Updated the llm-wiki plugin for Antigravity. New conversations use it." ;;
+    missing)
+      echo "Antigravity is installed. An llm-wiki plugin points its conversations at your wikis, and loads the wiki's index and agreements at the start, like the Claude Code plugin."
+      if ask_yn "Add it to $(tilde "$AGY_DIR")?" y; then
+        if agy_write; then
+          echo "  added. Quit and reopen Antigravity once, so it finds the new plugin."
+        else
+          echo "  couldn't write $(tilde "$AGY_DIR")."
+        fi
+      fi
+      setup_mark antigravity
+      ;;
+  esac
+  line="$(grep -m 1 -F "knowledge wikis live in" "$gm" 2>/dev/null || true)"
+  if [ -n "$line" ] && [ "$(agy_state)" = current ]; then
+    echo "$(tilde "$gm") still has the wiki line from before the plugin, so conversations would get it twice."
+    if ask_yn "Remove that line? The rest of the file stays." y; then
+      cp "$gm" "$gm.bak-$(date +%Y%m%d-%H%M%S)"
+      remove_line "$gm" "$line"
+      echo "  removed (backup beside it)."
+      [ -s "$gm" ] || rm -f "$gm"
+    fi
+  fi
+}
+
 cmd_setup() {
   local what="" a n
   for a in "$@"; do
@@ -3982,13 +4137,13 @@ Usage: $WIKI_CMD setup [--new | --list | <section> | <setting>]
   setup            Walk through every setting. Enter keeps what you have.
   setup --new      Only what's missing, out of date, or added since you last ran it.
   setup --list     Print current values without asking anything.
-  setup <section>  Just one section: collection, git, claude, upgrade, delegation, journal.
+  setup <section>  Just one section: collection, git, claude, antigravity, upgrade, delegation, journal.
   setup <setting>  Just one setting: git.identity, or journal.<key> such as journal.format.
                    A bare journal key works too: setup format.
 EOF
         return 0
         ;;
-      collection | git | claude | plugin | upgrade | skills | completion | journal | delegation | git.identity) what="$a" ;;
+      collection | git | claude | plugin | antigravity | upgrade | skills | completion | journal | delegation | git.identity) what="$a" ;;
       journal.*)
         [ -n "$(journal_field "${a#journal.}" 2)" ] || die "no journal setting called ${a#journal.}. Settings: $JOURNAL_KEYS"
         what="$a"
@@ -4026,11 +4181,13 @@ EOF
     plugin) SETUP_MODE=all; setup_plugin ;;
     skills) setup_skills ;;
     completion) SETUP_MODE=all; setup_completion ;;
+    antigravity) SETUP_MODE=all; setup_antigravity ;;
     '')
       setup_plugin
       setup_collection
       setup_git
       setup_claude
+      setup_antigravity
       setup_upgrade
       setup_delegation
       setup_skills
@@ -4105,6 +4262,7 @@ if [ "$cmd" = report ]; then
   exit 0
 fi
 case "$cmd" in
+  __agy-start) cmd_agy_start; exit 0 ;;
   capture) cmd_capture "$@"; exit 0 ;;
   lock) cmd_lock "$@"; exit 0 ;;
   log) cmd_log "$@"; exit 0 ;;

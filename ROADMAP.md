@@ -77,7 +77,7 @@ Things that have never been run for real. Treat them as unproven until crossed o
 ### Handbook version 23: `wiki start`, and staleness in commits (2026-10-29)
 
 - **Why:** Gemini skipped the session-start pull in every run, and session start took five or six calls without the plugin's hook. `lint.md` asked for pages far behind their repository's HEAD, which no command checked.
-- **What changed:** `wiki start` finds the wiki, pulls with a timeout and the collection's own SSH command, and prints the indexes, `For agents` and what waits. A failed pull is a warning. The handbook's session start and the session line for other agents run it. `stale` and `lint` count commits behind for pages with a `commit` stamp, report commits a repository doesn't have, and bare hashes in wikis over several repositories, using clones under `code_dirs`.
+- **What changed:** `wiki start` finds the wiki, pulls with a timeout and the collection's own SSH command, and prints the indexes, `For agents` and what waits. A failed pull is a warning. The handbook's session start and the session line for other agents run it. With Antigravity installed, `wiki setup` adds an llm-wiki plugin whose SessionStart hook runs `wiki start` and hands its output to the conversation, as Gemini proposed after checking Antigravity's own docs. `capture --file` lets agents capture without a pipe or heredoc. `stale` and `lint` count commits behind for pages with a `commit` stamp, report commits a repository doesn't have, and bare hashes in wikis over several repositories, using clones under `code_dirs`.
 
 ### Handbook version 22: mechanical checks named, and Gemini's review (2026-10-29)
 
