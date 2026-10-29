@@ -400,6 +400,7 @@ printf 'From a file.\n' > "$T/note.md"
 expect "capture --file reads the note from a file" "captured: raw/" "$W" capture demo from-file --file "$T/note.md"
 check "and adds the Captured line" bash -c "head -n 1 \"\$(ls '$WIKIS_DIR'/demo/raw/*-from-file.md)\" | grep -q '^Captured: '"
 refuse "capture --file needs the file to exist" "$W" capture demo nope --file "$T/nope.md"
+refuse "capture refuses --file and --copy together" "$W" capture demo both --file "$T/note.md" --copy "$T/note.md"
 # An agent's sandbox can block writes to the wikis. Each command must say so and
 # fail, never report a capture, lock or log entry that wasn't written.
 chmod 555 "$WIKIS_DIR/demo/raw"
@@ -594,6 +595,11 @@ case "$out" in *"near.md"*) bad "a page at the repository's HEAD isn't stale" "$
 case "$out" in *"gone.md  (commit deadbee not found in demo)"*) ok "stale reports a commit the repository doesn't have" ;; *) bad "stale reports a commit the repository doesn't have" "$out" ;; esac
 case "$out" in *"bare.md"*"write repo@hash"*) ok "a bare commit in a wiki over several repositories is flagged" ;; *) bad "a bare commit in a wiki over several repositories is flagged" "$out" ;; esac
 expect "lint reports a commit far behind" "commit far behind its repository" "$W" lint demo
+git -C "$R" remote add origin "git@example.com:me/renamed.git"
+fm far "renamed@$old"
+expect "a clone is found by its remote's name too, not only its folder" "far.md  (55 commits behind renamed)" "$W" stale 90
+fm far "demo@$old"
+expect "and still by its folder name" "far.md  (55 commits behind demo)" "$W" stale 90
 fm far "nothere@$old"
 lacks "a repository with no clone falls back to dates quietly" "far.md" "$W" stale 90
 rm -f "$WIKIS_DIR"/demo/wiki/{far,near,gone,bare}.md
@@ -635,6 +641,15 @@ check "its rule names the wikis and the start hook" grep -q "SessionStart hook r
 check "its hooks.json is Antigravity's flat SessionStart format" python3 -c "import json,sys; h=json.load(open(sys.argv[1]))['llm-wiki']['SessionStart'][0]; assert h['type']=='command' and h['command'].endswith(' __agy-start')" "$HOME/.gemini/config/plugins/llm-wiki/hooks.json"
 check "its plugin.json has only fields Antigravity reads" python3 -c "import json,sys; assert set(json.load(open(sys.argv[1]))) <= {'name','description','logo','suggestedPrompts','displayName','version','disabled'}" "$HOME/.gemini/config/plugins/llm-wiki/plugin.json"
 check "it links the llm-wiki skill" test -f "$HOME/.gemini/config/plugins/llm-wiki/skills/llm-wiki/SKILL.md"
+check "and the team skills from the wikis" test "$HOME/.gemini/config/plugins/llm-wiki/skills/bump-proto" -ef "$WIKIS_DIR/global/skills/bump-proto"
+mkskill "$WIKIS_DIR/global/skills/tidy-logs" "Tidy logs."
+expect "skills link links new team skills into the plugin too" "tidy-logs (from global), for Antigravity" "$W" skills link
+rm -r "$WIKIS_DIR/global/skills/tidy-logs"; "$W" skills link >/dev/null
+check "and removes them there when they're gone" test ! -e "$HOME/.gemini/config/plugins/llm-wiki/skills/tidy-logs"
+check "without touching the llm-wiki skill" test -f "$HOME/.gemini/config/plugins/llm-wiki/skills/llm-wiki/SKILL.md"
+rm "$HOME/.gemini/config/plugins/llm-wiki/skills/bump-proto"
+"$W" upgrade --all >/dev/null 2>&1
+check "upgrade --all links team skills into the plugin too" test -L "$HOME/.gemini/config/plugins/llm-wiki/skills/bump-proto"
 rm -rf "$HOME/.gemini"
 
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
