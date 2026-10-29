@@ -233,7 +233,7 @@ A wiki with a low hit rate is missing pages for the questions you actually ask, 
 
 Once a week, Claude offers a short report on the wikis, at a stopping point. Ask for it any time with "give me my wiki report", or run `wiki report` to see the raw material.
 
-- **Tokens:** what Claude Code spent per project over the week, from its own session records, and roughly how much of that went into reading the wikis. The wiki share is an estimate, from the size of what sessions read.
+- **Tokens:** what Claude Code spent per project over the week, from its own session records, and roughly how much of that went into reading the wikis. The wiki share is an estimate, from the size of what sessions read. With Antigravity installed, Gemini's conversations get a table of their own, by the project their file paths point at. It isn't added to Claude's, since the two count tokens differently.
 - **What the wikis gained:** notes captured, notes compiled, pages created and updated, skills added.
 - **Lookups:** how often each wiki answered the questions it was checked for.
 - **Needs you:** what's waiting on a person. Open contradictions, proposed fixes nobody has answered, a pile of notes waiting to be compiled, pages unchecked for 90 days, and tips you muted. The report leads with this when there's anything in it.

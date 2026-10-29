@@ -3400,6 +3400,104 @@ setup_completion() {
 # "Wiki reads" is an estimate: the size of what sessions read from the wikis, at
 # about four characters a token. The agent writes the material up.
 
+# report_tokens_gemini <start> <end>: the same table for Gemini in Antigravity, from its
+# transcripts' per-step counts. Kept apart from Claude's: the models count tokens
+# differently and are priced differently, so one total would mislead. A conversation
+# counts toward the project its file paths and `git -C` folders point at most.
+report_tokens_gemini() {
+  local from="$AGY_HOME/antigravity/brain"
+  [ -d "$from" ] && command -v python3 >/dev/null 2>&1 || return 1
+  python3 - "$from" "$1" "$2" "$(journal_get day_starts)" "$WIKIS_DIR" <<'PY'
+import json, os, re, subprocess, sys
+from datetime import datetime, timedelta, date
+from pathlib import Path
+
+brain, start, end, day_starts, wikis = sys.argv[1:6]
+start = date.fromisoformat(start); end = date.fromisoformat(end)
+dh, dm = (int(x) for x in day_starts.split(":"))
+wikis_real = os.path.realpath(wikis)
+
+cover = {}
+for rp in Path(wikis).glob("*/repos.md"):
+    for line in rp.read_text(errors="replace").splitlines():
+        if line.startswith("- "):
+            cover[line[2:].strip()] = rp.parent.name
+known = set(cover) | set(cover.values()) | {d.name for d in Path(wikis).iterdir() if (d / "AGENTS.md").is_file()}
+_proj = {}
+def project(d):
+    if d in _proj: return _proj[d]
+    name = None
+    if os.path.realpath(d).startswith(wikis_real + os.sep) or os.path.realpath(d) == wikis_real:
+        rel = os.path.relpath(os.path.realpath(d), wikis_real).split(os.sep)[0]
+        name = rel if rel in known else "wikis"
+    elif os.path.isdir(d):
+        def git(*a):
+            try: return subprocess.run(["git", "-C", d, *a], capture_output=True, text=True, timeout=5).stdout.strip()
+            except Exception: return ""
+        url = git("config", "--get", "remote.origin.url"); top = git("rev-parse", "--show-toplevel")
+        if url: name = re.sub(r"\.git$", "", url.rstrip("/")).split("/")[-1].split(":")[-1]
+        elif top: name = os.path.basename(top)
+        name = cover.get(name, name)
+        if name not in known: name = None
+    _proj[d] = name
+    return name
+
+def day_of(ts):
+    t = datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone()
+    return (t - timedelta(hours=dh, minutes=dm)).date()
+def touches_wiki(a):
+    p = a.get("Path") or ""
+    c = a.get("CommandLine") or ""
+    return (p and os.path.realpath(os.path.expanduser(p)).startswith(wikis_real + os.sep)) or wikis in c or "~/wikis" in c or "wiki.sh" in c
+
+cutoff = datetime.combine(start - timedelta(days=1), datetime.min.time()).timestamp()
+rows = {}
+for f in Path(brain).glob("*/.system_generated/logs/transcript_full.jsonl"):
+    if f.stat().st_mtime < cutoff: continue
+    steps = []
+    for line in open(f, errors="replace"):
+        try: steps.append(json.loads(line))
+        except ValueError: continue
+    seen = {}
+    for e in steps:
+        for c in e.get("tool_calls") or []:
+            a = c.get("args") or {}
+            dirs = [os.path.dirname(os.path.expanduser(a["Path"]))] if a.get("Path") else []
+            dirs += [os.path.expanduser(x) for x in re.findall(r"-C\s+(\S+)", a.get("CommandLine") or "")]
+            for d in dirs:
+                x = project(d)
+                if x and x != "wikis": seen[x] = seen.get(x, 0) + 1
+    p = max(seen, key=seen.get) if seen else "other folders"
+    conv = f.parts[-4]
+    for i, e in enumerate(steps):
+        if not e.get("created_at"): continue
+        d = day_of(e["created_at"])
+        if d < start or d > end: continue
+        row = rows.setdefault(p, {"sessions": set(), "new": 0, "cached": 0, "out": 0, "wiki": 0})
+        row["sessions"].add(conv)
+        row["new"] += e.get("input_tokens", 0) or 0
+        row["cached"] += e.get("cache_read_tokens", 0) or 0
+        row["out"] += e.get("output_tokens", 0) or 0
+        for c in e.get("tool_calls") or []:
+            a = c.get("args") or {}
+            if touches_wiki(a) and i + 1 < len(steps):
+                row["wiki"] += len(str(steps[i + 1].get("content") or "")) // 4
+
+rows = {p: r for p, r in rows.items() if r["new"] or r["out"]}
+if not rows:
+    print("No Gemini conversations in this range."); sys.exit()
+def k(n): return f"{n / 1e6:.1f}M" if n >= 1e6 else (f"{n / 1e3:.0f}k" if n >= 1e3 else str(n))
+print("| Project | Conversations | New input | Cache reads | Output | Wiki reads (est.) |")
+print("|---|---|---|---|---|---|")
+tot = {"s": 0, "new": 0, "cached": 0, "out": 0, "wiki": 0}
+for p, r in sorted(rows.items(), key=lambda x: -(x[1]["new"] + x[1]["cached"])):
+    print(f"| {p} | {len(r['sessions'])} | {k(r['new'])} | {k(r['cached'])} | {k(r['out'])} | {k(r['wiki'])} |")
+    tot["s"] += len(r["sessions"]); tot["new"] += r["new"]; tot["cached"] += r["cached"]; tot["out"] += r["out"]; tot["wiki"] += r["wiki"]
+print(f"| all | {tot['s']} | {k(tot['new'])} | {k(tot['cached'])} | {k(tot['out'])} | {k(tot['wiki'])} |")
+print("\nGemini counts tokens its own way, so these don't add to Claude's.")
+PY
+}
+
 # report_tokens <start> <end>: the Tokens section, from transcripts.
 report_tokens() {
   local from="$HOME/.claude/projects"
@@ -3623,6 +3721,12 @@ cmd_report() {
   echo "## Tokens (Claude Code)"
   echo
   report_tokens "$start" "$today"
+  if [ -d "$AGY_HOME/antigravity/brain" ]; then
+    echo
+    echo "## Tokens (Gemini in Antigravity)"
+    echo
+    report_tokens_gemini "$start" "$today" || echo "No python3, so no Gemini token counts."
+  fi
   echo
   echo "## What the wikis gained"
   echo
