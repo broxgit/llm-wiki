@@ -26,7 +26,6 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 - **Team digest.** A weekly roll-up across several people's journals, for a lead. Needs a shared, opt-in journal location.
 - **Handbook cost per session.** Since the session hook stopped embedding the handbook (only a 2KB preview reached the model), every session reads `AGENTS.md`, about 14KB or 3,500 tokens. Terse page style would cut this too.
 - **Trim the core further.** `template/AGENTS.md` is about 2,900 tokens, up from 2,600 after version 8. "Other wikis" and "Sync" are the biggest sections left.
-- **Split work and personal collections.** One collection on a personal remote now holds work, client, and personal wikis. `WIKIS_DIR` already supports a second collection. The routing line would need to know about both.
 - **Reach sessions with no file access.** A chat session that can't read files can't use a wiki. A small MCP server over the collection would fix that.
 - **Review flow for teams.** Agents push straight to the collection. A team may want a weekly digest of changes, or pull requests.
 - **Obsidian.** Add `.obsidian/` to the template's `.gitignore` if anyone opens wikis as vaults.
@@ -63,6 +62,12 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Work and personal collections (2026-10-29)
+
+- **Why:** one collection on a personal remote held work, client and personal wikis together.
+- **What changed:** `~/.config/llm-wiki/collections` lists collections besides `~/wikis`: a name, a folder, and rules that match a repository's folder or remote URL. Every command, `wiki start`, the Claude Code hook and the Antigravity plugin use the collection for the repository at hand; `--collection NAME` picks one by name; `wiki collections` lists them; `status` mentions notes waiting in the others; `WIKIS_DIR` still overrides. `wiki setup collections` adds one and creates it with its shared wiki. Moving existing wikis stays a person's step.
+- **Open:** the session line for other agents and the Antigravity plugin's rule name the collection they were written from; each session's `wiki start` output names the right one.
 
 ### Dependency map (2026-10-29)
 

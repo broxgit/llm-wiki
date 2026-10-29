@@ -8,9 +8,13 @@ set -u
 
 ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 WIKI_SH="$ROOT/wiki.sh"
+DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
+# The collection for this project: wiki.sh decides, from its collections file.
+if [ -z "${WIKIS_DIR:-}" ] && [ -x "$WIKI_SH" ]; then
+  WIKIS_DIR="$(cd "$DIR" 2>/dev/null && "$WIKI_SH" __collection 2>/dev/null || true)"
+fi
 WIKIS_DIR="${WIKIS_DIR:-$HOME/wikis}"
 export WIKIS_DIR
-DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 
 # Claude Code sends JSON on stdin. Its "source" says why the session started:
 # startup, resume, clear, compact or fork. Read with a timeout, so a run by hand

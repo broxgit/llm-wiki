@@ -12,8 +12,78 @@ while [ -L "$src" ]; do
 done
 REPO="$(cd "$(dirname "$src")" && pwd)"
 TEMPLATE="$REPO/template"
-WIKIS_DIR="${WIKIS_DIR:-$HOME/wikis}"
 SHARED="global"
+
+# Collections. ~/wikis is the default. More can be listed in the collections file,
+# one per line: a name, a folder, and the rules that pick it for a repository, such
+# as a work collection beside a personal one:
+#   work  ~/wikis-work  *gitlab.com:acme/*,~/dev/work/*
+# A rule starting with / or ~ matches the repository's folder; any other rule matches
+# its remote URL. Globs; the first collection with a matching rule wins. WIKIS_DIR,
+# when set, overrides all of it, and --collection NAME picks one by name.
+COLLECTIONS_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/llm-wiki/collections"
+DEFAULT_WIKIS="$HOME/wikis"
+
+# collections: "name<TAB>folder<TAB>rules" per collection, the default first.
+collections() {
+  printf 'default\t%s\t\n' "$DEFAULT_WIKIS"
+  [ -f "$COLLECTIONS_FILE" ] || return 0
+  awk 'NF >= 2 && $1 !~ /^#/ { print $1 "\t" $2 "\t" $3 }' "$COLLECTIONS_FILE" \
+    | while IFS="$(printf '\t')" read -r n f r; do
+        # shellcheck disable=SC2088
+        case "$f" in "~/"*) f="$HOME/${f:2}" ;; esac
+        printf '%s\t%s\t%s\n' "$n" "$f" "$r"
+      done
+}
+
+# collection_for <folder>: the collection folder whose rules match the repository
+# the folder is in, or the default.
+collection_for() {
+  local dir="$1" top url n f r rule IFS_
+  top="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$dir")"
+  url="$(git -C "$dir" config --get remote.origin.url 2>/dev/null || true)"
+  while IFS="$(printf '\t')" read -r n f r; do
+    [ -n "$r" ] || continue
+    IFS_="$IFS"; IFS=,
+    for rule in $r; do
+      IFS="$IFS_"
+      # shellcheck disable=SC2088
+      case "$rule" in "~/"*) rule="$HOME/${rule:2}" ;; esac
+      case "$rule" in
+        /*)
+          # shellcheck disable=SC2254
+          case "$top" in $rule | "${rule%/\*}") printf '%s' "$f"; return 0 ;; esac ;;
+        *)
+          # shellcheck disable=SC2254
+          [ -n "$url" ] && case "$url" in $rule) printf '%s' "$f"; return 0 ;; esac ;;
+      esac
+      IFS=,
+    done
+    IFS="$IFS_"
+  done < <(collections | tail -n +2)
+  printf '%s' "$DEFAULT_WIKIS"
+}
+
+# --collection NAME, anywhere on the command line, picks a collection by name.
+pick=""
+args=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --collection) pick="${2:-}"; shift 2 || { echo "error: --collection needs a name" >&2; exit 1; } ;;
+    --collection=*) pick="${1#*=}"; shift ;;
+    *) args+=("$1"); shift ;;
+  esac
+done
+set -- ${args[@]+"${args[@]}"}
+if [ -n "$pick" ]; then
+  WIKIS_DIR="$(collections | awk -F'\t' -v n="$pick" '$1 == n { print $2; exit }')"
+  [ -n "$WIKIS_DIR" ] || { echo "error: no collection called $pick. Collections: $(collections | cut -f 1 | tr '\n' ' ')" >&2; exit 1; }
+elif [ -z "${WIKIS_DIR:-}" ]; then
+  WIKIS_DIR="$(collection_for "$PWD")"
+else
+  # Set in the environment: it wins everywhere, routing included.
+  LLM_WIKI_FIXED_DIR=1
+fi
 # The command people type, for messages. The plugin's stable `wiki` command sets
 # LLM_WIKI_CMD. Run as wiki.sh, it's ./wiki.sh from the clone; through a link, the link's name.
 case "${0##*/}" in
@@ -47,6 +117,7 @@ Usage: $WIKI_CMD <command> [options]
                        Start a wiki from a repository's own docs: README, agent
                        instructions, skills, docs/, decision records.
   cover <wiki> <repo>...  Record that one wiki covers several repositories.
+  collections          List the wiki collections and the repositories each one takes.
   start [<repo>]       Session start in one call: find the wiki, pull, print the indexes,
                        For agents and what waits. Defaults to the current folder.
   permissions          Print the Claude Code allow rules for the wiki commands that
@@ -284,6 +355,8 @@ cmd_start() {
   else
     repo="$arg"
   fi
+  # A folder named on the command line decides the collection, as $PWD would.
+  if [ -d "$arg" ] && [ -z "${pick:-}" ] && [ -z "${LLM_WIKI_FIXED_DIR:-}" ]; then WIKIS_DIR="$(collection_for "$arg")"; fi
   [ -d "$WIKIS_DIR" ] || die "no wikis at $(tilde "$WIKIS_DIR"). Run: $WIKI_CMD setup"
   if [ -n "$repo" ]; then w="$(which_wiki "$repo")"; [ -z "$w" ] || wiki="$WIKIS_DIR/$w"; fi
   if [ -z "$wiki" ]; then
@@ -1410,6 +1483,12 @@ cmd_status() {
   if [ -f "$JOURNAL_CFG" ]; then
     echo "journal: $(journal_get enabled), commit $(journal_get commit), entries $(journal_get entries)"
   fi
+  # Other collections on this machine, so nothing waits unseen in one.
+  collections | while IFS="$TAB" read -r n f _; do
+    [ "$f" != "$WIKIS_DIR" ] && [ -d "$f" ] || continue
+    w="$(for d in "$f"/*/; do ! is_wiki "${d%/}" || pending_files "${d%/}"; done 2>/dev/null | wc -l | tr -d ' ' || true)"
+    echo "also:    collection $n at $(tilde "$f"), $w note(s) waiting. $WIKI_CMD status --collection $n"
+  done
   if [ -f "$DELEG_FILE" ]; then echo "delegation: mode $(deleg_mode)"; fi
   if from_plugin; then
     n="$(plugin_key)"
@@ -1885,6 +1964,8 @@ except Exception:
 p = p[0] if p else ""
 print(p[7:] if p.startswith("file://") else p)' 2>/dev/null || true)"
   [ -n "$dir" ] && [ -d "$dir" ] || dir="$HOME"
+  # The workspace decides the collection, unless one was named.
+  [ -n "${pick:-}" ] || [ -n "${LLM_WIKI_FIXED_DIR:-}" ] || WIKIS_DIR="$(collection_for "$dir")"
   # Antigravity runs the hook by its full path. Commands in the reply must be ones
   # the model can run, not ./wiki.sh.
   WIKI_CMD="$(agy_cmd)"
@@ -3167,7 +3248,7 @@ EOF
 # Tab completion. `completion zsh|bash` prints a small script for the shell, which
 # asks `__complete` for candidates on every Tab. The candidates live here, so a
 # plugin update can't leave completion stale.
-COMMANDS="setup init new start deps permissions seed harvest capture lock log sync index lint pending cover which status find stale patterns skills tips report stats delegation upgrade unlock claude link journal standup completion"
+COMMANDS="setup init new start collections deps permissions seed harvest capture lock log sync index lint pending cover which status find stale patterns skills tips report stats delegation upgrade unlock claude link journal standup completion"
 RANGES="lastworkday yesterday today week lastweek 7d 14d 30d"
 
 wiki_names() {
@@ -3231,7 +3312,7 @@ cmd_complete() {
     init) echo --git ;;
     completion) printf 'zsh\nbash\n' ;;
     setup)
-      printf -- '--new\n--list\ncollection\ngit\ngit.identity\nclaude\nplugin\npermissions\nantigravity\nupgrade\nskills\ndelegation\njournal\n'
+      printf -- '--new\n--list\ncollection\ngit\ngit.identity\nclaude\nplugin\npermissions\ncollections\nantigravity\nupgrade\nskills\ndelegation\njournal\n'
       for k in $JOURNAL_KEYS; do printf 'journal.%s\n' "$k"; done
       ;;
     journal)
@@ -4445,6 +4526,38 @@ setup_agy_grants() {
   setup_mark antigravity.grants
 }
 
+# setup collections: add a collection, such as one for work beside a personal one.
+setup_collections() {
+  local name dir rules here_url
+  section "Collections"
+  "$REPO/wiki.sh" collections 2>/dev/null | sed 's/^/  /'
+  echo "A second collection keeps wikis apart, such as work and personal, each with its own git remote and shared wiki."
+  echo "Repositories go to the collection whose rules match their remote URL or their folder; the rest stay in $(tilde "$DEFAULT_WIKIS")."
+  ask_yn "Add a collection?" n || return 0
+  ask "Its name, one word" "work"; name="$ANSWER"
+  case "$name" in '' | default | *[!A-Za-z0-9_-]*) die "a collection name is one word of letters, digits, - and _, and not \"default\"" ;; esac
+  collections | cut -f 1 | grep -qxF "$name" && die "there's already a collection called $name"
+  # The default is shown with ~ on purpose, and expanded below.
+  # shellcheck disable=SC2088
+  ask "Its folder" "~/wikis-$name"; dir="$ANSWER"
+  here_url="$(git config --get remote.origin.url 2>/dev/null || true)"
+  echo "Rules, separated by commas. A rule starting with ~ or / matches a repository's folder, such as ~/dev/work/*."
+  echo "Any other rule matches its remote URL, such as *gitlab.com:acme/* or *github.com/acme/*.${here_url:+ The remote here is $here_url.}"
+  ask "Rules" ""; rules="$(printf '%s' "$ANSWER" | tr -d ' ')"
+  [ -n "$rules" ] || die "a collection needs at least one rule, or nothing would ever go to it"
+  mkdir -p "$(dirname "$COLLECTIONS_FILE")"
+  [ -f "$COLLECTIONS_FILE" ] || printf '# Wiki collections besides %s: name, folder, rules. See: %s collections\n' "$(tilde "$DEFAULT_WIKIS")" "$WIKI_CMD" > "$COLLECTIONS_FILE"
+  printf '%s %s %s\n' "$name" "$dir" "$rules" >> "$COLLECTIONS_FILE"
+  echo "  added to $(tilde "$COLLECTIONS_FILE")."
+  # shellcheck disable=SC2088
+  case "$dir" in "~/"*) dir="$HOME/${dir:2}" ;; esac
+  if [ ! -f "$dir/WIKIS.md" ]; then
+    WIKIS_DIR="$dir" "$REPO/wiki.sh" init >/dev/null && echo "  created the collection at $(tilde "$dir"), with its shared wiki."
+  fi
+  echo "Next: give it a git remote and a commit identity with: $WIKI_CMD setup git --collection $name"
+  echo "Moving existing wikis into it is up to you: move the folder, then commit in both collections."
+}
+
 # Antigravity: offer the llm-wiki plugin when Antigravity is installed, keep it
 # current, and retire the session line pasted into ~/.gemini/GEMINI.md before it.
 setup_antigravity() {
@@ -4499,13 +4612,13 @@ Usage: $WIKI_CMD setup [--new | --list | <section> | <setting>]
   setup            Walk through every setting. Enter keeps what you have.
   setup --new      Only what's missing, out of date, or added since you last ran it.
   setup --list     Print current values without asking anything.
-  setup <section>  Just one section: collection, git, claude, permissions, antigravity, upgrade, delegation, journal.
+  setup <section>  Just one section: collection, collections, git, claude, permissions, antigravity, upgrade, delegation, journal.
   setup <setting>  Just one setting: git.identity, or journal.<key> such as journal.format.
                    A bare journal key works too: setup format.
 EOF
         return 0
         ;;
-      collection | git | claude | plugin | permissions | antigravity | upgrade | skills | completion | journal | delegation | git.identity) what="$a" ;;
+      collection | collections | git | claude | plugin | permissions | antigravity | upgrade | skills | completion | journal | delegation | git.identity) what="$a" ;;
       journal.*)
         [ -n "$(journal_field "${a#journal.}" 2)" ] || die "no journal setting called ${a#journal.}. Settings: $JOURNAL_KEYS"
         what="$a"
@@ -4545,6 +4658,7 @@ EOF
     completion) SETUP_MODE=all; setup_completion ;;
     antigravity) SETUP_MODE=all; setup_antigravity ;;
     permissions) SETUP_MODE=all; setup_permissions ;;
+    collections) setup_collections ;;
     '')
       setup_plugin
       setup_collection
@@ -4626,6 +4740,14 @@ if [ "$cmd" = report ]; then
   exit 0
 fi
 case "$cmd" in
+  __collection) printf '%s\n' "$WIKIS_DIR"; exit 0 ;;
+  collections)
+    collections | while IFS="$TAB" read -r n f r; do
+      printf '%-10s %s%s%s\n' "$n" "$(tilde "$f")" "${r:+  matches: }$r" "$([ "$f" = "$WIKIS_DIR" ] && echo '  <- here')"
+    done
+    [ -f "$COLLECTIONS_FILE" ] || echo "Only the default. $WIKI_CMD setup collections adds another, such as one for work."
+    exit 0
+    ;;
   __agy-start) cmd_agy_start; exit 0 ;;
   deps) cmd_deps "$@"; exit 0 ;;
   permissions)
