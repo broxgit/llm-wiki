@@ -1179,7 +1179,7 @@ EOF
 }
 
 cmd_status() {
-  local d v tv waiting f b lock line note since n found=0
+  local d v tv waiting f b lock line note since n found=0 ahead=0
   [ -d "$WIKIS_DIR" ] || { echo "no wikis at $(tilde "$WIKIS_DIR"). Run: $WIKI_CMD init"; return 0; }
   tv="$(version_of "$TEMPLATE/AGENTS.md")"
   printf '%-26s %-9s %-8s %s\n' "WIKI" "HANDBOOK" "WAITING" "LOCK"
@@ -1209,7 +1209,11 @@ cmd_status() {
     if [ "${n:-0}" -gt 0 ]; then note="$note  <- $n pattern(s) ready"; fi
     if [ -n "$tv" ] && [ "${v:-0}" -lt "$tv" ]; then note="$note  <- behind template v$tv, run: $WIKI_CMD upgrade ${d##*/}"; fi
     # Someone upgraded a shared wiki with a newer template than this clone.
-    if [ -n "$tv" ] && [ "${v:-0}" -gt "$tv" ]; then note="$note  <- ahead of your template v$tv, run: git -C $(tilde "$REPO") pull"; fi
+    # A plugin's folder isn't a clone, so the fix is a plugin update, said once below.
+    if [ -n "$tv" ] && [ "${v:-0}" -gt "$tv" ]; then
+      if from_plugin; then ahead=1; note="$note  <- ahead of this plugin's template v$tv"
+      else note="$note  <- ahead of your template v$tv, run: git -C $(tilde "$REPO") pull"; fi
+    fi
     if [ -f "$d/repos.md" ] && grep -q '^- ' "$d/repos.md"; then
       note="$note  covers: $(sed -n 's/^- //p' "$d/repos.md" | tr '\n' ' ')"
     fi
@@ -1222,6 +1226,16 @@ cmd_status() {
   if [ -f "$DELEG_FILE" ]; then echo "delegation: mode $(deleg_mode)"; fi
   if from_plugin; then
     n="$(plugin_key)"
+    if [ "$ahead" = 1 ]; then
+      f="$(plugin_installed)"
+      # An app started before an update keeps the old plugin loaded, and its
+      # session hook points the wiki command back at that old copy.
+      if [ -n "$f" ] && [ -d "$f" ] && ! [ "$f" -ef "$REPO" ]; then
+        echo "plugin:  this is an old copy (${REPO##*/}). Claude Code has ${f##*/} installed, but a Claude app or session started before the update still runs the old one. Quit and reopen the Claude app, restart terminal sessions, then start a new session."
+      else
+        echo "plugin:  this version is older than your wikis. Update it: claude plugin marketplace update ${n#*@}, then claude plugin update $n"
+      fi
+    fi
     [ "$(autoupdate_state "${n#*@}")" != off ] || echo "plugin:  auto-update is off, so fixes don't arrive. Run: $WIKI_CMD setup plugin"
   fi
   if in_git_repo "$WIKIS_DIR" && [ -f "$WIKIS_DIR/WIKIS.md" ]; then
@@ -3145,6 +3159,19 @@ cmd_delegation() {
 # From the plugin, setup also does the fiddly parts of installing: it puts `wiki`
 # on the PATH, turns on auto-update, and removes the old CLAUDE.md line. Then a
 # new person's install is two commands, one session, and `wiki setup`.
+
+# plugin_installed: the folder Claude Code says holds the installed version, from
+# installed_plugins.json, the same lookup the wiki command makes. Empty if unknown.
+plugin_installed() {
+  local f="$HOME/.claude/plugins/installed_plugins.json"
+  [ -f "$f" ] && command -v python3 >/dev/null 2>&1 || return 0
+  python3 - "$f" "$(plugin_key)" 2>/dev/null <<'PY' || true
+import json, sys
+entries = json.load(open(sys.argv[1])).get("plugins", {}).get(sys.argv[2], [])
+entries = sorted(entries, key=lambda e: e.get("scope") != "user")
+print(entries[0].get("installPath", "") if entries else "")
+PY
+}
 
 # plugin_key: plugin@marketplace for this copy, from its folder in the plugin cache.
 plugin_key() {

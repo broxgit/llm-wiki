@@ -192,6 +192,20 @@ mkdir -p "$P"
 (cd "$REPO" && tar cf - --exclude .git --exclude tests .) | (cd "$P" && tar xf -)
 expect "from the plugin, claude skips the CLAUDE.md line" "came with the llm-wiki Claude Code plugin" "$P/wiki.sh" claude
 check "from the plugin, CLAUDE.md is untouched" test ! -e "$HOME/.claude/CLAUDE.md"
+set_version "$WIKIS_DIR/demo/AGENTS.md" 999
+out="$("$P/wiki.sh" status 2>&1)"
+set_version "$WIKIS_DIR/demo/AGENTS.md" "$TV"
+case "$out" in *"claude plugin update llm-wiki@llm-wiki"*) ok "from the plugin, a newer wiki says to update the plugin" ;; *) bad "from the plugin, a newer wiki says to update the plugin" "$out" ;; esac
+case "$out" in *"git -C"*) bad "from the plugin, status never says to git pull the plugin's folder" "$out" ;; *) ok "from the plugin, status never says to git pull the plugin's folder" ;; esac
+# A newer version is installed, but this old copy still runs: restart, don't update.
+P2="$HOME/.claude/plugins/cache/llm-wiki/llm-wiki/def456"
+mkdir -p "$P2" && cp "$P/wiki.sh" "$P2/"
+printf '{"plugins":{"llm-wiki@llm-wiki":[{"scope":"user","installPath":"%s"}]}}\n' "$P2" > "$HOME/.claude/plugins/installed_plugins.json"
+set_version "$WIKIS_DIR/demo/AGENTS.md" 999
+out="$("$P/wiki.sh" status 2>&1)"
+set_version "$WIKIS_DIR/demo/AGENTS.md" "$TV"
+rm "$HOME/.claude/plugins/installed_plugins.json"
+case "$out" in *"Claude Code has def456 installed"*"Quit and reopen"*) ok "an old copy after an update says to restart Claude" ;; *) bad "an old copy after an update says to restart Claude" "$out" ;; esac
 
 section "Seed"
 A="$T/projects/api"
