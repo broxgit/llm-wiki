@@ -68,6 +68,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### Allow rules for the wiki commands (2026-10-29)
+
+- **Why:** the handbook has agents commit and push the wikis with `wiki sync`, but Claude Code's auto mode stops a push and asks, and a session can't grant itself the permission. A v24 compile in smarketing ended with its changes uncommitted.
+- **What changed:** `wiki setup` (or `setup permissions`) offers allow rules in `~/.claude/settings.json` for `start`, `capture`, `lock`, `log`, `index` and `sync`, in each spelling sessions use: the plugin's stable command or the clone's script, with `~` and in full, and plain `wiki`. It merges with what's there and keeps a backup. `wiki permissions` prints them for pasting. Adding them stays a person's step at a terminal on purpose: there is no non-interactive way for a session to add them.
+
 ### Handbook version 24: no summary page per source (2026-10-29)
 
 - **Why:** each raw note got a page in `wiki/sources/` that only pointed at the pages it fed, 59 in the collection, one more write per note at every compile. Gemini's review proposed dropping them.

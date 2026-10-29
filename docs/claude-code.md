@@ -23,6 +23,7 @@ The desktop app's **Chat** tab and claude.ai on the web are not Claude Code and 
    It asks one question at a time, and Enter takes the suggested answer. It:
    - makes `wiki` a command in every terminal, so from now on you type just `wiki`
    - turns on auto-update, which Claude Code leaves off for marketplaces outside Anthropic's own
+   - offers allow rules so sessions can run the wiki commands that write, `wiki sync` among them, without stopping to ask. Agents commit and push the wikis themselves, and Claude Code asks before a push, which a session can't approve for itself
    - creates your wiki collection in `~/wikis` and makes it a git repo
    - installs [gitleaks](https://github.com/gitleaks/gitleaks) with Homebrew, which stops agents from committing a secret
    - removes the wiki line from `~/.claude/CLAUDE.md` if an older version of this template put it there
