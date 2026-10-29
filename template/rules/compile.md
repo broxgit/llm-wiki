@@ -25,7 +25,7 @@ Once you hold the lock, read the last 10 entries of `log.md`.
 
 Trigger: session start, a pause, five notes waiting, or the user says "ingest" or "compile".
 
-With a named source, ingest that source. With none, ingest every pending file in `raw/` in filename order. That is oldest first. A raw file is pending when `wiki/sources/` has no page with the same name, extension aside. Check with `wiki.sh pending <wiki>`, or by listing the two folders. Don't open files to check. Ignore dotfiles. A missing `wiki/sources/` folder means nothing has been ingested yet.
+With a named source, ingest that source. With none, ingest every pending file in `raw/` in filename order. That is oldest first. A raw file is pending until it is compiled: until an ingest entry in `log.md` names it in a `- source:` line, a page lists it in `sources:`, or, in a wiki from before handbook v24, `wiki/sources/` has a page of the same name, extension aside. Check with `wiki.sh pending <wiki>`. Don't open files to check. Ignore dotfiles.
 
 With fewer than five pending files, compile them one at a time, as in the steps below. With five or more, as after `wiki seed`, compile them as one batch: see [Many files at once](#many-files-at-once).
 
@@ -35,23 +35,21 @@ For each source:
 
 1. If it is not in `raw/` yet, capture it first.
 2. Read it once, fully. Skip the read if this session wrote it.
-3. Write a summary page in `wiki/sources/` with the raw file's name, minus its extension, plus `.md`. Keep it short: what the source is, and links to the pages that carry its claims. Don't restate a short note.
-4. Update every other wiki page the source affects. Create a new page only if the topic will be referenced again. Before creating one, look for the topic in the other wikis with `wiki.sh find <word>`. If another wiki has it, add to that page or cite it, instead of starting a second copy. If the lesson holds beyond this project, as `AGENTS.md` describes under Ownership, write it in the shared wiki and cite it from here. When a page gains a claim that matters, revise its summary so the index shows it.
-5. Where the source disagrees with an existing page, or you doubt a claim, read `rules/conflicts.md` and follow it. Never overwrite silently.
-6. If it has `Feedback:` lines, add each to `patterns.md` as `rules/patterns.md` says.
+3. Update every other wiki page the source affects. Create a new page only if the topic will be referenced again. Before creating one, look for the topic in the other wikis with `wiki.sh find <word>`. If another wiki has it, add to that page or cite it, instead of starting a second copy. If the lesson holds beyond this project, as `AGENTS.md` describes under Ownership, write it in the shared wiki and cite it from here. When a page gains a claim that matters, revise its summary so the index shows it.
+4. Where the source disagrees with an existing page, or you doubt a claim, read `rules/conflicts.md` and follow it. Never overwrite silently.
+5. If it has `Feedback:` lines, add each to `patterns.md` as `rules/patterns.md` says.
 
-After the last source, update `index.md` once (`wiki.sh index <wiki>`) and append one entry per source to `log.md`. Also stamp any page you confirmed against code this session (see Stale knowledge in `AGENTS.md`). Then report in one line: pages created, pages updated, corrections, conflicts.
+After the last source, update `index.md` once (`wiki.sh index <wiki>`) and append one entry per source to `log.md`, naming the source in it. That entry is what marks the source compiled. Also stamp any page you confirmed against code this session (see Stale knowledge in `AGENTS.md`). Then report in one line: pages created, pages updated, corrections, conflicts.
 
 ### Many files at once
 
 One file at a time means rewriting the same topic page once per file, and a session that spends its start compiling instead of helping. With five or more pending files:
 
 1. Read them together. `wiki.sh pending <wiki> --show` prints them in one go, oldest first, up to about 150KB. If it says more wait, finish this batch, then run it again for the next.
-2. Before writing, plan: group the claims across all the files by topic, and match each topic to an existing page or a new one. A topic only one file touches can stay on that file's own page.
+2. Before writing, plan: group the claims across all the files by topic, and match each topic to an existing page or a new one. A topic only one file touches still goes on a topic page.
 3. Write each topic page once, with every file's claims for it, each cited to its file.
-4. Write each file's summary page in `wiki/sources/`: one line on what it is, and links to the pages it fed.
-5. Steps 5 and 6 above still apply to every file: conflicts, and `Feedback:` lines.
-6. Finish as below: `index.md` once, and one `log.md` entry per file.
+4. Steps 4 and 5 above still apply to every file: conflicts, and `Feedback:` lines.
+5. Finish as below: `index.md` once, and one `log.md` entry per file.
 
 Files named `*-seed-*` came from `wiki seed`: a repository's own docs, as its authors wrote them. Read the `seed-00-manifest` note first. It says which repository and commit they came from. Their claims about code are unchecked, so don't stamp `commit` from them, and where two of them disagree, the code decides once you check it.
 
@@ -59,7 +57,7 @@ Last, before you release the lock, count the `ingest` entries in `log.md` that c
 
 ## Pages
 
-Suggested subfolders under `wiki/`: `sources/` (one summary per raw source), `concepts/`, `entities/`, `howto/`, `decisions/`. Add others when a category has three or more pages.
+Suggested subfolders under `wiki/`: `concepts/`, `entities/`, `howto/`, `decisions/`. Add others when a category has three or more pages.
 
 Every page starts with frontmatter:
 
@@ -91,7 +89,7 @@ commit: 3f2a9c1
 
 ## index.md
 
-Grouped by category. One line per page, except pages under `wiki/sources/`. Those are bookkeeping and stay out of the index. Skills get a `## Skills` section, one line per `skills/<name>/SKILL.md`, with its description.
+Grouped by category. One line per page, except the source summaries under `wiki/sources/` that wikis from before v24 have. Those are bookkeeping and stay out of the index; leave them as they are. Skills get a `## Skills` section, one line per `skills/<name>/SKILL.md`, with its description.
 
 ```markdown
 ## Concepts
@@ -104,16 +102,16 @@ Keep it under 300 lines. Past that, split into one index file per category and m
 
 ## log.md
 
-Newest entry at the bottom. Append only. `wiki.sh log <wiki> ingest "<title>" --created <page> --updated <page> --conflicts <n>` appends a well-formed entry and prints the counts for your one-line report. It also takes `lint` with `--fixed` and `--reported`, and `--corrections` and `--patterns`.
+Newest entry at the bottom. Append only. `wiki.sh log <wiki> ingest "<title>" --source raw/<file> --created <page> --updated <page> --conflicts <n>` appends a well-formed entry and prints the counts for your one-line report. It also takes `lint` with `--fixed` and `--reported`, and `--corrections` and `--patterns`.
 
 ```markdown
 ## 2026-01-15 ingest: Source title
-- created: wiki/sources/2026-01-15-093000-source-title.md
+- source: raw/2026-01-15-093000-source-title.md
 - updated: wiki/concepts/page-title.md
 - conflicts: 1
 ```
 
-One entry per source, dated the day of the work and titled with the summary page's title. List wiki pages only. `conflicts` counts contradictions flagged. Write it even at zero. Add a `corrections:` line when a source corrected earlier claims, and a `patterns:` line with the number of `Feedback:` lines tallied when there were any. Entry types: `ingest`, `lint`, `restructure`, `resolve`. Captures are not logged. The file in `raw/` is the record. Stamping `verified` and `commit` is not logged either.
+One entry per source, dated the day of the work and titled with the source's title. The `- source:` line names its file in `raw/`, and marks it compiled. The other lines list wiki pages. `conflicts` counts contradictions flagged. Write it even at zero. Add a `corrections:` line when a source corrected earlier claims, and a `patterns:` line with the number of `Feedback:` lines tallied when there were any. Entry types: `ingest`, `lint`, `restructure`, `resolve`. Captures are not logged. The file in `raw/` is the record. Stamping `verified` and `commit` is not logged either.
 
 ## Structured data
 

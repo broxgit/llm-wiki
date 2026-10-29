@@ -495,6 +495,7 @@ cmd_log() {
   local wiki="" type="" title="" root lines="" nc=0 nu=0 nf=0 nr=0 corrections="" conflicts="" patterns="" v f
   while [ $# -gt 0 ]; do
     case "$1" in
+      --source) v="${2:-}"; v="${v#raw/}"; [ -n "$v" ] || die "--source takes raw/<file>"; lines="$lines- source: raw/$v"$'\n'; shift 2 ;;
       --created) lines="$lines- created: ${2:-}"$'\n'; nc=$((nc + 1)); shift 2 ;;
       --updated) lines="$lines- updated: ${2:-}"$'\n'; nu=$((nu + 1)); shift 2 ;;
       --fixed) lines="$lines- fixed: ${2:-}"$'\n'; nf=$((nf + 1)); shift 2 ;;
@@ -505,7 +506,7 @@ cmd_log() {
         case "$1" in --corrections) corrections="$v" ;; --conflicts) conflicts="$v" ;; --patterns) patterns="$v" ;; esac
         shift 2
         ;;
-      -*) die "log options: --created P, --updated P, --fixed T, --reported T, --corrections N, --conflicts N, --patterns N" ;;
+      -*) die "log options: --source raw/F, --created P, --updated P, --fixed T, --reported T, --corrections N, --conflicts N, --patterns N" ;;
       *) if [ -z "$wiki" ]; then wiki="$1"; elif [ -z "$type" ]; then type="$1"; else title="${title:+$title }$1"; fi; shift ;;
     esac
   done
@@ -834,8 +835,20 @@ for root in roots:
             add("commit without repo@ in a wiki over several repositories", f"{page} ({w[1]})")
     # Waiting notes.
     raw = os.path.join(root, "raw")
+    # Compiled: named in a log entry's `- source:` line, listed in a page's
+    # `sources:`, or with a summary page from before v24. As compiled_stems.
+    done = set()
+    lp = os.path.join(root, "log.md")
+    if os.path.exists(lp):
+        done |= {m for m in re.findall(r"^- source: raw/(\S+)", open(lp, errors="replace").read(), re.M)}
+    for p in pages:
+        done |= set(re.findall(r"raw/([^\],\"\s]+)", (body_and_front(open(p, errors="replace").read())[1] or {}).get("sources", "")))
+    done = {os.path.splitext(d)[0] for d in done}
+    sdir = os.path.join(root, "wiki", "sources")
+    if os.path.isdir(sdir):
+        done |= {os.path.splitext(f)[0] for f in os.listdir(sdir)}
     waiting = [f for f in (os.listdir(raw) if os.path.isdir(raw) else []) if not f.startswith(".")
-               and not os.path.exists(os.path.join(root, "wiki", "sources", os.path.splitext(f)[0] + ".md"))]
+               and os.path.splitext(f)[0] not in done]
     if waiting:
         found[f"notes waiting to be compiled ({len(waiting)})"] = []
     n = sum(len(v) or 1 for v in found.values())
@@ -859,14 +872,29 @@ PY
 # backlog comes in batches.
 PENDING_SHOW_BYTES=150000
 
-# pending_files <wiki root>: raw files with no source page yet, oldest first.
+# compiled_stems <wiki root>: the raw notes already compiled, one name per line,
+# without extension. Since v24 a compile records each note in its log entry
+# (`- source: raw/<file>`) instead of writing a summary page. A note also counts as
+# compiled when a page lists it in `sources:`, or when its summary page from
+# before v24 exists, so older wikis need no migration.
+compiled_stems() {
+  local r="$1"
+  {
+    sed -n 's#^- source: raw/##p' "$r/log.md" 2>/dev/null
+    grep -rh --include='*.md' '^sources:' "$r/wiki" 2>/dev/null | grep -o 'raw/[^],"[:space:]]*' | sed 's#^raw/##' || true
+  } | sed 's/\.[A-Za-z0-9]*$//'
+  [ ! -d "$r/wiki/sources" ] || ls "$r/wiki/sources" 2>/dev/null | sed -n 's/\.md$//p'
+}
+
+# pending_files <wiki root>: raw files not compiled yet, oldest first.
 pending_files() {
-  local f b
+  local f b done_
+  done_="$(compiled_stems "$1" | sort -u)"
   for f in "$1"/raw/*; do
     [ -f "$f" ] || continue
     b="${f##*/}"
     case "$b" in .*) continue ;; esac
-    [ -e "$1/wiki/sources/${b%.*}.md" ] || printf '%s\n' "$f"
+    printf '%s\n' "$done_" | grep -qxF -- "${b%.*}" || printf '%s\n' "$f"
   done
 }
 
@@ -2608,12 +2636,11 @@ patterns_ledger() {
 # Feedback lines in raw notes that haven't been compiled yet.
 patterns_pending() {
   local d="$1" f b
-  for f in "$d"/raw/*; do
-    [ -f "$f" ] || continue
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
     b="${f##*/}"
-    [ -e "$d/wiki/sources/${b%.*}.md" ] && continue
     grep -h '^Feedback:' "$f" 2>/dev/null | sed "s#^#$b: #" || true
-  done
+  done < <(pending_files "$d")
 }
 
 cmd_patterns() {

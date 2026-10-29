@@ -4,6 +4,14 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v24 (2026-10-29)
+
+No more summary page per source. Each raw note used to get a page in `wiki/sources/` that only pointed at the pages it fed: one more file written per note at every compile. The collection had 59.
+
+- A compile records each note in its `log.md` entry instead: `wiki log <wiki> ingest "<title>" --source raw/<file> ...` writes a `- source:` line. A note counts as compiled when a log entry names it, a page lists it in `sources:`, or its old summary page exists. Existing summary pages stay, and nothing needs migrating.
+- `rules/compile.md` drops the summary-page step. `wiki pending`, `status`, `lint`, the weekly report and the Claude Code hook all decide "compiled" the same way.
+- Do: if you share a collection, update everyone's plugin (or pull everyone's clone) before the next compile. Someone still on v23 decides "compiled" by summary pages, so they would see notes compiled under v24 as waiting and compile them again.
+
 ## v23 (2026-10-29)
 
 Session start in one call, and staleness that counts commits. Both from the test with Gemini, which skipped the session-start pull in every run.

@@ -47,7 +47,7 @@ Each wiki keeps `patterns.md` at its root. Updating it is compile work, done und
 2. If there isn't, add an entry with `status: watching`.
 3. If the sighting is a review comment, set the entry's kind to `review`, whatever it was. Review comments are the costliest kind.
 
-A feedback-only note needs no topic page. The ledger is its record. The note still gets its page in `wiki/sources/`.
+A feedback-only note needs no topic page. The ledger is its record. The note still gets its `log.md` entry, which marks it compiled.
 
 ```
 ## Wrap errors with context

@@ -6,12 +6,6 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 
 ## Next
 
-### Retire the per-source summary pages (handbook version 24)
-
-- **Why:** each raw note gets a page in `wiki/sources/` that only points at the pages it fed. The live collection has 59. They cost a write per note at compile, and `log.md` plus each page's `sources:` already record the same thing.
-- **Sketch:** `wiki log ... --source raw/<file>` records the note in the ingest entry. A note counts as compiled when `log.md` names it, a page's `sources:` lists it, or its old summary page exists, so nothing needs migrating. Drop the summary step from `rules/compile.md`. One helper decides "compiled" for `pending`, `status`, `lint`, the report and the session hook.
-- **Risk:** a teammate whose plugin hasn't updated still decides by summary pages, and would compile new notes a second time. Ship with a CHANGELOG `Do:` to update first, and keep it apart from other changes so its savings can be measured.
-
 ### Terse page style
 
 - **Why:** agents read pages far more often than people do. Measured on one sample page, terse notes in plain words used 56% of the tokens of default prose. The body alone used 45%.
@@ -73,6 +67,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Handbook version 24: no summary page per source (2026-10-29)
+
+- **Why:** each raw note got a page in `wiki/sources/` that only pointed at the pages it fed, 59 in the collection, one more write per note at every compile. Gemini's review proposed dropping them.
+- **What changed:** `wiki log --source raw/<file>` records the note in its ingest entry. One check decides "compiled" everywhere (`pending`, `status`, `lint`, the report, the Claude Code hook): a log entry names it, a page lists it in `sources:`, or its old summary page exists, so existing wikis need no migration. `compile.md` drops the summary step. Risk noted in the CHANGELOG: a teammate still on v23 would compile v24 notes again.
 
 ### Handbook version 23: `wiki start`, and staleness in commits (2026-10-29)
 
