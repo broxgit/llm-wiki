@@ -674,6 +674,11 @@ for root in roots:
                 add("frontmatter missing " + ", ".join(miss), rel)
             if len(fm.get("summary", "")) > 120:
                 add("summary over 120 characters", rel)
+            # Every claim traces to a file in raw/, so each sources: entry must exist.
+            for s in fm.get("sources", "").strip("[]").split(","):
+                s = s.strip().strip('"').strip("'")
+                if s and not s.startswith(("http:", "https:")) and not os.path.exists(os.path.join(root, s)):
+                    add("missing source file", f"{rel} -> {s}")
             v = fm.get("verified", "")
             if not source and v and v < stale_cut:
                 add("not verified in 180 days", f"{rel} (verified {v})")
@@ -756,6 +761,16 @@ pending_files() {
   done
 }
 
+# unlisted <wiki root>: the first of raw/ and wiki/sources/ that exists but can't be
+# listed, or nothing. A glob over such a folder looks empty, which inside an agent's
+# sandbox read as "nothing waiting" (Antigravity, 2026-10-29).
+unlisted() {
+  local d
+  for d in "$1/raw" "$1/wiki/sources"; do
+    if [ -d "$d" ] && ! ls "$d" >/dev/null 2>&1; then printf '%s' "$d"; return 0; fi
+  done
+}
+
 # pending [<wiki>] [--show]
 cmd_pending() {
   local wiki="" show=0 root f size total=0 n=0 left=0 d
@@ -768,21 +783,23 @@ cmd_pending() {
   done
   if [ -z "$wiki" ]; then
     [ "$show" = 0 ] || die "pending --show needs a wiki name"
+    left=0
     for d in "$WIKIS_DIR"/*/; do
       d="${d%/}"
       is_wiki "$d" || continue
+      if [ -n "$(unlisted "$d")" ]; then echo "${d##*/}: unknown, can't read $(tilde "$(unlisted "$d")")"; left=1; continue; fi
       n="$(pending_files "$d" | wc -l | tr -d ' ')"
       [ "$n" -eq 0 ] || echo "${d##*/}: $n waiting"
     done
+    [ "$left" = 0 ] || die "$(cant_read "$WIKIS_DIR")"
     return 0
   fi
   root="$(resolve "$wiki")"
   is_wiki "$root" || die "$(tilde "$root") is not a wiki"
   # A folder the shell can't list looks empty to a glob. Inside Antigravity's
   # sandbox (2026-10-29) that said "nothing waiting" while five notes waited.
-  for d in "$root/raw" "$root/wiki/sources"; do
-    [ ! -d "$d" ] || ls "$d" >/dev/null 2>&1 || die "$(cant_read "$d")"
-  done
+  d="$(unlisted "$root")"
+  [ -z "$d" ] || die "$(cant_read "$d")"
   if [ "$show" = 0 ]; then
     n="$(pending_files "$root" | wc -l | tr -d ' ')"
     [ "$n" -gt 0 ] || { echo "nothing waiting in $(tilde "$root")"; return 0; }
@@ -1215,25 +1232,23 @@ cmd_status() {
     is_wiki "$d" || continue
     found=1
     v="$(version_of "$d/AGENTS.md")"
-    waiting=0
-    for f in "$d"/raw/*; do
-      [ -f "$f" ] || continue
-      b="${f##*/}"
-      b="${b%.*}"
-      [ -e "$d/wiki/sources/$b.md" ] || waiting=$((waiting + 1))
-    done
+    waiting="$(pending_files "$d" | wc -l | tr -d ' ')"
+    [ -z "$(unlisted "$d")" ] || waiting="?"
     lock="free"
     if [ -f "$d/.compile-lock" ]; then
       line="$(head -n 1 "$d/.compile-lock")"
       case "$line" in held*) lock="$line" ;; esac
     fi
     note=""
-    if [ "$waiting" -ge 5 ]; then note="$note  <- compile due"; fi
+    if [ "$waiting" = "?" ]; then note="$note  <- can't read raw/: if this runs in an agent's sandbox, allow $(tilde "$WIKIS_DIR")"
+    elif [ "$waiting" -ge 5 ]; then note="$note  <- compile due"; fi
     # Ingest entries since the last lint entry. The handbook lints at 10.
     since="$(awk '/^## [0-9-]+ lint/{n=0} /^## [0-9-]+ ingest/{n++} END{print n+0}' "$d/log.md" 2>/dev/null)"
     if [ "${since:-0}" -ge 10 ]; then note="$note  <- lint due ($since ingests)"; fi
     n="$(patterns_ledger "$d" | grep -c '^ready|' || true)"
     if [ "${n:-0}" -gt 0 ]; then note="$note  <- $n pattern(s) ready"; fi
+    n="$(patterns_ledger "$d" | grep -c '^regressed|' || true)"
+    if [ "${n:-0}" -gt 0 ]; then note="$note  <- $n accepted fix(es) not working"; fi
     if [ -n "$tv" ] && [ "${v:-0}" -lt "$tv" ]; then note="$note  <- behind template v$tv, run: $WIKI_CMD upgrade ${d##*/}"; fi
     # Someone upgraded a shared wiki with a newer template than this clone.
     # A plugin's folder isn't a clone, so the fix is a plugin update, said once below.
@@ -1282,20 +1297,39 @@ cmd_status() {
   fi
 }
 
+# Index lines first, then pages whose text mentions the word but whose index line
+# doesn't: an identifier, error string or host name is rarely in a summary.
+FIND_PAGES=5
 cmd_find() {
-  local word="$1" d hits found=0
+  local word="$1" d hits pages f line n found=0
   [ -d "$WIKIS_DIR" ] || die "no wikis at $(tilde "$WIKIS_DIR")"
   for d in "$WIKIS_DIR"/*/; do
     d="${d%/}"
     [ -f "$d/index.md" ] || continue
     # Headings like "# Index" and "## Concepts" aren't entries.
     hits="$(grep -v '^#' "$d/index.md" | grep -i -F -- "$word" || true)"
-    [ -n "$hits" ] || continue
+    pages=""
+    if [ -d "$d/wiki" ]; then
+      n=0
+      while IFS= read -r f; do
+        [ -n "$f" ] && [ "$n" -lt "$FIND_PAGES" ] || continue
+        f="${f#"$d"/}"
+        case "$hits" in *"($f)"*) continue ;; esac
+        # The first mention in the page's text, not its frontmatter.
+        line="$(awk -v w="$word" 'NR == 1 && /^---$/ { fm = 1; next } fm && /^---$/ { fm = 0; next }
+          !fm && index(tolower($0), tolower(w)) { print; exit }' "$d/$f" | sed 's/^[[:space:]]*//' | cut -c 1-120)"
+        [ -n "$line" ] || continue
+        pages="$pages    $f: $line"$'\n'
+        n=$((n + 1))
+      done < <(grep -r -l -i -F --include='*.md' --exclude-dir=sources -- "$word" "$d/wiki" 2>/dev/null | sort)
+    fi
+    [ -n "$hits$pages" ] || continue
     found=1
     echo "${d##*/}:"
-    printf '%s\n' "$hits" | sed 's/^/  /'
+    [ -z "$hits" ] || printf '%s\n' "$hits" | sed 's/^/  /'
+    [ -z "$pages" ] || printf '  also in pages:\n%s' "$pages"
   done
-  [ "$found" = 1 ] || echo "no index mentions: $word"
+  [ "$found" = 1 ] || echo "no mentions in any index or page: $word"
 }
 
 # The date N days ago, as YYYY-MM-DD. GNU date first, then the BSD date on macOS.
@@ -2272,21 +2306,27 @@ cmd_standup() {
 # ---- patterns ---------------------------------------------------------------
 # Each wiki's patterns.md tallies recurring feedback. See template/rules/patterns.md.
 
-# patterns_ledger <wiki root>: one line per entry: ready|name|kind|status|sightings|repos
+# patterns_ledger <wiki root>: one line per entry: flag|name|kind|status|sightings|repos
+# flag is "ready" (enough sightings to propose a fix), "regressed" (accepted, then
+# seen again after that date: rules/patterns.md says the fix isn't working), or empty.
 patterns_ledger() {
   [ -f "$1/patterns.md" ] || return 0
   awk '
     function flush() {
       if (name == "") return
       nrep = 0; for (r in repos) nrep++
-      ready = (status ~ /^watching/ && (n >= 3 || (n >= 2 && (kind == "review" || nrep >= 2)))) ? "ready" : ""
-      print ready "|" name "|" kind "|" status "|" n "|" nrep
-      name = ""; kind = ""; status = ""; n = 0; delete repos
+      flag = (status ~ /^watching/ && (n >= 3 || (n >= 2 && (kind == "review" || nrep >= 2)))) ? "ready" : ""
+      if (status ~ /^accepted [0-9]/) {
+        split(status, a, " ")
+        for (i = 1; i <= ns; i++) if (seen[i] > a[2]) flag = "regressed"
+      }
+      print flag "|" name "|" kind "|" status "|" n "|" nrep
+      name = ""; kind = ""; status = ""; n = 0; ns = 0; delete repos; delete seen
     }
     /^## / { flush(); name = substr($0, 4); next }
     /^- kind:/ { kind = $3 }
     /^- status:/ { sub(/^- status: */, ""); status = $0 }
-    /^- seen:/ { c = 1; if ($NF ~ /^x[0-9]+$/) c = substr($NF, 2) + 0; n += c; if ($4 != "-") repos[$4] = 1 }
+    /^- seen:/ { c = 1; if ($NF ~ /^x[0-9]+$/) c = substr($NF, 2) + 0; n += c; if ($4 != "-") repos[$4] = 1; seen[++ns] = $3 }
     END { flush() }
   ' "$1/patterns.md"
 }
@@ -2303,7 +2343,7 @@ patterns_pending() {
 }
 
 cmd_patterns() {
-  local d line ready name kind status n nrep pend found=0 total=0
+  local d line ready name kind status n nrep pend found=0 total=0 regressed=0
   [ -d "$WIKIS_DIR" ] || die "no wikis at $(tilde "$WIKIS_DIR")"
   for d in "$WIKIS_DIR"/*/; do
     d="${d%/}"
@@ -2315,7 +2355,11 @@ cmd_patterns() {
     echo "== ${d##*/}"
     if [ -n "$line" ]; then
       while IFS='|' read -r ready name kind status n nrep; do
-        if [ "$ready" = ready ]; then total=$((total + 1)); printf '  READY  '; else printf '         '; fi
+        case "$ready" in
+          ready) total=$((total + 1)); printf '  READY  ' ;;
+          regressed) regressed=$((regressed + 1)); printf '  AGAIN  ' ;;
+          *) printf '         ' ;;
+        esac
         printf '%s (%s, seen %s, %s repo(s)): %s\n' "$name" "${kind:-?}" "$n" "$nrep" "${status:-watching}"
       done <<EOF2
 $line
@@ -2329,6 +2373,7 @@ EOF2
   [ "$found" = 1 ] || { echo "No patterns yet. Agents add Feedback lines to their notes as corrections come in."; return 0; }
   echo
   echo "$total ready to propose. An agent proposes each at a stopping point, per rules/patterns.md."
+  [ "$regressed" = 0 ] || echo "$regressed accepted fix(es) seen again since (AGAIN): the fix isn't working. Tell the user."
 }
 
 # ---- skills -----------------------------------------------------------------
@@ -2978,6 +3023,8 @@ report_needs_you() {
     if [ -n "$lines" ]; then any=1; printf '%s\n' "$lines" | sed "s/^/- ${d##*/}: a proposed fix still waits for an answer: /"; fi
     n="$(patterns_ledger "$d" | grep -c '^ready|' || true)"
     if [ "${n:-0}" -gt 0 ]; then any=1; echo "- ${d##*/}: $n repeated pattern(s) ready for a fix. wiki patterns lists them."; fi
+    n="$(patterns_ledger "$d" | grep -c '^regressed|' || true)"
+    if [ "${n:-0}" -gt 0 ]; then any=1; echo "- ${d##*/}: $n accepted fix(es) seen again since, so not working. wiki patterns lists them."; fi
     n="$(pending_files "$d" | wc -l | tr -d ' ')"
     if [ "$n" -gt 10 ]; then any=1; echo "- ${d##*/}: $n notes waiting to be compiled."; fi
     v="$(version_of "$d/AGENTS.md")"

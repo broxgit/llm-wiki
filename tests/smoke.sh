@@ -78,7 +78,11 @@ expect "which finds a covered repository" "demo" "$W" which web
 refuse "which fails for an unknown repository" "$W" which nothing
 printf -- '- [Deploy flow](wiki/howto/deploy.md): blue-green behind the canary gate\n' >> "$WIKIS_DIR/demo/index.md"
 expect "find searches indexes" "Deploy flow" "$W" find canary
-expect "find skips index headings" "no index mentions" "$W" find Index
+expect "find skips index headings" "no mentions" "$W" find Index
+mkdir -p "$WIKIS_DIR/demo/wiki/howto" && printf -- '---\ntitle: Deploy\nsummary: How deploys run.\n---\n\nSet DEPLOY_TOKEN_FILE before the run.\n' > "$WIKIS_DIR/demo/wiki/howto/deploy.md"
+expect "find also searches page text" "wiki/howto/deploy.md: Set DEPLOY_TOKEN_FILE" "$W" find deploy_token_file
+out="$("$W" find canary 2>&1)"
+case "$out" in *"also in pages"*"deploy.md"*) bad "find doesn't repeat a page its index line already showed" "$out" ;; *) ok "find doesn't repeat a page its index line already showed" ;; esac
 expect "claude --print prints the line" "knowledge wikis live in" "$W" claude --print
 check "claude --print writes nothing" test ! -e "$HOME/.claude/CLAUDE.md"
 expect "the line says what wiki.sh means, for agents without the hook" "Wherever their handbooks say \`wiki.sh\`, run" "$W" claude --print
@@ -258,6 +262,9 @@ expect "pending says when nothing waits" "nothing waiting in" "$W" pending globa
 chmod 000 "$WIKIS_DIR/demo/raw"
 refuse "pending fails when it can't list raw/" "$W" pending demo
 expect "and says what's waiting is unknown" "is unknown" "$W" pending demo
+refuse "pending across wikis fails too" "$W" pending
+expect "and names the wiki it couldn't read" "demo: unknown" "$W" pending
+expect "status shows ? and says why" "can't read raw/" "$W" status
 chmod 755 "$WIKIS_DIR/demo/raw"
 for i in 01 02 03 04 05 06 07 08 09 10 11; do printf 'Captured: 2026-01-01\n\nNote %s.\n' "$i" > "$WIKIS_DIR/bulk/raw/2026-01-01-0000$i-note-$i.md"; done
 "$W" cover bulk bulkrepo >/dev/null
@@ -357,6 +364,15 @@ printf '\n## Wrap errors\n- kind: review\n- rule: Wrap errors.\n- status: propos
 out="$("$W" report 2>&1)"
 case "$out" in *"## Needs you"*"open **Conflict:**"*) ok "Needs you lists open contradictions" ;; *) bad "Needs you lists open contradictions" "$out" ;; esac
 case "$out" in *"waits for an answer: Wrap errors"*) ok "Needs you lists unanswered proposals" ;; *) bad "Needs you lists unanswered proposals" "$out" ;; esac
+cp "$WIKIS_DIR/demo/patterns.md" "$T/patterns.bak"
+printf '\n## Pin versions\n- kind: correction\n- rule: Pin versions.\n- status: accepted 2026-10-01: a convention\n- seen: 2026-09-20 api raw/a.md\n- seen: 2026-10-05 api raw/b.md\n' >> "$WIKIS_DIR/demo/patterns.md"
+expect "patterns flags an accepted fix seen again since" "AGAIN  Pin versions" "$W" patterns
+expect "and status says the fix isn't working" "accepted fix(es) not working" "$W" status
+expect "and so does the report" "seen again since, so not working" "$W" report
+cp "$T/patterns.bak" "$WIKIS_DIR/demo/patterns.md"
+printf '\n## Pin versions\n- kind: correction\n- rule: Pin versions.\n- status: accepted 2026-10-01: a convention\n- seen: 2026-09-20 api raw/a.md\n' >> "$WIKIS_DIR/demo/patterns.md"
+lacks "an accepted fix not seen since isn't flagged" "AGAIN" "$W" patterns
+cp "$T/patterns.bak" "$WIKIS_DIR/demo/patterns.md"
 rm -f "$WIKIS_DIR/demo/wiki/conflict-test.md"
 lacks "a new collection's report isn't due yet" "due" "$W" report --due
 touch -t 202001010000 "$WIKIS_DIR/WIKIS.md"
@@ -444,6 +460,11 @@ out="$("$W" lint lintdemo 2>&1)"
 for want in "broken link" "broken citation" "not verified in 180 days" "notes waiting"; do
   case "$out" in *"$want"*) ok "lint reports: $want" ;; *) bad "lint reports: $want" "$out" ;; esac
 done
+printf -- '---\ntitle: Cited\nsummary: Cites raw files.\nsources: [raw/2026-01-01-000000-waiting.md, raw/2026-01-01-000001-gone.md]\nupdated: 2026-01-01\nverified: 2026-10-01\n---\n\nBody.\n' > "$L/wiki/concepts/cited.md"
+out="$("$W" lint lintdemo 2>&1)"
+case "$out" in *"missing source file"*"cited.md -> raw/2026-01-01-000001-gone.md"*) ok "lint reports a sources: entry with no raw file" ;; *) bad "lint reports a sources: entry with no raw file" "$out" ;; esac
+case "$out" in *"-> raw/2026-01-01-000000-waiting.md"*) bad "and only the missing one" "$out" ;; *) ok "and only the missing one" ;; esac
+rm "$L/wiki/concepts/cited.md"
 printf '\n- [Ghost](wiki/concepts/ghost.md): gone\n' >> "$L/index.md"
 expect "lint reports an index line with no page" "index line with no page" "$W" lint lintdemo
 expect "lint --all covers every wiki" "== global" "$W" lint --all

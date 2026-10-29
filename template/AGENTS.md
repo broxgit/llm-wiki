@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Handbook version 21.
+Handbook version 22.
 
 This folder is a knowledge base maintained by an LLM agent. Any agent working here follows this file. It needs no vendor features. Plain markdown, plain files.
 
@@ -88,7 +88,7 @@ Several sessions may use this wiki at once. That is safe because writes are spli
 1. Pick pages from `index.md` by their summaries.
 2. Read up to 5 pages. Read more only if those leave a gap.
 3. Answer from the pages. Cite each page by path.
-4. If this wiki and the shared wikis can't answer, search `raw/` by keyword before reading anything whole. Then try the peer wikis. If nothing answers, say so plainly.
+4. If this wiki and the shared wikis can't answer, search by keyword before reading anything whole: `wiki.sh find <word>` searches every wiki's index and page text, then search `raw/`. Then try the peer wikis. If nothing answers, say so plainly.
 5. If the answer produced synthesis worth keeping, capture it.
 6. Log the lookup: append `<UTC date>,<wiki>,hit` to `stats.csv` in the folder above this wiki, or `miss` when no page helped. Use the wiki that answered, or this wiki for a miss. Create the file with the line `date,wiki,result` if it's missing. One line per question, only when you checked a wiki. Git ignores it.
 

@@ -40,7 +40,7 @@ For each source:
 5. Where the source disagrees with an existing page, or you doubt a claim, read `rules/conflicts.md` and follow it. Never overwrite silently.
 6. If it has `Feedback:` lines, add each to `patterns.md` as `rules/patterns.md` says.
 
-After the last source, update `index.md` once and append one entry per source to `log.md`. Also stamp any page you confirmed against code this session (see Stale knowledge in `AGENTS.md`). Then report in one line: pages created, pages updated, corrections, conflicts.
+After the last source, update `index.md` once (`wiki.sh index <wiki>`) and append one entry per source to `log.md`. Also stamp any page you confirmed against code this session (see Stale knowledge in `AGENTS.md`). Then report in one line: pages created, pages updated, corrections, conflicts.
 
 ### Many files at once
 
@@ -97,6 +97,8 @@ Grouped by category. One line per page, except pages under `wiki/sources/`. Thos
 ## Concepts
 - [Page title](wiki/concepts/page-title.md): the summary line from its frontmatter
 ```
+
+After changing pages, run `wiki.sh index <wiki>`. It adds, updates and removes lines from each page's frontmatter, keeps your order and headings, and lists every line it changed. To change an index line, change the page's `summary` and run it again. Never edit a page's line by hand only.
 
 Keep it under 300 lines. Past that, split into one index file per category and make `index.md` a short list of those.
 
