@@ -82,6 +82,24 @@ wiki cover my-product repo-one repo-two repo-three
 
 A session in any of them then uses `my-product`. The test: if one session routinely works across the repositories, they are one wiki. If each is worked on alone and they only call each other, keep them separate.
 
+## Work and personal collections
+
+One collection, `~/wikis`, is enough for most people. To keep work wikis apart from personal ones, each with its own git remote and its own shared wiki, add a second collection:
+
+```
+wiki setup collections
+```
+
+It asks for a name, a folder (`~/wikis-work`, say), and rules that pick which repositories go there. A rule starting with `~` or `/` matches a repository's folder, such as `~/dev/work/*`. Any other rule matches its remote URL, such as `*gitlab.com:acme/*`. The list lives in `~/.config/llm-wiki/collections`, one line per collection:
+
+```
+work  ~/wikis-work  *gitlab.com:acme/*,~/dev/work/*
+```
+
+From then on, `wiki` commands, `wiki start`, the Claude Code hook and the Antigravity plugin use the collection for the repository you're in. Anything that matches no rule stays in `~/wikis`. `wiki collections` lists them, `--collection NAME` picks one by name for any command, and `wiki status` mentions notes waiting in the others. Setting `WIKIS_DIR` still overrides all of it.
+
+Setup doesn't move existing wikis. To move one, move its folder into the other collection and commit in both.
+
 ## Stop repeating yourself
 
 When you correct the agent, paste review comments on code it wrote, or watch it do the same steps again, it notes that. Once the same thing has come up a few times, it asks one question with the evidence and offers a fix:
@@ -257,6 +275,7 @@ Run `wiki` with no arguments for the full list. The ones you're likely to use:
 | `wiki status` | Every wiki: notes waiting, lock, handbook version, what's due. |
 | `wiki start` | Session start in one call: the wiki for this folder, a pull, the indexes, `For agents`, and what waits. Agents run it; you can too. |
 | `wiki find <word>` | Search every wiki's index, then page text. |
+| `wiki collections` | The wiki collections on this machine and the repositories each one takes. `--collection NAME` picks one for any command. |
 | `wiki deps [--all] [--write]` | Which repository owns which package, and which of your repositories use each other's, from `go.mod`, `package.json` and `pyproject.toml`. `--write` saves it to the shared wiki's `data/dependencies.csv`. |
 | `wiki stale [days]` | Pages not verified in that many days, 90 by default, or 50 commits behind their repository. |
 | `wiki patterns` | Recurring feedback, and which patterns are ready. |

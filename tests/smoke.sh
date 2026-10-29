@@ -722,5 +722,27 @@ expect "once present, setup --list says the commands are allowed" "wiki commands
 check "and other settings were kept" python3 -c "import json,sys; s=json.load(open(sys.argv[1])); assert s['theme']=='dark' and 'Bash(ls *)' in s['permissions']['allow']" "$HOME/.claude/settings.json"
 rm -f "$HOME/.claude/settings.json"
 
+section "Collections"
+CW="$T/wikis-work"
+WIKIS_DIR="$CW" "$W" init >/dev/null 2>&1
+WIKIS_DIR="$CW" "$W" new jobapp >/dev/null 2>&1
+mkdir -p "$HOME/.config/llm-wiki"
+printf '# test\nwork %s %s/code/workrepos/*,*gitlab.example.com:acme/*\n' "$CW" "$T" > "$HOME/.config/llm-wiki/collections"
+RA="$T/code/workrepos/jobapp"; RB="$T/elsewhere/svc"; RC="$T/elsewhere/hobby"
+for r in "$RA" "$RB" "$RC"; do mkdir -p "$r" && git -C "$r" init -q; done
+git -C "$RB" remote add origin git@gitlab.example.com:acme/svc.git
+nw() { (cd "$1" && env -u WIKIS_DIR "$W" "${@:2}"); }
+expect "a repository under a folder rule goes to that collection" "$CW" nw "$RA" __collection
+expect "a repository whose remote matches goes to that collection" "$CW" nw "$RB" __collection
+expect "any other repository stays in the default" "$HOME/wikis" nw "$RC" __collection
+expect "collections lists them with their rules" "work       $(printf '%s' "$CW" | sed "s#^$HOME#~#")  matches:" nw "$RC" collections
+expect "start in a work repository finds its wiki in the work collection" "wiki: $(printf '%s' "$CW" | sed "s#^$HOME#~#")/jobapp" nw "$RA" start
+expect "--collection picks one by name" "jobapp" nw "$RC" status --collection work
+refuse "--collection with an unknown name fails" nw "$RC" status --collection nope
+expect "the Claude Code hook routes the session to its collection" "/jobapp, for the repository jobapp" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; unset WIKIS_DIR; hook '$RA' | context"
+expect "WIKIS_DIR in the environment still wins" "$WIKIS_DIR" bash -c "cd '$RA' && WIKIS_DIR='$WIKIS_DIR' '$W' __collection"
+check "status in the default mentions the other collection" bash -c "cd '$RC' && env -u WIKIS_DIR WIKIS_DIR='$WIKIS_DIR' '$W' status | grep -q 'also:    collection work'"
+rm -f "$HOME/.config/llm-wiki/collections"
+
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ]

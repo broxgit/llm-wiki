@@ -24,7 +24,6 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 - **Merge requests in standups.** Reviews and MRs opened live in GitHub or GitLab, not in git history. Pulling them in would need an API token and a host per remote.
 - **Backfill from more places.** The desktop app's Chat tab and claude.ai aren't on disk, so they're out of reach without an agent that has chat search. (The desktop Code tab is in `~/.claude/projects`, and Gemini's Antigravity conversations are read since 2026-10-29.)
 - **Team digest.** A weekly roll-up across several people's journals, for a lead. Needs a shared, opt-in journal location.
-- **Split work and personal collections.** One collection on a personal remote now holds work, client, and personal wikis. `WIKIS_DIR` already supports a second collection. The routing line would need to know about both.
 - **Reach sessions with no file access.** A chat session that can't read files can't use a wiki. A small MCP server over the collection would fix that.
 - **Review flow for teams.** Agents push straight to the collection. A team may want a weekly digest of changes, or pull requests.
 - **Obsidian.** Add `.obsidian/` to the template's `.gitignore` if anyone opens wikis as vaults.
@@ -61,6 +60,12 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Work and personal collections (2026-10-29)
+
+- **Why:** one collection on a personal remote held work, client and personal wikis together.
+- **What changed:** `~/.config/llm-wiki/collections` lists collections besides `~/wikis`: a name, a folder, and rules that match a repository's folder or remote URL. Every command, `wiki start`, the Claude Code hook and the Antigravity plugin use the collection for the repository at hand; `--collection NAME` picks one by name; `wiki collections` lists them; `status` mentions notes waiting in the others; `WIKIS_DIR` still overrides. `wiki setup collections` adds one and creates it with its shared wiki. Moving existing wikis stays a person's step.
+- **Open:** the session line for other agents and the Antigravity plugin's rule name the collection they were written from; each session's `wiki start` output names the right one.
 
 ### Handbook version 25: a shorter core (2026-10-29)
 
