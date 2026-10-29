@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Handbook version 24.
+Handbook version 25.
 
 This folder is a knowledge base maintained by an LLM agent. Any agent working here follows this file. It needs no vendor features. Plain markdown, plain files.
 
@@ -13,7 +13,8 @@ This file holds what every session needs. The rest is in `rules/`. Read a rules 
 | compile: ingest, or any change to `wiki/`, `index.md`, or `log.md` | `rules/compile.md` |
 | file a source that disagrees with a page, or a claim you doubt | `rules/conflicts.md` |
 | lint | `rules/lint.md` |
-| create a wiki for another repository, or move knowledge between wikis | `rules/peers.md` |
+| look something up in a peer wiki, write to another wiki, create one, or move knowledge between wikis | `rules/peers.md` |
+| commit by hand, or handle a merge conflict or a refused commit | `rules/sync.md` |
 | write a journal entry, or report what the user did | `rules/journal.md` |
 | record feedback, update `patterns.md`, propose a fix, or check code against conventions | `rules/patterns.md` |
 | hand a task to a sub-agent on another model, or suggest doing so | `rules/delegation.md` |
@@ -109,59 +110,25 @@ The world changes. Pages don't. Each page records when its claims were last conf
 
 Trigger: your own judgment (see Act without being asked), or the user says "save this", "capture this", "file this", or "save this session", or hands over a source.
 
-1. For a file or document, copy it into `raw/` unchanged.
-2. Before writing, ask of each item: would another repository need this? If so, it belongs in the shared wiki or the wiki that owns it, not here. See Ownership under Other wikis. One conversation can make notes in several wikis.
-3. For a chat, write a note instead. Plain markdown, no frontmatter, first line `Captured: YYYY-MM-DD` in UTC. Include decisions, facts, open questions, links cited. Keep only what the user said or confirmed, what you checked against code or a source, and what came from a cited source. Leave out agent speculation.
-4. Name the file `YYYY-MM-DD-HHMMSS-short-slug.ext`, using the UTC date and time of capture. Read it from the clock, for example with `date -u +%Y-%m-%d-%H%M%S`. Never estimate or round it. The timestamp sets ingest order and keeps names unique. If you can't get the time, use the date alone and tell the user. If the name is taken, add `-2`, `-3`, and so on. Never overwrite.
+1. Ask of each item: would another repository need this? Then it goes in the shared wiki or the wiki that owns it (see Other wikis). One conversation can make notes in several wikis.
+2. Save it with `wiki.sh capture <wiki> <slug>`: pipe the note in, or pass `--file NOTE`. A document goes in unchanged with `--copy FILE`. The command names the file from the clock and adds the `Captured:` line.
+3. A note is plain markdown, no frontmatter: decisions, facts, open questions, links cited. Keep only what the user said or confirmed, what you checked against code or a source, and what a cited source says. Leave out speculation.
+4. Report the path in one line. Capture never touches `wiki/`, `index.md`, or `log.md`.
 
-`wiki.sh capture <wiki> <slug>` does steps 3 and 4: pipe the note in, and it adds the `Captured:` line and names the file from the clock, never rounded, never overwriting. `wiki.sh capture <wiki> --copy FILE` stores a document unchanged. Use it when you have the script. Without it, follow the steps by hand.
-5. Report the path in one line. Capture itself never touches `wiki/`, `index.md`, or `log.md`. Compiling the note is a separate step.
+Without the script, name the file `YYYY-MM-DD-HHMMSS-short-slug.md` from the UTC clock (`date -u +%Y-%m-%d-%H%M%S`). Never estimate or round the time, and never overwrite: add `-2`, `-3`. Make the first line `Captured: YYYY-MM-DD`.
 
-Save knowledge in the wiki, not in your tool's own memory. Some agents keep notes of their own, per project folder. A rule saved there only reaches sessions in that folder, while the wiki reaches every repository and every teammate. When you would save a correction, a working rule, or a fact about a project or tool to your own memory, capture it in the wiki instead.
-
-Rows of data are not notes. Records, listings, and metrics go in `data/` as CSV or SQLite.
+Save knowledge in the wiki, not in your tool's own memory: memory reaches one project folder, the wiki every repository and teammate. Rows of data go in `data/` as CSV or SQLite, not in notes.
 
 ## Other wikis
 
-This wiki is rarely alone. Two kinds of other wiki matter. Each has its own `AGENTS.md` and `rules/`, which apply when you write there. If its version line matches this handbook's, yours will do. Reading from another wiki needs no check.
+Every wiki in this wiki's parent folder is a peer. Each covers one project, is named after its repository, or lists its repositories in `repos.md`. `links.md` names the shared wikis, for knowledge that holds everywhere. Read `rules/peers.md` before you look something up in a peer, write to another wiki, or create one.
 
-**Peers.** Every wiki in this wiki's parent folder is a peer. Each covers one project. Most projects are a single code repository, and the wiki is named after it: the last part of the repository's remote URL, or its folder name when it has no remote. A project that spans several repositories has one wiki, named after the project, and its `repos.md` lists every repository it covers. To find the wiki for a repository, look for the peer with that name. If there is none, search the peers' `repos.md` files for it.
-
-**Shared.** `links.md` lists wikis for knowledge that holds everywhere, one per line:
-
-```
-- global: ~/wikis/global | knowledge that holds across projects: tooling, conventions, glossary
-```
-
-Each line is a name, a path, and a purpose. Skip a line whose path doesn't exist on this machine, or that points at this wiki.
-
-Rules for both kinds:
-
-- **Ownership.** Knowledge lives in the wiki of whatever owns the thing. What you learn about another project's code, client, or API goes in that project's wiki, even though this session is working elsewhere. Knowledge that holds beyond one project goes in the shared wiki whose purpose fits. For example:
-  - how the user wants agents to work (commits, branches, writing style, when to ask), in `wiki/conventions.md` under `## For agents`;
-  - how a shared library, internal tool, or vendor behaves;
-  - delivery pipelines, environments, and deploys;
-  - team practice for observability, tickets, and reviews;
-  - decisions by a guild or any group that sets practice across repositories.
-
-  Write the general lesson there once. Here, keep only what is specific to this project, with a citation to the shared page. Knowledge about this project stays here, once, however many of its repositories it touches. When unsure whether something holds beyond this project, ask yourself whether another repository's session would act differently for knowing it.
-- **Lookup by name.** When the work touches a repository outside this project that the user's team owns, find its wiki and read that `index.md` before answering from its source code or from general knowledge. Also list its `raw/` for pending files whose names bear on the question, and read those.
-- **Search.** When you don't know which wiki owns a topic, search the peers' `index.md` files by keyword and open only the ones that match. Then try the shared wikis in listed order. Never read every index.
-- **Found another way.** If you reached this repository's wiki some way other than its name or `repos.md`, such as a pointer in a file, run `wiki.sh cover <wiki> <repository>` so the next session finds it by name.
-- **Missing wiki.** If you have something to file and no wiki is named after the owning repository or lists it, create one. `rules/peers.md` says how. Don't create a wiki just to look something up.
-- **Cite, don't copy.** Never restate what another wiki says. Refer to its pages as `name:path`, such as `billing-service:wiki/entities/client.md`. Don't use relative file paths across wikis.
+- **Ownership.** Knowledge lives in the wiki of whatever owns the thing. A lesson that holds beyond this project goes in the shared wiki, once. Examples: how the user wants agents to work (in its `wiki/conventions.md`, under `## For agents`), how a shared library or tool behaves, deploys and environments, and team practice. Here, keep only what is specific to this project, citing the shared page. The test: would a session in another repository act differently for knowing it?
+- **Cite, don't copy.** Refer to another wiki's pages as `name:path`, such as `billing-service:wiki/entities/client.md`.
 
 ## Sync
 
-This section applies in two cases. One: this folder is the top level of a git repo. Two: this folder's parent is a wiki collection, meaning a git repo whose top level holds a `WIKIS.md` file. In a collection, commit only the wiki folders you changed. If this wiki sits inside any other repo, or has no git, skip this section and leave commits to the user.
-
-- `wiki.sh sync <wiki> -m "<message>"` does the commit, pull and push below for one wiki: it commits only that wiki's folder, pulls with a merge, and pushes. Use it when you have the script.
-- Pull before any write, if the repo has a remote. Pull with a merge (`git pull --no-rebase`), never a rebase or a stash: other sessions may have uncommitted notes in other wikis, and a rebase refuses to run while they're there.
-- Commit at each compile: every changed file, waiting captures included, in one commit per wiki. Don't commit each capture by itself. If you captured and no compile follows before the user's current request is done, commit the captures then.
-- Start commit messages with the wiki's name: `<wiki>: ingest <title>`, `<wiki>: ingest 6 notes`, `<wiki>: capture 3 notes`, `<wiki>: lint`.
-- Push after each commit if the repo has a remote. If the push is rejected, pull and push again, once.
-- On a merge conflict in `index.md` or `log.md`, keep the lines from both sides. On a conflict inside a page, stop and ask the user.
-- If a commit is refused because it holds a secret, replace the secret with `[REDACTED]` in that file, even in `raw/`, and commit again. Tell the user. If you think it is not a secret, ask the user before allowing it. Never skip the check with `--no-verify`.
+When this wiki is a git repo, or sits in a collection (a git repo whose top level holds `WIKIS.md`), commit and push your own changes: run `wiki.sh sync <wiki> -m "<wiki>: <what>"` after each compile, and after captures that no compile follows. It commits only that wiki's folder, pulls with a merge, and pushes. Never rebase, stash, or skip the secret check with `--no-verify`. Read `rules/sync.md` to do it by hand, for a merge conflict, or for a commit refused because it holds a secret. In any other repo, leave commits to the user.
 
 ## Token rules
 
