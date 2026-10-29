@@ -269,7 +269,7 @@ which_miss() {
 # Agents without the plugin's hook made five or six calls for this, and skipped the
 # pull in every run of the first test with another agent (Gemini, 2026-10-29).
 cmd_start() {
-  local arg="${1:-$PWD}" repo="" top w wiki note="" out sshc tv v line sname spath d n
+  local arg="${1:-$PWD}" repo="" top w="" wiki="" note="" out sshc tv v line sname spath d n
   if [ -d "$arg" ]; then
     if top="$(git -C "$arg" rev-parse --show-toplevel 2>/dev/null)"; then repo="$(repo_name "$top")"; fi
   else
