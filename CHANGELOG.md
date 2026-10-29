@@ -4,6 +4,17 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v22 (2026-10-29)
+
+From the first test with an agent other than Claude (Gemini in Antigravity) and its review of this repo.
+
+- `rules/compile.md` names `wiki index`, which writes index lines from each page's summary, and `rules/lint.md` says to run `wiki lint` first for the mechanical checks.
+- `wiki lint` also reports `sources:` entries whose file in `raw/` doesn't exist.
+- `wiki find` also searches page text, so an identifier or error string that no summary mentions still finds its page. The handbook's query steps use it before searching `raw/`.
+- An accepted pattern seen again after its accepted date is marked `AGAIN` in `wiki patterns`, counted in `wiki status`, and listed in the weekly report: the fix isn't working.
+- `wiki status` and `wiki pending` say when they can't read a wiki's `raw/`, as inside an agent's sandbox, instead of reporting nothing waiting.
+- Do: nothing. Sessions upgrade the wikis on their own. If you run an agent in a sandbox, allow `~/wikis` there.
+
 ## v21 (2026-10-28)
 
 Fitting in with real setups, from a review of two weeks of use.

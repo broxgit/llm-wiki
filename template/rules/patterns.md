@@ -74,7 +74,7 @@ Propose in your reply at the stopping point where the entry became ready, never 
 
 > Reviewers flagged bare `return err` in 3 merge requests since Oct 9: billing-api !412, orders-api !87, billing-api !431. Add it to billing-api's conventions, so I check for it before calling code done?
 
-When the user answers, set it to `accepted` or `declined`, and on `accepted` make the fix now. Only an answer to a proposal is a decline. "That's fine, just noting it" before a proposal is not one. A user pointing out a repeat wants it fixed, so propose. If the user moves on without answering, ask once more at a later stopping point, best at the end of the session or the start of the next. After that, leave it `proposed`. Lint lists it. Never ask about a declined pattern again unless three new sightings follow the decline. Then ask once more and mention the earlier answer. If an accepted pattern keeps getting sightings, the fix isn't working. Say so.
+When the user answers, set it to `accepted` or `declined`, and on `accepted` make the fix now. Only an answer to a proposal is a decline. "That's fine, just noting it" before a proposal is not one. A user pointing out a repeat wants it fixed, so propose. If the user moves on without answering, ask once more at a later stopping point, best at the end of the session or the start of the next. After that, leave it `proposed`. Lint lists it. Never ask about a declined pattern again unless three new sightings follow the decline. Then ask once more and mention the earlier answer. If an accepted pattern gets sightings after its accepted date, the fix isn't working. Say so. `wiki.sh patterns` marks it `AGAIN`, and `wiki.sh status` counts it.
 
 ## The fixes
 

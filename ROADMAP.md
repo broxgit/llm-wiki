@@ -6,13 +6,6 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 
 ## Next
 
-### Next handbook release
-
-Changes waiting for the next handbook version, held back to keep to one version a day.
-
-- `rules/compile.md`, index.md section: use `wiki.sh index <wiki>` after editing pages, and fix a page's summary rather than its index line.
-- `rules/lint.md`: run `wiki.sh lint <wiki>` first for the mechanical checks, then do the judgment checks.
-
 ### Terse page style
 
 - **Why:** agents read pages far more often than people do. Measured on one sample page, terse notes in plain words used 56% of the tokens of default prose. The body alone used 45%.
@@ -74,6 +67,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Handbook version 22: mechanical checks named, and Gemini's review (2026-10-29)
+
+- **Why:** the handbook didn't name `wiki index` or `wiki lint` yet, and Gemini's review of the repo found checks the handbook asked for that no command did.
+- **What changed:** `compile.md` and `lint.md` name `wiki index` and `wiki lint`. `lint` checks `sources:` files. `find` searches page text after index lines. `patterns`, `status` and the report flag an accepted pattern seen again (`AGAIN`). `status` and `pending` with no wiki say when a sandbox hides `raw/`.
 
 ### `wiki index` and `wiki lint` (2026-10-28)
 
