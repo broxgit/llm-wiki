@@ -11,7 +11,8 @@ Session start in one call, and staleness that counts commits. Both from the test
 - `wiki start` finds the wiki for the folder you're in, pulls the collection, and prints what session start reads: this wiki's index, each shared wiki's index and `For agents` section, and what waits. A failed pull is a warning, not an error. The handbook's session start runs it, and keeps the steps by hand for agents without the script.
 - The session line for other agents (`wiki claude --print`) runs `wiki start` instead of `wiki which`.
 - `wiki stale` and `wiki lint` also report a page whose `commit` is 50 or more commits behind its repository, a commit the repository doesn't have, and a bare hash in a wiki that covers several repositories. They find repositories under the journal's `code_dirs`. Without a clone, days still apply.
-- Do: if you put the session line in another agent's instruction file, such as `~/.gemini/GEMINI.md`, replace it with the new output of `wiki claude --print`. `wiki setup --new` updates `~/.claude/CLAUDE.md` for you.
+- With Antigravity installed, `wiki setup` offers an llm-wiki plugin for it: a rule naming the wikis, a SessionStart hook that runs `wiki start` and gives the conversation its output, and the llm-wiki skill. `wiki capture --file` reads a note from a file, so agents can capture without a pipe or heredoc. `delegation.md` names Gemini's tiers next to Claude's.
+- Do: run `wiki setup --new`. It updates the session line in `~/.claude/CLAUDE.md`, and with Antigravity installed it offers the plugin; quit and reopen Antigravity once after adding it. If you put the session line in another agent's file, such as `~/.codex/AGENTS.md`, replace it with the new output of `wiki claude --print`.
 
 ## v22 (2026-10-29)
 

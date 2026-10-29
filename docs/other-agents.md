@@ -33,10 +33,28 @@ Joining a team that already has a shared collection? Do [Teams](teams.md#join-a-
 One line in your agent's user-level instruction file covers every repository on the machine. It tells each session to find the wiki for the repository it's in and read its handbook.
 
 - **Claude Code without the plugin:** `./wiki.sh setup` adds it to `~/.claude/CLAUDE.md`. So does `./wiki.sh claude`.
-- **Any other agent:** `./wiki.sh claude --print` prints the line. Put it in whatever file your agent loads at the start of every session. For Codex that is `~/.codex/AGENTS.md`. For Gemini CLI and Antigravity it is `~/.gemini/GEMINI.md`: `./wiki.sh claude --print > ~/.gemini/GEMINI.md`, if the file holds nothing else. Check your agent's docs for others.
+- **Any other agent:** `./wiki.sh claude --print` prints the line. Put it in whatever file your agent loads at the start of every session. For Codex that is `~/.codex/AGENTS.md`, and for Gemini CLI `~/.gemini/GEMINI.md`. Check your agent's docs for others.
+- **Antigravity:** use its plugin instead of a line. See [Antigravity](#antigravity) below.
 - **Already on the plugin, adding another agent:** no clone needed. `wiki claude --print` prints the line with the plugin's stable `wiki` command in it.
 
 The line tells the agent where `wiki.sh` is. The handbooks name its commands (`wiki.sh capture`, `wiki.sh sync`, and others) without a path, and an agent that can't find the script falls back to doing those steps by hand. The agent also needs to run commands in `~/wikis` and in the clone, so allow both.
+
+### Antigravity
+
+`wiki setup` notices Antigravity and offers an llm-wiki plugin for it, in `~/.gemini/config/plugins/llm-wiki/`. It's the counterpart of the Claude Code plugin:
+
+- **A rule** that says where your wikis are and where `wiki.sh` is.
+- **A SessionStart hook** that runs `wiki start` for the open project and hands its output to the conversation: the wiki, a pull, the indexes, `For agents`, and what waits. The model starts with it instead of spending its first calls on it.
+- **The llm-wiki skill.**
+
+Add it any time with `wiki setup antigravity`, then quit and reopen Antigravity once so it finds the new plugin. Later updates reach new conversations on their own. If `~/.gemini/GEMINI.md` still has the wiki line from before, setup offers to remove it, so conversations don't get it twice.
+
+Antigravity has separate settings for files and for commands, and the second matters here:
+
+- **Non-Workspace File Access** lets the agent's file tools read and write `~/wikis`. Set it to `allow`.
+- **Terminal Sandbox** and the **Command Allowlist** govern the commands it runs, `wiki.sh` among them. With the sandbox on, add `wiki.sh` to the allowlist or approve it when asked, or `wiki.sh` can't read or write `~/wikis`.
+
+The agent captures notes with `wiki.sh capture <wiki> <slug> --file <note>`, a command with no pipe or heredoc, which an approval can cover from then on.
 
 **Sandboxed agents.** Some agents, Antigravity among them, run commands in a sandbox that blocks folders outside the open project. There, `wiki.sh` stops with "can't write" or "can't read … allow ~/wikis there", and git fails if your git config includes another file, such as a work identity. Allow `~/wikis`, the clone and `~/.gitconfig*` in the agent's settings. Otherwise the agent asks you to approve each command outside the sandbox, and it may skip steps such as the session-start pull.
 
