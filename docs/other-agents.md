@@ -33,10 +33,14 @@ Joining a team that already has a shared collection? Do [Teams](teams.md#join-a-
 One line in your agent's user-level instruction file covers every repository on the machine. It tells each session to find the wiki for the repository it's in and read its handbook.
 
 - **Claude Code without the plugin:** `./wiki.sh setup` adds it to `~/.claude/CLAUDE.md`. So does `./wiki.sh claude`.
-- **Any other agent:** `./wiki.sh claude --print` prints the line. Put it in whatever file your agent loads at the start of every session. For Codex that is `~/.codex/AGENTS.md`, and for Gemini CLI `~/.gemini/GEMINI.md`. Check your agent's docs for others.
+- **Any other agent:** `./wiki.sh claude --print` prints the line. Put it in whatever file your agent loads at the start of every session. For Codex that is `~/.codex/AGENTS.md`. For Gemini CLI and Antigravity it is `~/.gemini/GEMINI.md`: `./wiki.sh claude --print > ~/.gemini/GEMINI.md`, if the file holds nothing else. Check your agent's docs for others.
 - **Already on the plugin, adding another agent:** no clone needed. `wiki claude --print` prints the line with the plugin's stable `wiki` command in it.
 
 The line tells the agent where `wiki.sh` is. The handbooks name its commands (`wiki.sh capture`, `wiki.sh sync`, and others) without a path, and an agent that can't find the script falls back to doing those steps by hand. The agent also needs to run commands in `~/wikis` and in the clone, so allow both.
+
+**Sandboxed agents.** Some agents, Antigravity among them, run commands in a sandbox that blocks folders outside the open project. There, `wiki.sh` stops with "can't write" or "can't read … allow ~/wikis there", and git fails if your git config includes another file, such as a work identity. Allow `~/wikis`, the clone and `~/.gitconfig*` in the agent's settings. Otherwise the agent asks you to approve each command outside the sandbox, and it may skip steps such as the session-start pull.
+
+**Check its work from its transcripts.** Antigravity keeps them at `~/.gemini/antigravity/brain/<conversation>/.system_generated/logs/transcript_full.jsonl`, so a Claude Code session can read what it ran and grade a run against the handbook.
 
 Rerun `./wiki.sh claude` after a template update changes the line, or paste the new `--print` output over the old line. It replaces its own line and leaves the rest of the file alone.
 
