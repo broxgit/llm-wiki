@@ -49,6 +49,8 @@ Usage: $WIKI_CMD <command> [options]
   cover <wiki> <repo>...  Record that one wiki covers several repositories.
   start [<repo>]       Session start in one call: find the wiki, pull, print the indexes,
                        For agents and what waits. Defaults to the current folder.
+  permissions          Print the Claude Code allow rules for the wiki commands that
+                       write. wiki setup permissions adds them for you.
   which <repo>         Print the wiki that covers a repository.
   status               List wikis: handbook version, notes waiting, lock state.
   find <word>          Search every wiki's index, then page text, for a word.
@@ -3007,7 +3009,7 @@ EOF
 # Tab completion. `completion zsh|bash` prints a small script for the shell, which
 # asks `__complete` for candidates on every Tab. The candidates live here, so a
 # plugin update can't leave completion stale.
-COMMANDS="setup init new start seed harvest capture lock log sync index lint pending cover which status find stale patterns skills tips report stats delegation upgrade unlock claude link journal standup completion"
+COMMANDS="setup init new start permissions seed harvest capture lock log sync index lint pending cover which status find stale patterns skills tips report stats delegation upgrade unlock claude link journal standup completion"
 RANGES="lastworkday yesterday today week lastweek 7d 14d 30d"
 
 wiki_names() {
@@ -3071,7 +3073,7 @@ cmd_complete() {
     init) echo --git ;;
     completion) printf 'zsh\nbash\n' ;;
     setup)
-      printf -- '--new\n--list\ncollection\ngit\ngit.identity\nclaude\nplugin\nantigravity\nupgrade\nskills\ndelegation\njournal\n'
+      printf -- '--new\n--list\ncollection\ngit\ngit.identity\nclaude\nplugin\npermissions\nantigravity\nupgrade\nskills\ndelegation\njournal\n'
       for k in $JOURNAL_KEYS; do printf 'journal.%s\n' "$k"; done
       ;;
     journal)
@@ -3655,6 +3657,91 @@ with open(path, "w") as f:
 PY
 }
 
+# ---- Claude Code permissions -------------------------------------------------
+# The handbook has agents commit and push the wikis themselves, with `wiki sync`.
+# Claude Code's auto mode stops a session that pushes to a remote and asks, and a
+# session may not grant itself the permission. So setup offers allow rules for the
+# wiki commands that write, in the user's own ~/.claude/settings.json.
+PERM_SUBCOMMANDS="start capture lock log index sync"
+
+# perm_forms: each spelling sessions use for wiki.sh: the plugin's stable command
+# and this clone's script, with ~ and in full, and plain `wiki`.
+perm_forms() {
+  local c
+  {
+    if from_plugin; then c="$(plugin_cmd)"; else c="$REPO/wiki.sh"; fi
+    printf '%s\n' "$c" "$(tilde "$c")"
+    # The plugin's stable command, which its session hook tells sessions to use,
+    # even when this copy is a clone.
+    for c in "$HOME"/.claude/plugins/data/*/bin/wiki; do
+      [ -x "$c" ] && printf '%s\n' "$c" "$(tilde "$c")"
+    done
+    echo wiki
+  } | awk '!seen[$0]++'
+}
+
+# perm_rules: the allow rules setup offers, one per line.
+perm_rules() {
+  local f s
+  while IFS= read -r f; do
+    for s in $PERM_SUBCOMMANDS; do printf 'Bash(%s %s *)\n' "$f" "$s"; done
+  done < <(perm_forms)
+}
+
+# perm_missing: the offered rules not yet in ~/.claude/settings.json.
+perm_missing() {
+  local f="$HOME/.claude/settings.json"
+  command -v python3 >/dev/null 2>&1 || return 0
+  perm_rules | python3 -c '
+import json, sys
+try:
+    have = set(json.load(open(sys.argv[1])).get("permissions", {}).get("allow", []))
+except Exception:
+    have = set()
+for r in sys.stdin.read().splitlines():
+    if r not in have:
+        print(r)' "$f"
+}
+
+# perm_add: add the missing rules, keeping everything else. A backup goes beside it.
+perm_add() {
+  local f="$HOME/.claude/settings.json"
+  mkdir -p "$HOME/.claude"
+  [ -f "$f" ] || printf '{}\n' > "$f"
+  cp "$f" "$f.bak" || return 1
+  perm_missing | python3 -c '
+import json, sys
+path = sys.argv[1]
+s = json.load(open(path))
+allow = s.setdefault("permissions", {}).setdefault("allow", [])
+for r in sys.stdin.read().splitlines():
+    if r and r not in allow:
+        allow.append(r)
+with open(path, "w") as out:
+    json.dump(s, out, indent=2)
+    out.write("\n")' "$f"
+}
+
+setup_permissions() {
+  local n
+  [ -d "$HOME/.claude" ] || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  n="$(perm_missing | wc -l | tr -d ' ')"
+  if [ "$SETUP_MODE" = new ] && { [ "$n" -eq 0 ] || setup_done claude.permissions; }; then return 0; fi
+  section "Claude Code permissions"
+  if [ "$n" -eq 0 ]; then
+    echo "Claude Code may run the wiki commands that write without asking."
+    return 0
+  fi
+  echo "Agents commit and push the wikis themselves with \`wiki sync\`. Claude Code stops to ask before a push, and"
+  echo "a session can't give itself permission. Allow rules let sessions run these without asking:"
+  echo "  $WIKI_CMD $(printf '%s' "$PERM_SUBCOMMANDS" | sed 's/ /, /g')"
+  if ask_yn "Add $n allow rule(s) to ~/.claude/settings.json?" y; then
+    if perm_add; then echo "  added (backup beside it). New sessions use them."; else echo "  couldn't change ~/.claude/settings.json."; fi
+  fi
+  setup_mark claude.permissions
+}
+
 # plugin_pending: the plugin step has something to ask.
 plugin_pending() {
   local k
@@ -3730,6 +3817,7 @@ setup_pending() {
   setup_done git || echo git
   if in_git_repo "$WIKIS_DIR"; then setup_done git.identity || echo git.identity; fi
   setup_done delegation.mode || echo delegation.mode
+  if [ -d "$HOME/.claude" ] && [ -n "$(perm_missing)" ]; then setup_done claude.permissions || echo claude.permissions; fi
   case "$(agy_state)" in
     old) echo antigravity ;;
     missing) setup_done antigravity || echo antigravity ;;
@@ -4106,6 +4194,7 @@ setup_list() {
     echo "git                 not a repo"
   fi
   echo "claude              $(claude_state)"
+  [ ! -d "$HOME/.claude" ] || echo "permissions         $(n="$(perm_missing | wc -l | tr -d ' ')"; [ "$n" -eq 0 ] && echo "wiki commands allowed" || echo "$n allow rule(s) missing")"
   [ "$(agy_state)" = none ] || echo "antigravity         plugin $(agy_state)"
   if [ -n "$(completion_shell)" ]; then
     printf '%-19s %s' "completion" "$(completion_on "$(completion_shell)" && echo "on ($(completion_shell))" || echo off)"
@@ -4181,13 +4270,13 @@ Usage: $WIKI_CMD setup [--new | --list | <section> | <setting>]
   setup            Walk through every setting. Enter keeps what you have.
   setup --new      Only what's missing, out of date, or added since you last ran it.
   setup --list     Print current values without asking anything.
-  setup <section>  Just one section: collection, git, claude, antigravity, upgrade, delegation, journal.
+  setup <section>  Just one section: collection, git, claude, permissions, antigravity, upgrade, delegation, journal.
   setup <setting>  Just one setting: git.identity, or journal.<key> such as journal.format.
                    A bare journal key works too: setup format.
 EOF
         return 0
         ;;
-      collection | git | claude | plugin | antigravity | upgrade | skills | completion | journal | delegation | git.identity) what="$a" ;;
+      collection | git | claude | plugin | permissions | antigravity | upgrade | skills | completion | journal | delegation | git.identity) what="$a" ;;
       journal.*)
         [ -n "$(journal_field "${a#journal.}" 2)" ] || die "no journal setting called ${a#journal.}. Settings: $JOURNAL_KEYS"
         what="$a"
@@ -4226,11 +4315,13 @@ EOF
     skills) setup_skills ;;
     completion) SETUP_MODE=all; setup_completion ;;
     antigravity) SETUP_MODE=all; setup_antigravity ;;
+    permissions) SETUP_MODE=all; setup_permissions ;;
     '')
       setup_plugin
       setup_collection
       setup_git
       setup_claude
+      setup_permissions
       setup_antigravity
       setup_upgrade
       setup_delegation
@@ -4307,6 +4398,13 @@ if [ "$cmd" = report ]; then
 fi
 case "$cmd" in
   __agy-start) cmd_agy_start; exit 0 ;;
+  permissions)
+    # The allow rules setup offers, as JSON lines to paste into permissions.allow.
+    perm_rules | sed 's/.*/"&",/'
+    n="$(perm_missing | wc -l | tr -d ' ')"
+    echo "$n of these are missing from ~/.claude/settings.json. $WIKI_CMD setup permissions adds them." >&2
+    exit 0
+    ;;
   capture) cmd_capture "$@"; exit 0 ;;
   lock) cmd_lock "$@"; exit 0 ;;
   log) cmd_log "$@"; exit 0 ;;
