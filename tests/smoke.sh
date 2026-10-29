@@ -253,6 +253,12 @@ case "$out" in *"===== raw/"*"The billing API."*"none left"*) ok "pending --show
 for i in 1 2 3; do awk 'BEGIN { for (i = 0; i < 1200; i++) print "a line of filler for the bulk compile size cap test" }' > "$WIKIS_DIR/bulk/raw/2026-01-0$i-000000-big-$i.md"; done
 expect "pending --show stops at its size cap and says more wait" "1 more wait" "$W" pending bulk --show
 refuse "pending --show needs a wiki" "$W" pending --show
+expect "pending says when nothing waits" "nothing waiting in" "$W" pending global
+# A sandbox that blocks listing raw/ must not read as "nothing waiting".
+chmod 000 "$WIKIS_DIR/demo/raw"
+refuse "pending fails when it can't list raw/" "$W" pending demo
+expect "and says what's waiting is unknown" "is unknown" "$W" pending demo
+chmod 755 "$WIKIS_DIR/demo/raw"
 for i in 01 02 03 04 05 06 07 08 09 10 11; do printf 'Captured: 2026-01-01\n\nNote %s.\n' "$i" > "$WIKIS_DIR/bulk/raw/2026-01-01-0000$i-note-$i.md"; done
 "$W" cover bulk bulkrepo >/dev/null
 mkdir -p "$T/projects/bulkrepo" && git -C "$T/projects/bulkrepo" init -q
