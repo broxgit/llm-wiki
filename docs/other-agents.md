@@ -33,8 +33,8 @@ Joining a team that already has a shared collection? Do [Teams](teams.md#join-a-
 One line in your agent's user-level instruction file covers every repository on the machine. It tells each session to find the wiki for the repository it's in and read its handbook.
 
 - **Claude Code without the plugin:** `./wiki.sh setup` adds it to `~/.claude/CLAUDE.md`. So does `./wiki.sh claude`.
-- **Any other agent:** `./wiki.sh claude --print` prints the line. Put it in whatever file your agent loads at the start of every session. For Codex that is `~/.codex/AGENTS.md`, and for Gemini CLI `~/.gemini/GEMINI.md`. Check your agent's docs for others.
-- **Antigravity:** use its plugin instead of a line. See [Antigravity](#antigravity) below.
+- **Any other agent:** `./wiki.sh claude --print` prints the line. Put it in whatever file your agent loads at the start of every session. For Gemini CLI that is `~/.gemini/GEMINI.md`. Check your agent's docs for others.
+- **Antigravity and Codex:** use their plugins instead of a line. See [Antigravity](#antigravity) and [Codex](#codex) below.
 - **Already on the plugin, adding another agent:** no clone needed. `wiki claude --print` prints the line with the plugin's stable `wiki` command in it.
 
 The line tells the agent where `wiki.sh` is. The handbooks name its commands (`wiki.sh capture`, `wiki.sh sync`, and others) without a path, and an agent that can't find the script falls back to doing those steps by hand. The agent also needs to run commands in `~/wikis` and in the clone, so allow both.
@@ -56,10 +56,21 @@ Antigravity has separate settings for files and for commands, and the second mat
 
 The agent captures notes with `wiki.sh capture <wiki> <slug> --file <note>`, a command with no pipe or heredoc, which an approval can cover from then on.
 
-### Codex and Cursor
+### Codex
 
-- **Codex** reads `~/.codex/AGENTS.md`: put the session line there. Its sandbox blocks writes inside `~/wikis/.git` even when `~/wikis` itself is writable, so `wiki start` can't pull and `wiki sync` can't commit from inside it. Approve those two commands to run outside the sandbox. Capture and compile work once `~/wikis` is writable.
-- **Cursor** takes the session line in its user rules (Settings → Rules). Its sandbox blocks the pull and writes under `~/wikis` until a command runs with full permissions, which it asks for. It also runs Claude Code plugin hooks when the plugin is installed, so keep the plugin current with `wiki update`.
+`wiki setup` notices Codex and offers an llm-wiki plugin for it, the counterpart of the Claude Code plugin. Add it any time with `wiki setup codex`. It sets up three things:
+
+- **A plugin with two hooks.** At session start it runs `wiki start` for the repository and hands its output to the session: the wiki, a pull, the indexes, `For agents`, and what waits. After compaction it tells the session to capture what the summary holds before answering. The plugin lives in `~/.codex/llm-wiki`, a local marketplace that setup adds and installs with the `codex` command.
+- **A line in `~/.codex/AGENTS.md`** that says where your wikis are and that the hook runs `start`. It replaces the session line if you pasted one there before.
+- **The llm-wiki skill and your team skills,** linked into `~/.codex/skills`.
+
+Codex runs a plugin's hooks only once you trust them, and the desktop app doesn't ask. Run `codex` in a terminal once. It says 2 hooks need review: type `/hooks` and trust both, SessionStart and PostCompact. Each runs your `wiki` command with `__codex-start`. They stay the same across llm-wiki updates, so you trust them once.
+
+Codex's sandbox blocks writes inside `~/wikis/.git`, even when `~/wikis` itself is writable. Hooks run outside it, so the pull at session start works. `wiki sync`, which commits, runs inside it: approve it to run outside the sandbox when Codex asks.
+
+### Cursor
+
+Cursor takes the session line in its user rules (Settings → Rules). Its sandbox blocks the pull and writes under `~/wikis` until a command runs with full permissions, which it asks for. It also runs Claude Code plugin hooks when the plugin is installed, so keep the plugin current with `wiki update`.
 
 **Sandboxed agents.** Some agents, Antigravity among them, run commands in a sandbox that blocks folders outside the open project. There, `wiki.sh` stops with "can't write" or "can't read … allow ~/wikis there", and git fails if your git config includes another file, such as a work identity. Allow `~/wikis`, the clone and `~/.gitconfig*` in the agent's settings. Otherwise the agent asks you to approve each command outside the sandbox, and it may skip steps such as the session-start pull.
 

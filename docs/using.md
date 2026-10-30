@@ -116,7 +116,7 @@ It asks for a name, a folder (`~/wikis-work`, say), and rules that pick which re
 work  ~/wikis-work  *gitlab.com:acme/*,~/dev/work/*
 ```
 
-From then on, `wiki` commands, `wiki start`, the Claude Code hook and the Antigravity plugin use the collection for the repository you're in. Anything that matches no rule stays in `~/wikis`. `wiki collections` lists them, `--collection NAME` picks one by name for any command, and `wiki status` mentions notes waiting in the others. Setting `WIKIS_DIR` still overrides all of it.
+From then on, `wiki` commands, `wiki start`, the Claude Code hook, and the Antigravity and Codex plugins use the collection for the repository you're in. Anything that matches no rule stays in `~/wikis`. `wiki collections` lists them, `--collection NAME` picks one by name for any command, and `wiki status` mentions notes waiting in the others. Setting `WIKIS_DIR` still overrides all of it.
 
 Setup doesn't move existing wikis. To move one, move its folder into the other collection and commit in both.
 

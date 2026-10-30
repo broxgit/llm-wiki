@@ -735,6 +735,56 @@ printf '{"something":"else"}\n' > "$HOME/.gemini/config/config.json"
 lacks "an unexpected config.json isn't touched or reported on" "grant" "$W" setup --list
 rm -rf "$HOME/.gemini"
 
+section "Codex plugin"
+lacks "without Codex, setup --list says nothing about it" "codex" "$W" setup --list
+mkdir -p "$HOME/.codex"
+expect "with Codex, setup --list shows the plugin missing" "codex               plugin missing" "$W" setup --list
+codex_reply() { python3 -c 'import json,sys; d=json.load(sys.stdin)["hookSpecificOutput"]; print(d["hookEventName"]); print(d["additionalContext"])' 2>&1; }
+msg="$(printf '{"cwd":"%s","hook_event_name":"SessionStart","source":"startup"}' "$T/projects/web" | "$W" __codex-start | codex_reply)"
+case "$msg" in "SessionStart"*"wiki: "*"/demo, for the repository web"*"===== Waiting to be compiled"*) ok "the hook runs start for the session's folder and replies with additionalContext" ;; *) bad "the hook runs start for the session's folder and replies with additionalContext" "$msg" ;; esac
+case "$msg" in *"Do not run start again"*) ok "and tells the model not to run start again" ;; *) bad "and tells the model not to run start again" "$msg" ;; esac
+case "$msg" in *"./wiki.sh"*|*"just compacted"*) bad "its commands are runnable paths, and a fresh session isn't told it was compacted" "$msg" ;; *) ok "its commands are runnable paths, and a fresh session isn't told it was compacted" ;; esac
+msg="$(printf '{"cwd":"%s","hook_event_name":"PostCompact"}' "$T/projects/web" | "$W" __codex-start | codex_reply)"
+case "$msg" in "PostCompact"*"just compacted"*"capture"*) ok "after compaction it says to capture before answering" ;; *) bad "after compaction it says to capture before answering" "$msg" ;; esac
+case "$msg" in *"===== "*) bad "and doesn't repeat start's output" "$msg" ;; *) ok "and doesn't repeat start's output" ;; esac
+expect "a SessionStart after compaction gets both" "just compacted" bash -c "printf '{\"cwd\":\"%s\",\"hook_event_name\":\"SessionStart\",\"source\":\"compact\"}' '$T/projects/web' | '$W' __codex-start"
+expect "bad input still gets a reply, for the shared wiki" "Not in a repository" bash -c "cd '$HOME' && printf 'not json' | '$W' __codex-start"
+check "the hook doesn't create the plugin by itself" test ! -e "$HOME/.codex/llm-wiki"
+# A stand-in for the codex command: it records its arguments and marks the config
+# the way the real one does.
+cat > "$T/bin/codex" <<EOF
+#!/bin/sh
+echo "\$*" >> "$T/codex.log"
+case "\$*" in
+  "plugin marketplace add "*) printf '[marketplaces.llm-wiki]\nsource = "%s"\n' "\$4" >> "$HOME/.codex/config.toml" ;;
+  "plugin add llm-wiki@llm-wiki") grep -qF '[plugins."llm-wiki@llm-wiki"]' "$HOME/.codex/config.toml" 2>/dev/null || printf '[plugins."llm-wiki@llm-wiki"]\nenabled = true\n' >> "$HOME/.codex/config.toml" ;;
+esac
+EOF
+chmod +x "$T/bin/codex"
+printf '# Mine\n\nKeep this.\n\nMy knowledge wikis live in ~/old. Run the old line.\n\nAnd this.\n' > "$HOME/.codex/AGENTS.md"
+# setup wants a terminal for its questions. The tests answer through a pipe.
+in_tty() { LLM_WIKI_TEST_TTY=1 "$@"; }
+out="$(printf 'y\n' | PATH="$T/bin:$PATH" in_tty "$W" setup codex 2>&1)"
+case "$out" in *"replaces the wiki line"*"/hooks and trust both"*) ok "setup codex installs it and says to trust its hooks" ;; *) bad "setup codex installs it and says to trust its hooks" "$out" ;; esac
+check "it adds the marketplace and the plugin with the codex command" grep -qx "plugin add llm-wiki@llm-wiki" "$T/codex.log"
+check "its marketplace lists the plugin" python3 -c "import json,sys; p=json.load(open(sys.argv[1]))['plugins'][0]; assert p['name']=='llm-wiki' and p['source']=={'source':'local','path':'./plugins/llm-wiki'}" "$HOME/.codex/llm-wiki/.agents/plugins/marketplace.json"
+check "its hooks run __codex-start at SessionStart and PostCompact" python3 -c "import json,sys; h=json.load(open(sys.argv[1]))['hooks']['hooks']; assert all(h[e][0]['hooks'][0]['command'].endswith(' __codex-start') for e in ('SessionStart','PostCompact'))" "$HOME/.codex/llm-wiki/plugins/llm-wiki/.codex-plugin/plugin.json"
+check "the old line is replaced in place, and the rest of AGENTS.md stays" python3 -c "import sys; t=open(sys.argv[1]).read(); assert t.startswith('# Mine\n\nKeep this.\n\nMy knowledge wikis live in') and 'plugin' in t.split('\n')[4] and t.endswith('\n\nAnd this.\n') and 'old line' not in t" "$HOME/.codex/AGENTS.md"
+check "it links the llm-wiki skill" test -f "$HOME/.codex/skills/llm-wiki/SKILL.md"
+check "and the team skills from the wikis" test "$HOME/.codex/skills/bump-proto" -ef "$WIKIS_DIR/global/skills/bump-proto"
+expect "setup --list shows it current" "codex               plugin current" env PATH="$T/bin:$PATH" "$W" setup --list
+: > "$T/codex.log"
+PATH="$T/bin:$PATH" in_tty "$W" setup codex </dev/null >/dev/null 2>&1
+check "running setup again doesn't reinstall an unchanged plugin" test ! -s "$T/codex.log"
+mkskill "$WIKIS_DIR/global/skills/tidy-logs" "Tidy logs."
+expect "skills link links new team skills for Codex too" "tidy-logs (from global), for Codex" "$W" skills link
+rm -r "$WIKIS_DIR/global/skills/tidy-logs"; "$W" skills link >/dev/null
+check "and removes them there when they're gone" test ! -e "$HOME/.codex/skills/tidy-logs"
+rm "$HOME/.codex/skills/llm-wiki"
+printf '{"cwd":"%s","hook_event_name":"SessionStart"}' "$T/projects/web" | "$W" __codex-start >/dev/null
+check "each session start relinks the skill" test -f "$HOME/.codex/skills/llm-wiki/SKILL.md"
+rm -rf "$HOME/.codex" "$T/bin/codex" "$T/codex.log"
+
 section "Compiled without summary pages (v24)"
 "$W" new v24 >/dev/null 2>&1
 V="$WIKIS_DIR/v24"
