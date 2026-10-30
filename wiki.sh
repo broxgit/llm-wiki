@@ -84,12 +84,24 @@ else
   # Set in the environment: it wins everywhere, routing included.
   LLM_WIKI_FIXED_DIR=1
 fi
-# The command people type, for messages. The plugin's stable `wiki` command sets
-# LLM_WIKI_CMD. Run as wiki.sh, it's ./wiki.sh from the clone; through a link, the link's name.
-case "${0##*/}" in
-  wiki.sh) WIKI_CMD="${LLM_WIKI_CMD:-./wiki.sh}" ;;
-  *) WIKI_CMD="${LLM_WIKI_CMD:-${0##*/}}" ;;
-esac
+# The command people type, for messages: what they can run again from anywhere. The
+# plugin's stable `wiki` command sets LLM_WIKI_CMD. A name on the PATH stays a name;
+# a script run from its own folder is ./wiki.sh; run by any other path, that path,
+# because agents copy these commands, and ./wiki.sh means nothing from elsewhere.
+if [ -n "${LLM_WIKI_CMD:-}" ]; then
+  WIKI_CMD="$LLM_WIKI_CMD"
+elif [ "$0" = wiki.sh ] || [ "$0" = ./wiki.sh ]; then
+  WIKI_CMD="./wiki.sh"
+elif [ "$(command -v "${0##*/}" 2>/dev/null)" -ef "$0" ] 2>/dev/null; then
+  WIKI_CMD="${0##*/}"
+else
+  h='~'
+  case "$0" in
+    "$HOME"/*) WIKI_CMD="$h/${0#"$HOME"/}" ;;
+    /*) WIKI_CMD="$0" ;;
+    *) WIKI_CMD="$(cd "$(dirname "$0")" && pwd)/${0##*/}" ;;
+  esac
+fi
 
 usage() {
   cat <<EOF
@@ -413,6 +425,9 @@ cmd_start() {
       echo "pull: up to date with the remote"
     else
       echo "pull: failed, so pages may be behind other machines. Carry on, and pull before your first write. git said: $(printf '%s' "$out" | head -n 1)"
+      case "$out" in
+        *"Operation not permitted"*) echo "pull: that looks like an agent's sandbox blocking $(tilde "$WIKIS_DIR")/.git. Rerun $WIKI_CMD start outside the sandbox, or ask the user to allow it." ;;
+      esac
     fi
   fi
   tv="$(version_of "$TEMPLATE/AGENTS.md")"
@@ -639,6 +654,24 @@ cmd_log() {
   esac
 }
 
+# sync_lock <dir>: wait for any other session's sync of this collection, then hold
+# the lock until this process exits. A lock left for over five minutes is stale.
+sync_lock() {
+  local d="$1" n=0
+  [ -n "$d" ] && [ "$d" != /llm-wiki-sync.lock ] || return 0
+  while ! mkdir "$d" 2>/dev/null; do
+    # Can't create it at all: .git isn't writable here, and git will say so itself.
+    [ -d "$d" ] || return 0
+    if [ -n "$(find "$d" -maxdepth 0 -mmin +5 2>/dev/null)" ]; then rmdir "$d" 2>/dev/null || true; continue; fi
+    n=$((n + 1))
+    [ "$n" -le 60 ] || die "another session has been syncing this collection for a minute. Try again shortly."
+    [ "$n" -ne 1 ] || echo "waiting for another session's sync to finish..."
+    sleep 1
+  done
+  # shellcheck disable=SC2064
+  trap "rmdir '$d' 2>/dev/null || true" EXIT
+}
+
 # sync <wiki> [-m MESSAGE]: commit this wiki's changes, pull, and push.
 cmd_sync() {
   local wiki="" msg="" root repo path top err
@@ -660,6 +693,9 @@ cmd_sync() {
     return 0
   fi
   [ -n "$msg" ] || msg="${root##*/}: update"
+  # One sync at a time per collection: two sessions' git commands interleaving in one
+  # working tree broke a pull (Codex and Cursor, 2026-10-30).
+  sync_lock "$(git -C "$repo" rev-parse --absolute-git-dir 2>/dev/null)/llm-wiki-sync.lock"
   # Only this wiki: other sessions may have notes waiting, uncommitted, in other wikis.
   git -C "$repo" add -A -- "$path"
   if ! git -C "$repo" diff --cached --quiet -- "$path"; then
@@ -679,8 +715,27 @@ cmd_sync() {
       git -C "$repo" ls-files -u | awk '{ print $4 }' | sort -u | sed 's/^/  conflict: /'
       die "the pull hit a merge conflict. index.md and log.md merge on their own; for a page, stop and ask the user."
     fi
-    printf '%s\n' "$err"
-    die "the pull failed. If uncommitted changes in another wiki clash with what came in, run $WIKI_CMD sync for that wiki first."
+    # Files that came in and also sit here uncommitted: drop a local copy only when
+    # it's identical to the incoming one, then pull again. Never reset: other
+    # sessions' notes would be lost.
+    if printf '%s' "$err" | grep -q "untracked working tree files would be overwritten"; then
+      local f same=1
+      for f in $(printf '%s\n' "$err" | sed -n 's/^[[:space:]]\{1,\}\([^[:space:]].*\)$/\1/p' | grep -v '^Please\|^Aborting'); do
+        if [ -f "$repo/$f" ] && git -C "$repo" show "FETCH_HEAD:$f" 2>/dev/null | cmp -s - "$repo/$f"; then rm -f "$repo/$f"; else same=0; fi
+      done
+      if [ "$same" = 1 ] && err="$(git -C "$repo" pull -q --no-rebase --no-edit 2>&1)"; then
+        echo "pulled after setting aside local copies identical to what came in"
+      else
+        printf '%s\n' "$err"
+        die "the pull would overwrite uncommitted files that differ from what came in. Ask the user; never reset or delete them, they may be another session's notes."
+      fi
+    else
+      printf '%s\n' "$err"
+      if printf '%s' "$err" | grep -q "Operation not permitted"; then
+        die "the pull couldn't write to $(tilde "$repo")/.git. If this runs in an agent's sandbox, run $WIKI_CMD sync outside it, or allow writes there."
+      fi
+      die "the pull failed. If uncommitted changes in another wiki clash with what came in, run $WIKI_CMD sync for that wiki first."
+    fi
   fi
   if ! git -C "$repo" push -q 2>/dev/null; then
     # Someone pushed in between: pull and push once more.
@@ -2173,6 +2228,20 @@ cmd_update() {
     case "$k" in main | master) ;; *) echo "- $(tilde "$REPO") is on the branch $k, so this pulls that branch, not the released code." ;; esac
     git -C "$REPO" pull -q --no-rebase --no-edit || die "the pull in $(tilde "$REPO") failed. Fix it, then run $WIKI_CMD update again."
     echo "- pulled $(tilde "$REPO")"
+    # A machine that runs from a clone may still have the plugin installed, and its
+    # cached copy goes stale. Other agents load its hook too, so keep it current.
+    k="$(python3 -c '
+import json, os, sys
+try:
+    p = json.load(open(os.path.expanduser("~/.claude/plugins/installed_plugins.json"))).get("plugins", {})
+    print(next((key for key in p if key.startswith("llm-wiki@")), ""))
+except Exception:
+    print("")' 2>/dev/null || true)"
+    if [ -n "$k" ] && command -v claude >/dev/null 2>&1; then
+      claude plugin marketplace update "${k#*@}" >/dev/null 2>&1 && claude plugin update "$k" >/dev/null 2>&1 \
+        && echo "- updated the installed plugin's copy ($k) too" \
+        || echo "- couldn't update the installed plugin's copy ($k): claude plugin update $k"
+    fi
   else
     echo "- $(tilde "$REPO") is neither the plugin nor a git clone, so the code wasn't updated."
   fi
@@ -3160,7 +3229,12 @@ tip_set() {
 }
 
 # record_use <command> [sub]: note that a feature was used, so its tip stops.
+# Bookkeeping only: a command must never fail because this can't be written, as
+# `find` did in a read-only sandbox (Codex, 2026-10-30).
 record_use() {
+  ( record_use_ "$@" ) 2>/dev/null || true
+}
+record_use_() {
   case "$1:${2:-}" in
     seed:* | standup:* | stats:* | find:* | stale:* | skills:* | delegation:*) tip_set "used:$1" ;;
     harvest:--dry-run) ;;

@@ -56,6 +56,11 @@ Antigravity has separate settings for files and for commands, and the second mat
 
 The agent captures notes with `wiki.sh capture <wiki> <slug> --file <note>`, a command with no pipe or heredoc, which an approval can cover from then on.
 
+### Codex and Cursor
+
+- **Codex** reads `~/.codex/AGENTS.md`: put the session line there. Its sandbox blocks writes inside `~/wikis/.git` even when `~/wikis` itself is writable, so `wiki start` can't pull and `wiki sync` can't commit from inside it. Approve those two commands to run outside the sandbox. Capture and compile work once `~/wikis` is writable.
+- **Cursor** takes the session line in its user rules (Settings → Rules). Its sandbox blocks the pull and writes under `~/wikis` until a command runs with full permissions, which it asks for. It also runs Claude Code plugin hooks when the plugin is installed, so keep the plugin current with `wiki update`.
+
 **Sandboxed agents.** Some agents, Antigravity among them, run commands in a sandbox that blocks folders outside the open project. There, `wiki.sh` stops with "can't write" or "can't read … allow ~/wikis there", and git fails if your git config includes another file, such as a work identity. Allow `~/wikis`, the clone and `~/.gitconfig*` in the agent's settings. Otherwise the agent asks you to approve each command outside the sandbox, and it may skip steps such as the session-start pull.
 
 **Check its work from its transcripts.** Antigravity keeps them at `~/.gemini/antigravity/brain/<conversation>/.system_generated/logs/transcript_full.jsonl`, so a Claude Code session can read what it ran and grade a run against the handbook.

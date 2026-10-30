@@ -79,6 +79,9 @@ refuse "which fails for an unknown repository" "$W" which nothing
 printf -- '- [Deploy flow](wiki/howto/deploy.md): blue-green behind the canary gate\n' >> "$WIKIS_DIR/demo/index.md"
 expect "find searches indexes" "Deploy flow" "$W" find canary
 expect "find skips index headings" "no mentions" "$W" find Index
+mkdir -p "$T/ro-config/llm-wiki" && chmod 555 "$T/ro-config/llm-wiki"
+expect "find works when its usage record can't be written, as in a read-only sandbox" "Deploy flow" env XDG_CONFIG_HOME="$T/ro-config" "$W" find canary
+chmod 755 "$T/ro-config/llm-wiki"
 mkdir -p "$WIKIS_DIR/demo/wiki/howto" && printf -- '---\ntitle: Deploy\nsummary: How deploys run.\n---\n\nSet DEPLOY_TOKEN_FILE before the run.\n' > "$WIKIS_DIR/demo/wiki/howto/deploy.md"
 expect "find also searches page text" "wiki/howto/deploy.md: Set DEPLOY_TOKEN_FILE" "$W" find deploy_token_file
 out="$("$W" find canary 2>&1)"
@@ -191,7 +194,9 @@ expect "the wiki command's messages say wiki" "Run: wiki init" env WIKIS_DIR="$T
 section "Links and plugin mode"
 ln -s "$W" "$T/bin/wk"
 expect "a symlinked wiki.sh finds its template" "demo" "$T/bin/wk" which web
-expect "a symlinked wiki.sh uses its link's name" "Run: wk init" env WIKIS_DIR="$T/none" "$T/bin/wk" status
+expect "a symlinked wiki.sh on the PATH uses its link's name" "Run: wk init" env WIKIS_DIR="$T/none" PATH="$T/bin:$PATH" wk status
+expect "run by a path, messages name that path, not ./wiki.sh" "Run: $T/bin/wk init" env WIKIS_DIR="$T/none" PATH="/usr/bin:/bin" "$T/bin/wk" status
+expect "run from its own folder, it's ./wiki.sh" "Run: ./wiki.sh init" bash -c "cd '$REPO' && WIKIS_DIR='$T/none' ./wiki.sh status"
 P="$HOME/.claude/plugins/cache/llm-wiki/llm-wiki/abc123"
 mkdir -p "$P"
 (cd "$REPO" && tar cf - --exclude .git --exclude tests .) | (cd "$P" && tar xf -)
@@ -646,6 +651,24 @@ lacks "by default deps leaves out repositories no wiki covers" "example.com/me/l
 "$W" deps --all --write >/dev/null 2>&1
 check "deps --write saves the shared wiki's data/dependencies.csv" grep -q '^uses,app,go,example.com/me/lib/sub,lib,' "$WIKIS_DIR/global/data/dependencies.csv"
 rm -rf "$D" "$WIKIS_DIR/global/data/dependencies.csv"
+
+section "Sync takes turns"
+# Another session's sync holds the collection's lock: this one waits, then runs.
+L="$(git -C "$WIKIS_DIR" rev-parse --absolute-git-dir)/llm-wiki-sync.lock"
+mkdir "$L"; ( sleep 2; rmdir "$L" ) &
+out="$("$W" sync demo -m "demo: wait test" 2>&1)"
+case "$out" in *"waiting for another session's sync"*"synced:"*) ok "sync waits for another session's sync, then runs" ;; *) bad "sync waits for another session's sync, then runs" "$out" ;; esac
+check "and leaves no lock behind" test ! -d "$L"
+mkdir "$L"; touch -t 202001010000 "$L"
+expect "a lock older than five minutes is stale" "synced:" "$W" sync demo -m "demo: stale lock"
+# A note that came in and also sits here uncommitted, identical: set aside, pull again.
+git -C "$T/clone2" pull -q --no-rebase --no-edit >/dev/null 2>&1
+printf 'Captured: 2026-10-30\n\nSame note.\n' > "$T/clone2/demo/raw/2026-10-30-000001-same.md"
+git -C "$T/clone2" add -A && git -C "$T/clone2" commit -qm "demo: same note" && git -C "$T/clone2" push -q
+cp "$T/clone2/demo/raw/2026-10-30-000001-same.md" "$WIKIS_DIR/demo/raw/"
+printf 'Captured: 2026-10-30\n\nOther.\n' > "$WIKIS_DIR/agents/raw/2026-10-30-000002-other.md"
+out="$("$W" sync agents -m "agents: other" 2>&1)"
+case "$out" in *"identical to what came in"*"synced:"*) ok "sync sets aside an identical local copy of an incoming file, then pulls" ;; *) bad "sync sets aside an identical local copy of an incoming file, then pulls" "$out" ;; esac
 
 section "Session start in one call"
 git -C "$WIKIS_DIR" add -A >/dev/null 2>&1; git -C "$WIKIS_DIR" commit -qm "smoke: before start" >/dev/null 2>&1; git -C "$WIKIS_DIR" push -q >/dev/null 2>&1
