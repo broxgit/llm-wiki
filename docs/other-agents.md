@@ -94,14 +94,13 @@ A session that is mid-task can join at any point.
 
 ## Updates
 
-Pull the clone, then run setup in its catch-up mode:
+In the clone:
 
 ```
-git -C ~/dev/llm-wiki pull
-./wiki.sh setup --new
+./wiki.sh update
 ```
 
-It asks only about what's new on this machine: new settings, handbooks behind the template, a session line that changed. `./wiki.sh status` says when there is something to do.
+It pulls the clone, then hands over to the new version, which pulls, upgrades and pushes every wiki collection, asks about anything new on this machine, and says how to bring sessions that are already open up to date. `./wiki.sh status` says when there is something to do.
 
 ## Commands
 

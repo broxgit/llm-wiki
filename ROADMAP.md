@@ -61,6 +61,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### `wiki update` (2026-10-30)
+
+- **Why:** an update took a plugin command, a pull, an upgrade per collection, a push and `setup --new`, by hand on each machine; a script for it broke on `wiki collections`' hint line.
+- **What changed:** `wiki update` updates the plugin, or pulls the clone, then `exec`s the new version for the rest, so the old script never reads a file that changed under it. The new version pulls, upgrades and pushes each collection, runs `setup --new` at a terminal, and ends with what's left: restarting the Claude app and Antigravity, and the line to paste into open sessions. `upgrade` prints that line too. `wiki collections` writes its hint to stderr.
+
 ### Handbook version 26: each project's procedures and tools (2026-10-30)
 
 - **Why:** an agent resuming another agent's work skipped checks, such as CI after a push, that came from the other agent's app rather than from the wiki. And nothing said which tools or MCP servers a project's work needs.

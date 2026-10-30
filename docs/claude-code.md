@@ -75,7 +75,13 @@ After that, you mostly don't do anything. [Using it](using.md) covers what Claud
 
 ## Updates
 
-Every change pushed to this repo is a new version.
+Every change pushed to this repo is a new version. To take one now, in a terminal:
+
+```
+wiki update
+```
+
+It updates the plugin, pulls, upgrades and pushes every wiki collection, asks about any new settings, and says what's left: restart the Claude app (and Antigravity), and how to bring sessions that are already open up to date. Otherwise:
 
 - **With auto-update on**, Claude Code fetches updates in the background.
 - **Without it**, run `claude plugin marketplace update llm-wiki`, then `claude plugin update llm-wiki@llm-wiki`.
