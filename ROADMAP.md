@@ -63,6 +63,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### Standup says when it can't read a repository (2026-10-30)
+
+- **Why:** in Antigravity's sandbox, `wiki standup` found no commits in any repository and printed only "None found.". Gemini spent five reads of `wiki.sh` working out why before rerunning it outside the sandbox.
+- **What changed:** standup checks that git can read each repository before looking for commits. When some can't be read, it says how many, quotes git's first error, and suggests running outside the sandbox or allowing the code folders and `~/.gitconfig*`. When `code_dirs` holds no repositories at all, it says that too. A failing `git version` no longer stops standup.
+
 ### Slash commands as skills for other agents (2026-10-30)
 
 - **Why:** Antigravity dropped workflows for skills, and Codex and Cursor on their own have no plugin commands, so `/llm-wiki:status`, `save`, `compile` and `standup` existed only in Claude Code.
