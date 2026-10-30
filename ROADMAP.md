@@ -39,7 +39,7 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - A wiki with two shared wikis listed in `links.md`.
 - Real scale: hundreds of wikis, hundreds of pages. Real use so far is 10 wikis and 53 pages.
 - The version 8 triggers in real use. They passed a dry run only.
-- Agents other than Claude pulling at session start. Gemini in Antigravity skipped the pull in all four runs on 2026-10-29, at least once because its sandbox blocked git. Since the Antigravity plugin, its SessionStart hook pulls outside the sandbox (worked in its first live run); watch that it keeps working. Other agents (Codex, Cursor, Copilot) are still untried.
+- Agents other than Claude pulling at session start, and syncing. Gemini in Antigravity pulls through its plugin's hook; Codex's and Cursor's sandboxes block writes to `~/wikis/.git`, so both need `wiki start` and `wiki sync` run outside the sandbox. Copilot is still untried.
 - Delegation in real use: whether sessions suggest handoffs at the right size, and whether the log shows real savings. The log records outcomes, not tokens. Token counts per handoff would need the tool's usage data.
 - Stats in real use: whether sessions log every lookup, and what hit rate means a wiki should go.
 - Seed in real use: how long compiling 20 seeded documents takes, and whether the pages are worth it.
@@ -60,6 +60,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Fixes from the Codex and Cursor tests (2026-10-30)
+
+- **Why:** `docs/agent-test.md`, run by Codex and Cursor, found bugs the Gemini test hadn't.
+- **What changed:** a read-only command no longer fails when it can't record its own use. Messages name the path `wiki.sh` was run by, not `./wiki.sh`, so agents copy commands that work. `wiki sync` takes a lock for the whole collection, so two sessions' syncs take turns. When a pull would overwrite uncommitted local copies of incoming files, sync sets aside the identical ones and pulls again, and stops on the rest, never resetting. `wiki start` and `sync` say when a sandbox is the likely cause of a failed pull. `wiki update` on a clone also refreshes an installed plugin's cached copy, whose hook other agents may load. `docs/agent-test.md` is the protocol; `docs/other-agents.md` covers Codex and Cursor.
 
 ### `wiki update` (2026-10-30)
 
