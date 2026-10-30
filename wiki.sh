@@ -1983,6 +1983,59 @@ claude_line() {
   printf '%s' "My knowledge wikis live in $dir, one folder per project, plus a shared one at $dir/$SHARED. Wherever their handbooks say \`wiki.sh\`, run \`$w\`. At session start, run \`$w start\` in the repository you are working in. It names the wiki that covers it, pulls, and prints what to read first. Read that wiki's AGENTS.md and follow it. If no wiki covers the repository, read $dir/$SHARED/AGENTS.md and follow that, and create the repository's wiki with \`$w new <repository-name>\` the first time you have something to file there. Outside any repository, use the shared wiki. If your tool can hand work to sub-agents on cheaper models, do it for large, self-contained work as $dir/delegation.md says, following $dir/$SHARED/rules/delegation.md."
 }
 
+# command_skills_into <dir> <command>: the plugin's slash commands, as skills for
+# agents that have no commands (Antigravity, Codex, Cursor on its own): wiki-compile,
+# wiki-status and the rest. A command that runs wiki.sh inline says to run it here,
+# with <command>, the wiki.sh the agent can run. Each SKILL.md carries a marker
+# line, so only skills written here are ever replaced or removed.
+command_skills_into() {
+  local d="$1" cmd="$2" f name want have
+  [ -d "$REPO/commands" ] || return 0
+  mkdir -p "$d" || return 1
+  for f in "$REPO"/commands/*.md; do
+    [ -f "$f" ] || continue
+    name="wiki-$(basename "$f" .md)"
+    want="$(command_skill "$f" "$name" "$cmd")" || continue
+    if [ -e "$d/$name" ] && ! grep -qF "$COMMAND_SKILL_MARK" "$d/$name/SKILL.md" 2>/dev/null; then continue; fi
+    have="$(cat "$d/$name/SKILL.md" 2>/dev/null || true)"
+    [ "$have" = "$want" ] && continue
+    mkdir -p "$d/$name" && printf '%s\n' "$want" > "$d/$name/SKILL.md"
+  done
+  for f in "$d"/wiki-*/SKILL.md; do
+    [ -f "$f" ] && grep -qF "$COMMAND_SKILL_MARK" "$f" || continue
+    name="${f%/SKILL.md}"; name="${name##*/}"
+    [ -f "$REPO/commands/${name#wiki-}.md" ] || rm -rf "${f%/SKILL.md}"
+  done
+}
+
+COMMAND_SKILL_MARK="<!-- llm-wiki: made from a slash command by wiki.sh. Edits are overwritten. -->"
+
+# command_skill <command file> <skill name> <wiki.sh command>: the skill's SKILL.md.
+command_skill() {
+  python3 - "$1" "$2" "$3" "$COMMAND_SKILL_MARK" <<'PY'
+import re, sys
+src, name, cmd, mark = sys.argv[1:5]
+text = open(src).read()
+m = re.match(r"---\n(.*?)\n---\n(.*)", text, re.S)
+if not m:
+    sys.exit(1)
+desc = ""
+for line in m.group(1).splitlines():
+    if line.startswith("description:"):
+        desc = line.split(":", 1)[1].strip().strip('"')
+body = m.group(2).strip("\n")
+# An inline command, with the line that introduces it, becomes an instruction to run it.
+def run(mo):
+    what = mo.group(1).rstrip(", ")
+    args = mo.group(2).replace("$ARGUMENTS", "<options the user gave, if any>").strip()
+    return "Run `%s %s` for %s, and read its output." % (cmd, args, what[:1].lower() + what[1:])
+body = re.sub(r'^(.*?) from `wiki\.sh[^`]*`:\n\n!`"\$\{CLAUDE_PLUGIN_ROOT\}/wiki\.sh" ?(.*)`$', run, body, flags=re.M)
+body = body.replace("($ARGUMENTS)", "(from the user's request)")
+body = body.replace("$ARGUMENTS", "whatever the user asked for")
+print("---\nname: %s\ndescription: %s. Use when the user asks for it by name (%s) or in their own words.\n---\n\n%s\n\n%s" % (name, desc, name, mark, body))
+PY
+}
+
 # ---- Antigravity -------------------------------------------------------------
 # Google's Antigravity loads plugins from ~/.gemini/config/plugins/<name>/: rules
 # that are always on, a hooks.json, and skills. setup installs a small llm-wiki
@@ -2040,7 +2093,7 @@ agy_state() {
   [ -f "$AGY_DIR/plugin.json" ] || { echo missing; return 0; }
   if [ "$(cat "$AGY_DIR/rules/AGENTS.md" 2>/dev/null)" = "$(agy_rule)" ] \
     && [ "$(cat "$AGY_DIR/hooks.json" 2>/dev/null)" = "$(agy_hooks)" ] \
-    && [ -e "$AGY_DIR/skills/llm-wiki/SKILL.md" ]; then
+    && [ -e "$AGY_DIR/skills/llm-wiki/SKILL.md" ] && [ -e "$AGY_DIR/skills/wiki-status/SKILL.md" ]; then
     echo current
   else
     echo old
@@ -2060,6 +2113,7 @@ agy_write() {
   fi
   # Team skills from the wikis, as `wiki skills link` gives Claude Code.
   skills_link_into "$AGY_DIR/skills" quiet >/dev/null 2>&1 || true
+  command_skills_into "$AGY_DIR/skills" "$(agy_cmd)" >/dev/null 2>&1 || true
 }
 
 # __agy-start: the plugin's SessionStart hook. Reads Antigravity's JSON on stdin,
@@ -2183,7 +2237,7 @@ codex_state() {
   if codex_installed \
     && [ "$(cat "$CODEX_PLUGIN/.codex-plugin/plugin.json" 2>/dev/null)" = "$(codex_manifest)" ] \
     && [ "$(codex_line)" = "$(codex_rule)" ] \
-    && [ -e "$CODEX_DIR/skills/llm-wiki/SKILL.md" ]; then
+    && [ -e "$CODEX_DIR/skills/llm-wiki/SKILL.md" ] && [ -e "$CODEX_DIR/skills/wiki-status/SKILL.md" ]; then
     echo current
   else
     echo old
@@ -2218,6 +2272,7 @@ codex_links() {
     fi
   fi
   skills_link_into "$d" quiet >/dev/null 2>&1 || true
+  command_skills_into "$d" "$(tilde "$(codex_cmd)")" >/dev/null 2>&1 || true
 }
 
 # codex_write: write the marketplace, install the plugin when it's new or changed,
@@ -2376,6 +2431,7 @@ cursor_links() {
     fi
   fi
   skills_link_into "$d" quiet >/dev/null 2>&1 || true
+  command_skills_into "$d" "$(tilde "$(cursor_cmd)")" >/dev/null 2>&1 || true
 }
 
 # __cursor-start: the sessionStart hook. Reads Cursor's JSON on stdin, runs start for

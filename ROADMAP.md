@@ -63,6 +63,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### Slash commands as skills for other agents (2026-10-30)
+
+- **Why:** Antigravity dropped workflows for skills, and Codex and Cursor on their own have no plugin commands, so `/llm-wiki:status`, `save`, `compile` and `standup` existed only in Claude Code.
+- **What changed:** wiki.sh makes a skill from each file in `commands/` (`wiki-status`, `wiki-save`, `wiki-compile`, `wiki-standup`) in the skills folders it already keeps for Antigravity's plugin, Codex and Cursor. A command's inline `wiki.sh` output becomes an instruction to run it by a path the agent can use, and `$ARGUMENTS` becomes the user's request. A marker line in each SKILL.md means only skills made this way are refreshed or removed. They're made rather than kept in the repo, so Claude Code doesn't see each command twice.
+
 ### Cursor (2026-10-30)
 
 - **Why:** Cursor runs the Claude Code plugin from Claude Code's own installed copy, which on a directory marketplace can sit days behind. Cursor users without Claude Code got only a pasted user rule: no pull outside the sandbox, no wiki loaded at start.
