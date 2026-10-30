@@ -34,7 +34,7 @@ One line in your agent's user-level instruction file covers every repository on 
 
 - **Claude Code without the plugin:** `./wiki.sh setup` adds it to `~/.claude/CLAUDE.md`. So does `./wiki.sh claude`.
 - **Any other agent:** `./wiki.sh claude --print` prints the line. Put it in whatever file your agent loads at the start of every session. For Gemini CLI that is `~/.gemini/GEMINI.md`. Check your agent's docs for others.
-- **Antigravity and Codex:** use their plugins instead of a line. See [Antigravity](#antigravity) and [Codex](#codex) below.
+- **Antigravity and Codex:** use their plugins instead of a line. See [Antigravity](#antigravity) and [Codex](#codex) below. Cursor gets a hook too, and still takes a line: see [Cursor](#cursor).
 - **Already on the plugin, adding another agent:** no clone needed. `wiki claude --print` prints the line with the plugin's stable `wiki` command in it.
 
 The line tells the agent where `wiki.sh` is. The handbooks name its commands (`wiki.sh capture`, `wiki.sh sync`, and others) without a path, and an agent that can't find the script falls back to doing those steps by hand. The agent also needs to run commands in `~/wikis` and in the clone, so allow both.
@@ -70,7 +70,13 @@ Codex's sandbox blocks writes inside `~/wikis/.git`, even when `~/wikis` itself 
 
 ### Cursor
 
-Cursor takes the session line in its user rules (Settings → Rules). Its sandbox blocks the pull and writes under `~/wikis` until a command runs with full permissions, which it asks for. It also runs Claude Code plugin hooks when the plugin is installed, so keep the plugin current with `wiki update`.
+**With the Claude Code plugin installed,** Cursor needs nothing more. It loads Claude Code's installed plugins from the same copy Claude Code runs, so each session gets the plugin's hook. `wiki status` says when that copy is behind, and `wiki update` refreshes it.
+
+**Without it,** `wiki setup cursor` adds a sessionStart hook to `~/.cursor/hooks.json`, Cursor's own hooks file, leaving any other hooks there alone. The hook runs `wiki start` for the open folder and hands its output to the session: the wiki, a pull, the indexes, `For agents`, and what waits. Setup then prints a line for Settings → Rules → User Rules. It replaces any earlier wiki line there, and tells the agent the hook already ran `start`. Setup also links the llm-wiki skill and your team skills into `~/.cursor/skills`. If you install the Claude Code plugin later, this hook steps aside so sessions don't get the brief twice.
+
+Cursor has no hook after compaction. Its preCompact reply reaches only you, not the model, so there's no capture reminder after compaction there.
+
+Cursor's sandbox blocks the pull and writes under `~/wikis` until a command runs with full permissions, which it asks for. `wiki sync` needs that approval to commit.
 
 **Sandboxed agents.** Some agents, Antigravity among them, run commands in a sandbox that blocks folders outside the open project. There, `wiki.sh` stops with "can't write" or "can't read … allow ~/wikis there", and git fails if your git config includes another file, such as a work identity. Allow `~/wikis`, the clone and `~/.gitconfig*` in the agent's settings. Otherwise the agent asks you to approve each command outside the sandbox, and it may skip steps such as the session-start pull.
 

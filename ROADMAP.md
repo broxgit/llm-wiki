@@ -51,6 +51,7 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - The weekly report in real use: whether people ask for it, and whether the token estimate for wiki reads is close enough to be useful.
 - Shared knowledge in real use: whether sessions now file general lessons in the shared wiki, and whether they stop saving to their own memory. The weekly report's correction count is the first signal. Whether harvested notes get filed in the right wiki at compile.
 - Capture after compaction in real use: whether sessions capture before answering when the user's message arrives with the hook's message. On 2026-10-28 one session answered first and captured a turn late, which led to the "before you answer anything" wording. Watch for raw notes timed just after a compaction.
+- Cursor's own sessionStart hook (`wiki setup cursor`) in a live session without the Claude Code plugin: whether Cursor runs it outside its sandbox, so the pull works.
 - Codex's PostCompact hook in a live session. The smoke tests cover its reply; no Codex session has compacted with it yet.
 - Patterns in real use: whether agents write `Feedback:` lines unprompted, and whether the thresholds are right.
 
@@ -61,6 +62,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Cursor (2026-10-30)
+
+- **Why:** Cursor runs the Claude Code plugin from Claude Code's own installed copy, which on a directory marketplace can sit days behind. Cursor users without Claude Code got only a pasted user rule: no pull outside the sandbox, no wiki loaded at start.
+- **What changed:** `wiki status` says when an installed llm-wiki plugin copy is behind its marketplace, which both Claude Code and Cursor run. `wiki setup cursor` adds a sessionStart hook to `~/.cursor/hooks.json` that runs `wiki start` and replies with `additional_context`, prints the user-rules line, and links the skills into `~/.cursor/skills`. With the Claude Code plugin installed, the hook replies with nothing, so the brief never arrives twice. No compaction hook: Cursor has none after compaction, and its preCompact reply reaches only the person.
 
 ### Collections whose branch doesn't track the remote (2026-10-30)
 

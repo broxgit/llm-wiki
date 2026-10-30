@@ -52,7 +52,7 @@ Your coding agent forgets everything between sessions. llm-wiki gives it a memor
 
 ### Works with any agent
 
-Everything is plain markdown, in git, readable in any editor. The rules are a handbook any agent can follow, so Codex, Cursor, Gemini and Copilot work too. Plugins for Claude Code, Codex and Antigravity add the automatic parts: each session starts with its wiki loaded and pulled.
+Everything is plain markdown, in git, readable in any editor. The rules are a handbook any agent can follow, so Codex, Cursor, Gemini and Copilot work too. Plugins for Claude Code, Codex and Antigravity, and a hook for Cursor, add the automatic parts: each session starts with its wiki loaded and pulled.
 
 ## Start here
 
