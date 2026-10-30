@@ -696,6 +696,25 @@ out="$("$W" start web 2>&1)" && ok "a failed pull doesn't fail start" || bad "a 
 case "$out" in *"pull: failed"*"pull before your first write"*) ok "and says so, with what to do" ;; *) bad "and says so, with what to do" "$out" ;; esac
 git -C "$WIKIS_DIR" remote set-url origin "$T/remote.git"
 
+section "A remote the branch doesn't track"
+# setup's `git remote add` set no upstream, so a bare pull failed (a work Mac, 2026-10-30).
+git -C "$WIKIS_DIR" branch -q --unset-upstream
+expect "start pulls anyway" "pull: up to date with the remote" "$W" start web
+check "and the branch tracks origin from then on" git -C "$WIKIS_DIR" rev-parse -q --verify '@{u}'
+git -C "$WIKIS_DIR" branch -q --unset-upstream
+lacks "update pulls anyway" "the pull failed" "$W" update --wikis-only
+check "and sets the upstream too" git -C "$WIKIS_DIR" rev-parse -q --verify '@{u}'
+git init -q --bare "$T/empty.git"
+git -C "$WIKIS_DIR" remote set-url origin "$T/empty.git"
+git -C "$WIKIS_DIR" branch -q --unset-upstream
+expect "start with an empty remote says the next sync pushes to it" "the remote has nothing yet" "$W" start web
+echo "first push" > "$WIKIS_DIR/demo/raw/first-push.md"
+expect "sync to an empty remote makes the first push" "to origin for the first time" "$W" sync demo -m "demo: first push"
+check "the remote has the branch, and the branch tracks it" git -C "$WIKIS_DIR" rev-parse -q --verify '@{u}'
+git -C "$WIKIS_DIR" remote set-url origin "$T/remote.git"
+git -C "$WIKIS_DIR" fetch -q origin && git -C "$WIKIS_DIR" branch -q --set-upstream-to="origin/$(git -C "$WIKIS_DIR" symbolic-ref --short HEAD)"
+git -C "$WIKIS_DIR" rm -q "demo/raw/first-push.md" && git -C "$WIKIS_DIR" commit -q -m "demo: drop test note" && git -C "$WIKIS_DIR" pull -q --no-rebase --no-edit && git -C "$WIKIS_DIR" push -q
+
 section "Antigravity plugin"
 lacks "without Antigravity, setup --list says nothing about it" "antigravity" "$W" setup --list
 mkdir -p "$HOME/.gemini"

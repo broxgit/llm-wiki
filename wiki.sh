@@ -421,7 +421,9 @@ cmd_start() {
     # Keep the collection's own SSH command (setup may name a key there) and add a
     # timeout, so an unreachable host can't hang the session.
     sshc="${GIT_SSH_COMMAND:-$(git -C "$WIKIS_DIR" config --get core.sshCommand 2>/dev/null || echo ssh)}"
-    if out="$(GIT_SSH_COMMAND="$sshc -o ConnectTimeout=10 -o BatchMode=yes" git -C "$WIKIS_DIR" pull -q --no-rebase --no-edit 2>&1 </dev/null)"; then
+    if [ "$(GIT_SSH_COMMAND="$sshc -o ConnectTimeout=10 -o BatchMode=yes" track_remote "$WIKIS_DIR")" = new ]; then
+      echo "pull: the remote has nothing yet. The next $WIKI_CMD sync pushes this collection to it."
+    elif out="$(GIT_SSH_COMMAND="$sshc -o ConnectTimeout=10 -o BatchMode=yes" git -C "$WIKIS_DIR" pull -q --no-rebase --no-edit 2>&1 </dev/null)"; then
       echo "pull: up to date with the remote"
     else
       echo "pull: failed, so pages may be behind other machines. Carry on, and pull before your first write. git said: $(printf '%s' "$out" | head -n 1)"
@@ -673,6 +675,26 @@ sync_lock() {
 }
 
 # sync <wiki> [-m MESSAGE]: commit this wiki's changes, pull, and push.
+# track_remote <dir>: make the branch track origin's branch of the same name. Setup's
+# `git remote add` never set that, so a bare pull failed with "no tracking
+# information" (a work Mac, 2026-10-30). Prints `tracking` when the branch has an
+# upstream, or now has one, and `new` when origin has no such branch yet, so the
+# first push makes it. Prints nothing when it can't tell, such as offline.
+track_remote() {
+  local d="$1" br
+  if git -C "$d" rev-parse -q --verify '@{u}' >/dev/null 2>&1; then echo tracking; return 0; fi
+  br="$(git -C "$d" symbolic-ref -q --short HEAD 2>/dev/null)" || return 0
+  git -C "$d" remote get-url origin >/dev/null 2>&1 || return 0
+  # Ask the remote itself: a local origin/<branch> may be left from an earlier remote.
+  git -C "$d" ls-remote --exit-code --heads origin "$br" </dev/null >/dev/null 2>&1
+  case $? in
+    0)
+      git -C "$d" fetch -q origin "$br" </dev/null >/dev/null 2>&1 \
+        && git -C "$d" branch -q --set-upstream-to="origin/$br" >/dev/null 2>&1 && echo tracking ;;
+    2) echo new ;;
+  esac
+}
+
 cmd_sync() {
   local wiki="" msg="" root repo path top err
   while [ $# -gt 0 ]; do
@@ -708,6 +730,11 @@ cmd_sync() {
     echo "nothing to commit in ${root##*/}"
   fi
   [ -n "$(git -C "$repo" remote)" ] || { echo "no remote, so nothing to pull or push"; return 0; }
+  if [ "$(track_remote "$repo")" = new ]; then
+    git -C "$repo" push -q -u origin HEAD || die "the first push to origin failed. Check the remote with: $WIKI_CMD setup git"
+    echo "synced: pushed $(tilde "$repo") to origin for the first time"
+    return 0
+  fi
   # A merge, never a rebase or a stash: a rebase refuses to run while another
   # wiki has uncommitted notes, and a merge doesn't mind them.
   if ! err="$(git -C "$repo" pull -q --no-rebase --no-edit 2>&1)"; then
@@ -2439,18 +2466,22 @@ except Exception:
 
 # update_wikis: pull, upgrade and push each collection, then new settings and next steps.
 update_wikis() {
-  local n f r ahead
+  local n f r ahead track
   while IFS="$TAB" read -r n f r; do
     [ -d "$f" ] || continue
     echo
     echo "== Collection $n: $(tilde "$f")"
+    track=""
     if in_git_repo "$f" && [ -n "$(git -C "$f" remote 2>/dev/null)" ]; then
-      git -C "$f" pull -q --no-rebase --no-edit </dev/null || echo "- the pull failed; upgrading what's here. Pull and push by hand afterwards."
+      track="$(track_remote "$f")"
+      [ "$track" = new ] || git -C "$f" pull -q --no-rebase --no-edit </dev/null || echo "- the pull failed; upgrading what's here. Pull and push by hand afterwards."
     fi
     WIKIS_DIR="$f" "$REPO/wiki.sh" upgrade --all </dev/null | sed -n '/^== What changed/,/^== Next/p' | sed '$d'
     if in_git_repo "$f" && [ -n "$(git -C "$f" remote 2>/dev/null)" ]; then
       ahead="$(git -C "$f" rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)"
-      if [ "${ahead:-0}" -gt 0 ]; then
+      if [ "$track" = new ]; then
+        git -C "$f" push -q -u origin HEAD </dev/null && echo "- pushed to origin for the first time" || echo "- the first push failed. Check the remote with: $WIKI_CMD setup git"
+      elif [ "${ahead:-0}" -gt 0 ]; then
         git -C "$f" push -q </dev/null && echo "- pushed $ahead commit(s)" || echo "- the push failed. Run: git -C $(tilde "$f") pull --no-rebase && git -C $(tilde "$f") push"
       fi
     fi

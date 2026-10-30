@@ -62,6 +62,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### Collections whose branch doesn't track the remote (2026-10-30)
+
+- **Why:** `wiki setup git` adds `origin` but never set the branch's upstream. On a teammate's machine `wiki update` failed with "There is no tracking information for the current branch", and `wiki start` and `wiki sync` pulls fail the same way.
+- **What changed:** `start`, `sync` and `update` now set the upstream to origin's branch of the same name when it's missing. When origin has no such branch yet, `start` says the next sync pushes to it, and `sync` and `update` make that first push with `-u`.
+
 ### Codex plugin (2026-10-30)
 
 - **Why:** Codex has a plugin system and hooks in Claude Code's shape, but used only a pasted session line: no pull outside its sandbox, no wiki loaded at start, nothing after compaction.
