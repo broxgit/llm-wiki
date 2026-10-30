@@ -53,6 +53,7 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - Capture after compaction in real use: whether sessions capture before answering when the user's message arrives with the hook's message. On 2026-10-28 one session answered first and captured a turn late, which led to the "before you answer anything" wording. Watch for raw notes timed just after a compaction.
 - Cursor's own sessionStart hook (`wiki setup cursor`) in a live session without the Claude Code plugin: whether Cursor runs it outside its sandbox, so the pull works.
 - Codex's PostCompact hook in a live session. The smoke tests cover its reply; no Codex session has compacted with it yet.
+- Feedback in real use: whether agents keep notes unprompted, whether they pick real llm-wiki problems over their own mistakes, and whether the scrubbing misses private names in practice. Read the first filed issues closely.
 - Patterns in real use: whether agents write `Feedback:` lines unprompted, and whether the thresholds are right.
 
 ## Decided against
@@ -62,6 +63,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Agents report problems with llm-wiki, opt-in (handbook v27, 2026-10-30)
+
+- **Why:** only the maintainer's own sessions had a rule to report llm-wiki problems, and their notes stayed in his collection. Other users' agents hit problems too, and nothing reached anyone who could fix them.
+- **What changed:** `wiki setup feedback` chooses off, notes or share. With it on, `wiki start` prints a Feedback section and `rules/feedback.md` says what's worth a note (bug, friction, docs, idea, each with evidence), at most one per session. `wiki feedback add` saves it with the agent, llm-wiki commit, handbook version and system, outside the collection; the same summary again counts as seen again. `wiki feedback show` drafts the issue with paths, emails, remotes and private names scrubbed; `send` files it on llm-wiki's repository with `gh` or a filled-in browser form, only from a terminal and after a yes. `wiki status` lists notes waiting.
 
 ### `wiki sync` with no wiki named (2026-10-30)
 

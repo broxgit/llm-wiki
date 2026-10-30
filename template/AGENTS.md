@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Handbook version 26.
+Handbook version 27.
 
 This folder is a knowledge base maintained by an LLM agent. Any agent working here follows this file. It needs no vendor features. Plain markdown, plain files.
 
@@ -37,7 +37,7 @@ data/        Structured data (CSV, SQLite). Queried, not read.
 
 ## Session start
 
-Run `wiki.sh start` in the repository you're working in, or `wiki.sh start <repository-name>`. It does the pulling, reading and listing of steps 1 to 3 in one call: it pulls, then prints this wiki's index, each shared wiki's index, the `For agents` and `Tools` sections of the shared wikis and of this one, and what waits. What step 3 says to do about waiting notes still applies. If it says the pull failed, pull before your first write. Without the script, do the steps by hand:
+Run `wiki.sh start` in the repository you're working in, or `wiki.sh start <repository-name>`. It does the pulling, reading and listing of steps 1 to 3 in one call: it pulls, then prints this wiki's index, each shared wiki's index, the `For agents` and `Tools` sections of the shared wikis and of this one, and what waits. What step 3 says to do about waiting notes still applies. If it says the pull failed, pull before your first write. If it prints a `Feedback on llm-wiki` section, follow `rules/feedback.md`. Without the script, do the steps by hand:
 
 1. If Sync applies to this wiki and its repo has a remote, pull.
 2. Read `index.md`, then each shared wiki's `index.md`. Then read the `## For agents` and `## Tools` sections of each shared wiki's `wiki/conventions.md`, and of this wiki's own. Shared wikis are listed in `links.md`. Nothing else yet. Shared knowledge only helps if you know it's there, and the agreements in `For agents` apply to every session.

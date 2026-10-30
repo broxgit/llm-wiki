@@ -114,7 +114,15 @@ Expected: a note with a short `For agents` list (for example the smoke tests, sh
 
 Record: the note's path and its contents.
 
-## Step 9: report
+## Step 9: feedback
+
+If Step 1's output had a `Feedback on llm-wiki` section, follow `rules/feedback.md` now: pick the one problem from this test that would help most to fix, and save it with `wiki.sh feedback add`. If it had no such section, say so and skip this step.
+
+Expected: one note, with a kind, a one-line summary, your agent and model, and details with the exact command and output. Nothing sent: `wiki.sh feedback send` is the user's.
+
+Record: the command, its output, and the note's summary.
+
+## Step 10: report
 
 Write the report below to `agent-test-report.md` in this repository's folder, which most sandboxes let you write. Then save it with:
 
@@ -141,6 +149,7 @@ Date: <date and time>. Sandbox: <yes or no, and what it blocked>.
 | 6 Where would this go | | |
 | 7 Compile and sync | | |
 | 8 Procedures and tools | | |
+| 9 Feedback | | |
 
 ## What failed or got in the way
 For each: the exact command, what it printed, what you expected, and what you did about it.

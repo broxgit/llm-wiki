@@ -271,6 +271,29 @@ Some features only help once you know they exist. When something in your own wik
 
 Tips come from the plugin's session hook, so other agents don't show them on their own. Run `wiki tips` now and then instead.
 
+## Help improve llm-wiki
+
+Agents notice where llm-wiki gets in their way: a command that failed or misled them, two handbook instructions that conflicted, a step they had to work out by reading `wiki.sh`. With feedback on, they keep a note of it, so it gets fixed instead of forgotten. It's off until you choose:
+
+```
+wiki setup feedback
+```
+
+- **off:** nothing is kept.
+- **notes:** agents keep notes on this machine for you to read.
+- **share:** the same, and you can file one as an issue on llm-wiki's GitHub. You read each one first, and nothing is sent without your yes.
+
+Agents keep at most one note a session, at a stopping point, never in the middle of your task, and say so in a line. Notes stay outside your wiki collection, so they never reach teammates.
+
+| Command | Does |
+|---|---|
+| `wiki feedback` | Lists the notes: kind, how often seen, summary, id |
+| `wiki feedback show <id>` | The issue it would file |
+| `wiki feedback send <id>` | Shows it, and files it if you say yes: with `gh` when it's signed in, or a filled-in form in your browser |
+| `wiki feedback dismiss <id>` | Drops one |
+
+Before a draft is shown, it's scrubbed: home paths, emails, git remotes, and the names of your projects, wikis and accounts are replaced. If `gitleaks` is installed, it checks for secrets too. Scrubbing catches what it knows about, not everything, so read the draft before you say yes. `wiki status` lists notes waiting under To do.
+
 ## Tab completion
 
 Press Tab after `wiki` to fill in commands, wiki names, journal settings and their values, tip names, and folders for `wiki seed`. `wiki setup` offers to turn it on for zsh or bash: it adds one line to `~/.zshrc` or `~/.bashrc` that loads a small file in `~/.config/llm-wiki/`. Setup rewrites that file each time, and the candidates come from `wiki` itself, so updates never leave completion stale. Rerun the step alone with `wiki setup completion`.
