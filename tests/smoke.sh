@@ -609,6 +609,16 @@ expect "standup caps commits per repository" "(7 earlier commit(s) not listed)" 
 expect "the cap keeps the newest commit" "busy commit 12" "$W" standup --since 2d --max 5
 lacks "the cap drops the older ones" "busy commit 7" "$W" standup --since 2d --max 5
 expect "detailed reports list every commit" "busy commit 1" "$W" standup --since 2d --max 5 --format detailed
+# A config include git can't read fails every repository, as an agent's sandbox did.
+printf 'blocked\n' > "$T/gitconfig-blocked" && chmod 000 "$T/gitconfig-blocked"
+printf '[include]\n\tpath = %s\n' "$T/gitconfig-blocked" > "$T/gitconfig-bad"
+out="$(GIT_CONFIG_GLOBAL="$T/gitconfig-bad" "$W" standup --since 2d 2>&1)"
+case "$out" in *"1 of 1 repo(s) couldn't be read"*"git said: "*"sandbox"*) ok "standup says which repositories git couldn't read, not just None found" ;; *) bad "standup says which repositories git couldn't read, not just None found" "$out" ;; esac
+chmod 600 "$T/gitconfig-blocked"; rm -f "$T/gitconfig-blocked" "$T/gitconfig-bad"
+mkdir -p "$T/code-empty"
+"$W" journal set code_dirs "$T/code-empty" >/dev/null
+expect "and says when it found no repositories at all" "No git repositories found under $T/code-empty" "$W" standup --since 2d
+"$W" journal set code_dirs "$T/code" >/dev/null
 
 section "Commit distance"
 R="$T/code/demo"

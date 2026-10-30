@@ -3305,17 +3305,26 @@ cmd_standup() {
   } > "$out"
   authors="$(journal_get authors)"
   local since_flag=--since gv
-  gv="$(git version | sed -n 's/^git version \([0-9]*\)\.\([0-9]*\).*/\1 \2/p')"
+  gv="$(git version 2>/dev/null | sed -n 's/^git version \([0-9]*\)\.\([0-9]*\).*/\1 \2/p' || true)"
   if [ -n "$gv" ] && { [ "${gv% *}" -gt 2 ] || { [ "${gv% *}" -eq 2 ] && [ "${gv#* }" -ge 37 ]; }; }; then
     since_flag=--since-as-filter
   fi
-  local inprog
+  local inprog unreadable=0 found=0 gerr="" err
   inprog="$(mktemp)"
+  err="$(mktemp)"
   while IFS= read -r r; do
     [ -n "$r" ] || continue
     case "$r/" in "$WIKIS_DIR"/*) continue ;; esac
     name="$(repo_name "$r")"
     excluded "$name" && continue
+    found=$((found + 1))
+    # A repository git can't read must not pass for a quiet day: an agent's sandbox
+    # failed every one silently (Antigravity, 2026-10-30).
+    if ! git -C "$r" log -1 --format=%h >/dev/null 2>"$err"; then
+      unreadable=$((unreadable + 1))
+      [ -n "$gerr" ] || gerr="$(head -n 1 "$err")"
+      continue
+    fi
     me="$(git -C "$r" config user.email 2>/dev/null || true)"
     set -- 
     [ -n "$me" ] && set -- "--author=$me"
@@ -3351,7 +3360,13 @@ cmd_standup() {
       echo "- $name: branch $br, $dirty uncommitted file(s), $ahead unpushed commit(s)" >> "$inprog"
     fi
   done < <(find_repos)
+  rm -f "$err"
   [ "$n_commits" -gt 0 ] || { echo; echo "None found."; } >> "$out"
+  if [ "$found" -eq 0 ]; then
+    { echo; echo "(No git repositories found under $(journal_get code_dirs). If this runs in an agent's sandbox, it may not be able to read that folder: run it outside the sandbox. Otherwise set code_dirs: $WIKI_CMD journal set code_dirs <folders>)"; } >> "$out"
+  elif [ "$unreadable" -gt 0 ]; then
+    { echo; echo "($unreadable of $found repo(s) couldn't be read, so their commits are missing. git said: ${gerr:-nothing}. If this runs in an agent's sandbox, run it outside the sandbox, or allow the code folders and ~/.gitconfig* there.)"; } >> "$out"
+  fi
   [ "$skipped" -eq 0 ] || { echo; echo "($skipped repo(s) skipped: no user.email set and no authors configured.)"; } >> "$out"
 
   # Journal entries for the days in range.
