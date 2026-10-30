@@ -2546,6 +2546,12 @@ session_update_note() {
 EOF
 }
 
+# restart_note: apps load a plugin when they start, so an update reaches them only
+# after a restart. Cursor runs the Claude Code plugin's copy too.
+restart_note() {
+  echo "- Quit and reopen the Claude app$([ "$(cursor_state)" = none ] || echo ' and Cursor'), and restart terminal sessions, so they load the new plugin."
+}
+
 cmd_update() {
   local wikis_only=0 new k
   while [ $# -gt 0 ]; do
@@ -2564,7 +2570,7 @@ cmd_update() {
     claude plugin update "$k" || die "couldn't update $k"
     k="$(plugin_installed)"
     [ -n "$k" ] && [ -x "$k/wiki.sh" ] && new="$k/wiki.sh"
-    echo "- Quit and reopen the Claude app, and restart terminal sessions, so they load the new plugin."
+    restart_note
   elif git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     k="$(git -C "$REPO" rev-parse --abbrev-ref HEAD)"
     case "$k" in main | master) ;; *) echo "- $(tilde "$REPO") is on the branch $k, so this pulls that branch, not the released code." ;; esac
@@ -2581,7 +2587,7 @@ except Exception:
     print("")' 2>/dev/null || true)"
     if [ -n "$k" ] && command -v claude >/dev/null 2>&1; then
       claude plugin marketplace update "${k#*@}" >/dev/null 2>&1 && claude plugin update "$k" >/dev/null 2>&1 \
-        && echo "- updated the installed plugin's copy ($k) too" \
+        && { echo "- updated the installed plugin's copy ($k) too"; restart_note; } \
         || echo "- couldn't update the installed plugin's copy ($k): claude plugin update $k"
     fi
   else
