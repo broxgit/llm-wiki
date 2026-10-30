@@ -4,6 +4,15 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v27 (2026-10-30)
+
+Agents can tell you, and llm-wiki's maintainer, what got in their way. It's off until you turn it on.
+
+- `wiki setup feedback` picks one of three: `off`, `notes` (agents keep notes on this machine for you to read) or `share` (the same, and you can file one as an issue on llm-wiki's GitHub after reading it). The notes stay outside the collection, so they never sync to teammates.
+- With it on, `wiki start` prints a `Feedback on llm-wiki` section, and the handbook's new `rules/feedback.md` says what's worth a note (a bug, friction, a docs conflict, an idea, each with evidence), at most one per session and never mid-task. Agents save it with `wiki feedback add`.
+- `wiki feedback` lists the notes, `show` prints the issue it would file, `send` files it only after you read it and say yes (with `gh`, or a filled-in form in the browser), and `dismiss` drops one. Drafts have paths, emails, git remotes, and the names of your projects and wikis replaced, and `gitleaks` checks them when it's installed. `wiki status` lists notes waiting under To do.
+- Do: run `wiki setup feedback` and choose. `share` helps the most; you still read every note before it goes anywhere.
+
 ## v26 (2026-10-30)
 
 Each project's own definition of done, and the tools its work needs. Gemini resuming work in a project skipped checks Claude makes, such as CI after a push, because they came from Claude's app, not from the wiki.

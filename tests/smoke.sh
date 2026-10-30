@@ -876,6 +876,65 @@ git -C "$T/mkt" commit -q --allow-empty -m two
 expect "status says when the plugin copy is behind its marketplace, for Cursor too" "llm-wiki@mk is installed from ${first:0:7}, behind its marketplace at $(git -C "$T/mkt" rev-parse --short=7 HEAD). Claude Code and Cursor run that copy" "$W" status
 rm -rf "$HOME/.cursor" "$HOME/.claude/plugins/installed_plugins.json" "$HOME/.claude/plugins/known_marketplaces.json" "$T/mkt"
 
+section "Feedback on llm-wiki"
+FB="$HOME/.local/state/llm-wiki/feedback"
+expect "feedback is off until the user turns it on" "feedback               off" bash -c "'$W' setup --list | sed 's/  */               /'"
+expect "and setup --new would ask" "feedback" bash -c "'$W' setup --list | grep '<- new'"
+printf 'details\n' > "$T/fb.md"
+expect "while off, add saves nothing and says not to retry" "nothing was saved. Don't try again" "$W" feedback add bug "something" --file "$T/fb.md"
+check "and wrote no note" test ! -d "$FB"
+lacks "start has no Feedback section while it's off" "Feedback on llm-wiki" "$W" start web
+expect "setup feedback takes the answer" "feedback: share" bash -c "printf 'share\n' | LLM_WIKI_TEST_TTY=1 '$W' setup feedback"
+expect "a bad kind is refused" "the kind is one of" "$W" feedback add oops "something" --file "$T/fb.md"
+expect "a note without details is refused" "the details go in --file" bash -c "'$W' feedback add bug 'something' </dev/null"
+cat > "$T/fb.md" <<EOF
+Ran \`wiki sync\` in $HOME/code/web with no wiki name, from the demo wiki (demo:wiki/x.md).
+Remote git@github.com:acme/demo-service.git, user someone@example.com, token ghp_abcdefghijklmnopqrstuvwxyz0123456789.
+Issues go to https://github.com/broxgit/llm-wiki/issues.
+EOF
+expect "add saves a note" "feedback: saved" "$W" feedback add bug "sync without a name only says name a wiki" --agent "Smoke, test model" --file "$T/fb.md"
+n="$(ls "$FB" | head -n 1)"; n="${n%.md}"
+check "the note records its kind, agent, version and system" bash -c "grep -q '^Kind: bug' '$FB/$n.md' && grep -q '^Agent: Smoke, test model' '$FB/$n.md' && grep -q '^Handbook: v' '$FB/$n.md' && grep -q '^System: ' '$FB/$n.md'"
+expect "the same summary again counts as seen again" "seen again" bash -c "printf 'more\n' | '$W' feedback add bug 'Sync without a name only says name a wiki' --agent other"
+check "in one note, seen twice" bash -c "[ \$(ls '$FB' | wc -l) -eq 1 ] && grep -q '^Seen: 2' '$FB/$n.md'"
+expect "feedback lists it" "seen 2   sync without a name only says name a wiki" "$W" feedback
+expect "start tells agents to follow rules/feedback.md" "===== Feedback on llm-wiki: share" "$W" start web
+expect "and to tell the user once, never sending themselves" "Never run feedback send yourself" "$W" start web
+expect "status lists it under To do" "feedback: 1 note(s) from agents about llm-wiki" "$W" status
+out="$("$W" feedback show "$n" 2>&1)"
+case "$out" in "[bug] sync without a name only says name a wiki"*) ok "show drafts the issue, title first" ;; *) bad "show drafts the issue, title first" "$out" ;; esac
+case "$out" in *"$HOME"*|*"demo:wiki"*|*" demo wiki"*|*acme*|*someone@example.com*|*ghp_*) bad "the draft has home paths, project names, remotes, emails and tokens scrubbed" "$out" ;; *) ok "the draft has home paths, project names, remotes, emails and tokens scrubbed" ;; esac
+case "$out" in *"https://github.com/broxgit/llm-wiki/issues"*) ok "but keeps llm-wiki's own repository" ;; *) bad "but keeps llm-wiki's own repository" "$out" ;; esac
+expect "send needs a terminal, so an agent can't file one" "needs a terminal" bash -c "'$W' feedback send '$n' </dev/null"
+cat > "$T/bin/gh" <<EOF
+#!/bin/sh
+case "\$1 \$2" in
+  "auth status") exit 0 ;;
+  "issue create") echo "\$*" > "$T/gh.log"; cat > "$T/gh.body"; echo "https://github.com/broxgit/llm-wiki/issues/999" ;;
+esac
+EOF
+chmod +x "$T/bin/gh"
+out="$(printf 'n\n' | PATH="$T/bin:$PATH" LLM_WIKI_TEST_TTY=1 "$W" feedback send "$n" 2>&1)"
+case "$out" in *"This would be filed on broxgit/llm-wiki"*"Not filed"*) ok "send shows the draft and files nothing on a no" ;; *) bad "send shows the draft and files nothing on a no" "$out" ;; esac
+check "gh wasn't asked to file" test ! -e "$T/gh.log"
+expect "on a yes, it files it with gh" "filed: https://github.com/broxgit/llm-wiki/issues/999" bash -c "printf 'y\n' | PATH='$T/bin:$PATH' LLM_WIKI_TEST_TTY=1 '$W' feedback send '$n'"
+check "on llm-wiki's repository, with the drafted title" grep -q -- "--repo broxgit/llm-wiki --title \[bug\] sync without a name" "$T/gh.log"
+lacks "and the scrubbed body" "acme" cat "$T/gh.body"
+check "the note is marked sent, with the issue" grep -q '^Status: sent .* https://github.com/broxgit/llm-wiki/issues/999' "$FB/$n.md"
+lacks "status no longer counts it" "feedback:" "$W" status
+printf 'other\n' | "$W" feedback add idea "an idea" >/dev/null
+m="$(cd "$FB" && echo *-an-idea.md)"; m="${m%.md}"
+"$W" feedback dismiss "$m" >/dev/null
+check "dismiss marks a note dismissed" grep -q '^Status: dismissed' "$FB/$m.md"
+printf 'mode=notes\n' > "$HOME/.config/llm-wiki/feedback"
+printf 'x\n' | "$W" feedback add docs "a docs note" >/dev/null
+m="$(cd "$FB" && echo *-a-docs-note.md)"; m="${m%.md}"
+expect "in notes mode, send refuses" "sharing is off" bash -c "printf 'y\n' | LLM_WIKI_TEST_TTY=1 '$W' feedback send '$m'"
+lacks "and start doesn't ask agents to point the user at it" "wait for the user to read" "$W" start web
+check "the handbook rule ships in the template" grep -q 'wiki.sh feedback add' "$REPO/template/rules/feedback.md"
+check "and AGENTS.md points to it" grep -q 'rules/feedback.md' "$REPO/template/AGENTS.md"
+rm -rf "$FB" "$HOME/.config/llm-wiki/feedback" "$T/bin/gh" "$T/gh.log" "$T/gh.body" "$T/fb.md"
+
 section "Compiled without summary pages (v24)"
 "$W" new v24 >/dev/null 2>&1
 V="$WIKIS_DIR/v24"

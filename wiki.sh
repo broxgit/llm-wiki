@@ -151,6 +151,9 @@ Usage: $WIKI_CMD <command> [options]
   skills [link]        Team skills in the wikis, and link them into ~/.claude/skills.
   tips [--mute NAME]   Features your own wikis suggest you'd get something out of.
   completion zsh|bash  Print tab completion for a shell. wiki setup turns it on.
+  feedback [show|send|dismiss <id>]
+                       Notes agents kept about llm-wiki itself, and filing one as an
+                       issue after you read it. Off until: setup feedback.
   report [--since R]   Weekly look: tokens per project, what the wikis gained, hit
                        rate, and what needs you. An agent writes it up.
   stats [range]        How often wikis answered the questions sessions checked them for (default 30d).
@@ -466,6 +469,18 @@ cmd_start() {
     if [ "$n" -gt 0 ]; then echo "$(tilde "$d"): $n note(s). Compile them before the user's request, as the handbook's session start says, unless there are more than ten."
     else echo "$(tilde "$d"): nothing waiting"; fi
   done
+  # Feedback on llm-wiki, when the user turned it on. A wiki not yet upgraded has no
+  # rules/feedback.md, so the template's copy stands in.
+  if [ "$(feedback_mode)" != off ]; then
+    d="$wiki/rules/feedback.md"; [ -f "$d" ] || d="$TEMPLATE/rules/feedback.md"
+    echo
+    echo "===== Feedback on llm-wiki: $(feedback_mode)"
+    echo "When llm-wiki itself gets in your way, keep one note this session, as $(tilde "$d") says."
+    n="$(feedback_notes new | grep -c . || true)"
+    if [ "$(feedback_mode)" = share ] && [ "${n:-0}" -gt 0 ]; then
+      echo "$n note(s) wait for the user to read. At a stopping point, tell them once: run \`$WIKI_CMD feedback\` in a terminal. Never run feedback send yourself."
+    fi
+  fi
 }
 
 # cover <wiki> <repo>...: record that one wiki covers several repositories.
@@ -1673,6 +1688,11 @@ EOF2
       *) todo_add "secrets: another pre-commit hook is in place, so commits aren't scanned. Do: $(hook_advice)" ;;
     esac
   fi
+  n="$(feedback_notes new | grep -c . || true)"
+  if [ "${n:-0}" -gt 0 ]; then
+    if [ "$(feedback_mode)" = share ]; then todo_add "feedback: $n note(s) from agents about llm-wiki to read, and file the ones worth fixing. Run: $WIKI_CMD feedback"
+    else todo_add "feedback: $n note(s) from agents about llm-wiki. Run: $WIKI_CMD feedback"; fi
+  fi
   n="$(TIP_REPO="$PWD" tips_due | wc -l | tr -d ' ')"
   [ "$n" -eq 0 ] || todo_add "tips: $n feature(s) your wikis suggest trying. Run: $WIKI_CMD tips"
   n="$(setup_pending | wc -l | tr -d ' ')"
@@ -2640,6 +2660,275 @@ if out:
     print(f"wrote: {out.replace(os.path.expanduser('~'), '~', 1)}")
 PY
   [ -z "$out" ] || echo "If the shared wiki has no page for this dataset yet, compile one: what it is, its columns, how to refresh it ($WIKI_CMD deps --write)."
+}
+
+# ---- feedback ----------------------------------------------------------------
+# Agents' notes about llm-wiki itself: a command that failed or misled, handbook
+# instructions that conflicted, work a command should have done. Opt-in, per person:
+#   off    nothing is kept (the default)
+#   notes  agents keep notes on this machine, for you to read
+#   share  the same, and you can file one as a GitHub issue after reading it
+# Notes live outside the collection, so they never sync to teammates, and nothing
+# leaves the machine unless the user runs `feedback send` in a terminal and says yes.
+FEEDBACK_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/llm-wiki/feedback"
+FEEDBACK_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/llm-wiki/feedback"
+FEEDBACK_KINDS="bug friction docs idea"
+
+feedback_mode() {
+  local m
+  m="$(sed -n 's/^mode=//p' "$FEEDBACK_FILE" 2>/dev/null | head -n 1)"
+  case "$m" in notes | share) printf '%s' "$m" ;; *) printf off ;; esac
+}
+
+feedback_set() {
+  mkdir -p "$(dirname "$FEEDBACK_FILE")" || return 1
+  printf '# Feedback on llm-wiki: off, notes or share. Written by %s setup feedback.\nmode=%s\n' "$WIKI_CMD" "$1" > "$FEEDBACK_FILE"
+}
+
+# feedback_repo: where issues go: the repository this copy of llm-wiki came from.
+feedback_repo() {
+  local r
+  r="$(sed -n 's#.*"repository": *"https://github.com/\([^"]*\)".*#\1#p' "$REPO/.claude-plugin/plugin.json" 2>/dev/null | head -n 1)"
+  printf '%s' "${LLM_WIKI_ISSUES:-${r:-broxgit/llm-wiki}}"
+}
+
+# llm_wiki_version: the commit this copy runs, for the note.
+llm_wiki_version() {
+  git -C "$REPO" rev-parse --short HEAD 2>/dev/null && return 0
+  if from_plugin; then printf 'plugin %s' "${REPO##*/}"; else printf unknown; fi
+}
+
+# feedback_notes [status]: the notes, oldest first, optionally only one status.
+feedback_notes() {
+  local f
+  for f in "$FEEDBACK_DIR"/*.md; do
+    [ -f "$f" ] || continue
+    [ -z "${1:-}" ] || grep -q "^Status: $1" "$f" || continue
+    printf '%s\n' "$f"
+  done
+}
+
+feedback_field() { sed -n "s/^$1: //p" "$2" | head -n 1; }
+
+# feedback_find <id>: the note an id, a prefix of its file name, names.
+feedback_find() {
+  local m
+  [ -n "${1:-}" ] || die "name a note: $WIKI_CMD feedback lists them"
+  m="$(feedback_notes | while IFS= read -r f; do case "${f##*/}" in ("$1"*) printf '%s\n' "$f" ;; esac; done)"
+  [ -n "$m" ] || die "no feedback note $1. $WIKI_CMD feedback lists them."
+  [ "$(printf '%s\n' "$m" | wc -l | tr -d ' ')" = 1 ] || die "$1 matches more than one note. Give more of its name."
+  printf '%s' "$m"
+}
+
+# feedback_private: names to scrub from a draft, one per line: the projects in
+# code_dirs, the wikis, and who the user is. llm-wiki and the shared wiki stay.
+feedback_private() {
+  local d r
+  for d in "$WIKIS_DIR"/*/; do d="${d%/}"; is_wiki "$d" && printf '%s\n' "${d##*/}"; done
+  find_repos 2>/dev/null | while IFS= read -r r; do
+    repo_name "$r"; printf '\n%s\n' "${r##*/}"
+    # The account or group a remote lives under: github.com:<owner>/ or github.com/<owner>/.
+    git -C "$r" config --get remote.origin.url 2>/dev/null | sed -n 's#^[^@]*@[^:]*:\([^/]*\)/.*#\1#p; s#^https*://[^/]*/\([^/]*\)/.*#\1#p' || true
+  done
+  git config user.name 2>/dev/null || true
+  id -un 2>/dev/null || true
+  hostname -s 2>/dev/null || true
+}
+
+# feedback_scrub: stdin to stdout with home paths, private names, emails, git
+# remotes other than llm-wiki's own, and token-like strings replaced.
+feedback_scrub() {
+  local names
+  names="$(feedback_private | grep -v -x -e '' -e llm-wiki -e "$SHARED" | sort -u)"
+  FB_NAMES="$names" FB_HOME="$HOME" FB_REPO="$(feedback_repo)" python3 -c '
+import os, re, sys
+t = sys.stdin.read()
+home, keep = os.environ["FB_HOME"], os.environ["FB_REPO"]
+t = t.replace(home, "~")
+t = re.sub(r"/(Users|home)/[^/\s]+", "~", t)
+# The repository issues go to stays: set it aside before anything else matches it.
+t = t.replace(keep, "\0KEEP\0")
+t = re.sub(r"([\w.-]+@[\w.-]+:|https?://(github|gitlab|bitbucket)\.[\w.]+/)[\w./\x00-]+", lambda m: m.group(0) if "\0KEEP\0" in m.group(0) else "<remote>", t)
+t = re.sub(r"[\w.+-]+@[\w-]+(\.[\w-]+)+(?![\w.-]*:)", "<email>", t)
+t = re.sub(r"\b(gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,})\b", "<secret>", t)
+for n in sorted(os.environ["FB_NAMES"].split("\n"), key=len, reverse=True):
+    if not n:
+        continue
+    e = re.escape(n)
+    if len(n) >= 4:
+        t = re.sub(r"(?<![\w-])" + e + r"(?![\w-])", "<private>", t)
+    else:
+        # Short names are often plain words: only where they are clearly names.
+        t = re.sub(r"(?<=[/~])" + e + r"(?=[/:\s]|$)|(?<![\w-])" + e + r"(?=:wiki/)", "<private>", t)
+sys.stdout.write(t.replace("\0KEEP\0", keep))'
+}
+
+# feedback_draft <note>: the issue text, scrubbed: title on the first line.
+feedback_draft() {
+  local f="$1"
+  {
+    printf '[%s] %s\n' "$(feedback_field Kind "$f")" "$(feedback_field Summary "$f")"
+    printf '**Agent:** %s\n' "$(feedback_field Agent "$f")"
+    printf '**llm-wiki:** %s, handbook %s\n' "$(feedback_field llm-wiki "$f")" "$(feedback_field Handbook "$f")"
+    printf '**System:** %s\n' "$(feedback_field System "$f")"
+    printf '**Seen:** %s time(s)\n\n' "$(feedback_field Seen "$f")"
+    sed '1,/^$/d' "$f"
+    printf '\n---\nFiled with `wiki feedback send` after the user read it. An agent wrote the note; paths and private names are scrubbed.\n'
+  } | feedback_scrub
+}
+
+cmd_feedback() {
+  local sub="${1:-list}"
+  [ $# -eq 0 ] || shift
+  case "$sub" in
+    list) feedback_list ;;
+    add) feedback_add "$@" ;;
+    show) feedback_draft "$(feedback_find "${1:-}")" ;;
+    send) feedback_send "${1:-}" ;;
+    dismiss)
+      local f
+      f="$(feedback_find "${1:-}")"
+      feedback_status "$f" "dismissed $(date -u +%Y-%m-%d)"
+      echo "dismissed: ${f##*/}"
+      ;;
+    -h | --help)
+      cat <<EOF
+Usage: $WIKI_CMD feedback [list | add | show <id> | send <id> | dismiss <id>]
+
+  feedback             The notes agents wrote about llm-wiki, newest last.
+  feedback add <kind> "<summary>" [--agent "<agent, model>"] [--file NOTE]
+                       For agents: save one note (kind: ${FEEDBACK_KINDS// /, }).
+                       The details come from --file or stdin. A note with the
+                       same summary counts as seen again instead.
+  feedback show <id>   The issue it would file, with private names scrubbed.
+  feedback send <id>   Show it, and file it on $(feedback_repo) if you say yes.
+                       Needs a terminal. Uses gh when it's signed in, the browser otherwise.
+  feedback dismiss <id>  Mark a note as not worth sending.
+
+Mode: $(feedback_mode). Change it with: $WIKI_CMD setup feedback
+EOF
+      ;;
+    *) die "feedback: list, add, show <id>, send <id> or dismiss <id>. See $WIKI_CMD feedback --help" ;;
+  esac
+}
+
+feedback_status() {
+  local f="$1" tmp
+  tmp="$f.tmp"
+  ST="$2" awk '/^Status: / && !done { print "Status: " ENVIRON["ST"]; done = 1; next } { print }' "$f" > "$tmp" && mv "$tmp" "$f"
+}
+
+feedback_list() {
+  local f n=0 kind seen status sum
+  echo "Feedback on llm-wiki: $(feedback_mode). Notes in $(tilde "$FEEDBACK_DIR")"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    n=$((n + 1))
+    kind="$(feedback_field Kind "$f")"; seen="$(feedback_field Seen "$f")"
+    status="$(feedback_field Status "$f")"; sum="$(feedback_field Summary "$f")"
+    f="$(basename "$f" .md)"
+    printf '%-9s %-9s seen %-3s %s\n    id: %s\n' "${status%% *}" "$kind" "$seen" "$sum" "$f"
+  done <<EOF
+$(feedback_notes)
+EOF
+  if [ "$n" -eq 0 ]; then
+    echo "None yet."
+    [ "$(feedback_mode)" != off ] || echo "Agents keep notes only once it's on. Run: $WIKI_CMD setup feedback"
+    return 0
+  fi
+  echo
+  echo "Read one: $WIKI_CMD feedback show <id>. File it: $WIKI_CMD feedback send <id>. Drop it: $WIKI_CMD feedback dismiss <id>."
+}
+
+feedback_add() {
+  local kind="${1:-}" sum="${2:-}" agent="" file="" body f slug stamp n
+  [ $# -lt 2 ] || shift 2
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --agent) agent="${2:-}"; shift 2 ;;
+      --file) file="${2:-}"; shift 2 ;;
+      *) die "feedback add <kind> \"<summary>\" [--agent \"<agent, model>\"] [--file NOTE]" ;;
+    esac
+  done
+  case " $FEEDBACK_KINDS " in *" $kind "*) ;; *) die "feedback add: the kind is one of: $FEEDBACK_KINDS" ;; esac
+  [ -n "$sum" ] || die "feedback add: give a one-line summary"
+  if [ "$(feedback_mode)" = off ]; then
+    echo "feedback is off on this machine, so nothing was saved. Don't try again this session."
+    return 0
+  fi
+  if [ -n "$file" ]; then body="$(cat "$file")" || die "can't read $file"; elif [ ! -t 0 ]; then body="$(cat)"; fi
+  [ -n "${body:-}" ] || die "feedback add: the details go in --file NOTE or on stdin: what you ran, what it printed, what you expected, what would have helped"
+  mkdir -p "$FEEDBACK_DIR" || die "$(cant_write "$FEEDBACK_DIR")"
+  # The same summary again: count it, and keep the new details under it.
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    if [ "$(feedback_field Summary "$f" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$sum" | tr '[:upper:]' '[:lower:]')" ]; then
+      n="$(feedback_field Seen "$f")"
+      sed "s/^Seen: .*/Seen: $((${n:-1} + 1))/" "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+      printf '\n## Seen again %s%s\n\n%s\n' "$(date -u '+%Y-%m-%d %H:%M UTC')" "${agent:+, by $agent}" "$body" >> "$f" || die "$(cant_write "$f")"
+      echo "feedback: seen again, $(basename "$f" .md) (seen $((${n:-1} + 1)) times)"
+      return 0
+    fi
+  done <<EOF
+$(feedback_notes new)
+EOF
+  stamp="$(date -u +%Y%m%d-%H%M%S)"
+  slug="$(printf '%s' "$sum" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]\{1,\}/-/g; s/^-//; s/-$//' | cut -c1-40 | sed 's/-$//')"
+  f="$FEEDBACK_DIR/$stamp-$slug.md"
+  {
+    printf 'Kind: %s\nSummary: %s\nStatus: new\nAgent: %s\nCaptured: %s\n' "$kind" "$sum" "${agent:-unknown}" "$(date -u '+%Y-%m-%d %H:%M UTC')"
+    printf 'llm-wiki: %s\nHandbook: v%s\n' "$(llm_wiki_version)" "$(version_of "$TEMPLATE/AGENTS.md")"
+    printf 'System: %s %s, bash %s, git %s\n' "$(uname -s)" "$(uname -r)" "${BASH_VERSION%%(*}" "$(git version 2>/dev/null | sed 's/^git version //' || true)"
+    printf 'Seen: 1\n\n%s\n' "$body"
+  } > "$f" || die "$(cant_write "$f")"
+  echo "feedback: saved $(basename "$f" .md)$([ "$(feedback_mode)" = share ] && echo '. The user can file it with: wiki feedback send')"
+}
+
+feedback_send() {
+  local f draft title body repo url
+  f="$(feedback_find "${1:-}")"
+  [ "$(feedback_mode)" = share ] || die "sharing is off, so nothing is sent from here. To turn it on, run: $WIKI_CMD setup feedback"
+  [ -t 0 ] || [ -n "${LLM_WIKI_TEST_TTY:-}" ] || die "feedback send asks before filing, so it needs a terminal. Agents: tell the user to run it."
+  draft="$(feedback_draft "$f")"
+  title="${draft%%$'\n'*}"; body="${draft#*$'\n'}"
+  repo="$(feedback_repo)"
+  if command -v gitleaks >/dev/null 2>&1 && ! printf '%s\n' "$draft" | gitleaks stdin --no-banner >/dev/null 2>&1; then
+    die "gitleaks found something like a secret in this note. Edit $(tilde "$f") and try again."
+  fi
+  echo "This would be filed on $repo:"
+  echo
+  printf '%s\n' "$draft" | sed 's/^/  /'
+  echo
+  echo "Paths, emails, remotes and names of your projects and wikis are replaced. Read it for anything else private."
+  ask_yn "File it?" n || { echo "Not filed. Edit $(tilde "$f") and send again, or: $WIKI_CMD feedback dismiss ${1}"; return 0; }
+  if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+    url="$(printf '%s\n' "$body" | gh issue create --repo "$repo" --title "$title" --body-file - 2>&1)" || die "gh couldn't file it: $url"
+  else
+    url="https://github.com/$repo/issues/new?$(TITLE="$title" BODY="$body" python3 -c 'import os, urllib.parse as u; print(u.urlencode({"title": os.environ["TITLE"], "body": os.environ["BODY"]}))')"
+    echo "Opening the issue form, filled in. Submit it there."
+    { command -v open >/dev/null 2>&1 && open "$url"; } || { command -v xdg-open >/dev/null 2>&1 && xdg-open "$url"; } || echo "$url"
+  fi
+  feedback_status "$f" "sent $(date -u +%Y-%m-%d) ${url##*$'\n'}"
+  echo "filed: ${url##*$'\n'}"
+}
+
+setup_feedback() {
+  local cur
+  cur="$(feedback_mode)"
+  setup_due feedback || return 0
+  section "Feedback on llm-wiki"
+  echo "Agents can keep a note when llm-wiki itself gets in their way: a command that failed or misled, instructions that"
+  echo "conflicted, work a command should have done. At most one a session, never mid-task. Notes stay on this machine."
+  echo "  off    nothing is kept"
+  echo "  notes  keep notes for you to read: $WIKI_CMD feedback"
+  echo "  share  keep them, and let you file one as an issue on $(feedback_repo). You read each one first;"
+  echo "         names of your projects, paths and emails are scrubbed. Nothing is sent without your yes."
+  while :; do
+    ask "Feedback" "$cur"
+    case "$ANSWER" in off | notes | share) break ;; *) echo "  Answer off, notes or share." ;; esac
+  done
+  feedback_set "$ANSWER" && echo "  feedback: $ANSWER"
+  setup_mark feedback
 }
 
 # ---- update -------------------------------------------------------------------
@@ -3909,7 +4198,7 @@ EOF
 # Tab completion. `completion zsh|bash` prints a small script for the shell, which
 # asks `__complete` for candidates on every Tab. The candidates live here, so a
 # plugin update can't leave completion stale.
-COMMANDS="setup init new update start collections deps permissions seed harvest capture lock log sync index lint pending cover which status find stale patterns skills tips report stats delegation upgrade unlock claude link journal standup completion"
+COMMANDS="setup init new update start collections deps permissions seed harvest capture lock log sync index lint pending cover which status find stale patterns skills tips report stats feedback delegation upgrade unlock claude link journal standup completion"
 RANGES="lastworkday yesterday today week lastweek 7d 14d 30d"
 
 wiki_names() {
@@ -4840,6 +5129,7 @@ setup_pending() {
   setup_done git || echo git
   if in_git_repo "$WIKIS_DIR"; then setup_done git.identity || echo git.identity; fi
   setup_done delegation.mode || echo delegation.mode
+  setup_done feedback || echo feedback
   if [ -d "$HOME/.claude" ] && [ -n "$(perm_missing)" ]; then setup_done claude.permissions || echo claude.permissions; fi
   case "$(agy_state)" in
     old) echo antigravity ;;
@@ -5238,6 +5528,9 @@ setup_list() {
   printf '%-19s %s' "delegation.mode" "$(deleg_mode)"
   case "$pending" in *" delegation.mode "*) printf '  <- new' ;; esac
   printf '\n'
+  printf '%-19s %s' "feedback" "$(feedback_mode)"
+  case "$pending" in *" feedback "*) printf '  <- new' ;; esac
+  printf '\n'
 
   for k in $JOURNAL_KEYS; do
     v="$(journal_get "$k")"
@@ -5513,13 +5806,13 @@ Usage: $WIKI_CMD setup [--new | --list | <section> | <setting>]
   setup            Walk through every setting. Enter keeps what you have.
   setup --new      Only what's missing, out of date, or added since you last ran it.
   setup --list     Print current values without asking anything.
-  setup <section>  Just one section: collection, collections, tools, git, claude, permissions, antigravity, codex, cursor, upgrade, delegation, journal.
+  setup <section>  Just one section: collection, collections, tools, git, claude, permissions, antigravity, codex, cursor, upgrade, delegation, feedback, journal.
   setup <setting>  Just one setting: git.identity, or journal.<key> such as journal.format.
                    A bare journal key works too: setup format.
 EOF
         return 0
         ;;
-      collection | collections | tools | git | claude | plugin | permissions | antigravity | codex | cursor | upgrade | skills | completion | journal | delegation | git.identity) what="$a" ;;
+      collection | collections | tools | git | claude | plugin | permissions | antigravity | codex | cursor | upgrade | skills | completion | journal | delegation | feedback | git.identity) what="$a" ;;
       journal.*)
         [ -n "$(journal_field "${a#journal.}" 2)" ] || die "no journal setting called ${a#journal.}. Settings: $JOURNAL_KEYS"
         what="$a"
@@ -5546,6 +5839,7 @@ EOF
     upgrade) SETUP_MODE=all; setup_upgrade ;;
     journal) SETUP_MODE=all; setup_journal ;;
     delegation) SETUP_MODE=all; setup_delegation ;;
+    feedback) SETUP_MODE=all; setup_feedback ;;
     git.identity)
       in_git_repo "$WIKIS_DIR" || die "$(tilde "$WIKIS_DIR") isn't a git repo yet. Run: $WIKI_CMD setup git"
       setup_identity
@@ -5575,6 +5869,7 @@ EOF
       setup_cursor
       setup_upgrade
       setup_delegation
+      setup_feedback
       setup_skills
       setup_completion
       setup_journal
@@ -5676,6 +5971,7 @@ case "$cmd" in
     exit 0
     ;;
   capture) cmd_capture "$@"; exit 0 ;;
+  feedback) cmd_feedback "$@"; exit 0 ;;
   lock) cmd_lock "$@"; exit 0 ;;
   log) cmd_log "$@"; exit 0 ;;
   sync) cmd_sync "$@"; exit 0 ;;

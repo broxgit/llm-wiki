@@ -49,6 +49,7 @@ Your coding agent forgets everything between sessions. llm-wiki gives it a memor
 - **Points every session at the right wiki** at startup. Right after a long session is compacted, it asks the agent to save what the summary still holds.
 - **Suggests features you haven't tried,** at most one per session, only when your own wikis show a reason. You can mute any of them.
 - **A `wiki` command with tab completion** for status, standups, reports, seeding and setup.
+- **Agents report what gets in their way,** if you opt in: one note a session about an llm-wiki bug or rough edge, which you can read and file as an issue. Private names and paths are scrubbed, and nothing is sent without your yes.
 
 ### Works with any agent
 
