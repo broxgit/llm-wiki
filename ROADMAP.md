@@ -63,6 +63,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### Every call to action says how to resolve it (2026-10-30)
+
+- **Why:** `wiki status` and `wiki report` flagged things (compile due, lint due, an open conflict) without saying what to do, and only a few lines ended with a command.
+- **What changed:** `status` gathers every call to action under a To do list after the table; the table keeps its short markers. `report`'s Needs you does the same in place. Each item ends with its fix: `Run:` a terminal command, `Ask an agent:` a request with the exact words (compile, lint and conflicts need an agent), or `Do:` a manual step. A conflict names its page and what to ask. A smoke test fails any item without a fix, so new flags can't ship without one. The status command, its skill and the report's note to agents say to keep each fix.
+
 ### Standup says when it can't read a repository (2026-10-30)
 
 - **Why:** in Antigravity's sandbox, `wiki standup` found no commits in any repository and printed only "None found.". Gemini spent five reads of `wiki.sh` working out why before rerunning it outside the sandbox.

@@ -217,7 +217,7 @@ set_version "$WIKIS_DIR/demo/AGENTS.md" 999
 out="$("$P/wiki.sh" status 2>&1)"
 set_version "$WIKIS_DIR/demo/AGENTS.md" "$TV"
 rm "$HOME/.claude/plugins/installed_plugins.json"
-case "$out" in *"Claude Code has def456 installed"*"Quit and reopen"*) ok "an old copy after an update says to restart Claude" ;; *) bad "an old copy after an update says to restart Claude" "$out" ;; esac
+case "$out" in *"Claude Code has def456 installed"*"Do: quit and reopen"*) ok "an old copy after an update says to restart Claude" ;; *) bad "an old copy after an update says to restart Claude" "$out" ;; esac
 
 section "Seed"
 A="$T/projects/api"
@@ -384,6 +384,16 @@ printf '\n## Pin versions\n- kind: correction\n- rule: Pin versions.\n- status: 
 expect "patterns flags an accepted fix seen again since" "AGAIN  Pin versions" "$W" patterns
 expect "and status says the fix isn't working" "accepted fix(es) not working" "$W" status
 expect "and so does the report" "seen again since, so not working" "$W" report
+# Every call to action ends with its fix: a command, a request for an agent, or a step.
+fixless() { "$W" "$1" 2>&1 | fixes "$2"; }
+fixes() { awk -v h="$1" '$0 == h { on = 1; next } on && /^#/ { on = 0 } on && /^- / && !/(Run: |Ask an agent: |Do: )/ { print "no fix: " $0 }'; }
+out="$("$W" report 2>&1)"
+lacks "every Needs you line in report ends with its fix" "no fix:" fixless report '## Needs you'
+case "$out" in *"resolve the conflict in demo's wiki/conflict-test.md: <your decision>"*) ok "a conflict names its page and what to ask" ;; *) bad "a conflict names its page and what to ask" "$out" ;; esac
+case "$out" in *"show me the proposed fix 'Wrap errors' in demo"*) ok "a proposal says how to answer it" ;; *) bad "a proposal says how to answer it" "$out" ;; esac
+out="$("$W" status 2>&1)"
+lacks "every To do line in status ends with its fix" "no fix:" fixless status 'To do:'
+case "$out" in *"To do:"*"Ask an agent: \"look again at the patterns marked AGAIN in demo\""*) ok "status gathers the calls to action under To do" ;; *) bad "status gathers the calls to action under To do" "$out" ;; esac
 cp "$T/patterns.bak" "$WIKIS_DIR/demo/patterns.md"
 printf '\n## Pin versions\n- kind: correction\n- rule: Pin versions.\n- status: accepted 2026-10-01: a convention\n- seen: 2026-09-20 api raw/a.md\n' >> "$WIKIS_DIR/demo/patterns.md"
 lacks "an accepted fix not seen since isn't flagged" "AGAIN" "$W" patterns

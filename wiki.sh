@@ -1549,8 +1549,15 @@ Add to the project's agent instruction file so new sessions find it on their own
 EOF
 }
 
+# todo_add <text>: one line for status's To do list. Each ends with its fix:
+# `Run: <command>` for a terminal, `Ask an agent: "<request>"` for agent work, or
+# `Do: <step>` for anything else, such as restarting an app.
+todo_add() { STATUS_TODO="$STATUS_TODO- $1
+"; }
+
 cmd_status() {
-  local d v tv waiting f b lock line note since n found=0 ahead=0
+  local d v tv waiting f b lock line note since n found=0 ahead=0 behind="" w r
+  STATUS_TODO=""
   [ -d "$WIKIS_DIR" ] || { echo "no wikis at $(tilde "$WIKIS_DIR"). Run: $WIKI_CMD init"; return 0; }
   tv="$(version_of "$TEMPLATE/AGENTS.md")"
   printf '%-26s %-9s %-8s %s\n' "WIKI" "HANDBOOK" "WAITING" "LOCK"
@@ -1567,21 +1574,36 @@ cmd_status() {
       case "$line" in held*) lock="$line" ;; esac
     fi
     note=""
-    if [ "$waiting" = "?" ]; then note="$note  <- can't read raw/: if this runs in an agent's sandbox, allow $(tilde "$WIKIS_DIR")"
-    elif [ "$waiting" -ge 5 ]; then note="$note  <- compile due"; fi
+    w="${d##*/}"
+    if [ "$waiting" = "?" ]; then
+      note="$note  <- can't read raw/"
+      todo_add "$w: can't read raw/, likely an agent's sandbox. Do: run this outside the sandbox, or allow $(tilde "$WIKIS_DIR") there."
+    elif [ "$waiting" -ge 5 ]; then
+      note="$note  <- compile due"
+      todo_add "$w: $waiting notes waiting. Ask an agent: \"compile $w\" (in Claude Code: /llm-wiki:compile $w)"
+    fi
     # Ingest entries since the last lint entry. The handbook lints at 10.
     since="$(awk '/^## [0-9-]+ lint/{n=0} /^## [0-9-]+ ingest/{n++} END{print n+0}' "$d/log.md" 2>/dev/null)"
-    if [ "${since:-0}" -ge 10 ]; then note="$note  <- lint due ($since ingests)"; fi
+    if [ "${since:-0}" -ge 10 ]; then
+      note="$note  <- lint due ($since ingests)"
+      todo_add "$w: lint due, $since ingests since the last. Ask an agent: \"lint $w\""
+    fi
     n="$(patterns_ledger "$d" | grep -c '^ready|' || true)"
-    if [ "${n:-0}" -gt 0 ]; then note="$note  <- $n pattern(s) ready"; fi
+    if [ "${n:-0}" -gt 0 ]; then
+      note="$note  <- $n pattern(s) ready"
+      todo_add "$w: $n repeated pattern(s) ready for a fix. Ask an agent: \"propose the ready patterns in $w\""
+    fi
     n="$(patterns_ledger "$d" | grep -c '^regressed|' || true)"
-    if [ "${n:-0}" -gt 0 ]; then note="$note  <- $n accepted fix(es) not working"; fi
-    if [ -n "$tv" ] && [ "${v:-0}" -lt "$tv" ]; then note="$note  <- behind template v$tv, run: $WIKI_CMD upgrade ${d##*/}"; fi
+    if [ "${n:-0}" -gt 0 ]; then
+      note="$note  <- $n accepted fix(es) not working"
+      todo_add "$w: $n accepted fix(es) seen again, so not working. Ask an agent: \"look again at the patterns marked AGAIN in $w\""
+    fi
+    if [ -n "$tv" ] && [ "${v:-0}" -lt "$tv" ]; then note="$note  <- behind template v$tv"; behind="$behind $w"; fi
     # Someone upgraded a shared wiki with a newer template than this clone.
     # A plugin's folder isn't a clone, so the fix is a plugin update, said once below.
     if [ -n "$tv" ] && [ "${v:-0}" -gt "$tv" ]; then
       if from_plugin; then ahead=1; note="$note  <- ahead of this plugin's template v$tv"
-      else note="$note  <- ahead of your template v$tv, run: git -C $(tilde "$REPO") pull"; fi
+      else note="$note  <- ahead of your template v$tv"; todo_add "$w: upgraded by a newer llm-wiki than this one. Run: $WIKI_CMD update"; fi
     fi
     if [ -f "$d/repos.md" ] && grep -q '^- ' "$d/repos.md"; then
       note="$note  covers: $(sed -n 's/^- //p' "$d/repos.md" | tr '\n' ' ')"
@@ -1589,6 +1611,9 @@ cmd_status() {
     printf '%-26s %-9s %-8s %s%s\n' "${d##*/}" "v${v:-?}" "$waiting" "$lock" "$note"
   done
   [ "$found" = 1 ] || echo "(none yet. Run: $WIKI_CMD init)"
+  set -- $behind
+  if [ $# -eq 1 ]; then todo_add "$1: handbook behind template v$tv. Run: $WIKI_CMD upgrade $1"
+  elif [ $# -gt 1 ]; then todo_add "$# wikis' handbooks behind template v$tv ($*). Run: $WIKI_CMD upgrade --all"; fi
   if [ -f "$JOURNAL_CFG" ]; then
     echo "journal: $(journal_get enabled), commit $(journal_get commit), entries $(journal_get entries)"
   fi
@@ -1606,30 +1631,39 @@ cmd_status() {
       # An app started before an update keeps the old plugin loaded, and its
       # session hook points the wiki command back at that old copy.
       if [ -n "$f" ] && [ -d "$f" ] && ! [ "$f" -ef "$REPO" ]; then
-        echo "plugin:  this is an old copy (${REPO##*/}). Claude Code has ${f##*/} installed, but a Claude app or session started before the update still runs the old one. Quit and reopen the Claude app, restart terminal sessions, then start a new session."
+        todo_add "plugin: this is an old copy (${REPO##*/}). Claude Code has ${f##*/} installed, but an app or session started before the update still runs the old one. Do: quit and reopen the Claude app, restart terminal sessions, then start a new session."
       else
-        echo "plugin:  this version is older than your wikis. Update it: claude plugin marketplace update ${n#*@}, then claude plugin update $n"
+        todo_add "plugin: this version is older than your wikis. Run: claude plugin marketplace update ${n#*@} && claude plugin update $n"
       fi
     fi
-    [ "$(autoupdate_state "${n#*@}")" != off ] || echo "plugin:  auto-update is off, so fixes don't arrive. Run: $WIKI_CMD setup plugin"
+    [ "$(autoupdate_state "${n#*@}")" != off ] || todo_add "plugin: auto-update is off, so fixes don't arrive. Run: $WIKI_CMD setup plugin"
   fi
-  plugin_behind | while IFS="$TAB" read -r n f r; do
-    echo "plugin:  $n is installed from $f, behind its marketplace at $r. Claude Code$([ "$(cursor_state)" = none ] || echo ' and Cursor') run that copy. Run: $WIKI_CMD update"
-  done
+  r="$(plugin_behind)"
+  while IFS="$TAB" read -r n f b; do
+    [ -n "$n" ] || continue
+    todo_add "plugin: $n is installed from $f, behind its marketplace at $b. Claude Code$([ "$(cursor_state)" = none ] || echo ' and Cursor') run that copy. Run: $WIKI_CMD update"
+  done <<EOF2
+$r
+EOF2
   if in_git_repo "$WIKIS_DIR" && [ -f "$WIKIS_DIR/WIKIS.md" ]; then
     case "$(hook_state "$WIKIS_DIR")" in
-      ours) command -v gitleaks >/dev/null 2>&1 || echo "secrets: commits aren't scanned, gitleaks isn't installed. Run: brew install gitleaks" ;;
-      none) echo "secrets: commits aren't scanned. Run: $WIKI_CMD upgrade --all" ;;
-      *) echo "secrets: another pre-commit hook is in place. To scan commits, $(hook_advice)" ;;
+      ours) command -v gitleaks >/dev/null 2>&1 || todo_add "secrets: commits aren't scanned, gitleaks isn't installed. Run: brew install gitleaks" ;;
+      none) todo_add "secrets: commits aren't scanned. Run: $WIKI_CMD upgrade --all" ;;
+      *) todo_add "secrets: another pre-commit hook is in place, so commits aren't scanned. Do: $(hook_advice)" ;;
     esac
   fi
   n="$(TIP_REPO="$PWD" tips_due | wc -l | tr -d ' ')"
-  [ "$n" -eq 0 ] || echo "tips:    $n feature(s) your wikis suggest trying. Run: $WIKI_CMD tips"
+  [ "$n" -eq 0 ] || todo_add "tips: $n feature(s) your wikis suggest trying. Run: $WIKI_CMD tips"
   n="$(setup_pending | wc -l | tr -d ' ')"
   if [ ! -f "$SETUP_STATE" ]; then
-    echo "setup:   never run on this machine. Run: $WIKI_CMD setup"
+    todo_add "setup: never run on this machine. Run: $WIKI_CMD setup"
   elif [ "$n" -gt 0 ]; then
-    echo "setup:   $n new setting(s). Run: $WIKI_CMD setup --new"
+    todo_add "setup: $n new setting(s). Run: $WIKI_CMD setup --new"
+  fi
+  if [ -n "$STATUS_TODO" ]; then
+    echo
+    echo "To do:"
+    printf '%s' "$STATUS_TODO"
   fi
 }
 
@@ -4263,36 +4297,49 @@ report_lookups() {
 
 # report_needs_you: what waits on a person, whatever the range.
 report_needs_you() {
-  local d n lines any=0 tv v cutoff stale=0 muted
+  local d n lines any=0 tv v cutoff stale=0 muted w f line
   tv="$(version_of "$TEMPLATE/AGENTS.md")"
   cutoff="$(days_ago 90)"
   for d in "$WIKIS_DIR"/*/; do
     d="${d%/}"
     is_wiki "$d" || continue
     excluded "${d##*/}" && continue
-    lines="$(grep -rhE '^> \*\*(Check|Conflict):\*\*' "$d/wiki" 2>/dev/null | head -n 3 | sed 's/^> //' || true)"
-    if [ -n "$lines" ]; then any=1; printf '%s\n' "$lines" | sed "s/^/- ${d##*/}: open /"; fi
+    w="${d##*/}"
+    # Each line ends with its fix, as status's To do list does: Run, Ask an agent, or Do.
+    lines="$(grep -rE '^> \*\*(Check|Conflict):\*\*' "$d/wiki" 2>/dev/null | head -n 3 || true)"
+    if [ -n "$lines" ]; then
+      any=1
+      while IFS= read -r line; do
+        f="${line%%:*}"; f="${f#"$d"/}"; line="${line#*:> }"
+        case "$line" in
+          "**Conflict:**"*) echo "- $w: open $line Do: decide which holds, then ask an agent: \"resolve the conflict in $w's $f: <your decision>\"" ;;
+          *) echo "- $w: open $line Ask an agent: \"settle the Check line in $w's $f\", and tell it what's right if you know." ;;
+        esac
+      done <<EOF2
+$lines
+EOF2
+    fi
     lines="$(awk '/^## /{ name = substr($0, 4) } /^- status: proposed/{ print name }' "$d/patterns.md" 2>/dev/null || true)"
-    if [ -n "$lines" ]; then any=1; printf '%s\n' "$lines" | sed "s/^/- ${d##*/}: a proposed fix still waits for an answer: /"; fi
+    if [ -n "$lines" ]; then any=1; printf '%s\n' "$lines" | while IFS= read -r line; do echo "- $w: a proposed fix still waits for an answer: $line. Ask an agent: \"show me the proposed fix '$line' in $w\", then accept or decline it."; done; fi
     n="$(patterns_ledger "$d" | grep -c '^ready|' || true)"
-    if [ "${n:-0}" -gt 0 ]; then any=1; echo "- ${d##*/}: $n repeated pattern(s) ready for a fix. wiki patterns lists them."; fi
+    if [ "${n:-0}" -gt 0 ]; then any=1; echo "- $w: $n repeated pattern(s) ready for a fix. Ask an agent: \"propose the ready patterns in $w\""; fi
     n="$(patterns_ledger "$d" | grep -c '^regressed|' || true)"
-    if [ "${n:-0}" -gt 0 ]; then any=1; echo "- ${d##*/}: $n accepted fix(es) seen again since, so not working. wiki patterns lists them."; fi
+    if [ "${n:-0}" -gt 0 ]; then any=1; echo "- $w: $n accepted fix(es) seen again since, so not working. Ask an agent: \"look again at the patterns marked AGAIN in $w\""; fi
     n="$(pending_files "$d" | wc -l | tr -d ' ')"
-    if [ "$n" -gt 10 ]; then any=1; echo "- ${d##*/}: $n notes waiting to be compiled."; fi
+    if [ "$n" -gt 10 ]; then any=1; echo "- $w: $n notes waiting to be compiled. Ask an agent: \"compile $w\""; fi
     v="$(version_of "$d/AGENTS.md")"
-    if [ -n "$tv" ] && [ "${v:-0}" -lt "$tv" ]; then any=1; echo "- ${d##*/}: handbook v${v:-?}, behind v$tv."; fi
+    if [ -n "$tv" ] && [ "${v:-0}" -lt "$tv" ]; then any=1; echo "- $w: handbook v${v:-?}, behind v$tv. Run: $WIKI_CMD upgrade $w"; fi
     while IFS= read -r v; do
       [[ "$v" < "$cutoff" ]] && stale=$((stale + 1))
     done < <(grep -rh --include='*.md' --exclude-dir=sources '^verified:' "$d/wiki" 2>/dev/null | sed 's/^verified: *//' || true)
   done
-  if [ "$stale" -gt 0 ]; then any=1; echo "- $stale page(s) not checked in over 90 days. wiki stale lists them."; fi
+  if [ "$stale" -gt 0 ]; then any=1; echo "- $stale page(s) not checked against their code in over 90 days. Run: $WIKI_CMD stale, then in each repository it names, ask an agent: \"re-check the stale pages\""; fi
   muted="$( [ ! -f "$TIPS_STATE" ] || awk '$1 ~ /^muted:/ { sub(/^muted:/, "", $1); printf "%s ", $1 }' "$TIPS_STATE")"
-  if [ -n "$muted" ]; then any=1; echo "- Muted tips: ${muted% }. If everyone mutes one, it may not be worth keeping."; fi
+  if [ -n "$muted" ]; then any=1; echo "- Muted tips: ${muted% }. If everyone mutes one, it may not be worth keeping. Do: tell the llm-wiki maintainer which ones nobody uses. To see one again, run: $WIKI_CMD tips --unmute <name>"; fi
   # A busy week with no corrections recorded usually means they went somewhere else.
   if [ "$REPORT_FEEDBACK" -eq 0 ] && [ "$REPORT_NOTES" -ge 10 ]; then
     any=1
-    echo "- No corrections were recorded this week, across $REPORT_NOTES notes. If you corrected an agent, the correction may have gone to its own memory instead of the wiki, where no other repository sees it."
+    echo "- No corrections were recorded this week, across $REPORT_NOTES notes. If you corrected an agent, the correction may have gone to its own memory instead of the wiki, where no other repository sees it. Do: when you correct an agent, ask it to save the correction to the wiki."
   fi
   [ "$any" = 1 ] || echo "Nothing."
 }
@@ -4322,7 +4369,7 @@ cmd_report() {
   start="$(since_to_date "$today" "$since")"
   echo "# Wiki report: $start to $today"
   echo
-  echo "Agents: write this up in the user's usual reply style, outcomes first, leading with Needs you if it has anything. Don't paste the tables. If they prefer short replies, give Needs you and a line of totals, and offer the rest."
+  echo "Agents: write this up in the user's usual reply style, outcomes first, leading with Needs you if it has anything, each item with its fix. Don't paste the tables. If they prefer short replies, give Needs you and a line of totals, and offer the rest."
   echo
   echo "## Tokens (Claude Code)"
   echo

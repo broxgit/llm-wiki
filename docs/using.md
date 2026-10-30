@@ -292,7 +292,7 @@ Run `wiki` with no arguments for the full list. The ones you're likely to use:
 
 | Command | What it does |
 |---|---|
-| `wiki status` | Every wiki: notes waiting, lock, handbook version, what's due. |
+| `wiki status` | Every wiki: notes waiting, lock, handbook version, what's due. A To do list ends it, each item with its fix: `Run:` a command, `Ask an agent:` a request, or `Do:` a step. |
 | `wiki start` | Session start in one call: the wiki for this folder, a pull, the indexes, `For agents`, and what waits. Agents run it; you can too. |
 | `wiki find <word>` | Search every wiki's index, then page text. |
 | `wiki update` | Update llm-wiki, then upgrade and push every collection, and say what's left. |

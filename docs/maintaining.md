@@ -65,6 +65,8 @@ A change people will notice belongs in the setup guides or [Using it](using.md),
 
 To try a change before pushing it, install the plugin from your clone: `claude plugin marketplace add <path to clone>`, then `claude plugin install llm-wiki@llm-wiki`. A marketplace added from a local path runs straight from your working tree, so a new session picks up your edits. Switch back with `claude plugin marketplace remove llm-wiki` and the install steps in [Set up with Claude Code](claude-code.md).
 
+Every call to action that `wiki status` or `wiki report` prints ends with its fix: `Run:` a terminal command, `Ask an agent:` the exact request, or `Do:` a manual step. Add new flags to status's To do list with `todo_add`. A smoke test fails any item without a fix.
+
 Keep the session hook's output short. Claude Code shows the model only a short preview of a long hook output and saves the rest to a file, which the model may never read. The hook points at the handbook rather than embedding it for this reason.
 
 `ROADMAP.md` lists what's planned and what's still untested. When you finish an item, move it to Done and say what changed.
