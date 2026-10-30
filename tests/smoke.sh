@@ -763,5 +763,25 @@ expect "WIKIS_DIR in the environment still wins" "$WIKIS_DIR" bash -c "cd '$RA' 
 check "status in the default mentions the other collection" bash -c "cd '$RC' && env -u WIKIS_DIR WIKIS_DIR='$WIKIS_DIR' '$W' status | grep -q 'also:    collection work'"
 rm -f "$HOME/.config/llm-wiki/collections"
 
+section "Update"
+lacks "collections keeps its hint off stdout, for scripts" "Only the default" bash -c "'$W' collections 2>/dev/null"
+git -C "$WIKIS_DIR" add -A >/dev/null 2>&1; git -C "$WIKIS_DIR" commit -qm "smoke: before update" >/dev/null 2>&1; git -C "$WIKIS_DIR" push -q >/dev/null 2>&1
+set_version "$WIKIS_DIR/demo/AGENTS.md" 1
+git -C "$WIKIS_DIR" commit -qam "smoke: an old handbook" >/dev/null 2>&1; git -C "$WIKIS_DIR" push -q >/dev/null 2>&1
+out="$("$W" update --wikis-only </dev/null 2>&1)"
+case "$out" in *"== Collection here"*"Upgraded"*"pushed"*) ok "update --wikis-only upgrades the collection and pushes" ;; *) bad "update --wikis-only upgrades the collection and pushes" "$out" ;; esac
+check "and the upgrade reached the remote" bash -c "git --git-dir='$T/remote.git' log --oneline -1 | grep -q 'handbook v'"
+case "$out" in *"paste this into each"*"Run wiki start in this repository"*) ok "update says how to bring open sessions up to date" ;; *) bad "update says how to bring open sessions up to date" "$out" ;; esac
+set_version "$WIKIS_DIR/demo/AGENTS.md" 1
+expect "upgrade says it too" "paste this into each" "$W" upgrade --all
+# A clone: update pulls, then the new version, not the old, does the rest.
+U="$T/upd-src"; mkdir -p "$U" && (cd "$REPO" && tar cf - --exclude .git --exclude tests .) | (cd "$U" && tar xf -)
+git -C "$U" init -q && git -C "$U" add -A && git -C "$U" commit -qm v1
+git clone -q "$U" "$T/upd-clone"
+sed -i.bak 's/^update_wikis() {$/update_wikis() {\n  echo "NEW VERSION RAN"/' "$U/wiki.sh" && rm -f "$U/wiki.sh.bak"
+git -C "$U" commit -qam v2
+out="$("$T/upd-clone/wiki.sh" update </dev/null 2>&1)"
+case "$out" in *"pulled"*"NEW VERSION RAN"*) ok "update in a clone pulls, then hands over to the new version" ;; *) bad "update in a clone pulls, then hands over to the new version" "$out" ;; esac
+
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ]

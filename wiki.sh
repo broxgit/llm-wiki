@@ -118,6 +118,9 @@ Usage: $WIKI_CMD <command> [options]
                        instructions, skills, docs/, decision records.
   cover <wiki> <repo>...  Record that one wiki covers several repositories.
   collections          List the wiki collections and the repositories each one takes.
+  update [--wikis-only]
+                       Update llm-wiki itself, then pull, upgrade and push every collection,
+                       ask about new settings, and say how to bring open sessions up to date.
   start [<repo>]       Session start in one call: find the wiki, pull, print the indexes,
                        For agents and what waits. Defaults to the current folder.
   permissions          Print the Claude Code allow rules for the wiki commands that
@@ -1846,7 +1849,8 @@ upgrade_summary() {
   echo
   echo "== Next"
   if [ -n "$names" ]; then
-    echo "- New sessions load the new handbook. Sessions already running keep the old one until you restart them."
+    echo "- New sessions load the new handbook."
+    session_update_note
   fi
   upgrade_commit "$names" "- "
   if [ "$(claude_state)" = old ]; then
@@ -2128,6 +2132,85 @@ if out:
     print(f"wrote: {out.replace(os.path.expanduser('~'), '~', 1)}")
 PY
   [ -z "$out" ] || echo "If the shared wiki has no page for this dataset yet, compile one: what it is, its columns, how to refresh it ($WIKI_CMD deps --write)."
+}
+
+# ---- update -------------------------------------------------------------------
+# update [--wikis-only]: everything an update needs, in one command. Update the code
+# (the plugin, or this clone), then hand over to the new version with exec for the
+# rest, so the old script never reads another line of a file that may have changed.
+# The new version pulls, upgrades and pushes every collection, asks about new
+# settings, and says what's left for a person: restarting apps, and open sessions.
+
+# session_update_note: how to bring sessions that are already open up to date.
+session_update_note() {
+  cat <<EOF
+- Sessions already open keep the handbook they started with. Start new ones, or paste this into each:
+    Run wiki start in this repository, reread this wiki's AGENTS.md and follow it for the rest of this session.
+EOF
+}
+
+cmd_update() {
+  local wikis_only=0 new k
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --wikis-only) wikis_only=1; shift ;;
+      *) die "update options: --wikis-only" ;;
+    esac
+  done
+  [ "$wikis_only" = 0 ] || { update_wikis; return 0; }
+  echo "== Updating llm-wiki"
+  new="$REPO/wiki.sh"
+  if from_plugin; then
+    command -v claude >/dev/null 2>&1 || die "no claude command, so the plugin can't be updated from here"
+    k="$(plugin_key)"
+    claude plugin marketplace update "${k#*@}" || die "couldn't refresh the ${k#*@} marketplace"
+    claude plugin update "$k" || die "couldn't update $k"
+    k="$(plugin_installed)"
+    [ -n "$k" ] && [ -x "$k/wiki.sh" ] && new="$k/wiki.sh"
+    echo "- Quit and reopen the Claude app, and restart terminal sessions, so they load the new plugin."
+  elif git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    k="$(git -C "$REPO" rev-parse --abbrev-ref HEAD)"
+    case "$k" in main | master) ;; *) echo "- $(tilde "$REPO") is on the branch $k, so this pulls that branch, not the released code." ;; esac
+    git -C "$REPO" pull -q --no-rebase --no-edit || die "the pull in $(tilde "$REPO") failed. Fix it, then run $WIKI_CMD update again."
+    echo "- pulled $(tilde "$REPO")"
+  else
+    echo "- $(tilde "$REPO") is neither the plugin nor a git clone, so the code wasn't updated."
+  fi
+  [ "$(agy_state)" = none ] || echo "- Restart Antigravity, so it reloads the llm-wiki plugin."
+  # The new version does the rest. exec: this process becomes it, reading no further here.
+  if [ -n "${LLM_WIKI_FIXED_DIR:-}" ]; then
+    exec env LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" "$new" update --wikis-only
+  fi
+  exec env -u WIKIS_DIR LLM_WIKI_CMD="$WIKI_CMD" "$new" update --wikis-only
+}
+
+# update_wikis: pull, upgrade and push each collection, then new settings and next steps.
+update_wikis() {
+  local n f r ahead
+  while IFS="$TAB" read -r n f r; do
+    [ -d "$f" ] || continue
+    echo
+    echo "== Collection $n: $(tilde "$f")"
+    if in_git_repo "$f" && [ -n "$(git -C "$f" remote 2>/dev/null)" ]; then
+      git -C "$f" pull -q --no-rebase --no-edit </dev/null || echo "- the pull failed; upgrading what's here. Pull and push by hand afterwards."
+    fi
+    WIKIS_DIR="$f" "$REPO/wiki.sh" upgrade --all </dev/null | sed -n '/^== What changed/,/^== Next/p' | sed '$d'
+    if in_git_repo "$f" && [ -n "$(git -C "$f" remote 2>/dev/null)" ]; then
+      ahead="$(git -C "$f" rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)"
+      if [ "${ahead:-0}" -gt 0 ]; then
+        git -C "$f" push -q </dev/null && echo "- pushed $ahead commit(s)" || echo "- the push failed. Run: git -C $(tilde "$f") pull --no-rebase && git -C $(tilde "$f") push"
+      fi
+    fi
+  done < <(if [ -n "${LLM_WIKI_FIXED_DIR:-}" ]; then printf 'here\t%s\t\n' "$WIKIS_DIR"; else collections; fi)
+  echo
+  if [ -t 0 ] && [ -n "$(setup_pending)" ]; then
+    "$REPO/wiki.sh" setup --new
+    echo
+  fi
+  echo "== Next"
+  [ -t 0 ] || [ -z "$(setup_pending)" ] || echo "- New settings to look at: $WIKI_CMD setup --new"
+  [ -z "$(listed_cli_tools)" ] || echo "- To let agents run the tools your wikis list without asking: $WIKI_CMD setup tools"
+  session_update_note
 }
 
 # ---- journal ----------------------------------------------------------------
@@ -3272,7 +3355,7 @@ EOF
 # Tab completion. `completion zsh|bash` prints a small script for the shell, which
 # asks `__complete` for candidates on every Tab. The candidates live here, so a
 # plugin update can't leave completion stale.
-COMMANDS="setup init new start collections deps permissions seed harvest capture lock log sync index lint pending cover which status find stale patterns skills tips report stats delegation upgrade unlock claude link journal standup completion"
+COMMANDS="setup init new update start collections deps permissions seed harvest capture lock log sync index lint pending cover which status find stale patterns skills tips report stats delegation upgrade unlock claude link journal standup completion"
 RANGES="lastworkday yesterday today week lastweek 7d 14d 30d"
 
 wiki_names() {
@@ -4916,12 +4999,13 @@ if [ "$cmd" = report ]; then
   exit 0
 fi
 case "$cmd" in
+  update) cmd_update "$@"; exit 0 ;;
   __collection) printf '%s\n' "$WIKIS_DIR"; exit 0 ;;
   collections)
     collections | while IFS="$TAB" read -r n f r; do
       printf '%-10s %s%s%s\n' "$n" "$(tilde "$f")" "${r:+  matches: }$r" "$([ "$f" = "$WIKIS_DIR" ] && echo '  <- here')"
     done
-    [ -f "$COLLECTIONS_FILE" ] || echo "Only the default. $WIKI_CMD setup collections adds another, such as one for work."
+    [ -f "$COLLECTIONS_FILE" ] || echo "Only the default. $WIKI_CMD setup collections adds another, such as one for work." >&2
     exit 0
     ;;
   __agy-start) cmd_agy_start; exit 0 ;;

@@ -295,6 +295,7 @@ Run `wiki` with no arguments for the full list. The ones you're likely to use:
 | `wiki status` | Every wiki: notes waiting, lock, handbook version, what's due. |
 | `wiki start` | Session start in one call: the wiki for this folder, a pull, the indexes, `For agents`, and what waits. Agents run it; you can too. |
 | `wiki find <word>` | Search every wiki's index, then page text. |
+| `wiki update` | Update llm-wiki, then upgrade and push every collection, and say what's left. |
 | `wiki collections` | The wiki collections on this machine and the repositories each one takes. `--collection NAME` picks one for any command. |
 | `wiki deps [--all] [--write]` | Which repository owns which package, and which of your repositories use each other's, from `go.mod`, `package.json` and `pyproject.toml`. `--write` saves it to the shared wiki's `data/dependencies.csv`. |
 | `wiki stale [days]` | Pages not verified in that many days, 90 by default, or 50 commits behind their repository. |
