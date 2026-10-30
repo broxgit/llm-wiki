@@ -695,6 +695,26 @@ track_remote() {
   esac
 }
 
+# sync_default_wiki: the wiki sync means when none is named: the one this folder is
+# in, or the one that covers this repository, as start finds it. A session that left
+# the name off got only "name a wiki" (2026-10-30).
+sync_default_wiki() {
+  local top repo w
+  [ -n "${pick:-}" ] || [ -n "${LLM_WIKI_FIXED_DIR:-}" ] || WIKIS_DIR="$(collection_for "$PWD")"
+  case "$(pwd -P)/" in
+    "$(cd "$WIKIS_DIR" 2>/dev/null && pwd -P)"/*/*)
+      w="$(pwd -P)"; w="${w#"$(cd "$WIKIS_DIR" && pwd -P)"/}"; w="${w%%/*}"
+      is_wiki "$WIKIS_DIR/$w" && { echo "sync: $w, the wiki this folder is in" >&2; printf '%s' "$w"; return 0; } ;;
+  esac
+  if top="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+    repo="$(repo_name "$top")"
+    w="$(which_wiki "$repo")"
+    if [ -n "$w" ]; then echo "sync: $w, the wiki for the repository $repo" >&2; printf '%s' "$w"; return 0; fi
+    die "name a wiki: no wiki covers $repo. Run: $WIKI_CMD sync <wiki> -m \"<wiki>: what changed\""
+  fi
+  die "name a wiki: this folder isn't in a repository or a wiki. Run: $WIKI_CMD sync <wiki> -m \"<wiki>: what changed\""
+}
+
 cmd_sync() {
   local wiki="" msg="" root repo path top err
   while [ $# -gt 0 ]; do
@@ -704,6 +724,7 @@ cmd_sync() {
       *) wiki="$1"; shift ;;
     esac
   done
+  [ -n "$wiki" ] || wiki="$(sync_default_wiki)"
   root="$(wiki_root "$wiki")"
   top="$(git -C "$root" rev-parse --show-toplevel 2>/dev/null || true)"
   if [ -n "$top" ] && [ "$top" = "$(cd "$root" && pwd -P)" ]; then
