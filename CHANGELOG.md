@@ -4,6 +4,15 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v26 (2026-10-30)
+
+Each project's own definition of done, and the tools its work needs. Gemini resuming work in a project skipped checks Claude makes, such as CI after a push, because they came from Claude's app, not from the wiki.
+
+- A project wiki's `wiki/conventions.md` takes `## For agents` (the project's procedures) and `## Tools` (one line per tool: `- gh (cli): what it's for`, `- supabase (mcp): ...`). `wiki start` prints both after the shared wikis' sections, and marks each `cli` tool installed or not. Nothing in the page is run.
+- The handbook says to follow the project's `For agents` like the shared one, to tell the user when the work needs a listed tool the agent doesn't have instead of skipping the step, and to capture procedures and tools as they're learned. `rules/compile.md` says where they go.
+- `wiki setup tools` offers, one tool at a time, to let Claude Code and Antigravity run the command-line tools your wikis list without asking.
+- Do: nothing needed. To start, tell a session in a project "record this project's procedures and tools", or add them to its `wiki/conventions.md` yourself, then run `wiki setup tools`.
+
 ## v25 (2026-10-29)
 
 A shorter core. Every session reads `AGENTS.md`, so what only some sessions need moved into `rules/`: about 3,000 words became about 2,300.

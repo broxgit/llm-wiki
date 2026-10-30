@@ -658,6 +658,15 @@ case "$out" in *"pull: up to date"*) ok "start pulls the collection" ;; *) bad "
 check "and the pull brought the other machine's note" test -f "$WIKIS_DIR/demo/raw/2026-10-29-000000-other.md"
 case "$out" in *"===== "*"/demo/index.md"*"===== "*"/global/index.md (global)"*"For agents, from"*"===== Waiting to be compiled"*"/demo: "*"note(s)"*) ok "start prints the indexes, For agents and what waits, in that order" ;; *) bad "start prints the indexes, For agents and what waits, in that order" "$out" ;; esac
 expect "start points at the handbook" "/demo/AGENTS.md, the handbook" "$W" start web
+mkdir -p "$WIKIS_DIR/demo/wiki"
+printf -- '---\ntitle: Conventions\nsummary: x\nupdated: 2026-10-30\nverified: 2026-10-30\n---\n\n## For agents\n\n- After a push, check CI with gh pr checks.\n\n## Tools\n\n- ls (cli): listing\n- nosuchtool123 (cli): never installed\n- jira (mcp): tickets\n- $(touch %s/pwned) (cli): never run\n' "$T" > "$WIKIS_DIR/demo/wiki/conventions.md"
+out="$("$W" start web 2>&1)"
+case "$out" in *"For agents, from"*"demo/wiki/conventions.md"*"check CI with gh pr checks"*) ok "start prints the project's own For agents section" ;; *) bad "start prints the project's own For agents section" "$out" ;; esac
+case "$out" in *"- ls (cli): listing  [installed]"*) ok "start marks a listed tool that's installed" ;; *) bad "start marks a listed tool that's installed" "$out" ;; esac
+case "$out" in *"nosuchtool123 (cli): never installed  [NOT INSTALLED"*) ok "and one that isn't" ;; *) bad "and one that isn't" "$out" ;; esac
+case "$out" in *"jira (mcp): tickets  [an MCP server"*) ok "and asks the agent to check an MCP itself" ;; *) bad "and asks the agent to check an MCP itself" "$out" ;; esac
+check "nothing in the page is run" test ! -e "$T/pwned"
+rm -f "$WIKIS_DIR/demo/wiki/conventions.md"
 expect "start with no wiki for the repository uses the shared one" "No wiki covers brand-new yet" "$W" start brand-new
 git -C "$WIKIS_DIR" remote set-url origin "$T/nowhere.git"
 out="$("$W" start web 2>&1)" && ok "a failed pull doesn't fail start" || bad "a failed pull doesn't fail start" "$out"
