@@ -4559,11 +4559,13 @@ perm_forms() {
 }
 
 # perm_rules: the allow rules setup offers, one per line.
+# A pipe, not < <(...): on bash 3.2 the substituted process's exit can interrupt
+# a printf here with EINTR ("write error: Interrupted system call", macOS CI).
 perm_rules() {
   local f s
-  while IFS= read -r f; do
+  perm_forms | while IFS= read -r f; do
     for s in $PERM_SUBCOMMANDS; do printf 'Bash(%s %s *)\n' "$f" "$s"; done
-  done < <(perm_forms)
+  done
 }
 
 # perm_missing: the offered rules not yet in ~/.claude/settings.json.
