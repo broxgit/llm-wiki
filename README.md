@@ -52,14 +52,14 @@ Your coding agent forgets everything between sessions. llm-wiki gives it a memor
 
 ### Works with any agent
 
-Everything is plain markdown, in git, readable in any editor. The rules are a handbook any agent can follow, so Codex, Cursor and Copilot work too. The Claude Code plugin adds the automatic parts.
+Everything is plain markdown, in git, readable in any editor. The rules are a handbook any agent can follow, so Codex, Cursor, Gemini and Copilot work too. Plugins for Claude Code, Codex and Antigravity add the automatic parts: each session starts with its wiki loaded and pulled.
 
 ## Start here
 
 | You use | Guide | Time |
 |---|---|---|
 | Claude Code: in a terminal, the Claude desktop app's **Code** tab, or an IDE | [Set up with Claude Code](docs/claude-code.md), as a plugin | 5 minutes |
-| Anything else: Codex, Cursor, Copilot, the desktop app's **Chat** tab, claude.ai | [Set up with another agent](docs/other-agents.md) | 10 minutes |
+| Anything else: Codex, Antigravity, Cursor, Copilot, the desktop app's **Chat** tab, claude.ai | [Set up with another agent](docs/other-agents.md) | 10 minutes |
 
 Joining a team that already shares a collection? Read [Teams](docs/teams.md#join-a-shared-collection) first.
 
