@@ -79,6 +79,7 @@ commit: 3f2a9c1
 - A fact taken from outside, such as a vote, a quote, or a figure, names its source where the claim is stated: a link, or the document and date.
 - Dates and times are UTC everywhere: filenames, frontmatter, and the log.
 - Quote frontmatter values that contain a colon.
+- A project's procedures and tools go in its `wiki/conventions.md`, under `## For agents` and `## Tools`, one line each, each citing its source. Create the page when the first one comes up. A `Tools` line reads `- <name> (<cli|mcp|other>): what it's for`; `wiki.sh start` checks that each `cli` tool is installed. Ones that hold in every project go in the shared wiki's conventions instead.
 - One topic per page.
 - A page about current state, such as work in progress or open questions, carries `as_of: YYYY-MM-DD` in its frontmatter and the date in its summary. When the state changes, rewrite it to the new state. Don't append: the log and the sources keep the history.
 - Keep pages under roughly 1,500 words. Split larger ones and link the parts.

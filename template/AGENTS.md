@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Handbook version 25.
+Handbook version 26.
 
 This folder is a knowledge base maintained by an LLM agent. Any agent working here follows this file. It needs no vendor features. Plain markdown, plain files.
 
@@ -37,10 +37,10 @@ data/        Structured data (CSV, SQLite). Queried, not read.
 
 ## Session start
 
-Run `wiki.sh start` in the repository you're working in, or `wiki.sh start <repository-name>`. It does the pulling, reading and listing of steps 1 to 3 in one call: it pulls, then prints this wiki's index, each shared wiki's index and `For agents` section, and what waits. What step 3 says to do about waiting notes still applies. If it says the pull failed, pull before your first write. Without the script, do the steps by hand:
+Run `wiki.sh start` in the repository you're working in, or `wiki.sh start <repository-name>`. It does the pulling, reading and listing of steps 1 to 3 in one call: it pulls, then prints this wiki's index, each shared wiki's index, the `For agents` and `Tools` sections of the shared wikis and of this one, and what waits. What step 3 says to do about waiting notes still applies. If it says the pull failed, pull before your first write. Without the script, do the steps by hand:
 
 1. If Sync applies to this wiki and its repo has a remote, pull.
-2. Read `index.md`, then each shared wiki's `index.md` and the `## For agents` section of its `wiki/conventions.md`. Shared wikis are listed in `links.md`. Nothing else yet. Shared knowledge only helps if you know it's there, and the agreements in `For agents` apply to every session.
+2. Read `index.md`, then each shared wiki's `index.md`. Then read the `## For agents` and `## Tools` sections of each shared wiki's `wiki/conventions.md`, and of this wiki's own. Shared wikis are listed in `links.md`. Nothing else yet. Shared knowledge only helps if you know it's there, and the agreements in `For agents` apply to every session.
 3. Find the notes in `raw/` not compiled yet, with `wiki.sh pending <wiki>`. By hand: a note is compiled once an ingest entry in `log.md` names it in a `- source:` line, or a page lists it in `sources:`. If notes are waiting, compile them before you start on the user's request, and say so in one line. With more than ten waiting, do the user's request first and compile at the next pause, and say that instead. If another session holds the lock, go on without it.
 
 Do not bulk-read `wiki/`. The index exists so you don't have to.
@@ -68,6 +68,8 @@ Capture at stopping points, not as you go. A stopping point is where a piece of 
 **Lint.** Due when the log shows 10 or more ingests since the last lint. Every compile ends by checking, so you don't have to remember.
 
 **Feedback.** The user should never give the same correction twice. When the user corrects your work, review comments land on code an agent helped write, or you repeat a procedure or mechanical work, add a `Feedback:` line to your next capture. `rules/patterns.md` has the format and where the note goes. When `patterns.md` shows a pattern is ready, propose a fix at a stopping point: a convention, a note in a library's wiki, a skill, or a small tool.
+
+**Procedures and tools.** This wiki's `For agents` section is the project's own definition of done. Follow it as you follow the shared one, whatever your tool does by default: if it says to check CI after a push, check it. When the work needs a tool listed under `Tools` that you don't have, such as an MCP server you can't see or a command that isn't installed, tell the user once, when that work starts. Don't skip the step silently or work around it. When you learn a procedure or a tool the project relies on, capture it.
 
 **Conventions.** Before you call code done, check it against the conventions pages that apply: this wiki's, the shared wiki's `wiki/conventions.md`, and those of the internal libraries the change calls.
 

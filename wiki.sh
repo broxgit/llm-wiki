@@ -343,6 +343,37 @@ which_miss() {
   echo "If it's a project of its own, the first session with something to file creates its wiki: $WIKI_CMD new $name"
 }
 
+# print_conventions <wiki>: the wiki's agreements for agents and the tools its work
+# needs, from its wiki/conventions.md: the "## For agents" and "## Tools" sections.
+# A Tools line reads "- <name> (<kind>): what it's for". A cli tool is looked up on
+# PATH, so the agent knows at once what's missing. MCP servers can't be seen from
+# here: the agent checks its own. Nothing in the page is ever run.
+print_conventions() {
+  local f="$1/wiki/conventions.md" sec line name kind
+  [ -f "$f" ] || return 0
+  sec="$(awk '/^## For agents/ { on = 1; next } on && /^## / { exit } on' "$f")"
+  if [ -n "$(printf '%s' "$sec" | tr -d '[:space:]')" ]; then
+    echo
+    echo "===== For agents, from $(tilde "$f")"
+    printf '%s\n' "$sec"
+  fi
+  sec="$(awk '/^## Tools/ { on = 1; next } on && /^## / { exit } on' "$f")"
+  [ -n "$(printf '%s' "$sec" | tr -d '[:space:]')" ] || return 0
+  echo
+  echo "===== Tools this work needs, from $(tilde "$f")"
+  while IFS= read -r line; do
+    name="$(printf '%s' "$line" | sed -n 's/^- \([A-Za-z0-9._-]*\) (\([a-z]*\)).*/\1/p')"
+    kind="$(printf '%s' "$line" | sed -n 's/^- \([A-Za-z0-9._-]*\) (\([a-z]*\)).*/\2/p')"
+    case "$kind" in
+      cli) if command -v "$name" >/dev/null 2>&1; then line="$line  [installed]"; else line="$line  [NOT INSTALLED: tell the user before you work around it]"; fi ;;
+      mcp) line="$line  [an MCP server: check your tools for it]" ;;
+    esac
+    printf '%s\n' "$line"
+  done <<EOF2
+$sec
+EOF2
+}
+
 # start [<repo or folder>]: everything session start needs, in one call. Finds the
 # wiki, pulls the collection, and prints what the handbook says to read first: the
 # wiki's index, each shared wiki's index and For agents section, and what waits.
@@ -402,17 +433,10 @@ cmd_start() {
     echo
     echo "===== $(tilde "$spath")/index.md ($sname)"
     cat "$spath/index.md" 2>/dev/null || true
-    if [ -f "$spath/wiki/conventions.md" ]; then
-      echo
-      echo "===== For agents, from $(tilde "$spath")/wiki/conventions.md"
-      awk '/^## For agents/ { on = 1; next } on && /^## / { exit } on' "$spath/wiki/conventions.md"
-    fi
+    print_conventions "$spath"
   done < <(grep '^- [^:]*: ' "$wiki/links.md" 2>/dev/null || true)
-  if [ "$wiki" -ef "$WIKIS_DIR/$SHARED" ] && [ -f "$wiki/wiki/conventions.md" ]; then
-    echo
-    echo "===== For agents, from $(tilde "$wiki")/wiki/conventions.md"
-    awk '/^## For agents/ { on = 1; next } on && /^## / { exit } on' "$wiki/wiki/conventions.md"
-  fi
+  # This wiki's own agreements and tools, after the shared ones: the more specific last.
+  print_conventions "$wiki"
   echo
   echo "===== Waiting to be compiled"
   for d in "$wiki" $(grep '^- [^:]*: ' "$wiki/links.md" 2>/dev/null | sed 's/^[^:]*: *//; s/ |.*//; s#^~/#'"$HOME"'/#' || true); do
@@ -3312,7 +3336,7 @@ cmd_complete() {
     init) echo --git ;;
     completion) printf 'zsh\nbash\n' ;;
     setup)
-      printf -- '--new\n--list\ncollection\ngit\ngit.identity\nclaude\nplugin\npermissions\ncollections\nantigravity\nupgrade\nskills\ndelegation\njournal\n'
+      printf -- '--new\n--list\ncollection\ngit\ngit.identity\nclaude\nplugin\npermissions\ncollections\ntools\nantigravity\nupgrade\nskills\ndelegation\njournal\n'
       for k in $JOURNAL_KEYS; do printf 'journal.%s\n' "$k"; done
       ;;
     journal)
@@ -4047,12 +4071,16 @@ for r in sys.stdin.read().splitlines():
 }
 
 # perm_add: add the missing rules, keeping everything else. A backup goes beside it.
-perm_add() {
+perm_add() { perm_missing | claude_allow; }
+
+# claude_allow: add the allow rules on stdin to ~/.claude/settings.json, keeping
+# everything else. A backup goes beside it.
+claude_allow() {
   local f="$HOME/.claude/settings.json"
   mkdir -p "$HOME/.claude"
   [ -f "$f" ] || printf '{}\n' > "$f"
   cp "$f" "$f.bak" || return 1
-  perm_missing | python3 -c '
+  python3 -c '
 import json, sys
 path = sys.argv[1]
 s = json.load(open(path))
@@ -4597,9 +4625,12 @@ for g in sys.stdin.read().splitlines():
         print(g)' "$AGY_CONFIG"
 }
 
-agy_grants_add() {
+agy_grants_add() { agy_grants_missing | agy_grant; }
+
+# agy_grant: add the grants on stdin to Antigravity's live list, with a dated backup.
+agy_grant() {
   cp "$AGY_CONFIG" "$AGY_CONFIG.bak-$(date +%Y%m%d-%H%M%S)" || return 1
-  agy_grants_missing | python3 -c '
+  python3 -c '
 import json, sys
 path = sys.argv[1]
 s = json.load(open(path))
@@ -4628,6 +4659,46 @@ setup_agy_grants() {
     if agy_grants_add; then echo "  added (backup beside $(tilde "$AGY_CONFIG")). Quit and reopen Antigravity, or it may save its old list over this."; else echo "  couldn't change $(tilde "$AGY_CONFIG")."; fi
   fi
   setup_mark antigravity.grants
+}
+
+# setup tools: offer each agent permission to run the command-line tools the wikis
+# list under "## Tools", one tool at a time. Only tools a person listed, and only
+# with a person at the terminal: a session never grants itself a tool.
+listed_cli_tools() {
+  local d
+  for d in "$WIKIS_DIR"/*/; do
+    d="${d%/}"
+    [ -f "$d/wiki/conventions.md" ] || continue
+    awk '/^## Tools/ { on = 1; next } on && /^## / { exit } on' "$d/wiki/conventions.md" \
+      | sed -n "s/^- \([A-Za-z0-9._-]*\) (cli):.*/\1\t${d##*/}/p"
+  done | awk -F'\t' '{ w[$1] = w[$1] ? w[$1] ", " $2 : $2 } END { for (t in w) print t "\t" w[t] }' | sort
+}
+
+setup_tools() {
+  local all t wikis claude=0 agy=0 picked=""
+  section "Tools"
+  all="$(listed_cli_tools)"
+  if [ -z "$all" ]; then
+    echo "No wiki lists command-line tools yet. Add them under \"## Tools\" in a wiki's wiki/conventions.md, as \"- gh (cli): what it's for\"."
+    return 0
+  fi
+  [ -d "$HOME/.claude" ] && command -v python3 >/dev/null 2>&1 && claude=1
+  [ "$(agy_state)" != none ] && agy_grants_missing >/dev/null 2>&1 && agy=1
+  [ "$claude$agy" != 00 ] || { echo "Neither Claude Code nor Antigravity is set up here, so there's nothing to grant."; return 0; }
+  echo "Your wikis list these command-line tools. For each, agents can be allowed to run it without asking:"
+  while IFS="$TAB" read -r t wikis; do
+    command -v "$t" >/dev/null 2>&1 || { echo "  $t ($wikis): not installed here, skipped"; continue; }
+    ask_yn "  Allow $t (listed by $wikis)?" y </dev/tty && picked="$picked $t"
+  done <<EOF2
+$all
+EOF2
+  [ -n "$picked" ] || return 0
+  if [ "$claude" = 1 ]; then
+    for t in $picked; do printf 'Bash(%s *)\n' "$t"; done | claude_allow && echo "  Claude Code: allowed$picked (backup beside ~/.claude/settings.json)."
+  fi
+  if [ "$agy" = 1 ]; then
+    for t in $picked; do printf 'command(%s)\n' "$t"; done | agy_grant && echo "  Antigravity: allowed$picked. Restart it, or it may save its old list over this."
+  fi
 }
 
 # setup collections: add a collection, such as one for work beside a personal one.
@@ -4716,13 +4787,13 @@ Usage: $WIKI_CMD setup [--new | --list | <section> | <setting>]
   setup            Walk through every setting. Enter keeps what you have.
   setup --new      Only what's missing, out of date, or added since you last ran it.
   setup --list     Print current values without asking anything.
-  setup <section>  Just one section: collection, collections, git, claude, permissions, antigravity, upgrade, delegation, journal.
+  setup <section>  Just one section: collection, collections, tools, git, claude, permissions, antigravity, upgrade, delegation, journal.
   setup <setting>  Just one setting: git.identity, or journal.<key> such as journal.format.
                    A bare journal key works too: setup format.
 EOF
         return 0
         ;;
-      collection | collections | git | claude | plugin | permissions | antigravity | upgrade | skills | completion | journal | delegation | git.identity) what="$a" ;;
+      collection | collections | tools | git | claude | plugin | permissions | antigravity | upgrade | skills | completion | journal | delegation | git.identity) what="$a" ;;
       journal.*)
         [ -n "$(journal_field "${a#journal.}" 2)" ] || die "no journal setting called ${a#journal.}. Settings: $JOURNAL_KEYS"
         what="$a"
@@ -4763,6 +4834,7 @@ EOF
     antigravity) SETUP_MODE=all; setup_antigravity ;;
     permissions) SETUP_MODE=all; setup_permissions ;;
     collections) setup_collections ;;
+    tools) setup_tools ;;
     '')
       setup_plugin
       setup_collection

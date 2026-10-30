@@ -82,6 +82,26 @@ wiki cover my-product repo-one repo-two repo-three
 
 A session in any of them then uses `my-product`. The test: if one session routinely works across the repositories, they are one wiki. If each is worked on alone and they only call each other, keep them separate.
 
+## Project procedures and tools
+
+Each project can say how work there gets done and what it needs, in its wiki's `wiki/conventions.md`:
+
+```
+## For agents
+
+- Run pnpm check before calling a change done.
+- After a push, check CI with gh pr checks and fix what fails.
+
+## Tools
+
+- gh (cli): PR status and CI after a push.
+- supabase (mcp): the production database. Read-only unless asked.
+```
+
+`wiki start` prints both at every session start, after the shared wiki's, so every agent follows the same definition of done, not just the one whose app happens to remind it. It marks each `cli` tool installed or not. It can't see an agent's MCP servers, so the agent checks those, and tells you when the work needs one it doesn't have, instead of skipping the step. Sessions add lines as they learn them. To begin, tell a session in the project "record this project's procedures and tools".
+
+`wiki setup tools` then offers, one tool at a time, to let Claude Code and Antigravity run the listed command-line tools without asking.
+
 ## Work and personal collections
 
 One collection, `~/wikis`, is enough for most people. To keep work wikis apart from personal ones, each with its own git remote and its own shared wiki, add a second collection:

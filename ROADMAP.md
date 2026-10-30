@@ -61,6 +61,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### Handbook version 26: each project's procedures and tools (2026-10-30)
+
+- **Why:** an agent resuming another agent's work skipped checks, such as CI after a push, that came from the other agent's app rather than from the wiki. And nothing said which tools or MCP servers a project's work needs.
+- **What changed:** a project wiki's `wiki/conventions.md` takes `## For agents` and `## Tools` (`- <name> (<cli|mcp|other>): what it's for`). `wiki start` prints both after the shared wikis' and marks each `cli` tool installed or not; nothing in the page is run. The handbook says to follow the project's procedures like the shared ones, to tell the user when a listed tool is missing instead of skipping the step, and to capture procedures and tools as they're learned. `wiki setup tools` offers allow rules for the listed command-line tools in Claude Code and Antigravity, one at a time.
+
 ### Gemini's tokens in the weekly report (2026-10-29)
 
 - **Why:** the report counted Claude Code's tokens only, so a week's work in Antigravity was invisible in it.
