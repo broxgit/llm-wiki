@@ -63,6 +63,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### `wiki sync` with no wiki named (2026-10-30)
+
+- **Why:** a session in another project ran `wiki.sh sync` without a wiki name and got only "error: name a wiki". It was the one failed `wiki` command in 50 Claude sessions since the problem-report rule.
+- **What changed:** with no wiki named, `sync` uses the wiki the current folder is in, or the one that covers the current repository, as `start` finds it, and says which. A repository no wiki covers, or a folder outside any repository or wiki, gets an error that says what to run.
+
 ### Every call to action says how to resolve it (2026-10-30)
 
 - **Why:** `wiki status` and `wiki report` flagged things (compile due, lint due, an open conflict) without saying what to do, and only a few lines ended with a command.
@@ -132,7 +137,7 @@ Things that have never been run for real. Treat them as unproven until crossed o
 ### Backfill reads Gemini's Antigravity conversations (2026-10-29)
 
 - **Why:** work done in Antigravity never reached the journal, so standups missed it.
-- **What changed:** `wiki journal backfill` also digests `~/.gemini/antigravity/brain/*/…/transcript_full.jsonl`. A conversation doesn't record its workspace, so it goes under the project its file paths and `git -C` folders point at most. The digest marks how many sessions were Gemini's, with the user's prompts, files written or edited, a commit or `wiki.sh sync`, and the last reply. On 2026-10-29 it filed 8 conversations under workout-app, llm-wiki and global correctly.
+- **What changed:** `wiki journal backfill` also digests `~/.gemini/antigravity/brain/*/…/transcript_full.jsonl`. A conversation doesn't record its workspace, so it goes under the project its file paths and `git -C` folders point at most. The digest marks how many sessions were Gemini's, with the user's prompts, files written or edited, a commit or `wiki.sh sync`, and the last reply. On 2026-10-29 it filed 8 conversations under the right wikis, including llm-wiki and global.
 
 ### Antigravity grants for llm-wiki (2026-10-29)
 

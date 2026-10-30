@@ -479,6 +479,15 @@ expect "sync commits one wiki and pulls past another wiki's uncommitted note" "s
 check "the teammate's note came in" test -f "$WIKIS_DIR/global/raw/2026-01-01-000000-from-a-teammate.md"
 check "the other wiki's note stayed uncommitted" bash -c "git -C '$WIKIS_DIR' status --short | grep -q 'global/raw/2026-01-02-000000-uncommitted.md'"
 rm -f "$WIKIS_DIR/global/raw/2026-01-02-000000-uncommitted.md"
+# With no wiki named, sync uses the one start would.
+echo "from web" > "$WIKIS_DIR/demo/raw/2026-01-03-000000-from-web.md"
+out="$(cd "$T/projects/web" && "$W" sync -m "demo: from web" 2>&1)"
+case "$out" in *"sync: demo, the wiki for the repository web"*"synced:"*) ok "sync with no wiki named uses the repository's wiki" ;; *) bad "sync with no wiki named uses the repository's wiki" "$out" ;; esac
+check "and committed its note" bash -c "git -C '$WIKIS_DIR' log -1 --format=%s | grep -qx 'demo: from web'"
+expect "inside a wiki, it uses that wiki" "sync: demo, the wiki this folder is in" bash -c "cd '$WIKIS_DIR/demo/raw' && '$W' sync -m 'demo: nothing'"
+mkdir -p "$T/projects/nowiki" && git -C "$T/projects/nowiki" init -q
+out="$(cd "$T/projects/nowiki" && "$W" sync 2>&1)" && bad "a repository no wiki covers is an error" "$out" || case "$out" in *"no wiki covers nowiki. Run:"*"sync <wiki>"*) ok "a repository no wiki covers is an error that says what to run" ;; *) bad "a repository no wiki covers is an error that says what to run" "$out" ;; esac
+expect "outside any repository or wiki, it says to name one" "isn't in a repository or a wiki" bash -c "cd '$T' && '$W' sync"
 
 section "Index and lint"
 L="$WIKIS_DIR/lintdemo"
