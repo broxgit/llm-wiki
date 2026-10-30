@@ -45,7 +45,7 @@ The line tells the agent where `wiki.sh` is. The handbooks name its commands (`w
 
 - **A rule** that says where your wikis are and where `wiki.sh` is.
 - **A SessionStart hook** that runs `wiki start` for the open project and hands its output to the conversation: the wiki, a pull, the indexes, `For agents`, and what waits. The model starts with it instead of spending its first calls on it.
-- **The llm-wiki skill.**
+- **The llm-wiki skill,** and the plugin's slash commands as skills: `wiki-status`, `wiki-save`, `wiki-compile` and `wiki-standup`. Ask for one by name, or in your own words.
 
 Add it any time with `wiki setup antigravity`, then quit and reopen Antigravity once so it finds the new plugin. The same step offers Antigravity grants for what llm-wiki needs: read and write `~/wikis`, read the template, and run `wiki.sh`. Without them Gemini asks before each file and command. `wiki permissions` prints them. It adds nothing else: grants for git, npm and the like are yours to choose. Later updates reach new conversations on their own. If `~/.gemini/GEMINI.md` still has the wiki line from before, setup offers to remove it, so conversations don't get it twice.
 
@@ -62,7 +62,7 @@ The agent captures notes with `wiki.sh capture <wiki> <slug> --file <note>`, a c
 
 - **A plugin with two hooks.** At session start it runs `wiki start` for the repository and hands its output to the session: the wiki, a pull, the indexes, `For agents`, and what waits. After compaction it tells the session to capture what the summary holds before answering. The plugin lives in `~/.codex/llm-wiki`, a local marketplace that setup adds and installs with the `codex` command.
 - **A line in `~/.codex/AGENTS.md`** that says where your wikis are and that the hook runs `start`. It replaces the session line if you pasted one there before.
-- **The llm-wiki skill and your team skills,** linked into `~/.codex/skills`.
+- **The llm-wiki skill and your team skills,** linked into `~/.codex/skills`, and the slash commands as skills: `wiki-status`, `wiki-save`, `wiki-compile` and `wiki-standup`.
 
 Codex runs a plugin's hooks only once you trust them, and the desktop app doesn't ask. Run `codex` in a terminal once. It says 2 hooks need review: type `/hooks` and trust both, SessionStart and PostCompact. Each runs your `wiki` command with `__codex-start`. They stay the same across llm-wiki updates, so you trust them once.
 
@@ -72,7 +72,7 @@ Codex's sandbox blocks writes inside `~/wikis/.git`, even when `~/wikis` itself 
 
 **With the Claude Code plugin installed,** Cursor needs nothing more. It loads Claude Code's installed plugins from the same copy Claude Code runs, so each session gets the plugin's hook. `wiki status` says when that copy is behind, and `wiki update` refreshes it.
 
-**Without it,** `wiki setup cursor` adds a sessionStart hook to `~/.cursor/hooks.json`, Cursor's own hooks file, leaving any other hooks there alone. The hook runs `wiki start` for the open folder and hands its output to the session: the wiki, a pull, the indexes, `For agents`, and what waits. Setup then prints a line for Settings → Rules → User Rules. It replaces any earlier wiki line there, and tells the agent the hook already ran `start`. Setup also links the llm-wiki skill and your team skills into `~/.cursor/skills`. If you install the Claude Code plugin later, this hook steps aside so sessions don't get the brief twice.
+**Without it,** `wiki setup cursor` adds a sessionStart hook to `~/.cursor/hooks.json`, Cursor's own hooks file, leaving any other hooks there alone. The hook runs `wiki start` for the open folder and hands its output to the session: the wiki, a pull, the indexes, `For agents`, and what waits. Setup then prints a line for Settings → Rules → User Rules. It replaces any earlier wiki line there, and tells the agent the hook already ran `start`. Setup also links the llm-wiki skill and your team skills into `~/.cursor/skills`, and adds the slash commands there as skills: `wiki-status`, `wiki-save`, `wiki-compile` and `wiki-standup`. If you install the Claude Code plugin later, this hook steps aside so sessions don't get the brief twice.
 
 Cursor has no hook after compaction. Its preCompact reply reaches only you, not the model, so there's no capture reminder after compaction there.
 

@@ -10,12 +10,12 @@ Commands are written as `wiki <command>`. From a clone without the link, that's 
 |---|---|
 | Nothing | The agent checks the wiki before answering, and saves decisions and findings at stopping points. |
 | "Save this" | Saves what you just pointed at as a note now. |
-| "Save this session" | Saves everything this session established. Plugin: `/llm-wiki:save`. |
-| "Ingest" or "compile" | Turns waiting notes into pages now. Plugin: `/llm-wiki:compile`. |
+| "Save this session" | Saves everything this session established. Plugin: `/llm-wiki:save`; Antigravity, Codex and Cursor: the `wiki-save` skill. |
+| "Ingest" or "compile" | Turns waiting notes into pages now. Plugin: `/llm-wiki:compile`; Antigravity, Codex and Cursor: the `wiki-compile` skill. |
 | "Lint" | Health check: broken links, stale pages, duplicates, open questions. |
 | "Don't save that", "off the record" | Leaves that one thing out. |
 | "Leave the wiki alone" | No wiki writes until you say otherwise. |
-| "What did I do yesterday?", "Give me my standup" | A standup from your commits, journal and notes. Plugin: `/llm-wiki:standup`. |
+| "What did I do yesterday?", "Give me my standup" | A standup from your commits, journal and notes. Plugin: `/llm-wiki:standup`; Antigravity, Codex and Cursor: the `wiki-standup` skill. |
 | "Seed a wiki from this repo's docs" | Starts the repository's wiki from its README, `docs/` and decision records, so it isn't empty on day one. See [Start a wiki from a repository's docs](#start-a-wiki-from-a-repositorys-docs). |
 | "Backfill my journal" | Fills in past days from earlier sessions. See [Fill in past days](#fill-in-past-days). |
 | "That belongs in the billing-api wiki" | Moves knowledge to the wiki that owns it, after asking. |

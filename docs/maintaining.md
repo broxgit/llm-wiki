@@ -24,7 +24,7 @@ template/          The scaffold, copied whole to start a wiki.
   raw/ wiki/ data/ Sources, compiled pages, structured data.
 skills/llm-wiki/   The Claude skill that finds, runs, and scaffolds wikis.
 .claude-plugin/    The plugin manifest, and the marketplace that lists it.
-commands/          The plugin's slash commands.
+commands/          The plugin's slash commands. wiki.sh also makes skills from them for Antigravity, Codex and Cursor.
 tests/smoke.sh     Smoke tests for wiki.sh, the hook and the secret scan. CI runs them.
 .github/workflows/ CI: shellcheck, plugin validation, and the smoke tests on Linux and macOS.
 scripts/
