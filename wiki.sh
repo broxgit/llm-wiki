@@ -5342,7 +5342,7 @@ setup_cursor() {
         if cursor_write; then
           echo "  added. In Cursor, put this in Settings > Rules > User Rules, in place of any earlier wiki line:"
           echo
-          cursor_rule | fold -s -w 100 | sed 's/^/    /'
+          cursor_rule; echo
           echo
         else
           echo "  couldn't write $(tilde "$CURSOR_HOOKS")."
