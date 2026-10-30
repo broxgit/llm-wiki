@@ -1613,6 +1613,9 @@ cmd_status() {
     fi
     [ "$(autoupdate_state "${n#*@}")" != off ] || echo "plugin:  auto-update is off, so fixes don't arrive. Run: $WIKI_CMD setup plugin"
   fi
+  plugin_behind | while IFS="$TAB" read -r n f r; do
+    echo "plugin:  $n is installed from $f, behind its marketplace at $r. Claude Code$([ "$(cursor_state)" = none ] || echo ' and Cursor') run that copy. Run: $WIKI_CMD update"
+  done
   if in_git_repo "$WIKIS_DIR" && [ -f "$WIKIS_DIR/WIKIS.md" ]; then
     case "$(hook_state "$WIKIS_DIR")" in
       ours) command -v gitleaks >/dev/null 2>&1 || echo "secrets: commits aren't scanned, gitleaks isn't installed. Run: brew install gitleaks" ;;
@@ -2114,11 +2117,14 @@ codex_bin() {
 # plugin its stable command, since the plugin's own folder changes with every update.
 codex_cmd() { if from_plugin; then plugin_cmd; else printf '%s/wiki.sh' "$REPO"; fi; }
 
+# codex_rule [hook] [command]: the rule for an agent whose hook runs start. Cursor
+# names its own hook.
 codex_rule() {
-  local dir w
+  local dir w hook="${1:-}"
+  [ -n "$hook" ] || hook="the llm-wiki plugin's hook"
   dir="$(tilde "$WIKIS_DIR")"
-  w="$(tilde "$(codex_cmd)")"
-  printf '%s' "My knowledge wikis live in $dir, one folder per project, plus a shared one at $dir/$SHARED. Wherever their handbooks say \`wiki.sh\`, run \`$w\`. At the start of each session, the llm-wiki plugin's hook runs \`$w start\` for the repository and adds its output to the session: the wiki that covers it, a pull of the collection, the indexes, the agreements under For agents, and the notes waiting. When that output is there, don't run start again: read that wiki's AGENTS.md and follow it. When it's missing, run \`$w start\` in the repository yourself, then do the same. If no wiki covers the repository, create one with \`$w new <repository-name>\` the first time you have something to file there. If you can hand work to sub-agents on cheaper models, do it for large, self-contained work as $dir/delegation.md says, following $dir/$SHARED/rules/delegation.md."
+  w="$(tilde "${2:-$(codex_cmd)}")"
+  printf '%s' "My knowledge wikis live in $dir, one folder per project, plus a shared one at $dir/$SHARED. Wherever their handbooks say \`wiki.sh\`, run \`$w\`. At the start of each session, $hook runs \`$w start\` for the repository and adds its output to the session: the wiki that covers it, a pull of the collection, the indexes, the agreements under For agents, and the notes waiting. When that output is there, don't run start again: read that wiki's AGENTS.md and follow it. When it's missing, run \`$w start\` in the repository yourself, then do the same. If no wiki covers the repository, create one with \`$w new <repository-name>\` the first time you have something to file there. If you can hand work to sub-agents on cheaper models, do it for large, self-contained work as $dir/delegation.md says, following $dir/$SHARED/rules/delegation.md."
 }
 
 codex_hooks() {
@@ -2268,6 +2274,131 @@ $out"
 $capture"
   fi
   printf '%s' "$msg" | EVENT="$event" python3 -c 'import json, os, sys; print(json.dumps({"hookSpecificOutput": {"hookEventName": os.environ["EVENT"], "additionalContext": sys.stdin.read()}}))'
+}
+
+# ---- Cursor ------------------------------------------------------------------
+# Cursor runs Claude Code's plugins: it reads ~/.claude/plugins/installed_plugins.json
+# and loads each plugin from its installPath, so with the Claude Code plugin it
+# gets the same session hook, from the same copy. Without it, setup adds a
+# sessionStart hook to ~/.cursor/hooks.json, Cursor's own user-level hooks, that
+# runs `wiki.sh __cursor-start`. Cursor has no hook after compaction, and its
+# preCompact reply reaches only the person, so there's nothing to add there.
+CURSOR_DIR="$HOME/.cursor"
+CURSOR_HOOKS="$CURSOR_DIR/hooks.json"
+
+# claude_plugin_rows: one line per installed llm-wiki Claude Code plugin: key, the
+# commit it was installed from, and its marketplace's folder.
+claude_plugin_rows() {
+  local f="$HOME/.claude/plugins/installed_plugins.json"
+  [ -f "$f" ] && command -v python3 >/dev/null 2>&1 || return 0
+  python3 - "$f" "$HOME/.claude/plugins/known_marketplaces.json" 2>/dev/null <<'PY' || true
+import json, sys
+plugins = json.load(open(sys.argv[1])).get("plugins", {})
+try:
+    known = json.load(open(sys.argv[2]))
+except Exception:
+    known = {}
+for key, entries in plugins.items():
+    if not key.startswith("llm-wiki@") or not entries:
+        continue
+    e = sorted(entries, key=lambda e: e.get("scope") != "user")[0]
+    loc = (known.get(key.split("@", 1)[1]) or {}).get("installLocation", "")
+    print("\t".join([key, e.get("gitCommitSha") or "", loc]))
+PY
+}
+
+# plugin_behind: the installed Claude Code plugins whose copy is older than their
+# marketplace, as key, installed commit and marketplace commit. Claude Code and
+# Cursor both run that copy, so its hooks lag until it's updated.
+plugin_behind() {
+  local key sha loc head
+  while IFS="$TAB" read -r key sha loc; do
+    [ -n "$sha" ] && [ -n "$loc" ] || continue
+    head="$(git -C "$loc" rev-parse HEAD 2>/dev/null)" || continue
+    [ "$head" = "$sha" ] || printf '%s\t%s\t%s\n' "$key" "${sha:0:7}" "${head:0:7}"
+  done < <(claude_plugin_rows)
+}
+
+cursor_cmd() { codex_cmd; }
+
+cursor_rule() { codex_rule "the llm-wiki hook in $(tilde "$CURSOR_HOOKS")" "$(cursor_cmd)"; }
+
+# cursor_state: none (no Cursor here), claude (it runs the Claude Code plugin's
+# hook instead), missing, old, or current.
+cursor_state() {
+  [ -d "$CURSOR_DIR" ] || { echo none; return 0; }
+  [ -z "$(claude_plugin_rows)" ] || { echo claude; return 0; }
+  command -v python3 >/dev/null 2>&1 || { echo missing; return 0; }
+  python3 - "$CURSOR_HOOKS" "$(cursor_cmd)" 2>/dev/null <<'PY' || echo missing
+import json, sys
+try:
+    h = json.load(open(sys.argv[1]))
+except Exception:
+    print("missing"); sys.exit()
+ours = [x for x in (h.get("hooks") or {}).get("sessionStart") or [] if "__cursor-start" in str(x.get("command", ""))]
+want = '"%s" __cursor-start' % sys.argv[2]
+print("missing" if not ours else "current" if [x.get("command") for x in ours] == [want] else "old")
+PY
+}
+
+# cursor_write: add the sessionStart hook to ~/.cursor/hooks.json, or repoint it.
+# Other hooks there stay as they are.
+cursor_write() {
+  mkdir -p "$CURSOR_DIR" || return 1
+  python3 - "$CURSOR_HOOKS" "$(cursor_cmd)" <<'PY' || return 1
+import json, os, sys
+p, cmd = sys.argv[1], sys.argv[2]
+h = {"version": 1, "hooks": {}}
+if os.path.exists(p):
+    h = json.load(open(p))
+hooks = h.setdefault("hooks", {})
+starts = [x for x in hooks.get("sessionStart") or [] if "__cursor-start" not in str(x.get("command", ""))]
+starts.append({"command": '"%s" __cursor-start' % cmd, "timeout": 30})
+hooks["sessionStart"] = starts
+h.setdefault("version", 1)
+tmp = p + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(h, f, indent=2)
+    f.write("\n")
+os.replace(tmp, p)
+PY
+  cursor_links
+}
+
+# cursor_links: the llm-wiki skill and the team skills, in ~/.cursor/skills.
+cursor_links() {
+  local d="$CURSOR_DIR/skills"
+  mkdir -p "$d" || return 1
+  if [ -d "$REPO/skills/llm-wiki" ] && ! [ "$d/llm-wiki" -ef "$REPO/skills/llm-wiki" ]; then
+    if [ ! -e "$d/llm-wiki" ] || [ -L "$d/llm-wiki" ]; then
+      rm -f "$d/llm-wiki"
+      ln -s "$REPO/skills/llm-wiki" "$d/llm-wiki"
+    fi
+  fi
+  skills_link_into "$d" quiet >/dev/null 2>&1 || true
+}
+
+# __cursor-start: the sessionStart hook. Reads Cursor's JSON on stdin, runs start for
+# the first workspace folder, and replies with additional_context. When the Claude
+# Code plugin is installed, Cursor runs its hook too, so this one stays quiet.
+cmd_cursor_start() {
+  local input dir out
+  input="$(cat)"
+  if [ -n "$(claude_plugin_rows)" ]; then echo '{}'; return 0; fi
+  dir="$(printf '%s' "$input" | python3 -c '
+import json, sys
+try:
+    p = json.load(sys.stdin).get("workspace_roots") or []
+except Exception:
+    p = []
+print(p[0] if p else "")' 2>/dev/null || true)"
+  [ -n "$dir" ] && [ -d "$dir" ] || dir="${CURSOR_PROJECT_DIR:-$HOME}"
+  [ -n "${pick:-}" ] || [ -n "${LLM_WIKI_FIXED_DIR:-}" ] || WIKIS_DIR="$(collection_for "$dir")"
+  WIKI_CMD="$(tilde "$(cursor_cmd)")"
+  { [ "$(cursor_state)" = none ] || cursor_links; } >/dev/null 2>&1 || true
+  out="$( (cmd_start "$dir") 2>&1 || true)"
+  printf 'llm-wiki: this hook ran `%s start` for this session. Its output follows. Read the AGENTS.md of the wiki it names and follow it. Do not run start again.\n\n%s\n' "$WIKI_CMD" "$out" \
+    | python3 -c 'import json, sys; print(json.dumps({"additional_context": sys.stdin.read()}))'
 }
 
 cmd_claude() {
@@ -3344,6 +3475,7 @@ skills_link() {
   skills_link_into "$SKILLS_DIR" "${1:-}"
   [ ! -d "$AGY_DIR" ] || skills_link_into "$AGY_DIR/skills" "${1:-}"
   [ ! -f "$CODEX_PLUGIN/.codex-plugin/plugin.json" ] || skills_link_into "$CODEX_DIR/skills" "${1:-}"
+  case "$(cursor_state)" in current | old) skills_link_into "$CURSOR_DIR/skills" "${1:-}" ;; esac
 }
 
 # skills_link_into <dir> [quiet]: link each collection skill into dir, and remove
@@ -3367,7 +3499,7 @@ skills_link_into() {
     fi
     ln -sfn "$src" "$SKILLS_DIR/$dest"
     n=$((n + 1))
-    echo "linked:  $dest (from $wiki)$(case "$SKILLS_DIR" in ("$AGY_DIR/skills") echo ', for Antigravity' ;; ("$CODEX_DIR/skills") echo ', for Codex' ;; esac)"
+    echo "linked:  $dest (from $wiki)$(case "$SKILLS_DIR" in ("$AGY_DIR/skills") echo ', for Antigravity' ;; ("$CODEX_DIR/skills") echo ', for Codex' ;; ("$CURSOR_DIR/skills") echo ', for Cursor' ;; esac)"
   done <<EOF
 $all
 EOF
@@ -4572,6 +4704,10 @@ setup_pending() {
     old) echo codex ;;
     missing) setup_done codex || echo codex ;;
   esac
+  case "$(cursor_state)" in
+    old) echo cursor ;;
+    missing) setup_done cursor || echo cursor ;;
+  esac
   # Tab completion, asked once per machine unless the profile already loads it.
   local sh
   sh="$(completion_shell)"
@@ -4946,6 +5082,7 @@ setup_list() {
   [ ! -d "$HOME/.claude" ] || echo "permissions         $(n="$(perm_missing | wc -l | tr -d ' ')"; [ "$n" -eq 0 ] && echo "wiki commands allowed" || echo "$n allow rule(s) missing")"
   [ "$(agy_state)" = none ] || echo "antigravity         plugin $(agy_state)$(m="$(agy_grants_missing 2>/dev/null)" && { n="$(printf '%s' "$m" | grep -c . || true)"; [ "$n" -eq 0 ] && echo ", grants in place" || echo ", $n grant(s) missing"; })"
   [ "$(codex_state)" = none ] || echo "codex               plugin $(codex_state)"
+  case "$(cursor_state)" in none) ;; claude) echo "cursor              runs the Claude Code plugin" ;; *) echo "cursor              hook $(cursor_state)" ;; esac
   if [ -n "$(completion_shell)" ]; then
     printf '%-19s %s' "completion" "$(completion_on "$(completion_shell)" && echo "on ($(completion_shell))" || echo off)"
     case "$pending" in *" completion."*) printf '  <- new' ;; esac
@@ -5185,6 +5322,37 @@ setup_codex() {
   esac
 }
 
+# Cursor: with the Claude Code plugin it needs nothing. Without it, offer the
+# sessionStart hook, and give the user-rules line that goes with it.
+setup_cursor() {
+  local state
+  state="$(cursor_state)"
+  case "$state" in none) return 0 ;; claude) [ "$SETUP_MODE" = new ] || { section "Cursor"; echo "Cursor runs the Claude Code plugin's hook, so it needs nothing more. Keep the plugin current with $WIKI_CMD update."; }; return 0 ;; esac
+  if [ "$SETUP_MODE" = new ] && { [ "$state" = current ] || { [ "$state" = missing ] && setup_done cursor; }; }; then
+    return 0
+  fi
+  section "Cursor"
+  case "$state" in
+    current) echo "The llm-wiki hook for Cursor is up to date." ;;
+    old) if cursor_write; then echo "Updated the llm-wiki hook in $(tilde "$CURSOR_HOOKS"). New sessions use it."; fi ;;
+    missing)
+      echo "Cursor is installed. A sessionStart hook in $(tilde "$CURSOR_HOOKS") points its sessions at your wikis, pulls, and loads the wiki's index and agreements at the start."
+      if ask_yn "Add it?" y; then
+        [ ! -f "$CURSOR_HOOKS" ] || cp "$CURSOR_HOOKS" "$CURSOR_HOOKS.bak-$(date +%Y%m%d-%H%M%S)"
+        if cursor_write; then
+          echo "  added. In Cursor, put this in Settings > Rules > User Rules, in place of any earlier wiki line:"
+          echo
+          cursor_rule | fold -s -w 100 | sed 's/^/    /'
+          echo
+        else
+          echo "  couldn't write $(tilde "$CURSOR_HOOKS")."
+        fi
+      fi
+      setup_mark cursor
+      ;;
+  esac
+}
+
 cmd_setup() {
   local what="" a n
   for a in "$@"; do
@@ -5198,13 +5366,13 @@ Usage: $WIKI_CMD setup [--new | --list | <section> | <setting>]
   setup            Walk through every setting. Enter keeps what you have.
   setup --new      Only what's missing, out of date, or added since you last ran it.
   setup --list     Print current values without asking anything.
-  setup <section>  Just one section: collection, collections, tools, git, claude, permissions, antigravity, codex, upgrade, delegation, journal.
+  setup <section>  Just one section: collection, collections, tools, git, claude, permissions, antigravity, codex, cursor, upgrade, delegation, journal.
   setup <setting>  Just one setting: git.identity, or journal.<key> such as journal.format.
                    A bare journal key works too: setup format.
 EOF
         return 0
         ;;
-      collection | collections | tools | git | claude | plugin | permissions | antigravity | codex | upgrade | skills | completion | journal | delegation | git.identity) what="$a" ;;
+      collection | collections | tools | git | claude | plugin | permissions | antigravity | codex | cursor | upgrade | skills | completion | journal | delegation | git.identity) what="$a" ;;
       journal.*)
         [ -n "$(journal_field "${a#journal.}" 2)" ] || die "no journal setting called ${a#journal.}. Settings: $JOURNAL_KEYS"
         what="$a"
@@ -5245,6 +5413,7 @@ EOF
     completion) SETUP_MODE=all; setup_completion ;;
     antigravity) SETUP_MODE=all; setup_antigravity ;;
     codex) SETUP_MODE=all; setup_codex ;;
+    cursor) SETUP_MODE=all; setup_cursor ;;
     permissions) SETUP_MODE=all; setup_permissions ;;
     collections) setup_collections ;;
     tools) setup_tools ;;
@@ -5256,6 +5425,7 @@ EOF
       setup_permissions
       setup_antigravity
       setup_codex
+      setup_cursor
       setup_upgrade
       setup_delegation
       setup_skills
@@ -5341,6 +5511,7 @@ case "$cmd" in
     ;;
   __agy-start) cmd_agy_start; exit 0 ;;
   __codex-start) cmd_codex_start; exit 0 ;;
+  __cursor-start) cmd_cursor_start; exit 0 ;;
   deps) cmd_deps "$@"; exit 0 ;;
   permissions)
     # The allow rules setup offers, as JSON lines to paste into permissions.allow.
