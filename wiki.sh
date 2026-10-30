@@ -2059,6 +2059,190 @@ print(p[7:] if p.startswith("file://") else p)' 2>/dev/null || true)"
     | python3 -c 'import json, sys; print(json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": sys.stdin.read()}}]}))'
 }
 
+# ---- Codex -------------------------------------------------------------------
+# OpenAI's Codex installs plugins from marketplaces: a folder with
+# .agents/plugins/marketplace.json, whose plugins each have a .codex-plugin/plugin.json.
+# Its hooks follow Claude Code's: SessionStart and PostCompact, JSON on stdin, and
+# additionalContext in the reply. setup writes a small marketplace with one plugin
+# into ~/.codex/llm-wiki and installs it. Its hooks run `wiki.sh __codex-start`, the
+# stable command, so the plugin itself stays the same across updates: Codex asks the
+# user to trust a plugin's hooks, and asks again whenever they change.
+# Plugins can't carry an always-on rule, so the rule goes in ~/.codex/AGENTS.md, in
+# place of the session line. The skills are linked into ~/.codex/skills.
+CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
+CODEX_MKT="$CODEX_DIR/llm-wiki"
+CODEX_PLUGIN="$CODEX_MKT/plugins/llm-wiki"
+CODEX_KEY="llm-wiki@llm-wiki"
+
+# codex_bin: the codex command, which the desktop app keeps inside itself.
+codex_bin() {
+  local c
+  for c in "$(command -v codex 2>/dev/null)" /Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex /Applications/Codex.app/Contents/Resources/codex; do
+    [ -n "$c" ] && [ -x "$c" ] && { printf '%s' "$c"; return 0; }
+  done
+  return 1
+}
+
+# codex_cmd: the wiki.sh command the hooks run, with no ~: from the Claude Code
+# plugin its stable command, since the plugin's own folder changes with every update.
+codex_cmd() { if from_plugin; then plugin_cmd; else printf '%s/wiki.sh' "$REPO"; fi; }
+
+codex_rule() {
+  local dir w
+  dir="$(tilde "$WIKIS_DIR")"
+  w="$(tilde "$(codex_cmd)")"
+  printf '%s' "My knowledge wikis live in $dir, one folder per project, plus a shared one at $dir/$SHARED. Wherever their handbooks say \`wiki.sh\`, run \`$w\`. At the start of each session, the llm-wiki plugin's hook runs \`$w start\` for the repository and adds its output to the session: the wiki that covers it, a pull of the collection, the indexes, the agreements under For agents, and the notes waiting. When that output is there, don't run start again: read that wiki's AGENTS.md and follow it. When it's missing, run \`$w start\` in the repository yourself, then do the same. If no wiki covers the repository, create one with \`$w new <repository-name>\` the first time you have something to file there. If you can hand work to sub-agents on cheaper models, do it for large, self-contained work as $dir/delegation.md says, following $dir/$SHARED/rules/delegation.md."
+}
+
+codex_hooks() {
+  local c
+  c="$(codex_cmd | sed 's/["\\]/\\&/g')"
+  cat <<EOF2
+{
+    "hooks": {
+      "SessionStart": [{ "hooks": [{ "type": "command", "command": "\\"$c\\" __codex-start", "timeout": 30 }] }],
+      "PostCompact": [{ "hooks": [{ "type": "command", "command": "\\"$c\\" __codex-start", "timeout": 30 }] }]
+    }
+  }
+EOF2
+}
+
+# The version comes from the hooks, so Codex installs a new copy only when they change.
+codex_manifest() {
+  local h v
+  h="$(codex_hooks)"
+  v="$(printf '%s' "$h" | cksum | cut -d ' ' -f 1)"
+  cat <<EOF2
+{
+  "name": "llm-wiki",
+  "version": "1.0.$v",
+  "description": "Points every session at your knowledge wiki for the repository, and loads its index and agreements at the start and after compaction.",
+  "author": { "name": "llm-wiki" },
+  "homepage": "https://github.com/broxgit/llm-wiki",
+  "hooks": $h
+}
+EOF2
+}
+
+codex_marketplace() {
+  cat <<'EOF2'
+{
+  "name": "llm-wiki",
+  "plugins": [
+    {
+      "name": "llm-wiki",
+      "source": { "source": "local", "path": "./plugins/llm-wiki" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Productivity"
+    }
+  ]
+}
+EOF2
+}
+
+codex_installed() { grep -qF "[plugins.\"$CODEX_KEY\"]" "$CODEX_DIR/config.toml" 2>/dev/null; }
+codex_line() { grep -m 1 -F "knowledge wikis live in" "$CODEX_DIR/AGENTS.md" 2>/dev/null || true; }
+
+# codex_state: none (no Codex here), missing, old, or current.
+codex_state() {
+  [ -d "$CODEX_DIR" ] || { echo none; return 0; }
+  [ -f "$CODEX_PLUGIN/.codex-plugin/plugin.json" ] || { echo missing; return 0; }
+  if codex_installed \
+    && [ "$(cat "$CODEX_PLUGIN/.codex-plugin/plugin.json" 2>/dev/null)" = "$(codex_manifest)" ] \
+    && [ "$(codex_line)" = "$(codex_rule)" ] \
+    && [ -e "$CODEX_DIR/skills/llm-wiki/SKILL.md" ]; then
+    echo current
+  else
+    echo old
+  fi
+}
+
+# codex_rule_write: put the rule in ~/.codex/AGENTS.md, in place of an earlier wiki
+# line if there is one. The rest of the file stays.
+codex_rule_write() {
+  local f="$CODEX_DIR/AGENTS.md" old new
+  old="$(codex_line)"
+  new="$(codex_rule)"
+  [ "$old" != "$new" ] || return 0
+  if [ -n "$old" ]; then
+    OLD="$old" NEW="$new" awk '$0 == ENVIRON["OLD"] { print ENVIRON["NEW"]; next } { print }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  elif [ -s "$f" ]; then
+    printf '\n%s\n' "$new" >> "$f"
+  else
+    printf '%s\n' "$new" > "$f"
+  fi
+}
+
+# codex_links: the llm-wiki skill and the team skills, linked into ~/.codex/skills.
+# The skill links into this copy of the template, so it's refreshed at each session.
+codex_links() {
+  local d="$CODEX_DIR/skills"
+  mkdir -p "$d" || return 1
+  if [ -d "$REPO/skills/llm-wiki" ] && ! [ "$d/llm-wiki" -ef "$REPO/skills/llm-wiki" ]; then
+    if [ ! -e "$d/llm-wiki" ] || [ -L "$d/llm-wiki" ]; then
+      rm -f "$d/llm-wiki"
+      ln -s "$REPO/skills/llm-wiki" "$d/llm-wiki"
+    fi
+  fi
+  skills_link_into "$d" quiet >/dev/null 2>&1 || true
+}
+
+# codex_write: write the marketplace, install the plugin when it's new or changed,
+# and refresh the rule and skills. Installing needs the codex command.
+codex_write() {
+  local c m="$CODEX_PLUGIN/.codex-plugin/plugin.json" changed=0
+  mkdir -p "$CODEX_MKT/.agents/plugins" "${m%/*}" || return 1
+  [ "$(cat "$CODEX_MKT/.agents/plugins/marketplace.json" 2>/dev/null)" = "$(codex_marketplace)" ] || codex_marketplace > "$CODEX_MKT/.agents/plugins/marketplace.json"
+  [ "$(cat "$m" 2>/dev/null)" = "$(codex_manifest)" ] || { codex_manifest > "$m"; changed=1; }
+  codex_rule_write
+  codex_links
+  if [ "$changed" = 1 ] || ! codex_installed; then
+    c="$(codex_bin)" || { echo "  no codex command found, so the plugin isn't installed. Install it with: codex plugin marketplace add $(tilde "$CODEX_MKT") && codex plugin add $CODEX_KEY"; return 1; }
+    grep -qF '[marketplaces.llm-wiki]' "$CODEX_DIR/config.toml" 2>/dev/null || "$c" plugin marketplace add "$CODEX_MKT" >/dev/null || return 1
+    "$c" plugin add "$CODEX_KEY" >/dev/null || return 1
+  fi
+}
+
+# __codex-start: the plugin's hook, for SessionStart and PostCompact. Reads Codex's
+# JSON on stdin, runs start in the session's folder, and replies with
+# additionalContext. After compaction it only says to capture first: the session
+# already has the rest. It never fails the session: an error becomes the message.
+cmd_codex_start() {
+  local input fields dir event source out msg
+  input="$(cat)"
+  fields="$(printf '%s' "$input" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    d = {}
+print("\t".join(str(d.get(k) or "") for k in ("cwd", "hook_event_name", "source")))' 2>/dev/null || true)"
+  IFS="$TAB" read -r dir event source <<EOF2
+$fields
+EOF2
+  event="${event:-SessionStart}"
+  [ -n "$dir" ] && [ -d "$dir" ] || dir="$PWD"
+  WIKI_CMD="$(tilde "$(codex_cmd)")"
+  local capture="This session was just compacted. Before you answer anything, even the user's message, capture whatever in the summary the wiki doesn't hold yet, as the handbook's Capture section says. It can't wait for a stopping point: the summary is all that's left."
+  if [ "$event" = PostCompact ]; then
+    msg="llm-wiki: $capture"
+  else
+    [ -n "${pick:-}" ] || [ -n "${LLM_WIKI_FIXED_DIR:-}" ] || WIKIS_DIR="$(collection_for "$dir")"
+    # Keep the rule and skills current, so an update reaches the next session.
+    if [ -f "$CODEX_PLUGIN/.codex-plugin/plugin.json" ]; then
+      { [ -z "$(codex_line)" ] || codex_rule_write; codex_links; } >/dev/null 2>&1 || true
+    fi
+    out="$( (cmd_start "$dir") 2>&1 || true)"
+    msg="llm-wiki: this plugin ran \`$WIKI_CMD start\` for this session. Its output follows. Read the AGENTS.md of the wiki it names and follow it. Do not run start again.
+
+$out"
+    [ "$source" != compact ] || msg="$msg
+
+$capture"
+  fi
+  printf '%s' "$msg" | EVENT="$event" python3 -c 'import json, os, sys; print(json.dumps({"hookSpecificOutput": {"hookEventName": os.environ["EVENT"], "additionalContext": sys.stdin.read()}}))'
+}
+
 cmd_claude() {
   local f="$CLAUDE_FILE" line tmp
   if from_plugin; then
@@ -3128,6 +3312,7 @@ skill_description() {
 skills_link() {
   skills_link_into "$SKILLS_DIR" "${1:-}"
   [ ! -d "$AGY_DIR" ] || skills_link_into "$AGY_DIR/skills" "${1:-}"
+  [ ! -f "$CODEX_PLUGIN/.codex-plugin/plugin.json" ] || skills_link_into "$CODEX_DIR/skills" "${1:-}"
 }
 
 # skills_link_into <dir> [quiet]: link each collection skill into dir, and remove
@@ -3151,7 +3336,7 @@ skills_link_into() {
     fi
     ln -sfn "$src" "$SKILLS_DIR/$dest"
     n=$((n + 1))
-    echo "linked:  $dest (from $wiki)$([ "$SKILLS_DIR" = "$AGY_DIR/skills" ] && echo ', for Antigravity')"
+    echo "linked:  $dest (from $wiki)$(case "$SKILLS_DIR" in ("$AGY_DIR/skills") echo ', for Antigravity' ;; ("$CODEX_DIR/skills") echo ', for Codex' ;; esac)"
   done <<EOF
 $all
 EOF
@@ -4352,6 +4537,10 @@ setup_pending() {
     current) setup_done antigravity.grants || ! agy_grants_missing | grep -q . || echo antigravity.grants ;;
   esac
   [ "$(agy_state)" != current ] || ! grep -qF "knowledge wikis live in" "$AGY_HOME/GEMINI.md" 2>/dev/null || echo antigravity.line
+  case "$(codex_state)" in
+    old) echo codex ;;
+    missing) setup_done codex || echo codex ;;
+  esac
   # Tab completion, asked once per machine unless the profile already loads it.
   local sh
   sh="$(completion_shell)"
@@ -4725,6 +4914,7 @@ setup_list() {
   echo "claude              $(claude_state)"
   [ ! -d "$HOME/.claude" ] || echo "permissions         $(n="$(perm_missing | wc -l | tr -d ' ')"; [ "$n" -eq 0 ] && echo "wiki commands allowed" || echo "$n allow rule(s) missing")"
   [ "$(agy_state)" = none ] || echo "antigravity         plugin $(agy_state)$(m="$(agy_grants_missing 2>/dev/null)" && { n="$(printf '%s' "$m" | grep -c . || true)"; [ "$n" -eq 0 ] && echo ", grants in place" || echo ", $n grant(s) missing"; })"
+  [ "$(codex_state)" = none ] || echo "codex               plugin $(codex_state)"
   if [ -n "$(completion_shell)" ]; then
     printf '%-19s %s' "completion" "$(completion_on "$(completion_shell)" && echo "on ($(completion_shell))" || echo off)"
     case "$pending" in *" completion."*) printf '  <- new' ;; esac
@@ -4931,6 +5121,39 @@ setup_antigravity() {
   [ "$(agy_state)" = missing ] || setup_agy_grants
 }
 
+# Codex: offer the llm-wiki plugin when Codex is installed, and keep it current.
+setup_codex() {
+  local state
+  state="$(codex_state)"
+  [ "$state" != none ] || return 0
+  if [ "$SETUP_MODE" = new ] && { [ "$state" = current ] || { [ "$state" = missing ] && setup_done codex; }; }; then
+    return 0
+  fi
+  section "Codex"
+  case "$state" in
+    current) echo "The llm-wiki plugin for Codex is up to date." ;;
+    old)
+      if codex_write; then echo "Updated the llm-wiki plugin for Codex. New sessions use it."; fi ;;
+    missing)
+      echo "Codex is installed. An llm-wiki plugin points its sessions at your wikis, and loads the wiki's index and agreements at the start and after compaction, like the Claude Code plugin."
+      if [ -n "$(codex_line)" ]; then
+        echo "It replaces the wiki line in $(tilde "$CODEX_DIR/AGENTS.md") with one that knows about the plugin."
+      else
+        echo "It also adds a line about your wikis to $(tilde "$CODEX_DIR/AGENTS.md")."
+      fi
+      if ask_yn "Add it?" y; then
+        [ ! -f "$CODEX_DIR/AGENTS.md" ] || cp "$CODEX_DIR/AGENTS.md" "$CODEX_DIR/AGENTS.md.bak-$(date +%Y%m%d-%H%M%S)"
+        if codex_write; then
+          echo "  added. Codex runs its hooks only once you trust them, and the desktop app doesn't ask. Run codex in a terminal once: it says 2 hooks need review. Type /hooks and trust both."
+        else
+          echo "  couldn't install it."
+        fi
+      fi
+      setup_mark codex
+      ;;
+  esac
+}
+
 cmd_setup() {
   local what="" a n
   for a in "$@"; do
@@ -4944,13 +5167,13 @@ Usage: $WIKI_CMD setup [--new | --list | <section> | <setting>]
   setup            Walk through every setting. Enter keeps what you have.
   setup --new      Only what's missing, out of date, or added since you last ran it.
   setup --list     Print current values without asking anything.
-  setup <section>  Just one section: collection, collections, tools, git, claude, permissions, antigravity, upgrade, delegation, journal.
+  setup <section>  Just one section: collection, collections, tools, git, claude, permissions, antigravity, codex, upgrade, delegation, journal.
   setup <setting>  Just one setting: git.identity, or journal.<key> such as journal.format.
                    A bare journal key works too: setup format.
 EOF
         return 0
         ;;
-      collection | collections | tools | git | claude | plugin | permissions | antigravity | upgrade | skills | completion | journal | delegation | git.identity) what="$a" ;;
+      collection | collections | tools | git | claude | plugin | permissions | antigravity | codex | upgrade | skills | completion | journal | delegation | git.identity) what="$a" ;;
       journal.*)
         [ -n "$(journal_field "${a#journal.}" 2)" ] || die "no journal setting called ${a#journal.}. Settings: $JOURNAL_KEYS"
         what="$a"
@@ -4963,7 +5186,8 @@ EOF
         ;;
     esac
   done
-  [ -t 0 ] || die "setup asks questions, so it needs a terminal. $WIKI_CMD setup --list prints the current values."
+  # LLM_WIKI_TEST_TTY: the smoke tests answer setup's questions through a pipe.
+  [ -t 0 ] || [ -n "${LLM_WIKI_TEST_TTY:-}" ] || die "setup asks questions, so it needs a terminal. $WIKI_CMD setup --list prints the current values."
   if [ "$SETUP_MODE" = new ] && [ -d "$WIKIS_DIR" ] && [ "$(claude_state)" = current ] && ! plugin_pending; then
     n="$(setup_pending | wc -l | tr -d ' ')"
     [ "$n" -gt 0 ] || [ -n "$(setup_upgrade_needed)" ] || { echo "Nothing new to set up."; return 0; }
@@ -4989,6 +5213,7 @@ EOF
     skills) setup_skills ;;
     completion) SETUP_MODE=all; setup_completion ;;
     antigravity) SETUP_MODE=all; setup_antigravity ;;
+    codex) SETUP_MODE=all; setup_codex ;;
     permissions) SETUP_MODE=all; setup_permissions ;;
     collections) setup_collections ;;
     tools) setup_tools ;;
@@ -4999,6 +5224,7 @@ EOF
       setup_claude
       setup_permissions
       setup_antigravity
+      setup_codex
       setup_upgrade
       setup_delegation
       setup_skills
@@ -5083,6 +5309,7 @@ case "$cmd" in
     exit 0
     ;;
   __agy-start) cmd_agy_start; exit 0 ;;
+  __codex-start) cmd_codex_start; exit 0 ;;
   deps) cmd_deps "$@"; exit 0 ;;
   permissions)
     # The allow rules setup offers, as JSON lines to paste into permissions.allow.

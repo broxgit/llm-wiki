@@ -39,7 +39,7 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - A wiki with two shared wikis listed in `links.md`.
 - Real scale: hundreds of wikis, hundreds of pages. Real use so far is 10 wikis and 53 pages.
 - The version 8 triggers in real use. They passed a dry run only.
-- Agents other than Claude pulling at session start, and syncing. Gemini in Antigravity pulls through its plugin's hook; Codex's and Cursor's sandboxes block writes to `~/wikis/.git`, so both need `wiki start` and `wiki sync` run outside the sandbox. Copilot is still untried.
+- Agents other than Claude pulling at session start, and syncing. Gemini in Antigravity and Codex pull through their plugins' hooks; Codex's and Cursor's sandboxes block writes to `~/wikis/.git`, so `wiki sync` there, and Cursor's `wiki start`, run outside the sandbox. Copilot is still untried.
 - Delegation in real use: whether sessions suggest handoffs at the right size, and whether the log shows real savings. The log records outcomes, not tokens. Token counts per handoff would need the tool's usage data.
 - Stats in real use: whether sessions log every lookup, and what hit rate means a wiki should go.
 - Seed in real use: how long compiling 20 seeded documents takes, and whether the pages are worth it.
@@ -51,6 +51,7 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - The weekly report in real use: whether people ask for it, and whether the token estimate for wiki reads is close enough to be useful.
 - Shared knowledge in real use: whether sessions now file general lessons in the shared wiki, and whether they stop saving to their own memory. The weekly report's correction count is the first signal. Whether harvested notes get filed in the right wiki at compile.
 - Capture after compaction in real use: whether sessions capture before answering when the user's message arrives with the hook's message. On 2026-10-28 one session answered first and captured a turn late, which led to the "before you answer anything" wording. Watch for raw notes timed just after a compaction.
+- Codex's PostCompact hook in a live session. The smoke tests cover its reply; no Codex session has compacted with it yet.
 - Patterns in real use: whether agents write `Feedback:` lines unprompted, and whether the thresholds are right.
 
 ## Decided against
@@ -60,6 +61,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Codex plugin (2026-10-30)
+
+- **Why:** Codex has a plugin system and hooks in Claude Code's shape, but used only a pasted session line: no pull outside its sandbox, no wiki loaded at start, nothing after compaction.
+- **What changed:** `wiki setup codex` writes a local marketplace with an llm-wiki plugin to `~/.codex/llm-wiki` and installs it. Its SessionStart hook runs `wiki start` and hands the output to the session; its PostCompact hook says to capture before answering. The hooks call the stable `wiki` command, so they don't change with updates and Codex asks to trust them only once. The rule goes in `~/.codex/AGENTS.md`, replacing the session line, and the skills are linked into `~/.codex/skills`. `setup --list` and `setup --new` know about it. Tested live on 2026-10-30: once trusted, a Codex session got the brief, the pull ran outside the sandbox, and Codex answered from the brief without running `start` again.
 
 ### Fixes from the Codex and Cursor tests (2026-10-30)
 
