@@ -64,6 +64,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### Feedback reminders: once a day, and in the weekly report (2026-10-31)
+
+- **Why:** with `share` on, `wiki start` told every session to remind the user about unread notes, so several sessions a day meant several reminders. The weekly report didn't mention them at all.
+- **What changed:** `start` passes the reminder on at most once a day, and only for notes from an earlier day, and stays quiet for three days after the user runs `wiki feedback` in a terminal. An agent listing them doesn't count as the user looking. The weekly report's Needs you lists notes waiting, ending with how to read, file and drop them.
+
 ### Agents report problems with llm-wiki, opt-in (handbook v27, 2026-10-30)
 
 - **Why:** only the maintainer's own sessions had a rule to report llm-wiki problems, and their notes stayed in his collection. Other users' agents hit problems too, and nothing reached anyone who could fix them.

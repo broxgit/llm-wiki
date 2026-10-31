@@ -899,7 +899,20 @@ expect "the same summary again counts as seen again" "seen again" bash -c "print
 check "in one note, seen twice" bash -c "[ \$(ls '$FB' | wc -l) -eq 1 ] && grep -q '^Seen: 2' '$FB/$n.md'"
 expect "feedback lists it" "seen 2   sync without a name only says name a wiki" "$W" feedback
 expect "start tells agents to follow rules/feedback.md" "===== Feedback on llm-wiki: share" "$W" start web
-expect "and to tell the user once, never sending themselves" "Never run feedback send yourself" "$W" start web
+lacks "a note captured today doesn't make start remind the user yet" "wait for the user to read" "$W" start web
+sed -i.bak 's/^Captured: .*/Captured: 2026-01-01 09:00 UTC/' "$FB/$n.md" && rm -f "$FB/$n.md.bak"
+expect "an older one does, telling the agent never to send it" "Never run feedback send yourself" "$W" start web
+lacks "and only once a day" "wait for the user to read" "$W" start web
+TS="$HOME/.config/llm-wiki/tips"
+sed -i.bak '/^shown:feedback /d' "$TS" && rm -f "$TS.bak"
+"$W" feedback >/dev/null
+expect "an agent listing them doesn't count as the user looking" "wait for the user to read" "$W" start web
+sed -i.bak '/^shown:feedback /d' "$TS" && rm -f "$TS.bak"
+printf 'used:feedback %s\n' "$(date -u +%Y-%m-%d)" >> "$TS"
+lacks "for three days after the user looked, start doesn't remind" "wait for the user to read" "$W" start web
+sed -i.bak '/^used:feedback /d' "$TS" && rm -f "$TS.bak"
+out="$("$W" report 2>&1)"
+case "$out" in *"## Needs you"*"- llm-wiki feedback: 1 note(s)"*"Run: "*"feedback send <id> (it asks before filing)"*) ok "report lists the notes under Needs you, with how to read and file them" ;; *) bad "report lists the notes under Needs you, with how to read and file them" "$out" ;; esac
 expect "status lists it under To do" "feedback: 1 note(s) from agents about llm-wiki" "$W" status
 out="$("$W" feedback show "$n" 2>&1)"
 case "$out" in "[bug] sync without a name only says name a wiki"*) ok "show drafts the issue, title first" ;; *) bad "show drafts the issue, title first" "$out" ;; esac
