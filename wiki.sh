@@ -476,11 +476,28 @@ cmd_start() {
     echo
     echo "===== Feedback on llm-wiki: $(feedback_mode)"
     echo "When llm-wiki itself gets in your way, keep one note this session, as $(tilde "$d") says."
-    n="$(feedback_notes new | grep -c . || true)"
-    if [ "$(feedback_mode)" = share ] && [ "${n:-0}" -gt 0 ]; then
+    if [ "$(feedback_mode)" = share ] && feedback_remind_due; then
+      ( tip_set shown:feedback ) 2>/dev/null || true
+      n="$(feedback_notes new | grep -c . || true)"
       echo "$n note(s) wait for the user to read. At a stopping point, tell them once: run \`$WIKI_CMD feedback\` in a terminal. Never run feedback send yourself."
     fi
   fi
+}
+
+# feedback_remind_due: whether this session should pass on the reminder: once a day
+# at most, not for notes captured today, and not for three days after the user looked.
+feedback_remind_due() {
+  local f old=0 today
+  today="$(date -u +%Y-%m-%d)"
+  [ "$(tip_get shown:feedback)" != "$today" ] || return 1
+  [ -z "$(tip_get used:feedback)" ] || [[ "$(tip_get used:feedback)" < "$(days_ago 3)" ]] || return 1
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    [[ "$(feedback_field Captured "$f")" < "$today" ]] && old=1
+  done <<EOF2
+$(feedback_notes new)
+EOF2
+  [ "$old" = 1 ]
 }
 
 # cover <wiki> <repo>...: record that one wiki covers several repositories.
@@ -2820,6 +2837,9 @@ feedback_status() {
 
 feedback_list() {
   local f n=0 kind seen status sum
+  # The user looked, so start holds the reminder for a few days. An agent listing
+  # them, with its output captured, doesn't count.
+  [ ! -t 1 ] || ( tip_set used:feedback ) 2>/dev/null || true
   echo "Feedback on llm-wiki: $(feedback_mode). Notes in $(tilde "$FEEDBACK_DIR")"
   while IFS= read -r f; do
     [ -n "$f" ] || continue
@@ -4643,6 +4663,15 @@ EOF2
       [[ "$v" < "$cutoff" ]] && stale=$((stale + 1))
     done < <(grep -rh --include='*.md' --exclude-dir=sources '^verified:' "$d/wiki" 2>/dev/null | sed 's/^verified: *//' || true)
   done
+  n="$(feedback_notes new | grep -c . || true)"
+  if [ "${n:-0}" -gt 0 ]; then
+    any=1
+    if [ "$(feedback_mode)" = share ]; then
+      echo "- llm-wiki feedback: $n note(s) from agents about problems with llm-wiki itself. Run: $WIKI_CMD feedback, read each with $WIKI_CMD feedback show <id>, then file the ones worth fixing with $WIKI_CMD feedback send <id> (it asks before filing) and drop the rest with $WIKI_CMD feedback dismiss <id>"
+    else
+      echo "- llm-wiki feedback: $n note(s) from agents about problems with llm-wiki itself, kept on this machine. Run: $WIKI_CMD feedback"
+    fi
+  fi
   if [ "$stale" -gt 0 ]; then any=1; echo "- $stale page(s) not checked against their code in over 90 days. Run: $WIKI_CMD stale, then in each repository it names, ask an agent: \"re-check the stale pages\""; fi
   muted="$( [ ! -f "$TIPS_STATE" ] || awk '$1 ~ /^muted:/ { sub(/^muted:/, "", $1); printf "%s ", $1 }' "$TIPS_STATE")"
   if [ -n "$muted" ]; then any=1; echo "- Muted tips: ${muted% }. If everyone mutes one, it may not be worth keeping. Do: tell the llm-wiki maintainer which ones nobody uses. To see one again, run: $WIKI_CMD tips --unmute <name>"; fi

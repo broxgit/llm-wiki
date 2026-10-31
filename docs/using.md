@@ -292,7 +292,7 @@ Agents keep at most one note a session, at a stopping point, never in the middle
 | `wiki feedback send <id>` | Shows it, and files it if you say yes: with `gh` when it's signed in, or a filled-in form in your browser |
 | `wiki feedback dismiss <id>` | Drops one |
 
-Before a draft is shown, it's scrubbed: home paths, emails, git remotes, and the names of your projects, wikis and accounts are replaced. If `gitleaks` is installed, it checks for secrets too. Scrubbing catches what it knows about, not everything, so read the draft before you say yes. `wiki status` lists notes waiting under To do.
+Before a draft is shown, it's scrubbed: home paths, emails, git remotes, and the names of your projects, wikis and accounts are replaced. If `gitleaks` is installed, it checks for secrets too. Scrubbing catches what it knows about, not everything, so read the draft before you say yes. `wiki status` lists notes waiting under To do, and the weekly report lists them under Needs you, with how to read and file them. With `share`, an agent also reminds you, at most once a day: not for notes from today, and not for three days after you last ran `wiki feedback`.
 
 ## Tab completion
 
