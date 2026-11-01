@@ -59,7 +59,7 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - Cursor's own sessionStart hook (`wiki setup cursor`) in a live session without the Claude Code plugin: whether Cursor runs it outside its sandbox, so the pull works.
 - Codex's PostCompact hook in a live session. The smoke tests cover its reply; no Codex session has compacted with it yet.
 - Feedback in real use: whether agents keep notes unprompted, whether they pick real llm-wiki problems over their own mistakes, and whether the scrubbing misses private names in practice. Read the first filed issues closely.
-- The MCP server in the desktop app's Chat tab itself. Codex used it end to end on 2026-11-01, and the Claude CLI connected to it. Whether Chat sessions call `wiki_start` unprompted, and whether they capture without being asked.
+- The MCP server in the desktop app's Chat tab itself. On 2026-11-01, Codex used it end to end, and the Claude CLI on its cheapest model, with no other tools or settings, called `wiki_start` for a plain question and captured a decision without being asked. Whether Chat sessions do the same.
 - Patterns in real use: whether agents write `Feedback:` lines unprompted, and whether the thresholds are right.
 
 ## Decided against
