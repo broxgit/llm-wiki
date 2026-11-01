@@ -6,6 +6,12 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 
 ## Next
 
+### Reach web agents
+
+- **Why:** claude.ai, ChatGPT and other web agents can't run `wiki.sh` or read `~/wikis`, and they can't start a local MCP server. The local server covers the desktop app's Chat tab, not these.
+- **Sketch:** first test the cheap route: a web agent's GitHub connector reading a private collection repository, with a short instruction block on how to use it. If that leaves a real gap, consider a hosted MCP server.
+- **Open:** whether the GitHub route answers well enough, and whether it can capture notes through commits. A hosted server puts private notes behind a public URL, so it needs sign-in and a security review before it's worth building.
+
 ### Terse page style
 
 - **Why:** agents read pages far more often than people do. Measured on one sample page, terse notes in plain words used 56% of the tokens of default prose. The body alone used 45%.
@@ -24,7 +30,6 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 - **Merge requests in standups.** Reviews and MRs opened live in GitHub or GitLab, not in git history. Pulling them in would need an API token and a host per remote.
 - **Backfill from more places.** The desktop app's Chat tab and claude.ai aren't on disk, so they're out of reach without an agent that has chat search. (The desktop Code tab is in `~/.claude/projects`, and Gemini's Antigravity conversations are read since 2026-10-29.)
 - **Team digest.** A weekly roll-up across several people's journals, for a lead. Needs a shared, opt-in journal location.
-- **Reach sessions with no file access.** A chat session that can't read files can't use a wiki. A small MCP server over the collection would fix that.
 - **Review flow for teams.** Agents push straight to the collection. A team may want a weekly digest of changes, or pull requests.
 - **Obsidian.** Add `.obsidian/` to the template's `.gitignore` if anyone opens wikis as vaults.
 
@@ -54,6 +59,7 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - Cursor's own sessionStart hook (`wiki setup cursor`) in a live session without the Claude Code plugin: whether Cursor runs it outside its sandbox, so the pull works.
 - Codex's PostCompact hook in a live session. The smoke tests cover its reply; no Codex session has compacted with it yet.
 - Feedback in real use: whether agents keep notes unprompted, whether they pick real llm-wiki problems over their own mistakes, and whether the scrubbing misses private names in practice. Read the first filed issues closely.
+- The MCP server in the desktop app's Chat tab itself. Codex used it end to end on 2026-11-01, and the Claude CLI connected to it. Whether Chat sessions call `wiki_start` unprompted, and whether they capture without being asked.
 - Patterns in real use: whether agents write `Feedback:` lines unprompted, and whether the thresholds are right.
 
 ## Decided against
@@ -63,6 +69,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### A local MCP server, for sessions with no file access (2026-11-01)
+
+- **Why:** the desktop app's Chat tab can't read files or run commands, so it couldn't use a wiki at all.
+- **What changed:** `mcp/server.py`, standard-library Python started by `wiki mcp`, offers `wiki_list`, `wiki_start`, `wiki_search`, `wiki_read`, `wiki_status`, `wiki_capture` and `wiki_feedback`. All but reading go through `wiki.sh`. Reads stay inside the wiki, refusing `..`, absolute paths, links that lead out, and hidden folders. `wiki_capture` commits and pushes; a later session with file access compiles. `wiki setup chat` adds it to the desktop app's config, keeping everything else with a backup, and `wiki mcp --print` gives the entry for other clients.
 
 ### Feedback reminders: once a day, and in the weekly report (2026-10-31)
 

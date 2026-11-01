@@ -154,6 +154,8 @@ Usage: $WIKI_CMD <command> [options]
   feedback [show|send|dismiss <id>]
                        Notes agents kept about llm-wiki itself, and filing one as an
                        issue after you read it. Off until: setup feedback.
+  mcp [--print]        A local MCP server over the wikis, for sessions with no file
+                       access. An MCP client starts it. --print gives its config entry.
   report [--since R]   Weekly look: tokens per project, what the wikis gained, hit
                        rate, and what needs you. An agent writes it up.
   stats [range]        How often wikis answered the questions sessions checked them for (default 30d).
@@ -2951,6 +2953,86 @@ setup_feedback() {
   setup_mark feedback
 }
 
+# ---- MCP ---------------------------------------------------------------------
+# mcp/server.py is a small MCP server over the collections, for sessions with no
+# file access, such as the Claude desktop app's Chat tab. It runs this script for
+# everything but reading a file. setup adds it to the desktop app's config.
+CLAUDE_DESKTOP_DIR="${LLM_WIKI_DESKTOP_DIR:-$HOME/Library/Application Support/Claude}"
+CLAUDE_DESKTOP_CONFIG="$CLAUDE_DESKTOP_DIR/claude_desktop_config.json"
+
+# mcp_entry: the server's entry for an MCP client's config.
+mcp_entry() {
+  CMD="$(codex_cmd)" python3 -c 'import json, os; print(json.dumps({"command": os.environ["CMD"], "args": ["mcp"]}, indent=2))'
+}
+
+cmd_mcp() {
+  case "${1:-}" in
+    --print)
+      printf 'Add this under "mcpServers" in your MCP client'"'"'s config, as "llm-wiki":\n\n'
+      mcp_entry
+      return 0
+      ;;
+    "") ;;
+    *) die "mcp: no options, or --print for the config entry. It speaks MCP on stdin and stdout, for an MCP client to start." ;;
+  esac
+  command -v python3 >/dev/null 2>&1 || die "the MCP server needs python3"
+  local list
+  if [ -n "${LLM_WIKI_FIXED_DIR:-}" ]; then list="$(printf 'here\t%s' "$WIKIS_DIR")"; else list="$(collections)"; fi
+  # Apps started from the desktop get a short PATH, without Homebrew's tools.
+  exec env PATH="$PATH:/opt/homebrew/bin:/usr/local/bin" LLM_WIKI_SH="$REPO/wiki.sh" LLM_WIKI_COLLECTIONS="$list" python3 "$REPO/mcp/server.py"
+}
+
+# chat_state: none (no desktop app here), missing, old, or current.
+chat_state() {
+  [ -d "$CLAUDE_DESKTOP_DIR" ] || { echo none; return 0; }
+  command -v python3 >/dev/null 2>&1 || { echo none; return 0; }
+  CMD="$(codex_cmd)" python3 - "$CLAUDE_DESKTOP_CONFIG" 2>/dev/null <<'PY' || echo missing
+import json, os, sys
+e = (json.load(open(sys.argv[1])).get("mcpServers") or {}).get("llm-wiki")
+print("missing" if not e else "current" if e.get("command") == os.environ["CMD"] and e.get("args") == ["mcp"] else "old")
+PY
+}
+
+# chat_write: add the server to the desktop app's config. Everything else there stays.
+chat_write() {
+  mkdir -p "$CLAUDE_DESKTOP_DIR" || return 1
+  [ ! -f "$CLAUDE_DESKTOP_CONFIG" ] || cp -p "$CLAUDE_DESKTOP_CONFIG" "$CLAUDE_DESKTOP_CONFIG.bak-llm-wiki-$(date +%Y%m%d-%H%M%S)"
+  CMD="$(codex_cmd)" python3 - "$CLAUDE_DESKTOP_CONFIG" <<'PY'
+import json, os, sys
+p = sys.argv[1]
+c = json.load(open(p)) if os.path.exists(p) else {}
+c.setdefault("mcpServers", {})["llm-wiki"] = {"command": os.environ["CMD"], "args": ["mcp"]}
+tmp = p + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(c, f, indent=2)
+    f.write("\n")
+os.chmod(tmp, 0o600)
+os.replace(tmp, p)
+PY
+}
+
+setup_chat() {
+  local state
+  state="$(chat_state)"
+  [ "$state" != none ] || return 0
+  if [ "$SETUP_MODE" = new ] && { [ "$state" = current ] || { [ "$state" = missing ] && setup_done chat; }; }; then
+    return 0
+  fi
+  section "Claude desktop Chat"
+  case "$state" in
+    current) echo "The Chat tab can reach your wikis." ;;
+    old) if chat_write; then echo "Updated the llm-wiki server in the desktop app's config. Quit and reopen the Claude app to use it."; fi ;;
+    missing)
+      echo "The desktop app's Chat tab has no file access, so it can't use a wiki. A small local server gives it tools to search and read your wikis and save notes. It runs on this machine; nothing goes anywhere except the pushes to your own wiki remote."
+      if ask_yn "Add it to the desktop app's config? Everything else there stays, with a backup beside it." y; then
+        if chat_write; then echo "  added. Quit and reopen the Claude app, then ask a Chat something your wikis know."
+        else echo "  couldn't change the config. To add it by hand: $WIKI_CMD mcp --print"; fi
+      fi
+      setup_mark chat
+      ;;
+  esac
+}
+
 # ---- update -------------------------------------------------------------------
 # update [--wikis-only]: everything an update needs, in one command. Update the code
 # (the plugin, or this clone), then hand over to the new version with exec for the
@@ -4218,7 +4300,7 @@ EOF
 # Tab completion. `completion zsh|bash` prints a small script for the shell, which
 # asks `__complete` for candidates on every Tab. The candidates live here, so a
 # plugin update can't leave completion stale.
-COMMANDS="setup init new update start collections deps permissions seed harvest capture lock log sync index lint pending cover which status find stale patterns skills tips report stats feedback delegation upgrade unlock claude link journal standup completion"
+COMMANDS="setup init new update start collections deps permissions seed harvest capture lock log sync index lint pending cover which status find stale patterns skills tips report stats feedback mcp delegation upgrade unlock claude link journal standup completion"
 RANGES="lastworkday yesterday today week lastweek 7d 14d 30d"
 
 wiki_names() {
@@ -5159,6 +5241,10 @@ setup_pending() {
   if in_git_repo "$WIKIS_DIR"; then setup_done git.identity || echo git.identity; fi
   setup_done delegation.mode || echo delegation.mode
   setup_done feedback || echo feedback
+  case "$(chat_state)" in
+    old) echo chat ;;
+    missing) setup_done chat || echo chat ;;
+  esac
   if [ -d "$HOME/.claude" ] && [ -n "$(perm_missing)" ]; then setup_done claude.permissions || echo claude.permissions; fi
   case "$(agy_state)" in
     old) echo antigravity ;;
@@ -5560,6 +5646,7 @@ setup_list() {
   printf '%-19s %s' "feedback" "$(feedback_mode)"
   case "$pending" in *" feedback "*) printf '  <- new' ;; esac
   printf '\n'
+  [ "$(chat_state)" = none ] || echo "chat                server $(chat_state)"
 
   for k in $JOURNAL_KEYS; do
     v="$(journal_get "$k")"
@@ -5835,13 +5922,13 @@ Usage: $WIKI_CMD setup [--new | --list | <section> | <setting>]
   setup            Walk through every setting. Enter keeps what you have.
   setup --new      Only what's missing, out of date, or added since you last ran it.
   setup --list     Print current values without asking anything.
-  setup <section>  Just one section: collection, collections, tools, git, claude, permissions, antigravity, codex, cursor, upgrade, delegation, feedback, journal.
+  setup <section>  Just one section: collection, collections, tools, git, claude, permissions, antigravity, codex, cursor, upgrade, delegation, feedback, chat, journal.
   setup <setting>  Just one setting: git.identity, or journal.<key> such as journal.format.
                    A bare journal key works too: setup format.
 EOF
         return 0
         ;;
-      collection | collections | tools | git | claude | plugin | permissions | antigravity | codex | cursor | upgrade | skills | completion | journal | delegation | feedback | git.identity) what="$a" ;;
+      collection | collections | tools | git | claude | plugin | permissions | antigravity | codex | cursor | upgrade | skills | completion | journal | delegation | feedback | chat | git.identity) what="$a" ;;
       journal.*)
         [ -n "$(journal_field "${a#journal.}" 2)" ] || die "no journal setting called ${a#journal.}. Settings: $JOURNAL_KEYS"
         what="$a"
@@ -5869,6 +5956,7 @@ EOF
     journal) SETUP_MODE=all; setup_journal ;;
     delegation) SETUP_MODE=all; setup_delegation ;;
     feedback) SETUP_MODE=all; setup_feedback ;;
+    chat) SETUP_MODE=all; setup_chat ;;
     git.identity)
       in_git_repo "$WIKIS_DIR" || die "$(tilde "$WIKIS_DIR") isn't a git repo yet. Run: $WIKI_CMD setup git"
       setup_identity
@@ -5899,6 +5987,7 @@ EOF
       setup_upgrade
       setup_delegation
       setup_feedback
+      setup_chat
       setup_skills
       setup_completion
       setup_journal
@@ -6001,6 +6090,7 @@ case "$cmd" in
     ;;
   capture) cmd_capture "$@"; exit 0 ;;
   feedback) cmd_feedback "$@"; exit 0 ;;
+  mcp) cmd_mcp "$@"; exit 0 ;;
   lock) cmd_lock "$@"; exit 0 ;;
   log) cmd_log "$@"; exit 0 ;;
   sync) cmd_sync "$@"; exit 0 ;;
