@@ -92,7 +92,17 @@ For tighter control, two alternatives:
 
 - **Stricter, Claude Code only.** A sentence relies on the agent choosing to open the file. An import loads it every time. Put `@~/wikis/<repository-name>/AGENTS.md` on its own line in the project's `CLAUDE.md`. That costs roughly 2,900 tokens in every session.
 
-**The desktop app's Chat tab and claude.ai:** they have no instruction file to put the line in. Zip the `skills/llm-wiki` folder, with the folder at the zip root, and add it under Customize > Skills. The skill finds wikis in the folders a conversation can reach, so connect `~/wikis` too.
+**The desktop app's Chat tab:** it can't read files or run commands, so it reaches your wikis through a small local server:
+
+```
+wiki setup chat
+```
+
+It adds the server to the app's config, keeping everything else there with a backup beside it. Quit and reopen the app. Chats then have tools to search and read your wikis, see what needs attention, and save notes, which it commits and pushes. A later session with file access compiles them. The server runs on your machine, and reads stay inside your wikis.
+
+**Other MCP clients:** `wiki mcp --print` gives the config entry. Any client that starts local MCP servers can use it.
+
+**claude.ai and other web agents:** they can't start a local server, so this doesn't reach them yet. They have no instruction file either. Zip the `skills/llm-wiki` folder, with the folder at the zip root, and add it under Customize > Skills. The skill finds wikis in the folders a conversation can reach.
 
 ## Check that it works
 

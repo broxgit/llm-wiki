@@ -329,6 +329,7 @@ Run `wiki` with no arguments for the full list. The ones you're likely to use:
 | `wiki cover <wiki> <repo>...` | One wiki for several repositories. |
 | `wiki unlock <name>` | Free a stuck compile lock. |
 | `wiki capture <wiki> <slug>` | Save a note piped in, named from the clock. Mostly for agents. |
+| `wiki mcp` | A local MCP server over your wikis, for sessions with no file access, such as the desktop app's Chat tab. `wiki setup chat` adds it there. |
 | `wiki lock`, `wiki log`, `wiki sync` | The compile lock, a log entry, and commit-pull-push for one wiki. With no wiki named, `sync` uses this repository's. Mostly for agents. |
 | `wiki index <wiki>` | Bring `index.md` in step with the pages' titles and summaries, keeping its order and headings. |
 | `wiki lint <wiki>`, `--all` | The mechanical health checks: broken links and citations, index gaps, frontmatter, size, stale pages, waiting notes. Changes nothing. |
