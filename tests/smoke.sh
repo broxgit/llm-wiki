@@ -960,6 +960,7 @@ out="$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"p
 check "initialize answers in the client's protocol version, with instructions" python3 -c "import json,sys; r=json.loads(sys.argv[1].splitlines()[0])['result']; assert r['protocolVersion']=='2025-03-26' and 'wiki_start' in r['instructions'] and 'tools' in r['capabilities']" "$out"
 check "a notification gets no reply, bad JSON a parse error, and the server carries on" python3 -c "import json,sys; l=[json.loads(x) for x in sys.argv[1].splitlines()]; assert len(l)==5 and l[1]['error']['code']==-32700 and l[2]['id']==2 and l[3]['error']['code']==-32601" "$out"
 check "it lists its tools, each with a schema" python3 -c "import json,sys; t=json.loads(sys.argv[1].splitlines()[4])['result']['tools']; assert [x['name'] for x in t]==['wiki_list','wiki_start','wiki_search','wiki_read','wiki_status','wiki_capture','wiki_feedback'] and all(x['inputSchema']['type']=='object' for x in t)" "$out"
+check "it tells chat agents the wikis come before memory and past chats" python3 -c "import json,sys; l=sys.argv[1].splitlines(); r=json.loads(l[0])['result']['instructions']; t={x['name']:x['description'] for x in json.loads(l[4])['result']['tools']}; assert 'before memory' in r and 'before memory' in t['wiki_start'] and 'before memory' in t['wiki_search']" "$out"
 expect "wiki_list lists the wikis and what they cover" "covers: api web" mcp_call wiki_list
 expect "wiki_start finds the project's wiki" "/demo, for the repository web" mcp_call wiki_start '{"repository":"web"}'
 expect "with no project, the shared wiki" "Not in a repository" mcp_call wiki_start
@@ -986,9 +987,26 @@ D="$T/desktop"
 lacks "without the desktop app, setup --list says nothing about Chat" "chat   " env LLM_WIKI_DESKTOP_DIR="$D" "$W" setup --list
 mkdir -p "$D" && printf '{"preferences":{"x":1},"mcpServers":{"other":{"command":"o"}}}\n' > "$D/claude_desktop_config.json"
 expect "with it, setup --list shows the server missing" "server missing" env LLM_WIKI_DESKTOP_DIR="$D" "$W" setup --list
-expect "setup chat adds it" "added. Quit and reopen" bash -c "printf 'y\n' | LLM_WIKI_TEST_TTY=1 LLM_WIKI_DESKTOP_DIR='$D' '$W' setup chat"
+# The app rewrites its config as it runs, so setup must write only once it's closed.
+sleep 4242 & FAKE=$!
+out="$(LLM_WIKI_DESKTOP_DIR="$D" LLM_WIKI_DESKTOP_PROC="^sleep 4242" "$W" setup chat --yes </dev/null 2>&1)" && bad "--yes refuses while the app is open" "$out" || case "$out" in *"nothing was changed"*"quit the app"*) ok "--yes refuses while the app is open" ;; *) bad "--yes refuses while the app is open" "$out" ;; esac
+kill "$FAKE" 2>/dev/null; wait "$FAKE" 2>/dev/null || true
+expect "and changes nothing" "server missing" env LLM_WIKI_DESKTOP_DIR="$D" "$W" setup --list
+# An agent runs inside the app, so the app is its ancestor.
+printf '#!/bin/sh\nLLM_WIKI_DESKTOP_DIR="%s" LLM_WIKI_DESKTOP_PROC="fake-app-4242" "%s" setup chat --yes </dev/null\nexit 0\n' "$D" "$W" > "$T/fake-app-4242"; chmod +x "$T/fake-app-4242"
+expect "it sees the app when running inside it" "nothing was changed" "$T/fake-app-4242"
+rm -f "$T/fake-app-4242"
+sleep 4242 & FAKE=$!
+( sleep 2; kill "$FAKE" 2>/dev/null ) &
+out="$(printf 'y\n' | LLM_WIKI_TEST_TTY=1 LLM_WIKI_DESKTOP_DIR="$D" LLM_WIKI_DESKTOP_PROC="^sleep 4242" "$W" setup chat 2>&1)"
+wait "$FAKE" 2>/dev/null || true
+case "$out" in *"Quit the Claude app now"*"added. Open the Claude app"*) ok "asked with the app open, setup waits until it's closed, then writes" ;; *) bad "asked with the app open, setup waits until it's closed, then writes" "$out" ;; esac
 check "keeping everything else in the config" python3 -c "import json,sys; c=json.load(open(sys.argv[1])); assert c['preferences']=={'x':1} and c['mcpServers']['other']=={'command':'o'} and c['mcpServers']['llm-wiki']['args']==['mcp']" "$D/claude_desktop_config.json"
+case "$out" in *"personal preferences"*"Check them before memory or past chats"*) ok "and gives the line for the user's profile preferences" ;; *) bad "and gives the line for the user's profile preferences" "$out" ;; esac
 check "with a backup beside it" bash -c "ls '$D' | grep -q 'claude_desktop_config.json.bak-llm-wiki-'"
+printf '{"mcpServers":{}}\n' > "$D/claude_desktop_config.json"
+expect "--yes adds it with no terminal when the app is closed" "added. Open the Claude app" env LLM_WIKI_DESKTOP_DIR="$D" LLM_WIKI_DESKTOP_PROC="^no such process" "$W" setup chat --yes
+expect "--yes works only for chat" "--yes works only with" "$W" setup git --yes
 expect "and setup --list shows it current" "server current" env LLM_WIKI_DESKTOP_DIR="$D" "$W" setup --list
 rm -rf "$D"
 

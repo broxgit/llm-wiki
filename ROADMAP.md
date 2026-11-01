@@ -59,7 +59,7 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - Cursor's own sessionStart hook (`wiki setup cursor`) in a live session without the Claude Code plugin: whether Cursor runs it outside its sandbox, so the pull works.
 - Codex's PostCompact hook in a live session. The smoke tests cover its reply; no Codex session has compacted with it yet.
 - Feedback in real use: whether agents keep notes unprompted, whether they pick real llm-wiki problems over their own mistakes, and whether the scrubbing misses private names in practice. Read the first filed issues closely.
-- The MCP server in the desktop app's Chat tab itself. On 2026-11-01, Codex used it end to end, and the Claude CLI on its cheapest model, with no other tools or settings, called `wiki_start` for a plain question and captured a decision without being asked. Whether Chat sessions do the same.
+- The MCP server in the desktop app's Chat tab itself. On 2026-11-01, Codex used it end to end, and the Claude CLI on its cheapest model, with no other tools or settings, called `wiki_start` for a plain question and captured a decision without being asked. The Chat tab itself did not: asked plainly, it answered from memory and past chats (handbook v12), even after the server's instructions said the wikis come first. Told to use the tools, it found the right rule and cited the page. So setup now gives a line for the user's profile preferences. Whether that line is enough for plain questions.
 - Patterns in real use: whether agents write `Feedback:` lines unprompted, and whether the thresholds are right.
 
 ## Decided against
@@ -69,6 +69,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### `wiki setup chat` waits for the app to close (2026-11-01)
+
+- **Why:** the desktop app rewrites its config while it runs, from its own copy, so an entry added meanwhile is gone within about two minutes. Setup wrote it with the app open, then said to quit and reopen.
+- **What changed:** asked with the app open, setup waits until it's closed before writing. `wiki setup chat --yes` does the step with no terminal, for an agent the user told to, and refuses while the app is open. An agent's feedback note asked for that form.
 
 ### A local MCP server, for sessions with no file access (2026-11-01)
 
