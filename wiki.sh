@@ -3011,6 +3011,39 @@ os.replace(tmp, p)
 PY
 }
 
+# chat_note: what setup can't do. Chat reads its memory and past chats first, and
+# only a line in the user's profile preferences, which it reads every time, moves
+# it to the wikis (a real Chat, 2026-11-01).
+chat_note() {
+  cat <<'EOF2'
+  One more step, in the app: Chat checks its memory and past chats first, even with the tools connected. In Settings > Profile, add this to your personal preferences:
+
+    My knowledge wikis are available through the llm-wiki tools. They're my current record of my rules, decisions, projects and past work. Check them before memory or past chats, and trust them when they disagree.
+
+EOF2
+}
+
+# chat_app_running: whether the desktop app is open. It rewrites its config as it
+# runs, from its own copy, so an entry added meanwhile is gone within minutes.
+# ps, not pgrep: BSD pgrep leaves out its own ancestors, and an agent runs inside the app.
+chat_app_running() { ps -axo command= 2>/dev/null | grep -E "${LLM_WIKI_DESKTOP_PROC:-/Claude\.app/Contents/MacOS/Claude( |\$)}" >/dev/null; }
+
+# chat_wait_closed: return once the app is closed, so the write sticks. With --yes,
+# for an agent, which the app's quitting would end: refuse instead of waiting.
+chat_wait_closed() {
+  chat_app_running || return 0
+  if [ -n "${SETUP_YES:-}" ]; then
+    echo "The Claude app is open, so nothing was changed: it rewrites this config as it runs, and would drop the entry."
+    echo "Ask the user to quit the app, then run this in the Terminal app: $WIKI_CMD setup chat"
+    return 1
+  fi
+  echo "The Claude app is open. It rewrites this config as it runs and would drop the entry, so this waits until it's closed."
+  echo "If this is the app's own Terminal panel, press Ctrl-C and run it in the Terminal app instead: quitting the app ends this panel."
+  echo "Quit the Claude app now (Cmd+Q). Waiting..."
+  while chat_app_running; do sleep 1; done
+  sleep 1
+}
+
 setup_chat() {
   local state
   state="$(chat_state)"
@@ -3020,13 +3053,14 @@ setup_chat() {
   fi
   section "Claude desktop Chat"
   case "$state" in
-    current) echo "The Chat tab can reach your wikis." ;;
-    old) if chat_write; then echo "Updated the llm-wiki server in the desktop app's config. Quit and reopen the Claude app to use it."; fi ;;
+    current) echo "The Chat tab can reach your wikis."; chat_note ;;
+    old) if chat_wait_closed && chat_write; then echo "Updated the llm-wiki server in the desktop app's config. Open the Claude app to use it."; fi ;;
     missing)
       echo "The desktop app's Chat tab has no file access, so it can't use a wiki. A small local server gives it tools to search and read your wikis and save notes. It runs on this machine; nothing goes anywhere except the pushes to your own wiki remote."
       if ask_yn "Add it to the desktop app's config? Everything else there stays, with a backup beside it." y; then
-        if chat_write; then echo "  added. Quit and reopen the Claude app, then ask a Chat something your wikis know."
-        else echo "  couldn't change the config. To add it by hand: $WIKI_CMD mcp --print"; fi
+        chat_wait_closed || return 1
+        if chat_write; then echo "  added. Open the Claude app."; chat_note; echo "  Then ask a new Chat something your wikis know."
+        else echo "  couldn't change the config. To add it by hand, with the app closed: $WIKI_CMD mcp --print"; fi
       fi
       setup_mark chat
       ;;
@@ -5277,6 +5311,7 @@ section() { printf '\n== %s\n' "$1"; }
 # ask_yn <question> <y|n>: succeed for yes.
 ask_yn() {
   local r hint="[y/N]"
+  [ -z "${SETUP_YES:-}" ] || return 0
   [ "$2" = y ] && hint="[Y/n]"
   while :; do
     printf '%s %s ' "$1" "$hint"
@@ -5915,6 +5950,7 @@ cmd_setup() {
     case "$a" in
       --new) SETUP_MODE=new ;;
       --list) setup_list; return 0 ;;
+      --yes) SETUP_YES=1 ;;
       -h | --help)
         cat <<EOF
 Usage: $WIKI_CMD setup [--new | --list | <section> | <setting>]
@@ -5923,6 +5959,7 @@ Usage: $WIKI_CMD setup [--new | --list | <section> | <setting>]
   setup --new      Only what's missing, out of date, or added since you last ran it.
   setup --list     Print current values without asking anything.
   setup <section>  Just one section: collection, collections, tools, git, claude, permissions, antigravity, codex, cursor, upgrade, delegation, feedback, chat, journal.
+  setup chat --yes Add the Chat tab's server without asking, for an agent the user told to. The app must be closed.
   setup <setting>  Just one setting: git.identity, or journal.<key> such as journal.format.
                    A bare journal key works too: setup format.
 EOF
@@ -5941,8 +5978,9 @@ EOF
         ;;
     esac
   done
+  [ -z "${SETUP_YES:-}" ] || [ "$what" = chat ] || die "--yes works only with: $WIKI_CMD setup chat"
   # LLM_WIKI_TEST_TTY: the smoke tests answer setup's questions through a pipe.
-  [ -t 0 ] || [ -n "${LLM_WIKI_TEST_TTY:-}" ] || die "setup asks questions, so it needs a terminal. $WIKI_CMD setup --list prints the current values."
+  [ -n "${SETUP_YES:-}" ] || [ -t 0 ] || [ -n "${LLM_WIKI_TEST_TTY:-}" ] || die "setup asks questions, so it needs a terminal. $WIKI_CMD setup --list prints the current values."
   if [ "$SETUP_MODE" = new ] && [ -d "$WIKIS_DIR" ] && [ "$(claude_state)" = current ] && ! plugin_pending; then
     n="$(setup_pending | wc -l | tr -d ' ')"
     [ "$n" -gt 0 ] || [ -n "$(setup_upgrade_needed)" ] || { echo "Nothing new to set up."; return 0; }

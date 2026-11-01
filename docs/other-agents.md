@@ -98,7 +98,9 @@ For tighter control, two alternatives:
 wiki setup chat
 ```
 
-It adds the server to the app's config, keeping everything else there with a backup beside it. Quit and reopen the app. Chats then have tools to search and read your wikis, see what needs attention, and save notes, which it commits and pushes. A later session with file access compiles them. The server runs on your machine, and reads stay inside your wikis.
+Run it in the Terminal app, not at a `claude` prompt or in the app's own Terminal panel. The app rewrites this config while it runs and would drop the entry, so setup waits for you to quit the app before it writes. It keeps everything else there, with a backup beside it. Open the app again, then add the line setup prints to your personal preferences under Settings > Profile. Without it, Chat answers from its memory and past chats, even when those are out of date, and uses the tools only if you ask. Chats then have tools to search and read your wikis, see what needs attention, and save notes, which it commits and pushes. A later session with file access compiles them. The server runs on your machine, and reads stay inside your wikis.
+
+An agent you've told to do it can run `wiki setup chat --yes`, which refuses while the app is open.
 
 **Other MCP clients:** `wiki mcp --print` gives the config entry. Any client that starts local MCP servers can use it.
 
