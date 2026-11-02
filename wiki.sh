@@ -64,6 +64,17 @@ collection_for() {
   printf '%s' "$DEFAULT_WIKIS"
 }
 
+# set_collection <folder>: switch collection partway through a run, as the hooks do for
+# the folder they're given, and keep the paths derived from it in step.
+set_collection() {
+  WIKIS_DIR="$1"
+  JOURNAL_DIR="$WIKIS_DIR/journal"
+  JOURNAL_CFG="$JOURNAL_DIR/config"
+  STATS_FILE="$WIKIS_DIR/stats.csv"
+  DELEG_FILE="$WIKIS_DIR/delegation.md"
+  DELEG_LOG="$WIKIS_DIR/delegation-log.csv"
+}
+
 # --collection NAME, anywhere on the command line, picks a collection by name.
 pick=""
 args=()
@@ -407,7 +418,7 @@ cmd_start() {
     repo="$arg"
   fi
   # A folder named on the command line decides the collection, as $PWD would.
-  if [ -d "$arg" ] && [ -z "${pick:-}" ] && [ -z "${LLM_WIKI_FIXED_DIR:-}" ]; then WIKIS_DIR="$(collection_for "$arg")"; fi
+  if [ -d "$arg" ] && [ -z "${pick:-}" ] && [ -z "${LLM_WIKI_FIXED_DIR:-}" ]; then set_collection "$(collection_for "$arg")"; fi
   [ -d "$WIKIS_DIR" ] || die "no wikis at $(tilde "$WIKIS_DIR"). Run: $WIKI_CMD setup"
   if [ -n "$repo" ]; then w="$(which_wiki "$repo")"; [ -z "$w" ] || wiki="$WIKIS_DIR/$w"; fi
   if [ -z "$wiki" ]; then
@@ -671,7 +682,7 @@ cmd_log() {
   done
   root="$(wiki_root "$wiki")"
   case "$type" in
-    ingest) [ -n "$title" ] || die "an ingest entry needs the source page's title"; conflicts="${conflicts:-0}" ;;
+    ingest) [ -n "$title" ] || die "an ingest entry needs a title: what the note was about"; conflicts="${conflicts:-0}" ;;
     lint | restructure | resolve) ;;
     *) die "log types: ingest, lint, restructure, resolve" ;;
   esac
@@ -734,7 +745,7 @@ track_remote() {
 # the name off got only "name a wiki" (2026-10-30).
 sync_default_wiki() {
   local top repo w
-  [ -n "${pick:-}" ] || [ -n "${LLM_WIKI_FIXED_DIR:-}" ] || WIKIS_DIR="$(collection_for "$PWD")"
+  [ -n "${pick:-}" ] || [ -n "${LLM_WIKI_FIXED_DIR:-}" ] || set_collection "$(collection_for "$PWD")"
   case "$(pwd -P)/" in
     "$(cd "$WIKIS_DIR" 2>/dev/null && pwd -P)"/*/*)
       w="$(pwd -P)"; w="${w#"$(cd "$WIKIS_DIR" && pwd -P)"/}"; w="${w%%/*}"
@@ -1133,14 +1144,18 @@ compiled_stems() {
 
 # pending_files <wiki root>: raw files not compiled yet, oldest first.
 pending_files() {
-  local f b done_
-  done_="$(compiled_stems "$1" | sort -u)"
-  for f in "$1"/raw/*; do
-    [ -f "$f" ] || continue
-    b="${f##*/}"
-    case "$b" in .*) continue ;; esac
-    printf '%s\n' "$done_" | grep -qxF -- "${b%.*}" || printf '%s\n' "$f"
-  done
+  local f b
+  # One pass, not a grep per note: this runs at every session start.
+  {
+    compiled_stems "$1" || true
+    echo "//raw//"
+    for f in "$1"/raw/*; do
+      [ -f "$f" ] || continue
+      b="${f##*/}"
+      case "$b" in .*) continue ;; esac
+      printf '%s\n' "$f"
+    done
+  } | awk '$0 == "//raw//" { raw = 1; next } !raw { done_[$0] = 1; next } { b = $0; sub(/.*\//, "", b); sub(/\.[^.]*$/, "", b); if (!(b in done_)) print }'
 }
 
 # unlisted <wiki root>: the first of raw/ and wiki/sources/ that exists but can't be
@@ -1912,10 +1927,12 @@ cmd_upgrade_all() {
   write_delegation_file
   apply_delegation_ignore
   # Team skills into whichever agents are on this machine.
-  if [ -d "$HOME/.claude" ] || [ -d "$AGY_DIR" ]; then
+  if [ -d "$HOME/.claude" ] || [ -d "$AGY_DIR" ] || [ -f "$CODEX_PLUGIN/.codex-plugin/plugin.json" ] || [ -d "$CURSOR_DIR/skills" ]; then
     echo "== skills"
     [ ! -d "$HOME/.claude" ] || skills_link_into "$SKILLS_DIR" quiet
     [ ! -d "$AGY_DIR" ] || skills_link_into "$AGY_DIR/skills" quiet
+    [ ! -f "$CODEX_PLUGIN/.codex-plugin/plugin.json" ] || skills_link_into "$CODEX_DIR/skills" quiet
+    case "$(cursor_state)" in current | old) skills_link_into "$CURSOR_DIR/skills" quiet ;; esac
   fi
   upgrade_summary "$from" "$behind"
 }
@@ -2226,7 +2243,7 @@ p = p[0] if p else ""
 print(p[7:] if p.startswith("file://") else p)' 2>/dev/null || true)"
   [ -n "$dir" ] && [ -d "$dir" ] || dir="$HOME"
   # The workspace decides the collection, unless one was named.
-  [ -n "${pick:-}" ] || [ -n "${LLM_WIKI_FIXED_DIR:-}" ] || WIKIS_DIR="$(collection_for "$dir")"
+  [ -n "${pick:-}" ] || [ -n "${LLM_WIKI_FIXED_DIR:-}" ] || set_collection "$(collection_for "$dir")"
   # Antigravity runs the hook by its full path. Commands in the reply must be ones
   # the model can run, not ./wiki.sh.
   WIKI_CMD="$(agy_cmd)"
@@ -2409,7 +2426,7 @@ EOF2
   if [ "$event" = PostCompact ]; then
     msg="llm-wiki: $capture"
   else
-    [ -n "${pick:-}" ] || [ -n "${LLM_WIKI_FIXED_DIR:-}" ] || WIKIS_DIR="$(collection_for "$dir")"
+    [ -n "${pick:-}" ] || [ -n "${LLM_WIKI_FIXED_DIR:-}" ] || set_collection "$(collection_for "$dir")"
     # Keep the rule and skills current, so an update reaches the next session.
     if [ -f "$CODEX_PLUGIN/.codex-plugin/plugin.json" ]; then
       { [ -z "$(codex_line)" ] || codex_rule_write; codex_links; } >/dev/null 2>&1 || true
@@ -2543,7 +2560,7 @@ except Exception:
     p = []
 print(p[0] if p else "")' 2>/dev/null || true)"
   [ -n "$dir" ] && [ -d "$dir" ] || dir="${CURSOR_PROJECT_DIR:-$HOME}"
-  [ -n "${pick:-}" ] || [ -n "${LLM_WIKI_FIXED_DIR:-}" ] || WIKIS_DIR="$(collection_for "$dir")"
+  [ -n "${pick:-}" ] || [ -n "${LLM_WIKI_FIXED_DIR:-}" ] || set_collection "$(collection_for "$dir")"
   WIKI_CMD="$(tilde "$(cursor_cmd)")"
   { [ "$(cursor_state)" = none ] || cursor_links; } >/dev/null 2>&1 || true
   out="$( (cmd_start "$dir") 2>&1 || true)"
@@ -2742,8 +2759,12 @@ feedback_find() {
 # feedback_private: names to scrub from a draft, one per line: the projects in
 # code_dirs, the wikis, and who the user is. llm-wiki and the shared wiki stay.
 feedback_private() {
-  local d r
-  for d in "$WIKIS_DIR"/*/; do d="${d%/}"; is_wiki "$d" && printf '%s\n' "${d##*/}"; done
+  local d r n f
+  # Every collection's, not just this one's: a work wiki's name must not reach a public issue.
+  # A pipe, not < <(...), which can interrupt a printf on bash 3.2, as in perm_rules.
+  { collections; printf 'here\t%s\t\n' "$WIKIS_DIR"; } | while IFS="$TAB" read -r n f _; do
+    for d in "$f"/*/; do d="${d%/}"; ! is_wiki "$d" || printf '%s\n' "${d##*/}"; done
+  done
   find_repos 2>/dev/null | while IFS= read -r r; do
     repo_name "$r"; printf '\n%s\n' "${r##*/}"
     # The account or group a remote lives under: github.com:<owner>/ or github.com/<owner>/.
@@ -2979,7 +3000,7 @@ cmd_mcp() {
   local list
   if [ -n "${LLM_WIKI_FIXED_DIR:-}" ]; then list="$(printf 'here\t%s' "$WIKIS_DIR")"; else list="$(collections)"; fi
   # Apps started from the desktop get a short PATH, without Homebrew's tools.
-  exec env PATH="$PATH:/opt/homebrew/bin:/usr/local/bin" LLM_WIKI_SH="$REPO/wiki.sh" LLM_WIKI_COLLECTIONS="$list" python3 "$REPO/mcp/server.py"
+  exec env PATH="$PATH:/opt/homebrew/bin:/usr/local/bin" LLM_WIKI_SH="$REPO/wiki.sh" LLM_WIKI_SHARED="$SHARED" LLM_WIKI_COLLECTIONS="$list" python3 "$REPO/mcp/server.py"
 }
 
 # chat_state: none (no desktop app here), missing, old, or current.
@@ -4379,7 +4400,7 @@ cmd_complete() {
     log)
       if [ "$i" -eq 2 ]; then wiki_names
       elif [ "$i" -eq 3 ]; then printf 'ingest\nlint\nrestructure\nresolve\n'
-      else printf -- '--created\n--updated\n--fixed\n--reported\n--corrections\n--conflicts\n--patterns\n'; fi
+      else printf -- '--source\n--created\n--updated\n--fixed\n--reported\n--corrections\n--conflicts\n--patterns\n'; fi
       ;;
     cover) [ "$i" -eq 2 ] && wiki_names ;;
     seed) [ "$i" -eq 2 ] && echo __dirs__; printf -- '--wiki\n--max\n--dry-run\n' ;;
@@ -4398,7 +4419,7 @@ cmd_complete() {
     init) echo --git ;;
     completion) printf 'zsh\nbash\n' ;;
     setup)
-      printf -- '--new\n--list\ncollection\ngit\ngit.identity\nclaude\nplugin\npermissions\ncollections\ntools\nantigravity\nupgrade\nskills\ndelegation\njournal\n'
+      printf -- '--new\n--list\ncollection\ngit\ngit.identity\nclaude\nplugin\npermissions\ncollections\ntools\nantigravity\ncodex\ncursor\nfeedback\nchat\nupgrade\nskills\ndelegation\njournal\n'
       for k in $JOURNAL_KEYS; do printf 'journal.%s\n' "$k"; done
       ;;
     journal)
@@ -4719,7 +4740,7 @@ report_gains() {
     REPORT_FEEDBACK=$((REPORT_FEEDBACK + fb))
     local skills
     skills=0
-    [ ! -d "$d/skills" ] || skills="$(find "$d/skills" -name SKILL.md -newermt "$s" 2>/dev/null | wc -l | tr -d ' ')"
+    [ ! -d "$d/skills" ] || skills="$(find "$d/skills" -name SKILL.md -newermt "$s" ! -newermt "$e 23:59:59" 2>/dev/null | wc -l | tr -d ' ')"
     [ "$notes$1$2$3$4$skills" != "000000" ] || continue
     any=1
     printf -- '- %s: %s note(s) captured, %s compiled, pages %s created and %s updated%s%s\n' "${d##*/}" "$notes" "${1:-0}" "${2:-0}" "${3:-0}" \

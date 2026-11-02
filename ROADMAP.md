@@ -56,6 +56,7 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - Feedback in real use: whether agents keep notes unprompted, whether they pick real llm-wiki problems over their own mistakes, and whether the scrubbing misses private names in practice. Read the first filed issues closely.
 - The MCP server in the desktop app's Chat tab itself. On 2026-11-01, Codex used it end to end, and the Claude CLI on its cheapest model, with no other tools or settings, called `wiki_start` for a plain question and captured a decision without being asked. The Chat tab itself did not: asked plainly, it answered from memory and past chats (handbook v12), even after the server's instructions said the wikis come first. Told to use the tools, it found the right rule and cited the page. So setup now gives a line for the user's profile preferences, and with it a plain question went to the wikis (one test, 2026-11-01). Whether it holds across other subjects, and whether Chats capture without being asked.
 - The GitHub route beyond one test: how a Project answers a question its files don't cover, how much of a collection fits, a whole repository added to a plain chat, and other web agents' GitHub connectors.
+- An intermittent failure of 4 smoke tests on bash 3.2, seen once on 2026-11-02 with its output not kept. It may be the `done < <(...)` pattern, which can interrupt a `printf` on bash 3.2 and still appears about 16 times in `wiki.sh`.
 - Patterns in real use: whether agents write `Feedback:` lines unprompted, and whether the thresholds are right.
 
 ## Decided against
@@ -65,6 +66,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Fixes from a review by Gemini (2026-11-02)
+
+- **Why:** Gemini reviewed the code. About a third of its findings didn't match the code once checked; these did.
+- **What changed:** drafted feedback issues now scrub wiki names from every collection, not just the current one. The MCP server logs Chat's lookups to `stats.csv`: reading pages counts as one hit per ten minutes per wiki, and a search that finds nothing as a miss. `upgrade --all` links team skills for Codex and Cursor too. `pending_files` makes one pass instead of a grep per note. `set_collection` keeps the journal, stats and delegation paths in step when a hook switches collection. Tab completion knows `log --source` and the newer setup sections. `.local-work` is git-ignored.
 
 ### Web agents read the wikis through GitHub (2026-11-02)
 

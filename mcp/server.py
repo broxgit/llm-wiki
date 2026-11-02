@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 
 WIKI_SH = os.environ.get("LLM_WIKI_SH", "")
 PROTOCOL = "2025-06-18"
@@ -18,6 +19,8 @@ MAX_READ = 200_000
 MAX_NOTE = 200_000
 READABLE = (".md", ".csv", ".txt")
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+LOOKUP_WINDOW = 600
+LOOKUPS = {}
 
 INSTRUCTIONS = """These tools reach the user's knowledge wikis: plain markdown, one wiki per project, plus a shared one. They are the user's current record of their rules, preferences, decisions, projects and past work.
 Your memory and past chats can be out of date, so check the wikis first, before memory or past-chat search, for anything on those subjects. When they disagree, go with the wiki and say so.
@@ -102,6 +105,25 @@ def must(folder, *args, stdin=None):
     return out
 
 
+def log_lookup(folder, wiki, result):
+    """One line in stats.csv, as the handbook asks of sessions with a shell. Chat can't
+    append to a file, so the server does it. It must never fail a lookup."""
+    now = time.time()
+    # Several reads for one question count once.
+    if result == "hit" and now - LOOKUPS.get(wiki, 0) < LOOKUP_WINDOW:
+        return
+    LOOKUPS[wiki] = now
+    path = os.path.join(folder, "stats.csv")
+    try:
+        new = not os.path.exists(path)
+        with open(path, "a") as f:
+            if new:
+                f.write("date,wiki,result\n")
+            f.write("%s,%s,%s\n" % (time.strftime("%Y-%m-%d", time.gmtime(now)), wiki, result))
+    except OSError:
+        pass
+
+
 def wiki_list(_):
     lines = []
     for name, folder in collections():
@@ -136,12 +158,14 @@ def wiki_search(args):
     parts = []
     for name, folder in chosen:
         out = must(folder, "find", word)
+        if out.startswith("no mentions"):
+            log_lookup(folder, os.environ.get("LLM_WIKI_SHARED", "global"), "miss")
         parts.append("Collection %s:\n%s" % (name, out) if len(chosen) > 1 else out)
     return "\n\n".join(parts)
 
 
 def wiki_read(args):
-    _, _, root = find_wiki(args.get("wiki"), args.get("collection"))
+    _, folder, root = find_wiki(args.get("wiki"), args.get("collection"))
     rel = args.get("path") or "index.md"
     if os.path.isabs(rel) or rel.startswith("~"):
         raise ToolError("give a path inside the wiki, such as index.md or wiki/conventions.md.")
@@ -160,6 +184,8 @@ def wiki_read(args):
         raise ToolError("no file %s in that wiki. Its index.md lists the pages." % rel)
     if len(text) > MAX_READ:
         text = text[:MAX_READ] + "\n\n[cut off at %d characters]" % MAX_READ
+    if inside.startswith("wiki" + os.sep):
+        log_lookup(folder, args["wiki"], "hit")
     return text
 
 
