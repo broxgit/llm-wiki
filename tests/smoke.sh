@@ -570,6 +570,7 @@ expect "with no wiki behind, upgrade still commits collection changes" 'Committe
 check "and the ignore rules are anchored" grep -qx '/delegation.md' "$WIKIS_DIR/.gitignore"
 
 section "Stats"
+rm -f "$WIKIS_DIR/stats.csv"
 expect "stats with no log says so" "No lookups logged yet" "$W" stats
 check "stats.csv is git-ignored" git -C "$WIKIS_DIR" check-ignore -q stats.csv
 today="$(date -u +%Y-%m-%d)"
@@ -577,6 +578,23 @@ printf 'date,wiki,result\n%s,demo,hit\n%s,demo,miss\n%s,global,hit\n2000-01-01,d
 expect "stats computes a wiki's hit rate" "50%" "$W" stats
 expect "stats totals every wiki" "67%" "$W" stats
 lacks "stats leaves out lookups before the range" "25%" "$W" stats
+expect "stats says most sessions don't log" "Most sessions don't log" "$W" stats
+"$W" find zzznothingmatches >/dev/null
+check "find logs a search that found nothing, with its word" bash -c "tail -n 1 '$WIKIS_DIR/stats.csv' | grep -q ',global,search-none,zzznothingmatches$'"
+"$W" find canary >/dev/null
+check "and one that found something" bash -c "tail -n 1 '$WIKIS_DIR/stats.csv' | grep -q ',search-found,canary$'"
+expect "stats lists the words that found nothing" "1 found nothing: zzznothingmatches" "$W" stats
+expect "searches don't change the hit rate" "67%" "$W" stats
+# Page reads come from transcripts, so they don't depend on a session logging anything.
+TP="$HOME/.claude/projects/usage-test"; mkdir -p "$TP"
+ts="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+printf '{"timestamp":"%s","sessionId":"s1","cwd":"%s","message":{"id":"m1","usage":{"input_tokens":5,"output_tokens":5},"content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"%s/demo/wiki/alpha.md"}},{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"cat %s/demo/wiki/beta.md"}},{"type":"tool_use","id":"t3","name":"Edit","input":{"file_path":"%s/global/wiki/x.md"}},{"type":"tool_use","id":"t4","name":"Bash","input":{"command":"grep x %s/*/wiki/y.md"}}]}}\n' "$ts" "$HOME" "$WIKIS_DIR" "$WIKIS_DIR" "$WIKIS_DIR" "$WIKIS_DIR" > "$TP/s1.jsonl"
+out="$("$W" report 2>&1)"
+case "$out" in *"## Wiki use"*"- demo: pages opened in 1 session(s)"*"Searches: 2, of which 1 found nothing: zzznothingmatches"*"Most sessions do not log"*) ok "the report counts sessions that opened pages, once each, and searches" ;; *) bad "the report counts sessions that opened pages, once each, and searches" "$out" ;; esac
+case "$out" in *"answered"*"%"*) bad "and gives no hit rate" "$out" ;; *) ok "and gives no hit rate" ;; esac
+case "$out" in *"- global: pages opened"*) bad "an edit isn't opening a page" "$out" ;; *) ok "an edit isn't opening a page" ;; esac
+case "$out" in *"- *: pages opened"*) bad "a glob in a command isn't a wiki" "$out" ;; *) ok "a glob in a command isn't a wiki" ;; esac
+rm -rf "$TP"
 
 section "Plugin updates reach the wiki command"
 # Two installed versions side by side, as Claude Code leaves them after an update.
@@ -999,7 +1017,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"w
 check "reading the index isn't a lookup that answered anything" test ! -e "$SC"
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"wiki_read","arguments":{"wiki":"demo","path":"wiki/mcp-one.md"}}}' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"wiki_read","arguments":{"wiki":"demo","path":"wiki/mcp-two.md"}}}' | "$W" mcp >/dev/null
 check "reading pages logs one hit, however many pages" bash -c "[ \"\$(grep -c ',demo,hit$' '$SC')\" = 1 ] && head -n 1 '$SC' | grep -qx 'date,wiki,result'"
-expect "a search that finds nothing logs a miss" ",global,miss" bash -c "printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"wiki_search\",\"arguments\":{\"word\":\"zzzabsent\"}}}' | '$W' mcp >/dev/null; tail -n 1 '$SC'"
+expect "a search that finds nothing is logged" ",global,search-none,zzzabsent" bash -c "printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"wiki_search\",\"arguments\":{\"word\":\"zzzabsent\"}}}' | '$W' mcp >/dev/null; tail -n 1 '$SC'"
 rm -f "$SC" "$WIKIS_DIR/demo/wiki/mcp-one.md" "$WIKIS_DIR/demo/wiki/mcp-two.md"; [ ! -f "$T/stats.bak" ] || mv "$T/stats.bak" "$SC"
 check "the note is a normal capture" bash -c "grep -q '^Captured: ' '$WIKIS_DIR'/demo/raw/*-from-chat.md && grep -q 'We chose Postgres' '$WIKIS_DIR'/demo/raw/*-from-chat.md"
 check "and it reached the remote" bash -c "git --git-dir='$T/remote.git' log -1 --format=%s | grep -q 'capture from-chat'"

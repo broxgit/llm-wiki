@@ -240,14 +240,16 @@ The copies are the repository's docs as written, which can be out of date. The a
 
 ## Is it paying off?
 
-Each time a session checks a wiki for a question, it logs whether the pages helped: a hit or a miss. The log stays on your machine.
+The weekly report (`wiki report`) counts how many sessions opened each wiki's pages, from the transcripts on this machine. It also lists searches that found nothing, which `wiki find` logs itself. Those words are the pages you're missing. Compiling a wiki counts as opening it too, so a busy wiki's count runs a little high.
+
+Sessions are also asked to log whether the pages helped: a hit or a miss. `wiki stats` shows those, but most sessions skip it, so read the rates as rough. Everything stays on your machine.
 
 ```
 wiki stats           # the last 30 days
 wiki stats week
 ```
 
-A wiki with a low hit rate is missing pages for the questions you actually ask, or covers a repository you rarely need help with.
+A wiki nobody opens may not be worth keeping.
 
 ## Weekly report
 
@@ -255,7 +257,7 @@ Once a week, Claude offers a short report on the wikis, at a stopping point. Ask
 
 - **Tokens:** what Claude Code spent per project over the week, from its own session records, and roughly how much of that went into reading the wikis. The wiki share is an estimate, from the size of what sessions read. With Antigravity installed, Gemini's conversations get a table of their own, by the project their file paths point at. It isn't added to Claude's, since the two count tokens differently.
 - **What the wikis gained:** notes captured, notes compiled, pages created and updated, skills added.
-- **Lookups:** how often each wiki answered the questions it was checked for.
+- **Wiki use:** how many sessions opened each wiki's pages, and which searches found nothing.
 - **Needs you:** what's waiting on a person. Open contradictions, proposed fixes nobody has answered, a pile of notes waiting to be compiled, pages unchecked for 90 days, and tips you muted. The report leads with this when there's anything in it.
 
 `wiki report --since lastweek`, or any range `standup` takes, changes the period. A week with a report offer gets no tip, so there's only one nudge.
@@ -340,4 +342,4 @@ Run `wiki` with no arguments for the full list. The ones you're likely to use:
 | `wiki tips` | Features your own wikis suggest you'd get something out of. |
 | `wiki completion zsh\|bash` | Tab completion for your shell. `wiki setup` turns it on. |
 | `wiki report` | The weekly report: tokens, what the wikis gained, lookups, and what needs you. |
-| `wiki stats [range]` | How often each wiki answered the questions it was checked for. |
+| `wiki stats [range]` | What sessions logged about whether a wiki helped, and searches that found nothing. |

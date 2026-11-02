@@ -1760,7 +1760,7 @@ EOF2
 # doesn't: an identifier, error string or host name is rarely in a summary.
 FIND_PAGES=5
 cmd_find() {
-  local word="$1" d hits pages f line n found=0
+  local word="$1" d hits pages f line n found=0 first=""
   [ -d "$WIKIS_DIR" ] || die "no wikis at $(tilde "$WIKIS_DIR")"
   for d in "$WIKIS_DIR"/*/; do
     d="${d%/}"
@@ -1786,11 +1786,24 @@ EOF2
     fi
     [ -n "$hits$pages" ] || continue
     found=1
+    [ -n "$first" ] || first="${d##*/}"
     echo "${d##*/}:"
     [ -z "$hits" ] || printf '%s\n' "$hits" | sed 's/^/  /'
     [ -z "$pages" ] || printf '  also in pages:\n%s' "$pages"
   done
   [ "$found" = 1 ] || echo "no mentions in any index or page: $word"
+  # Logged here because sessions mostly skip logging by hand. A word that found nothing
+  # shows what pages are missing.
+  if [ "$found" = 1 ]; then stats_log "$first" search-found "$word"; else stats_log "$SHARED" search-none "$word"; fi
+}
+
+# stats_log <wiki> <result> [word]: one line in stats.csv. It must never fail a command,
+# such as in a sandbox that can't write there.
+stats_log() {
+  (
+    [ -s "$STATS_FILE" ] || echo "date,wiki,result,word" >> "$STATS_FILE"
+    printf '%s,%s,%s,%s\n' "$(date -u +%Y-%m-%d)" "$1" "$2" "$(printf '%s' "${3:-}" | tr -d ',\n' | cut -c1-60)" >> "$STATS_FILE"
+  ) 2>/dev/null || true
 }
 
 # The date N days ago, as YYYY-MM-DD. GNU date first, then the BSD date on macOS.
@@ -3028,7 +3041,7 @@ cmd_mcp() {
   local list
   if [ -n "${LLM_WIKI_FIXED_DIR:-}" ]; then list="$(printf 'here\t%s' "$WIKIS_DIR")"; else list="$(collections)"; fi
   # Apps started from the desktop get a short PATH, without Homebrew's tools.
-  exec env PATH="$PATH:/opt/homebrew/bin:/usr/local/bin" LLM_WIKI_SH="$REPO/wiki.sh" LLM_WIKI_SHARED="$SHARED" LLM_WIKI_COLLECTIONS="$list" python3 "$REPO/mcp/server.py"
+  exec env PATH="$PATH:/opt/homebrew/bin:/usr/local/bin" LLM_WIKI_SH="$REPO/wiki.sh" LLM_WIKI_COLLECTIONS="$list" python3 "$REPO/mcp/server.py"
 }
 
 # chat_state: none (no desktop app here), missing, old, or current.
@@ -4287,10 +4300,11 @@ tip_stats() {
   local n first low
   [ -s "$STATS_FILE" ] || return 0
   [ -z "$(tip_get used:stats)" ] || [[ "$(tip_get used:stats)" < "$(days_ago 30)" ]] || return 0
-  n="$(grep -c '^20' "$STATS_FILE" || true)"
-  first="$(grep -m 1 '^20' "$STATS_FILE" | cut -d , -f 1)"
+  # Searches log themselves; a lookup is a session saying whether the pages helped.
+  n="$(grep -cE '^20[^,]*,[^,]*,(hit|miss)' "$STATS_FILE" || true)"
+  first="$(grep -m 1 -E '^20[^,]*,[^,]*,(hit|miss)' "$STATS_FILE" | cut -d , -f 1)"
   [ "${n:-0}" -ge 20 ] && [[ "$first" < "$(days_ago 13)" ]] || return 0
-  low="$(awk -F, '$1 ~ /^20/ { n[$2]++; if ($3 ~ /^hit/) h[$2]++ }
+  low="$(awk -F, '$1 ~ /^20/ && $3 ~ /^(hit|miss)/ { n[$2]++; if ($3 ~ /^hit/) h[$2]++ }
     END { for (w in n) if (n[w] >= 5 && h[w] / n[w] < 0.4) printf "%s (%d%%) ", w, 100 * h[w] / n[w] }' "$STATS_FILE")"
   echo "Sessions have logged $n wiki lookups since $first.${low:+ Some wikis rarely answer: ${low% }.} \`wiki stats\` shows each wiki's hit rate, so you can see which ones earn their keep."
 }
@@ -4597,6 +4611,11 @@ def touches_wiki(a):
     c = a.get("CommandLine") or ""
     return (p and os.path.realpath(os.path.expanduser(p)).startswith(wikis_real + os.sep)) or wikis in c or "~/wikis" in c or "wiki.sh" in c
 
+# Which wikis' pages a tool call opened, for the report's Wiki use section.
+_tilde = wikis.replace(os.path.expanduser("~"), "~", 1)
+PAGE = re.compile("(?:%s)/([^/\\s\"']+)/wiki(?:/|\\b)" % "|".join(re.escape(x) for x in {wikis, wikis_real, _tilde}))
+usage = set()  # (wiki, conversation)
+
 cutoff = datetime.combine(start - timedelta(days=1), datetime.min.time()).timestamp()
 rows = {}
 for f in Path(brain).glob("*/.system_generated/logs/transcript_full.jsonl"):
@@ -4627,9 +4646,18 @@ for f in Path(brain).glob("*/.system_generated/logs/transcript_full.jsonl"):
         row["out"] += e.get("output_tokens", 0) or 0
         for c in e.get("tool_calls") or []:
             a = c.get("args") or {}
+            if c.get("name") not in ("write_file", "edit_file"):
+                for w in PAGE.findall("%s %s" % (a.get("Path") or "", a.get("CommandLine") or "")):
+                    usage.add((w, conv))
             if touches_wiki(a) and i + 1 < len(steps):
                 row["wiki"] += len(str(steps[i + 1].get("content") or "")) // 4
 
+if os.environ.get("REPORT_USAGE_FILE"):
+    with open(os.environ["REPORT_USAGE_FILE"], "a") as uf:
+        for w, s in sorted(usage):
+            # A path can hold a glob or a variable, such as ~/wikis/*/wiki/.
+            if (Path(wikis) / w / "AGENTS.md").is_file():
+                uf.write("%s\t%s\n" % (w, s))
 rows = {p: r for p, r in rows.items() if r["new"] or r["out"]}
 if not rows:
     print("No Gemini conversations in this range."); sys.exit()
@@ -4701,6 +4729,21 @@ def day_of(ts):
     t = datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone()
     return (t - timedelta(hours=dh, minutes=dm)).date()
 
+# Which wikis' pages a tool call opened, for the report's Wiki use section.
+_tilde = wikis.replace(os.path.expanduser("~"), "~", 1)
+PAGE = re.compile("(?:%s)/([^/\\s\"']+)/wiki(?:/|\\b)" % "|".join(re.escape(x) for x in {wikis, wikis_real, _tilde}))
+usage = set()  # (wiki, session)
+def note_pages(use, session):
+    inp = use.get("input") or {}
+    name = str(use.get("name", ""))
+    if name.endswith("wiki_read") and str(inp.get("path", "")).startswith("wiki/"):
+        usage.add((str(inp.get("wiki")), session))
+    if name in ("Edit", "Write"):
+        return
+    for k in ("file_path", "path", "command"):
+        for w in PAGE.findall(str(inp.get(k, ""))):
+            usage.add((w, session))
+
 cutoff = datetime.combine(start - timedelta(days=1), datetime.min.time()).timestamp()
 rows = {}      # project -> counts
 seen = set()   # message ids already counted
@@ -4734,6 +4777,8 @@ for f in Path(sess_dir).rglob("*.jsonl"):
             row["out"] += u.get("output_tokens", 0)
         for c in msg.get("content") or []:
             if not isinstance(c, dict): continue
+            if c.get("type") == "tool_use":
+                note_pages(c, r.get("sessionId", f.stem))
             if c.get("type") == "tool_use" and touches_wiki(c):
                 wiki_uses[c.get("id")] = p
                 row["wiki"] += len(json.dumps(c.get("input") or {})) // 4
@@ -4742,6 +4787,12 @@ for f in Path(sess_dir).rglob("*.jsonl"):
                 if isinstance(body, list): body = " ".join(x.get("text", "") for x in body if isinstance(x, dict))
                 rows[wiki_uses[c["tool_use_id"]]]["wiki"] += len(str(body or "")) // 4
 
+if os.environ.get("REPORT_USAGE_FILE"):
+    with open(os.environ["REPORT_USAGE_FILE"], "a") as uf:
+        for w, s in sorted(usage):
+            # A path can hold a glob or a variable, such as ~/wikis/*/wiki/.
+            if (Path(wikis) / w / "AGENTS.md").is_file():
+                uf.write("%s\t%s\n" % (w, s))
 rows = {p: r for p, r in rows.items() if r["new"] or r["out"]}
 if not rows:
     print("No Claude Code sessions in this range."); sys.exit()
@@ -4790,15 +4841,27 @@ report_gains() {
   echo "- Corrections recorded as Feedback lines: $REPORT_FEEDBACK, in $REPORT_NOTES note(s)."
 }
 
-# report_lookups <start> <end>: hit rate per wiki, from stats.csv.
-report_lookups() {
-  if [ ! -s "$STATS_FILE" ]; then echo "No lookups logged. Sessions on handbook v16 or later log them."; return 0; fi
+# report_use <start> <end>: how the wikis got used. Page reads come from transcripts, which
+# don't depend on anyone remembering; so do searches, which wiki find logs itself. Hits and
+# misses come from sessions logging by hand, and most don't, so they aren't a hit rate.
+report_use() {
+  if [ -s "${REPORT_USAGE_FILE:-}" ]; then
+    sort -u "$REPORT_USAGE_FILE" | cut -f 1 | sort | uniq -c | sort -rn \
+      | awk '{ printf "- %s: pages opened in %d session(s)\n", $2, $1 }'
+  else
+    echo "- No page reads found in session transcripts on this machine."
+  fi
+  [ -s "$STATS_FILE" ] || return 0
   awk -F, -v s="$1" -v e="$2" '
-    $1 ~ /^20/ && $1 >= s && $1 <= e && NF >= 3 { n[$2]++; if ($3 ~ /^hit/) h[$2]++; t++; ht += ($3 ~ /^hit/) }
+    $1 ~ /^20/ && $1 >= s && $1 <= e && NF >= 3 {
+      if ($3 ~ /^hit/) h++
+      else if ($3 ~ /^miss/) m++
+      else if ($3 == "search-found") f++
+      else if ($3 == "search-none") { none++; if ($4 != "" && !seen[$4]++ && n < 8) { words = words (n ? ", " : "") $4; n++ } }
+    }
     END {
-      if (!t) { print "No lookups logged in this range."; exit }
-      for (w in n) printf "- %s: %d lookup(s), %d%% answered\n", w, n[w], 100 * h[w] / n[w]
-      printf "- all: %d lookup(s), %d%% answered\n", t, 100 * ht / t
+      if (f + none) printf "- Searches: %d, of which %d found nothing%s\n", f + none, none, (words == "" ? "" : ": " words)
+      if (h + m) printf "- Logged by sessions as answered or not: %d and %d. Most sessions do not log, so this is not a hit rate.\n", h, m
     }' "$STATS_FILE"
 }
 
@@ -4892,6 +4955,7 @@ cmd_report() {
   echo
   echo "## Tokens (Claude Code)"
   echo
+  REPORT_USAGE_FILE="$(mktemp)"; export REPORT_USAGE_FILE
   report_tokens "$start" "$today"
   if [ -d "$AGY_HOME/antigravity/brain" ]; then
     echo
@@ -4904,17 +4968,19 @@ cmd_report() {
   echo
   report_gains "$start" "$today"
   echo
-  echo "## Lookups"
+  echo "## Wiki use"
   echo
-  report_lookups "$start" "$today"
+  report_use "$start" "$today"
   echo
   echo "## Needs you"
   echo
   report_needs_you
+  rm -f "$REPORT_USAGE_FILE"
 }
 
 # ---- stats ------------------------------------------------------------------
-# Agents log each wiki lookup to stats.csv in the collection: date,wiki,hit|miss.
+# Agents log each wiki lookup to stats.csv in the collection: date,wiki,hit|miss. wiki find
+# logs its own searches there too: date,wiki,search-found|search-none,word.
 # A hit means the pages answered at least part of the question. stats sums it, so
 # you can tell whether a wiki earns its keep.
 STATS_FILE="$WIKIS_DIR/stats.csv"
@@ -4930,14 +4996,20 @@ cmd_stats() {
   echo "Wiki lookups since $from"
   awk -F, -v from="$from" '
     NR == 1 && $1 == "date" { next }
-    $1 >= from && NF >= 3 { n[$2]++; if ($3 ~ /^hit/) h[$2]++; total++; hits += ($3 ~ /^hit/) }
+    $1 < from || NF < 3 { next }
+    $3 == "search-found" { found++; next }
+    $3 == "search-none" { none++; if ($4 != "" && !seen[$4]++ && c < 8) { words = words (c ? ", " : "") $4; c++ } next }
+    { n[$2]++; if ($3 ~ /^hit/) h[$2]++; total++; hits += ($3 ~ /^hit/) }
     END {
-      if (!total) { print "  none in this range"; exit }
-      printf "%-26s %7s %5s %6s %6s\n", "WIKI", "LOOKUPS", "HITS", "MISSES", "RATE"
-      for (w in n) printf "%-26s %7d %5d %6d %5.0f%%\n", w, n[w], h[w], n[w] - h[w], 100 * h[w] / n[w]
-      printf "%-26s %7d %5d %6d %5.0f%%\n", "all", total, hits, total - hits, 100 * hits / total
+      if (!total) print "  none in this range"
+      else {
+        printf "%-26s %7s %5s %6s %6s\n", "WIKI", "LOOKUPS", "HITS", "MISSES", "RATE"
+        for (w in n) printf "%-26s %7d %5d %6d %5.0f%%\n", w, n[w], h[w], n[w] - h[w], 100 * h[w] / n[w]
+        printf "%-26s %7d %5d %6d %5.0f%%\n", "all", total, hits, total - hits, 100 * hits / total
+      }
+      if (found + none) printf "Searches: %d, of which %d found nothing%s\n", found + none, none, (words == "" ? "" : ": " words)
     }' "$STATS_FILE"
-  echo "A wiki that keeps missing may be missing pages, or may not be worth keeping."
+  echo "Most sessions don't log their lookups, so rates rest on few answers. The weekly report counts page reads from transcripts."
 }
 
 # ---- delegation -------------------------------------------------------------

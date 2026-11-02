@@ -39,7 +39,7 @@ Your coding agent forgets everything between sessions. llm-wiki gives it a memor
 ### Watches the token bill
 
 - **Reads little.** An index first, then a handful of short pages. Wiki reads came to about 1% of new input tokens in real use.
-- **Hit-rate stats** show which wikis actually answer questions.
+- **Usage counts** show which wikis get opened, and which searches found nothing, so you can see what's missing.
 - **Hands busywork to cheaper models:** test runs, file sweeps, boilerplate. Design, debugging and review stay on your best model. *Your expensive model's tokens go on the hard parts.*
 
 ### Looks after itself
