@@ -2,6 +2,10 @@
 # wiki.sh: set up and look after LLM wikis built from this template.
 # Works with the bash that ships on macOS (3.2) and on Linux.
 set -euo pipefail
+# Feed a loop with a heredoc holding $(...), not process substitution. On bash 3.2 the exit of
+# a substituted process can interrupt a blocked printf, and under set -e that ends the
+# script partway (reproduced: 10 of 40 runs, none with a heredoc). Empty output gives one
+# blank line, so a loop needs its own guard. A smoke test keeps the form out.
 
 # Follow symlinks, such as ~/.local/bin/wiki, to the real script: template/ sits beside it.
 src="${BASH_SOURCE[0]}"
@@ -60,7 +64,9 @@ collection_for() {
       IFS=,
     done
     IFS="$IFS_"
-  done < <(collections | tail -n +2)
+  done <<EOF2
+$(collections | tail -n +2)
+EOF2
   printf '%s' "$DEFAULT_WIKIS"
 }
 
@@ -459,6 +465,7 @@ cmd_start() {
   cat "$wiki/index.md" 2>/dev/null || echo "(no index yet)"
   # Shared wikis from links.md: "- name: path | purpose". Skip missing ones and this one.
   while IFS= read -r line; do
+    [ -n "$line" ] || continue
     sname="${line#- }"; sname="${sname%%:*}"
     spath="${line#*: }"; spath="${spath%% |*}"
     # links.md writes ~ for the home folder. The tilde is meant literally.
@@ -470,7 +477,9 @@ cmd_start() {
     echo "===== $(tilde "$spath")/index.md ($sname)"
     cat "$spath/index.md" 2>/dev/null || true
     print_conventions "$spath"
-  done < <(grep '^- [^:]*: ' "$wiki/links.md" 2>/dev/null || true)
+  done <<EOF2
+$(grep '^- [^:]*: ' "$wiki/links.md" 2>/dev/null || true)
+EOF2
   # This wiki's own agreements and tools, after the shared ones: the more specific last.
   print_conventions "$wiki"
   echo
@@ -1206,6 +1215,7 @@ cmd_pending() {
     return 0
   fi
   while IFS= read -r f; do
+    [ -n "$f" ] || continue
     size="$(wc -c < "$f" | tr -d ' ')"
     if [ "$n" -gt 0 ] && [ $((total + size)) -gt "$PENDING_SHOW_BYTES" ]; then
       left=$((left + 1))
@@ -1216,7 +1226,9 @@ cmd_pending() {
     printf '===== raw/%s\n' "${f##*/}"
     cat "$f"
     printf '\n'
-  done < <(pending_files "$root")
+  done <<EOF2
+$(pending_files "$root")
+EOF2
   printf '===== %d file(s) shown' "$n"
   if [ "$left" -gt 0 ]; then
     printf '. %d more wait. Compile these first, then run this again for the rest.\n' "$left"
@@ -1392,7 +1404,9 @@ cmd_seed() {
       echo "seeded:  $f"
     fi
     list="$list- raw/$dest: $f"$'\n'
-  done < <(seed_candidates "$top")
+  done <<EOF2
+$(seed_candidates "$top")
+EOF2
   # A note first in ingest order, so the compile knows where the copies came from.
   if [ "$dry" = 0 ] && [ "$n" -gt 0 ]; then
     # Never overwrite: a second seed in the same second gets -2, as the handbook names captures.
@@ -1766,7 +1780,9 @@ cmd_find() {
         [ -n "$line" ] || continue
         pages="$pages    $f: $line"$'\n'
         n=$((n + 1))
-      done < <(grep -r -l -i -F --include='*.md' --exclude-dir=sources -- "$word" "$d/wiki" 2>/dev/null | sort)
+      done <<EOF2
+$(grep -r -l -i -F --include='*.md' --exclude-dir=sources -- "$word" "$d/wiki" 2>/dev/null | sort)
+EOF2
     fi
     [ -n "$hits$pages" ] || continue
     found=1
@@ -1806,6 +1822,7 @@ commit_lag() {
   grep -q '^- ' "$root/repos.md" 2>/dev/null && multi=1
   [ -d "$root/wiki" ] || return 0
   while IFS= read -r f; do
+    [ -n "$f" ] || continue
     c="$(awk 'NR == 1 && /^---$/ { fm = 1; next } fm && /^---$/ { exit } fm && /^commit:/ { sub(/^commit: */, ""); print; exit }' "$f" | tr -d '"'"'"' ')"
     [ -n "$c" ] || continue
     case "$c" in
@@ -1822,7 +1839,9 @@ commit_lag() {
     fi
     n="$(git -C "$path" rev-list --count "$hash..HEAD" 2>/dev/null || echo 0)"
     [ "${n:-0}" -lt "$STALE_COMMITS" ] || printf '%s\tbehind %s %s\n' "${f#"$root"/}" "$n" "$repo"
-  done < <(find "$root/wiki" -type f -name '*.md' ! -path '*/sources/*' | sort)
+  done <<EOF2
+$(find "$root/wiki" -type f -name '*.md' ! -path '*/sources/*' | sort)
+EOF2
 }
 
 cmd_stale() {
@@ -1837,6 +1856,7 @@ cmd_stale() {
     is_wiki "$d" || continue
     [ -d "$d/wiki" ] || continue
     while IFS= read -r f; do
+      [ -n "$f" ] || continue
       v="$(sed -n 's/^verified: *\([0-9-]*\).*/\1/p' "$f" | head -n 1)"
       rel="${f:$((${#d} + 1))}"
       if [ -z "$v" ]; then
@@ -1846,7 +1866,9 @@ cmd_stale() {
         echo "${d##*/}: $rel  (verified $v)"
         found=1
       fi
-    done < <(find "$d/wiki" -type f -name '*.md' ! -path '*/sources/*' | sort)
+    done <<EOF2
+$(find "$d/wiki" -type f -name '*.md' ! -path '*/sources/*' | sort)
+EOF2
   done
   map="$(repo_map)"
   if [ -n "$map" ]; then
@@ -1861,7 +1883,9 @@ cmd_stale() {
           missing*) set -- $v; echo "${d##*/}: $rel  (commit $2 not found in $3)" ;;
           bare*) echo "${d##*/}: $rel  (commit ${v#bare } names no repository; this wiki covers several, so write repo@hash)" ;;
         esac
-      done < <(commit_lag "$d" "$map")
+      done <<EOF2
+$(commit_lag "$d" "$map")
+EOF2
     done
   fi
   [ "$found" = 1 ] || echo "nothing older than $days days (cutoff $cutoff) or $STALE_COMMITS commits"
@@ -1995,9 +2019,11 @@ upgrade_commit() {
     # Template files the upgrade created, such as patterns.md in an old wiki.
     while IFS= read -r f; do
       [ -n "$f" ] && paths="$paths $f"
-    done < <(cd "$WIKIS_DIR" && (cd "$TEMPLATE" && find . -type f | sed "s#^\./#$d/#") | while IFS= read -r f; do
+    done <<EOF2
+$(cd "$WIKIS_DIR" && (cd "$TEMPLATE" && find . -type f | sed "s#^\./#$d/#") | while IFS= read -r f; do
       [ -e "$f" ] && ! git ls-files --error-unmatch -- "$f" >/dev/null 2>&1 && printf '%s\n' "$f"
     done)
+EOF2
   done
   # Upgrades can add ignore rules for the journal, delegation and stats files.
   [ -f "$WIKIS_DIR/.gitignore" ] && paths="$paths .gitignore"
@@ -2482,7 +2508,9 @@ plugin_behind() {
     [ -n "$sha" ] && [ -n "$loc" ] || continue
     head="$(git -C "$loc" rev-parse HEAD 2>/dev/null)" || continue
     [ "$head" = "$sha" ] || printf '%s\t%s\t%s\n' "$key" "${sha:0:7}" "${head:0:7}"
-  done < <(claude_plugin_rows)
+  done <<EOF2
+$(claude_plugin_rows)
+EOF2
 }
 
 cursor_cmd() { codex_cmd; }
@@ -3179,7 +3207,9 @@ update_wikis() {
         git -C "$f" push -q </dev/null && echo "- pushed $ahead commit(s)" || echo "- the push failed. Run: git -C $(tilde "$f") pull --no-rebase && git -C $(tilde "$f") push"
       fi
     fi
-  done < <(if [ -n "${LLM_WIKI_FIXED_DIR:-}" ]; then printf 'here\t%s\t\n' "$WIKIS_DIR"; else collections; fi)
+  done <<EOF2
+$(if [ -n "${LLM_WIKI_FIXED_DIR:-}" ]; then printf 'here\t%s\t\n' "$WIKIS_DIR"; else collections; fi)
+EOF2
   echo
   if [ -t 0 ] && [ -n "$(setup_pending)" ]; then
     "$REPO/wiki.sh" setup --new
@@ -3860,7 +3890,9 @@ cmd_standup() {
     if [ "$dirty" -gt 0 ] || [ "$ahead" -gt 0 ] || { [ -n "$lines" ] && [ "$br" != main ] && [ "$br" != master ]; }; then
       echo "- $name: branch $br, $dirty uncommitted file(s), $ahead unpushed commit(s)" >> "$inprog"
     fi
-  done < <(find_repos)
+  done <<EOF2
+$(find_repos)
+EOF2
   rm -f "$err"
   [ "$n_commits" -gt 0 ] || { echo; echo "None found."; } >> "$out"
   if [ "$found" -eq 0 ]; then
@@ -3878,10 +3910,13 @@ cmd_standup() {
     f="$(journal_file_for "$d")"
     if [ -f "$f" ]; then
       while IFS= read -r line; do
+        [ -n "$line" ] || continue
         local proj="${line#*[}"; proj="${proj%%]*}"
         excluded "$proj" && continue
         echo "- $d ${line#- }" >> "$out"; got=1
-      done < <(grep '^- ' "$f" || true)
+      done <<EOF2
+$(grep '^- ' "$f" || true)
+EOF2
     fi
     d="$(date_add "$d" 1)"
   done
@@ -3981,7 +4016,9 @@ patterns_pending() {
     [ -n "$f" ] || continue
     b="${f##*/}"
     grep -h '^Feedback:' "$f" 2>/dev/null | sed "s#^#$b: #" || true
-  done < <(pending_files "$d")
+  done <<EOF2
+$(pending_files "$d")
+EOF2
 }
 
 cmd_patterns() {
@@ -4265,8 +4302,11 @@ tip_stale() {
   for d in "$WIKIS_DIR"/*/wiki; do
     [ -d "$d" ] || continue
     while IFS= read -r v; do
+      [ -n "$v" ] || continue
       [[ "$v" < "$cutoff" ]] && n=$((n + 1))
-    done < <(grep -rh --include='*.md' --exclude-dir=sources '^verified:' "$d" 2>/dev/null | sed 's/^verified: *//')
+    done <<EOF2
+$(grep -rh --include='*.md' --exclude-dir=sources '^verified:' "$d" 2>/dev/null | sed 's/^verified: *//')
+EOF2
   done
   [ "$n" -ge 3 ] || return 0
   echo "$n wiki pages haven't been checked in over 90 days. \`wiki stale\` lists them, and \"re-verify the stale pages in <wiki>\" has an agent check them against the code."
@@ -4797,8 +4837,11 @@ EOF2
     v="$(version_of "$d/AGENTS.md")"
     if [ -n "$tv" ] && [ "${v:-0}" -lt "$tv" ]; then any=1; echo "- $w: handbook v${v:-?}, behind v$tv. Run: $WIKI_CMD upgrade $w"; fi
     while IFS= read -r v; do
+      [ -n "$v" ] || continue
       [[ "$v" < "$cutoff" ]] && stale=$((stale + 1))
-    done < <(grep -rh --include='*.md' --exclude-dir=sources '^verified:' "$d/wiki" 2>/dev/null | sed 's/^verified: *//' || true)
+    done <<EOF2
+$(grep -rh --include='*.md' --exclude-dir=sources '^verified:' "$d/wiki" 2>/dev/null | sed 's/^verified: *//' || true)
+EOF2
   done
   n="$(feedback_notes new | grep -c . || true)"
   if [ "${n:-0}" -gt 0 ]; then
