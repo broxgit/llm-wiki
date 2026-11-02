@@ -158,8 +158,6 @@ def wiki_search(args):
     parts = []
     for name, folder in chosen:
         out = must(folder, "find", word)
-        if out.startswith("no mentions"):
-            log_lookup(folder, os.environ.get("LLM_WIKI_SHARED", "global"), "miss")
         parts.append("Collection %s:\n%s" % (name, out) if len(chosen) > 1 else out)
     return "\n\n".join(parts)
 

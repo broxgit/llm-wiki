@@ -41,7 +41,7 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - The version 8 triggers in real use. They passed a dry run only.
 - Agents other than Claude pulling at session start, and syncing. Gemini in Antigravity and Codex pull through their plugins' hooks; Codex's and Cursor's sandboxes block writes to `~/wikis/.git`, so `wiki sync` there, and Cursor's `wiki start`, run outside the sandbox. Copilot is still untried.
 - Delegation in real use: whether sessions suggest handoffs at the right size, and whether the log shows real savings. The log records outcomes, not tokens. Token counts per handoff would need the tool's usage data.
-- Stats in real use: whether sessions log every lookup, and what hit rate means a wiki should go.
+- Stats in real use: what page-open counts mean a wiki should go. Sessions don't log lookups reliably, so hit rate can't answer that.
 - Seed in real use: how long compiling 20 seeded documents takes, and whether the pages are worth it.
 - `scripts/migrate-to-plugin.sh` and the interactive parts of `wiki setup` in CI. Both ran by hand in fake homes on 2026-10-28; CI only shellchecks the script. Testing them needs a pseudo-terminal that works on Linux and macOS runners.
 - The plugin's data folder name. Docs hard-code `~/.claude/plugins/data/llm-wiki-llm-wiki`, seen on three machines. A fork under another marketplace name gets a different folder.
@@ -65,6 +65,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### The report counts wiki use it can see (2026-11-02)
+
+- **Why:** the report said "17 lookups, 100% answered" for a week of about 67 sessions. Sessions mostly skip logging by hand, so that number looked meaningful and wasn't.
+- **What changed:** the report's Wiki use section counts sessions that opened each wiki's pages, from Claude Code and Gemini transcripts. `wiki find` logs its own searches, and the words that found nothing are listed: those are the missing pages. Hand-logged hits and misses are shown as counts, with no percentage. The handbook's logging step stays, since only a session can say whether a page helped.
 
 ### No loop fed by process substitution (2026-11-02)
 
