@@ -104,7 +104,21 @@ An agent you've told to do it can run `wiki setup chat --yes`, which refuses whi
 
 **Other MCP clients:** `wiki mcp --print` gives the config entry. Any client that starts local MCP servers can use it.
 
-**claude.ai and other web agents:** they can't start a local server, so this doesn't reach them yet. They have no instruction file either. Zip the `skills/llm-wiki` folder, with the folder at the zip root, and add it under Customize > Skills. The skill finds wikis in the folders a conversation can reach.
+**claude.ai:** it can't start a local server, but if your collection is in a private GitHub repository, a Project can read it:
+
+1. Check that **GitHub Integration** is connected under [Customize > Connectors](https://claude.ai/customize/connectors). Repository access isn't set there.
+2. Create a Project and keep it private. In its project knowledge, which may be labeled **Context**, add from **GitHub** and paste your repository's URL.
+3. If it says Claude can't access the repository, follow its **here** link to GitHub, choose **Only select repositories**, and pick your collection. Then paste the URL again.
+4. Select what you want it to know, not the whole collection. A good start is the shared wiki's `index.md`, `wiki/conventions.md` and `wiki/concepts`, plus any project wikis you ask about.
+5. Add this to the Project's instructions:
+
+   > The context is my knowledge wiki: my current record of my rules and decisions. Check it before memory or past chats, trust it when they disagree, and cite the file's path.
+
+Ask in a session inside the Project. It knows only the files you selected, and its copy goes stale until you select **Sync now**. It can read but not save notes, so capture from the Chat tab or an agent with file access.
+
+**Other web agents:** the same idea works wherever an agent has a GitHub connector that can read your private repository. Only claude.ai's has been tried.
+
+**Sessions that can reach your files but have no instruction file:** zip the `skills/llm-wiki` folder, with the folder at the zip root, and add it under Customize > Skills. The skill finds wikis in the folders a conversation can reach.
 
 ## Check that it works
 
