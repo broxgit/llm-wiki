@@ -329,6 +329,8 @@ unset XDG_CONFIG_HOME
 section "Tab completion"
 expect "the first word completes to commands" "standup" "$W" __complete 1 st
 expect "journal set completes setting names" "max_commits" "$W" __complete 3 journal set ""
+expect "setup completes the newer sections" "feedback" "$W" __complete 2 setup ""
+expect "and chat" "chat" "$W" __complete 2 setup ""
 expect "a choice setting completes its values" "summary" "$W" __complete 4 journal set format ""
 expect "tips --mute completes tip names" "share-skill" "$W" __complete 3 tips --mute ""
 expect "upgrade completes wiki names" "demo" "$W" __complete 2 upgrade ""
@@ -832,6 +834,8 @@ check "its hooks run __codex-start at SessionStart and PostCompact" python3 -c "
 check "the old line is replaced in place, and the rest of AGENTS.md stays" python3 -c "import sys; t=open(sys.argv[1]).read(); assert t.startswith('# Mine\n\nKeep this.\n\nMy knowledge wikis live in') and 'plugin' in t.split('\n')[4] and t.endswith('\n\nAnd this.\n') and 'old line' not in t" "$HOME/.codex/AGENTS.md"
 check "it links the llm-wiki skill" test -f "$HOME/.codex/skills/llm-wiki/SKILL.md"
 check "and the slash commands as skills" test -f "$HOME/.codex/skills/wiki-compile/SKILL.md"
+rm "$HOME/.codex/skills/bump-proto"; "$W" upgrade --all >/dev/null 2>&1
+check "upgrade --all links team skills for Codex too" test -L "$HOME/.codex/skills/bump-proto"
 check "and the team skills from the wikis" test "$HOME/.codex/skills/bump-proto" -ef "$WIKIS_DIR/global/skills/bump-proto"
 expect "setup --list shows it current" "codex               plugin current" env PATH="$T/bin:$PATH" "$W" setup --list
 : > "$T/codex.log"
@@ -863,6 +867,8 @@ in_tty "$W" setup cursor </dev/null >/dev/null 2>&1
 check "running setup again doesn't add it twice" python3 -c "import json,sys; assert len(json.load(open(sys.argv[1]))['hooks']['sessionStart'])==2" "$HOME/.cursor/hooks.json"
 check "it links the llm-wiki skill for Cursor" test -f "$HOME/.cursor/skills/llm-wiki/SKILL.md"
 check "and the slash commands as skills" test -f "$HOME/.cursor/skills/wiki-status/SKILL.md"
+rm "$HOME/.cursor/skills/bump-proto"; "$W" upgrade --all >/dev/null 2>&1
+check "upgrade --all links team skills for Cursor too" test -L "$HOME/.cursor/skills/bump-proto"
 check "and the team skills" test "$HOME/.cursor/skills/bump-proto" -ef "$WIKIS_DIR/global/skills/bump-proto"
 # With the Claude Code plugin installed, Cursor runs its hook, so ours stays quiet.
 mkdir -p "$HOME/.claude/plugins"
@@ -944,6 +950,13 @@ printf 'x\n' | "$W" feedback add docs "a docs note" >/dev/null
 m="$(cd "$FB" && echo *-a-docs-note.md)"; m="${m%.md}"
 expect "in notes mode, send refuses" "sharing is off" bash -c "printf 'y\n' | LLM_WIKI_TEST_TTY=1 '$W' feedback send '$m'"
 lacks "and start doesn't ask agents to point the user at it" "wait for the user to read" "$W" start web
+# Another collection's wiki names are private too, wherever this runs from.
+mkdir -p "$T/other-coll/client-secret-wiki" && touch "$T/other-coll/client-secret-wiki/AGENTS.md" "$T/other-coll/client-secret-wiki/index.md"
+printf 'other %s\n' "$T/other-coll" > "$HOME/.config/llm-wiki/collections"
+printf 'Hit this in the client-secret-wiki wiki.\n' | "$W" feedback add bug "a note naming another collection" >/dev/null
+m="$(cd "$FB" && echo *-a-note-naming-another-collection.md)"; m="${m%.md}"
+lacks "the draft scrubs wiki names from every collection" "client-secret-wiki" "$W" feedback show "$m"
+rm -rf "$T/other-coll" "$HOME/.config/llm-wiki/collections"
 check "the handbook rule ships in the template" grep -q 'wiki.sh feedback add' "$REPO/template/rules/feedback.md"
 check "and AGENTS.md points to it" grep -q 'rules/feedback.md' "$REPO/template/AGENTS.md"
 rm -rf "$FB" "$HOME/.config/llm-wiki/feedback" "$T/bin/gh" "$T/gh.log" "$T/gh.body" "$T/fb.md"
@@ -979,6 +992,15 @@ expect "a wiki name can't be a path" "ERROR: that isn't a wiki name" mcp_call wi
 expect "wiki_capture refuses a bad slug" "ERROR: the slug" mcp_call wiki_capture '{"wiki":"demo","slug":"../x","note":"n"}'
 expect "and an empty note" "ERROR: the note is empty" mcp_call wiki_capture '{"wiki":"demo","slug":"x","note":" "}'
 expect "wiki_capture saves and pushes" "Pushed." mcp_call wiki_capture '{"wiki":"demo","slug":"from-chat","note":"We chose Postgres, in a chat."}'
+# Chat can't append to stats.csv, so the server logs its lookups.
+printf 'one\n' > "$WIKIS_DIR/demo/wiki/mcp-one.md"; printf 'two\n' > "$WIKIS_DIR/demo/wiki/mcp-two.md"
+SC="$WIKIS_DIR/stats.csv"; cp "$SC" "$T/stats.bak" 2>/dev/null || true; rm -f "$SC"
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"wiki_read","arguments":{"wiki":"demo"}}}' | "$W" mcp >/dev/null
+check "reading the index isn't a lookup that answered anything" test ! -e "$SC"
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"wiki_read","arguments":{"wiki":"demo","path":"wiki/mcp-one.md"}}}' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"wiki_read","arguments":{"wiki":"demo","path":"wiki/mcp-two.md"}}}' | "$W" mcp >/dev/null
+check "reading pages logs one hit, however many pages" bash -c "[ \"\$(grep -c ',demo,hit$' '$SC')\" = 1 ] && head -n 1 '$SC' | grep -qx 'date,wiki,result'"
+expect "a search that finds nothing logs a miss" ",global,miss" bash -c "printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"wiki_search\",\"arguments\":{\"word\":\"zzzabsent\"}}}' | '$W' mcp >/dev/null; tail -n 1 '$SC'"
+rm -f "$SC" "$WIKIS_DIR/demo/wiki/mcp-one.md" "$WIKIS_DIR/demo/wiki/mcp-two.md"; [ ! -f "$T/stats.bak" ] || mv "$T/stats.bak" "$SC"
 check "the note is a normal capture" bash -c "grep -q '^Captured: ' '$WIKIS_DIR'/demo/raw/*-from-chat.md && grep -q 'We chose Postgres' '$WIKIS_DIR'/demo/raw/*-from-chat.md"
 check "and it reached the remote" bash -c "git --git-dir='$T/remote.git' log -1 --format=%s | grep -q 'capture from-chat'"
 expect "wiki_feedback follows the setting" "feedback is off" mcp_call wiki_feedback '{"kind":"idea","summary":"s","details":"d"}'
