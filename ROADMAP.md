@@ -6,13 +6,6 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 
 ## Next
 
-### Terse page style
-
-- **Why:** agents read pages far more often than people do. Measured on one sample page, terse notes in plain words used 56% of the tokens of default prose. The body alone used 45%.
-- **Sketch:** a style rule in `rules/compile.md`. One fact per line. Fragments over sentences. No narrative, no restating. Plain words, identifiers verbatim. Then trim frontmatter, which is nearly half of a terse page: cite sources by timestamp prefix, and drop fields that repeat each other.
-- **Not this:** invented abbreviations or JSON. In the same test, shorthand saved 2 points over terse plain words and JSON saved none. Abbreviations cost more tokens per word ("tmo" is 2 tokens, "timeout" is 1) and are harder for a model to read back.
-- **Open:** whether terse pages hurt answer quality. Test by asking the same questions against both versions of a page. Whether teammates still need to read pages comfortably.
-
 ### Know whether sessions capture and compile
 
 - **Why:** `wiki stats` measures lookups only. Saving and compiling are the parts that failed in the first week (50 of 109 notes never compiled), and nothing measures them now.
@@ -27,6 +20,7 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 - **Team digest.** A weekly roll-up across several people's journals, for a lead. Needs a shared, opt-in journal location.
 - **Review flow for teams.** Agents push straight to the collection. A team may want a weekly digest of changes, or pull requests.
 - **Obsidian.** Add `.obsidian/` to the template's `.gitignore` if anyone opens wikis as vaults.
+- **Terse page style.** Held on 2026-11-02. Measured on one sample page, terse plain-word notes used 56% of the tokens of default prose, but wiki reads were about 1.9% of a week's new input tokens, so the saving is under 1%. It would mean rewriting every page or keeping two styles, and teammates read the pages too. If token savings become a goal, look at long sessions first: most of the volume is cache reads. If it ever comes back, test answer quality first, and skip abbreviations and JSON, which saved nothing more in the same test.
 
 ## Untested
 
@@ -56,6 +50,7 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - Feedback in real use: whether agents keep notes unprompted, whether they pick real llm-wiki problems over their own mistakes, and whether the scrubbing misses private names in practice. Read the first filed issues closely.
 - The MCP server in the desktop app's Chat tab itself. On 2026-11-01, Codex used it end to end, and the Claude CLI on its cheapest model, with no other tools or settings, called `wiki_start` for a plain question and captured a decision without being asked. The Chat tab itself did not: asked plainly, it answered from memory and past chats (handbook v12), even after the server's instructions said the wikis come first. Told to use the tools, it found the right rule and cited the page. So setup now gives a line for the user's profile preferences, and with it a plain question went to the wikis (one test, 2026-11-01). Whether it holds across other subjects, and whether Chats capture without being asked.
 - The GitHub route beyond one test: how a Project answers a question its files don't cover, how much of a collection fits, a whole repository added to a plain chat, and other web agents' GitHub connectors.
+- Microsoft 365 Copilot beyond one test by hand (2026-11-03, with a made-up wiki): whether the agent appears in the Mac app, how it answers a question the wiki doesn't cover, and real pages. `wiki setup microsoft-copilot` has run only against fakes: GitHub's localhost redirect, generating without a tools file, and provisioning from the command line are unproven.
 - Patterns in real use: whether agents write `Feedback:` lines unprompted, and whether the thresholds are right.
 
 ## Decided against

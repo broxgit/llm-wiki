@@ -6082,6 +6082,11 @@ setup_cursor() {
 
 cmd_setup() {
   local what="" a n
+  if [ "${1:-}" = microsoft-copilot ]; then
+    shift
+    command -v python3 >/dev/null 2>&1 || die "setup microsoft-copilot needs python3"
+    exec python3 "$REPO/scripts/microsoft_copilot_setup.py" "$@"
+  fi
   for a in "$@"; do
     case "$a" in
       --new) SETUP_MODE=new ;;
@@ -6096,6 +6101,8 @@ Usage: $WIKI_CMD setup [--new | --list | <section> | <setting>]
   setup --list     Print current values without asking anything.
   setup <section>  Just one section: collection, collections, tools, git, claude, permissions, antigravity, codex, cursor, upgrade, delegation, feedback, chat, journal.
   setup chat --yes Add the Chat tab's server without asking, for an agent the user told to. The app must be closed.
+  setup microsoft-copilot --repo OWNER/REPO
+                   Set up a Microsoft 365 Copilot agent that reads a wiki repository on GitHub. --help for its options.
   setup <setting>  Just one setting: git.identity, or journal.<key> such as journal.format.
                    A bare journal key works too: setup format.
 EOF
