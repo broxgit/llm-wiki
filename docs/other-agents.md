@@ -126,6 +126,14 @@ wiki setup microsoft-copilot --repo OWNER/REPO
 
 It needs Node.js, and uses `gh`, if you have it, to find the repository's wikis; without it, name one with `--wiki`. It registers a read-only GitHub App, generates the agent with Microsoft's Agents Toolkit and provisions it to your tenant. You do four things: select **Create GitHub App**, select **Install** and pick that repository alone, sign in to Microsoft 365, and sign in to GitHub in the first chat. If the automatic GitHub step fails, `--manual` has you register the app from a pre-filled link and paste its client ID and secret. `--help` lists the other options.
 
+The agent starts from `global/index.md` if the repository has one, and opens another wiki's index only when a question is about that wiki. In one test with 20 indexes, reading them all first seemed to crowd out the page a first question was after. Naming several wikis with `--wiki` works the same way. When you add a wiki, or a newer llm-wiki changes the agent's instructions, update it from the machine that made it, using the name you gave it:
+
+```
+wiki setup microsoft-copilot --update --name wiki
+```
+
+It keeps the same agent, app and sign-in. Start a new chat afterward, since one already open may keep the old instructions.
+
 Start a chat from the agent itself, under **Agents** or **Plugins**: a regular new chat doesn't use it. In the Mac app, relaunch first. Ask something the wiki answers, then ask it to read a file from a private repository you didn't install the app on. It should fail.
 
 It reads what was last pushed, so answers are as fresh as your last sync, and it can't save notes. The server URL offers only read tools and the app's Contents permission is read-only. Don't swap in an OAuth App, as Microsoft's walkthrough does: its `repo` scope reaches every repository you can.

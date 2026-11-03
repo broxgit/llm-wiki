@@ -21,6 +21,8 @@ git config --global user.email smoke@example.com
 git config --global user.name "Smoke Test"
 git config --global init.defaultBranch main
 
+# The news is read, so a first run's line doesn't appear in every status below.
+"$REPO/wiki.sh" news >/dev/null
 TV="$(sed -n 's/^Handbook version \([0-9][0-9]*\).*/\1/p' "$REPO/template/AGENTS.md" | head -n 1)"
 pass=0
 fail=0
@@ -1172,7 +1174,7 @@ cat > "$MC/bin/gh" <<'EOF'
 #!/bin/sh
 case "$*" in
   "repo view"*) echo '{"isPrivate": true}' ;;
-  *git/trees*) echo '{"tree": [{"path": "index.md"}, {"path": "work/index.md"}, {"path": "work/wiki/a.md"}, {"path": "global/index.md"}, {"path": "journal/x.md"}, {"path": ".github/x"}]}' ;;
+  *git/trees*) [ -z "$MC_TREE" ] || { echo "$MC_TREE"; exit 0; }; echo '{"tree": [{"path": "index.md"}, {"path": "work/index.md"}, {"path": "work/wiki/a.md"}, {"path": "global/index.md"}, {"path": "journal/x.md"}, {"path": ".github/x"}]}' ;;
   "api users/"*) echo '{"type": "User"}' ;;
   *) exit 1 ;;
 esac
@@ -1197,7 +1199,7 @@ case "$1" in
 esac
 EOF
 chmod +x "$MC/atk"
-mc_run() { env MC="$MC" MC_FAIL="${MC_FAIL:-}" PATH="$MC/bin:$PATH" LLM_WIKI_TEST_TTY=1 LLM_WIKI_OPEN="$MC/open" LLM_WIKI_ATK="$MC/atk" LLM_WIKI_GITHUB_API="http://127.0.0.1:$(cat "$MC/port")" LLM_WIKI_APP_WAIT=20 "$W" setup microsoft-copilot "$@"; }
+mc_run() { env MC="$MC" MC_FAIL="${MC_FAIL:-}" MC_TREE="${MC_TREE:-}" PATH="$MC/bin:$PATH" LLM_WIKI_TEST_TTY=1 LLM_WIKI_OPEN="$MC/open" LLM_WIKI_ATK="$MC/atk" LLM_WIKI_GITHUB_API="http://127.0.0.1:$(cat "$MC/port")" LLM_WIKI_APP_WAIT=20 "$W" setup microsoft-copilot "$@"; }
 out="$(env LLM_WIKI_ATK="$MC/atk" "$W" setup microsoft-copilot --repo a/b </dev/null 2>&1)" && bad "setup microsoft-copilot needs a terminal" "$out" || case "$out" in *"Agents: tell the user to run it"*) ok "setup microsoft-copilot needs a terminal" ;; *) bad "setup microsoft-copilot needs a terminal" "$out" ;; esac
 out="$(printf 'n\n' | mc_run --repo acme/wikis --dir "$MC/a" 2>&1)"
 case "$out" in *"could read: global, journal, work"*"Stopped. Nothing was changed."*) ok "it names what the agent could read, and a no stops it" ;; *) bad "it names what the agent could read, and a no stops it" "$out" ;; esac
@@ -1214,7 +1216,7 @@ check "the agent uses the read-only server" grep -q -- '--mcp-da-server-url http
 check "the toolkit gets the client ID" grep -q -- '--mcp-da-client-id Iv1.fakeid' "$MC/atk.log"
 if grep -q 'real-secret-4242' "$MC/atk.log"; then bad "the secret stays off the command line" "$(cat "$MC/atk.log")"; else ok "the secret stays off the command line"; fi
 check "provisioning sees the real secret" grep -qx 'SECRET_MCP_DA_OAUTH_CLIENT_SECRET_APIGITHUBC=real-secret-4242' "$MC/env-at-provision"
-check "afterwards the secret is gone from disk" grep -qx 'SECRET_MCP_DA_OAUTH_CLIENT_SECRET_APIGITHUBC=' "$MC/a/notes/env/.env.dev.user"
+check "afterwards the secret is gone from disk, leaving a value the toolkit accepts" grep -qx 'SECRET_MCP_DA_OAUTH_CLIENT_SECRET_APIGITHUBC=cleared-after-provisioning' "$MC/a/notes/env/.env.dev.user"
 if grep -rq -e 'pem-4242' -e 'hook-4242' "$MC/a"; then bad "the app's private key is never saved" "found"; else ok "the app's private key is never saved"; fi
 check "the instructions name the repository and the wiki's index" grep -q 'repository acme/wikis.*' "$MC/a/notes/appPackage/instruction.txt"
 check "they start from the wiki named" grep -q 'read work/index.md with get_file_contents' "$MC/a/notes/appPackage/instruction.txt"
@@ -1223,12 +1225,63 @@ expect "it won't overwrite a project" "already exists" bash -c "printf 'y\n\n' |
 out="$(printf 'y\n\n' | MC_FAIL=1 mc_run --repo acme/wikis --name failed --dir "$MC/a" 2>&1)" && bad "a failed provision says so" "$out" || case "$out" in *"Provisioning failed"*"provision --env dev"*) ok "a failed provision says how to retry" ;; *) bad "a failed provision says how to retry" "$out" ;; esac
 check "a failed provision keeps the secret for the retry" grep -qx 'SECRET_MCP_DA_OAUTH_CLIENT_SECRET_APIGITHUBC=real-secret-4242' "$MC/a/failed/env/.env.dev.user"
 check "only the owner can read that file" python3 -c "import os,stat,sys; assert stat.S_IMODE(os.stat(sys.argv[1]).st_mode)==0o600" "$MC/a/failed/env/.env.dev.user"
-check "with no wiki named, it starts from every index" grep -q 'read global/index.md and index.md and work/index.md' "$MC/a/failed/appPackage/instruction.txt"
+check "with no wiki named, it starts from the top index, not every index" grep -q 'read index.md with get_file_contents' "$MC/a/failed/appPackage/instruction.txt"
+check "it names the other wikis" grep -q 'in its own folder with an index.md: global, work' "$MC/a/failed/appPackage/instruction.txt"
+out="$(printf 'y\n\n' | MC_TREE='{"tree": [{"path": "global/index.md"}, {"path": "a/index.md"}, {"path": "b/index.md"}]}' mc_run --repo acme/wikis --name shared --dir "$MC/a" 2>&1)"
+case "$out" in *"starts from: global/index.md."*) ok "with a shared wiki, it says it starts there" ;; *) bad "with a shared wiki, it says it starts there" "$out" ;; esac
+check "with a shared wiki, it reads that index first" grep -q 'read global/index.md with get_file_contents' "$MC/a/shared/appPackage/instruction.txt"
+check "the others are named, and never all read" grep -q 'index.md: a, b\. When a question is about one of them.*Never read every index' "$MC/a/shared/appPackage/instruction.txt"
+printf 'y\n\n' | MC_TREE='{"tree": [{"path": "a/index.md"}, {"path": "b/index.md"}]}' mc_run --repo acme/wikis --name noshared --dir "$MC/a" >/dev/null 2>&1
+check "with no shared wiki, it picks by the question" grep -q 'pick the wiki it.s about, and read only that wiki.s index.md' "$MC/a/noshared/appPackage/instruction.txt"
 out="$(printf 'y\nIv1.byhand\nhand-secret-4242\n\n' | mc_run --repo acme/wikis --name byhand --dir "$MC/a" --manual 2>&1)"
 case "$out" in *"contents=read"*"Done. To try it"*) ok "--manual prints the pre-filled link and takes pasted values" ;; *) bad "--manual prints the pre-filled link and takes pasted values" "$out" ;; esac
 case "$out" in *hand-secret-4242*) bad "--manual doesn't echo the secret" "$out" ;; *) ok "--manual doesn't echo the secret" ;; esac
 check "--manual uses the pasted client ID" grep -q -- '--mcp-da-client-id Iv1.byhand' "$MC/atk.log"
+# --update: the same agent, with current instructions, no clicks and no new sign-in registration.
+out="$(printf '\n' | mc_run --update --name missing --dir "$MC/a" 2>&1)" && bad "--update needs an agent to exist" "$out" || case "$out" in *"no agent at"*"machine that created it"*) ok "--update needs an agent to exist" ;; *) bad "--update needs an agent to exist" "$out" ;; esac
+: > "$MC/opened"; : > "$MC/atk.log"
+out="$(MC_TREE='{"tree": [{"path": "global/index.md"}, {"path": "a/index.md"}, {"path": "b/index.md"}, {"path": "newwiki/index.md"}]}' mc_run --update --name shared --dir "$MC/a" </dev/null 2>&1)"
+case "$out" in *"Updating the agent for acme/wikis"*"Start a new chat from shareddev"*) ok "--update remembers the repository and finishes" ;; *) bad "--update remembers the repository and finishes" "$out" ;; esac
+check "--update picks up a new wiki" grep -q 'index.md: a, b, newwiki\.' "$MC/a/shared/appPackage/instruction.txt"
+if grep -q '^new ' "$MC/atk.log"; then bad "--update generates nothing new" "$(cat "$MC/atk.log")"; else ok "--update generates nothing new"; fi
+check "--update provisions" grep -q '^provision ' "$MC/atk.log"
+check "--update opens no pages" test ! -s "$MC/opened"
+check "--update leaves no secret behind" grep -qx 'SECRET_MCP_DA_OAUTH_CLIENT_SECRET_APIGITHUBC=cleared-after-provisioning' "$MC/a/shared/env/.env.dev.user"
+sed -i.bak 's/^\(SECRET_MCP_DA_OAUTH_CLIENT_SECRET_APIGITHUBC\)=.*/\1=/' "$MC/a/notes/env/.env.dev.user"; rm -f "$MC/a/notes/.llm-wiki.json"
+out="$(mc_run --update --name notes --dir "$MC/a" </dev/null 2>&1)" && bad "an older agent asks for its repository once" "$out" || case "$out" in *"name its repository once with --repo"*) ok "an older agent asks for its repository once" ;; *) bad "an older agent asks for its repository once" "$out" ;; esac
+mc_run --update --name notes --dir "$MC/a" --repo acme/wikis --wiki work </dev/null >/dev/null 2>&1
+check "provisioning an older agent sees a value, not a blank" grep -qx 'SECRET_MCP_DA_OAUTH_CLIENT_SECRET_APIGITHUBC=cleared-after-provisioning' "$MC/env-at-provision"
+check "--update saves settings for next time" python3 -c "import json,sys; s=json.load(open(sys.argv[1])); assert s=={'repo':'acme/wikis','wikis':['work']}" "$MC/a/notes/.llm-wiki.json"
+expect "a second setup points at --update" "add --update" bash -c "printf 'y\n\n' | env MC='$MC' PATH='$MC/bin:$PATH' LLM_WIKI_TEST_TTY=1 LLM_WIKI_ATK='$MC/atk' '$W' setup microsoft-copilot --repo acme/wikis --name notes --dir '$MC/a' 2>&1 || true"
 kill "$MC_PID" 2>/dev/null; wait "$MC_PID" 2>/dev/null || true
+
+section "News"
+N="$T/news"; mkdir -p "$N/state"
+printf '# News\n\n## 2026-01-02: Second\n\nSecond body.\n\n- Do: second step.\n\n## 2026-01-01: First\n\nFirst body.\n' > "$N/NEWS.md"
+news() { env XDG_STATE_HOME="$N/state" LLM_WIKI_NEWS_FILE="$N/NEWS.md" "$W" "$@"; }
+out="$(news status 2>&1)"
+case "$out" in *"llm-wiki: 1 new thing(s) to read about. Run: "*" news"*) ok "status says when there's news, with what to run" ;; *) bad "status says when there's news, with what to run" "$out" ;; esac
+out="$(news news 2>&1)"
+case "$out" in *"Second body"*"second step"*) ok "a first run prints the latest entry" ;; *) bad "a first run prints the latest entry" "$out" ;; esac
+case "$out" in *"First body"*) bad "a first run skips the history" "$out" ;; *) ok "a first run skips the history" ;; esac
+case "$(news status 2>&1)" in *"to read about"*) bad "status goes quiet once it's read" "" ;; *) ok "status goes quiet once it's read" ;; esac
+expect "with nothing new, news says how to see it all" "Nothing new since you last looked" env XDG_STATE_HOME="$N/state" LLM_WIKI_NEWS_FILE="$N/NEWS.md" "$W" news
+expect "--all prints the history" "First body" env XDG_STATE_HOME="$N/state" LLM_WIKI_NEWS_FILE="$N/NEWS.md" "$W" news --all
+printf '# News\n\n## 2026-01-04: Fourth\n\nFourth body.\n\n## 2026-01-03: Third\n\nThird body.\n\n## 2026-01-02: Second\n\nSecond body.\n' > "$N/NEWS.md"
+case "$(news status 2>&1)" in *"llm-wiki: 2 new thing(s)"*) ok "status counts what's new since the last read" ;; *) bad "status counts what's new since the last read" "$(news status 2>&1)" ;; esac
+out="$(news update --wikis-only 2>&1 </dev/null)"
+case "$out" in *"What's new in llm-wiki"*"Fourth body"*"Third body"*"== Next"*) ok "update prints what's new since the last read" ;; *) bad "update prints what's new since the last read" "$out" ;; esac
+case "$out" in *"Second body"*) bad "update leaves out what's been read" "$out" ;; *) ok "update leaves out what's been read" ;; esac
+case "$(news news 2>&1)" in *"Nothing new"*) ok "update marks it read" ;; *) bad "update marks it read" "" ;; esac
+printf '# News\n\n## 2026-01-05: Renamed\n\nBody.\n' > "$N/NEWS.md"
+case "$(news status 2>&1)" in *"to read about"*) bad "a heading that's gone counts as nothing new" "" ;; *) ok "a heading that's gone counts as nothing new" ;; esac
+check "news without a NEWS.md stays quiet" env XDG_STATE_HOME="$N/none" LLM_WIKI_NEWS_FILE="$N/none.md" "$W" status
+check "NEWS.md entries are dated, with different titles" python3 -c "
+import re,sys
+h=[l for l in open(sys.argv[1]) if l.startswith('## ')]
+assert h and all(re.match(r'## \d{4}-\d\d-\d\d: \S', l) for l in h) and len(set(h))==len(h)
+d=[l[3:13] for l in h]
+assert d==sorted(d,reverse=True)" "$REPO/NEWS.md"
 
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ]

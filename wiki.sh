@@ -173,6 +173,7 @@ Usage: $WIKI_CMD <command> [options]
                        issue after you read it. Off until: setup feedback.
   mcp [--print]        A local MCP server over the wikis, for sessions with no file
                        access. An MCP client starts it. --print gives its config entry.
+  news [--all]         What's new in llm-wiki since you last looked.
   report [--since R]   Weekly look: tokens per project, what the wikis gained, hit
                        rate, and what needs you. An agent writes it up.
   stats [range]        How often wikis answered the questions sessions checked them for (default 30d).
@@ -1741,6 +1742,8 @@ EOF2
     if [ "$(feedback_mode)" = share ]; then todo_add "feedback: $n note(s) from agents about llm-wiki to read, and file the ones worth fixing. Run: $WIKI_CMD feedback"
     else todo_add "feedback: $n note(s) from agents about llm-wiki. Run: $WIKI_CMD feedback"; fi
   fi
+  n="$(news_unseen)"
+  [ "$n" -eq 0 ] || todo_add "llm-wiki: $n new thing(s) to read about. Run: $WIKI_CMD news"
   n="$(TIP_REPO="$PWD" tips_due | wc -l | tr -d ' ')"
   [ "$n" -eq 0 ] || todo_add "tips: $n feature(s) your wikis suggest trying. Run: $WIKI_CMD tips"
   n="$(setup_pending | wc -l | tr -d ' ')"
@@ -3027,6 +3030,56 @@ mcp_entry() {
   CMD="$(codex_cmd)" python3 -c 'import json, os; print(json.dumps({"command": os.environ["CMD"], "args": ["mcp"]}, indent=2))'
 }
 
+# NEWS.md holds what's new outside the handbook. A marker on this machine holds the
+# last heading seen, so each entry shows once, however the code got here: plugin
+# users get new commits without running update.
+NEWS_FILE="${LLM_WIKI_NEWS_FILE:-$REPO/NEWS.md}"
+NEWS_SEEN="${XDG_STATE_HOME:-$HOME/.local/state}/llm-wiki/news-seen"
+
+# news_unseen: how many entries are new. With no marker, only the latest counts, so a
+# first run doesn't print the whole history. A heading that's gone counts as nothing new.
+news_unseen() {
+  [ -f "$NEWS_FILE" ] || { echo 0; return 0; }
+  if [ -f "$NEWS_SEEN" ]; then
+    awk -v seen="$(cat "$NEWS_SEEN")" '/^## /{ if ($0 == seen) { found = 1; exit } n++ } END { print found ? n + 0 : 0 }' "$NEWS_FILE"
+  else
+    grep -q '^## ' "$NEWS_FILE" && echo 1 || echo 0
+  fi
+}
+
+# news_print <n>: the newest n entries.
+news_print() {
+  awk -v n="$1" '/^## / { c++; if (c > n) exit } c >= 1' "$NEWS_FILE"
+}
+
+news_mark_seen() {
+  [ -f "$NEWS_FILE" ] || return 0
+  mkdir -p "$(dirname "$NEWS_SEEN")"
+  grep -m1 '^## ' "$NEWS_FILE" > "$NEWS_SEEN" || true
+}
+
+cmd_news() {
+  local n
+  case "${1:-}" in
+    --all)
+      [ -f "$NEWS_FILE" ] || die "no NEWS.md in $(tilde "$REPO")"
+      news_print 999999
+      ;;
+    "")
+      n="$(news_unseen)"
+      if [ "$n" -gt 0 ]; then news_print "$n"
+      else echo "Nothing new since you last looked. All of it: $WIKI_CMD news --all"; fi
+      ;;
+    -h | --help)
+      echo "Usage: $WIKI_CMD news [--all]"
+      echo "  What's new in llm-wiki outside the handbook, since you last looked. --all prints everything."
+      return 0
+      ;;
+    *) die "news options: --all" ;;
+  esac
+  news_mark_seen
+}
+
 cmd_mcp() {
   case "${1:-}" in
     --print)
@@ -3201,7 +3254,7 @@ except Exception:
 
 # update_wikis: pull, upgrade and push each collection, then new settings and next steps.
 update_wikis() {
-  local n f r ahead track
+  local n f r ahead track k
   while IFS="$TAB" read -r n f r; do
     [ -d "$f" ] || continue
     echo
@@ -3226,6 +3279,13 @@ EOF2
   echo
   if [ -t 0 ] && [ -n "$(setup_pending)" ]; then
     "$REPO/wiki.sh" setup --new
+    echo
+  fi
+  k="$(news_unseen)"
+  if [ "$k" -gt 0 ]; then
+    echo "== What's new in llm-wiki"
+    news_print "$k"
+    news_mark_seen
     echo
   fi
   echo "== Next"
@@ -4409,7 +4469,7 @@ EOF
 # Tab completion. `completion zsh|bash` prints a small script for the shell, which
 # asks `__complete` for candidates on every Tab. The candidates live here, so a
 # plugin update can't leave completion stale.
-COMMANDS="setup init new update start collections deps permissions seed harvest capture lock log sync index lint pending cover which status find stale patterns skills tips report stats feedback mcp delegation upgrade unlock claude link journal standup completion"
+COMMANDS="setup init new update start collections deps permissions seed harvest capture lock log sync index lint pending cover which status find stale patterns skills tips report stats feedback news mcp delegation upgrade unlock claude link journal standup completion"
 RANGES="lastworkday yesterday today week lastweek 7d 14d 30d"
 
 wiki_names() {
@@ -4463,6 +4523,7 @@ cmd_complete() {
     harvest) printf -- '--dry-run\n--from\n' ;;
     tips) printf -- '--mute\n--unmute\n' ;;
     report) printf -- '--since\n' ;;
+    news) printf -- '--all\n' ;;
     stats) printf '%s\n' $RANGES ;;
     delegation)
       if [ "$i" -eq 2 ]; then printf 'off\nask\nauto\nlog\n'
@@ -6271,6 +6332,7 @@ case "$cmd" in
     ;;
   capture) cmd_capture "$@"; exit 0 ;;
   feedback) cmd_feedback "$@"; exit 0 ;;
+  news) cmd_news "$@"; exit 0 ;;
   mcp) cmd_mcp "$@"; exit 0 ;;
   lock) cmd_lock "$@"; exit 0 ;;
   log) cmd_log "$@"; exit 0 ;;
