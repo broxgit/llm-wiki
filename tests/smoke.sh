@@ -1172,7 +1172,7 @@ cat > "$MC/bin/gh" <<'EOF'
 #!/bin/sh
 case "$*" in
   "repo view"*) echo '{"isPrivate": true}' ;;
-  *git/trees*) echo '{"tree": [{"path": "index.md"}, {"path": "work/index.md"}, {"path": "work/wiki/a.md"}, {"path": "global/index.md"}, {"path": "journal/x.md"}, {"path": ".github/x"}]}' ;;
+  *git/trees*) [ -z "$MC_TREE" ] || { echo "$MC_TREE"; exit 0; }; echo '{"tree": [{"path": "index.md"}, {"path": "work/index.md"}, {"path": "work/wiki/a.md"}, {"path": "global/index.md"}, {"path": "journal/x.md"}, {"path": ".github/x"}]}' ;;
   "api users/"*) echo '{"type": "User"}' ;;
   *) exit 1 ;;
 esac
@@ -1197,7 +1197,7 @@ case "$1" in
 esac
 EOF
 chmod +x "$MC/atk"
-mc_run() { env MC="$MC" MC_FAIL="${MC_FAIL:-}" PATH="$MC/bin:$PATH" LLM_WIKI_TEST_TTY=1 LLM_WIKI_OPEN="$MC/open" LLM_WIKI_ATK="$MC/atk" LLM_WIKI_GITHUB_API="http://127.0.0.1:$(cat "$MC/port")" LLM_WIKI_APP_WAIT=20 "$W" setup microsoft-copilot "$@"; }
+mc_run() { env MC="$MC" MC_FAIL="${MC_FAIL:-}" MC_TREE="${MC_TREE:-}" PATH="$MC/bin:$PATH" LLM_WIKI_TEST_TTY=1 LLM_WIKI_OPEN="$MC/open" LLM_WIKI_ATK="$MC/atk" LLM_WIKI_GITHUB_API="http://127.0.0.1:$(cat "$MC/port")" LLM_WIKI_APP_WAIT=20 "$W" setup microsoft-copilot "$@"; }
 out="$(env LLM_WIKI_ATK="$MC/atk" "$W" setup microsoft-copilot --repo a/b </dev/null 2>&1)" && bad "setup microsoft-copilot needs a terminal" "$out" || case "$out" in *"Agents: tell the user to run it"*) ok "setup microsoft-copilot needs a terminal" ;; *) bad "setup microsoft-copilot needs a terminal" "$out" ;; esac
 out="$(printf 'n\n' | mc_run --repo acme/wikis --dir "$MC/a" 2>&1)"
 case "$out" in *"could read: global, journal, work"*"Stopped. Nothing was changed."*) ok "it names what the agent could read, and a no stops it" ;; *) bad "it names what the agent could read, and a no stops it" "$out" ;; esac
@@ -1223,7 +1223,14 @@ expect "it won't overwrite a project" "already exists" bash -c "printf 'y\n\n' |
 out="$(printf 'y\n\n' | MC_FAIL=1 mc_run --repo acme/wikis --name failed --dir "$MC/a" 2>&1)" && bad "a failed provision says so" "$out" || case "$out" in *"Provisioning failed"*"provision --env dev"*) ok "a failed provision says how to retry" ;; *) bad "a failed provision says how to retry" "$out" ;; esac
 check "a failed provision keeps the secret for the retry" grep -qx 'SECRET_MCP_DA_OAUTH_CLIENT_SECRET_APIGITHUBC=real-secret-4242' "$MC/a/failed/env/.env.dev.user"
 check "only the owner can read that file" python3 -c "import os,stat,sys; assert stat.S_IMODE(os.stat(sys.argv[1]).st_mode)==0o600" "$MC/a/failed/env/.env.dev.user"
-check "with no wiki named, it starts from every index" grep -q 'read global/index.md and index.md and work/index.md' "$MC/a/failed/appPackage/instruction.txt"
+check "with no wiki named, it starts from the top index, not every index" grep -q 'read index.md with get_file_contents' "$MC/a/failed/appPackage/instruction.txt"
+check "it names the other wikis" grep -q 'in its own folder with an index.md: global, work' "$MC/a/failed/appPackage/instruction.txt"
+out="$(printf 'y\n\n' | MC_TREE='{"tree": [{"path": "global/index.md"}, {"path": "a/index.md"}, {"path": "b/index.md"}]}' mc_run --repo acme/wikis --name shared --dir "$MC/a" 2>&1)"
+case "$out" in *"starts from: global/index.md."*) ok "with a shared wiki, it says it starts there" ;; *) bad "with a shared wiki, it says it starts there" "$out" ;; esac
+check "with a shared wiki, it reads that index first" grep -q 'read global/index.md with get_file_contents' "$MC/a/shared/appPackage/instruction.txt"
+check "the others are named, and never all read" grep -q 'index.md: a, b\. When a question is about one of them.*Never read every index' "$MC/a/shared/appPackage/instruction.txt"
+printf 'y\n\n' | MC_TREE='{"tree": [{"path": "a/index.md"}, {"path": "b/index.md"}]}' mc_run --repo acme/wikis --name noshared --dir "$MC/a" >/dev/null 2>&1
+check "with no shared wiki, it picks by the question" grep -q 'pick the wiki it.s about, and read only that wiki.s index.md' "$MC/a/noshared/appPackage/instruction.txt"
 out="$(printf 'y\nIv1.byhand\nhand-secret-4242\n\n' | mc_run --repo acme/wikis --name byhand --dir "$MC/a" --manual 2>&1)"
 case "$out" in *"contents=read"*"Done. To try it"*) ok "--manual prints the pre-filled link and takes pasted values" ;; *) bad "--manual prints the pre-filled link and takes pasted values" "$out" ;; esac
 case "$out" in *hand-secret-4242*) bad "--manual doesn't echo the secret" "$out" ;; *) ok "--manual doesn't echo the secret" ;; esac
