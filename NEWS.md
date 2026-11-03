@@ -4,6 +4,15 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. A short paragraph, then lines starting `- ` for what changed and `- Do:` for what to do about it. Add an entry for anything a user would notice, and none for fixes they wouldn't.
 
+## 2026-11-03: Copilot Cowork can change code through runs on your Mac
+
+If work gives you far more Copilot than Claude, Cowork can now work on a real repository without reaching it. It publishes a folder to OneDrive, you run one command, and you attach the report.
+
+- `wiki setup copilot-cowork` copies the `remote-pair-run` skill to your work OneDrive.
+- The run waits for OneDrive to catch up, checks every file against a manifest, and ends in a clear PASS or FAIL. It never commits or pushes.
+- It has been through one test with Cowork, on a throwaway repository.
+- Do: nothing, unless you use Copilot Cowork at work. Then see "Set up with another agent" in the docs.
+
 ## 2026-11-03: Microsoft 365 Copilot can read your wikis
 
 A work or school account can now ask Copilot questions and get answers from a wiki repository on GitHub. It's read-only, and limited to the one repository you install it on.
