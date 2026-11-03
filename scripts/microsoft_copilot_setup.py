@@ -348,7 +348,7 @@ The client secret stays in {secret_env_file(project)} so you can retry:
     write_secret(project, "")
     print(f"""
 Done. To try it:
-  1. Open {COPILOT_CHAT} and start a chat from the agent, {args.name}dev, under Agents or Plugins. A regular new chat doesn't use it.
+  1. Open {COPILOT_CHAT} and start a chat from the agent, {args.name}dev, under Agents or Plugins. A regular new chat doesn't use it. In the Mac app, relaunch first.
   2. Ask something the wiki answers, and sign in to GitHub when asked. It should cite a page.
   3. Ask it to read a file from a private repository you didn't install the app on. It should fail.
 

@@ -1252,7 +1252,7 @@ memory_project() {
   if top="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)"; then name="$(repo_name "$top")"; else name="${cwd##*/}"; fi
   w="$(which_wiki "$name")"
   if [ -z "$w" ]; then
-    # A scratch folder inside a project, such as politiboop/sweeps/b41, belongs to it.
+    # A scratch folder inside a project, such as myapp/sweeps/b41, belongs to it.
     local IFS=/
     for part in $cwd; do [ -n "$part" ] && [ -n "$(which_wiki "$part")" ] && w="$(which_wiki "$part")"; done
   fi
@@ -3579,7 +3579,7 @@ def project(cwd):
         if url: name = re.sub(r"\.git$", "", url.rstrip("/")).split("/")[-1].split(":")[-1]
         elif top: name = os.path.basename(top)
     if os.path.realpath(cwd) == os.path.realpath(wikis): name = "wikis"
-    # A scratch folder inside a project, such as politiboop/sweeps/b41, belongs to that project.
+    # A scratch folder inside a project, such as myapp/sweeps/b41, belongs to that project.
     if name not in known:
         for part in reversed(Path(cwd).parts[:-1]):
             if part in known:
@@ -4710,7 +4710,7 @@ def project(cwd):
         elif top: name = os.path.basename(top)
     if os.path.realpath(cwd) == wikis_real: name = "wikis"
     name = cover.get(name, name)
-    # A scratch folder inside a project, such as politiboop/sweeps/b41, belongs to it.
+    # A scratch folder inside a project, such as myapp/sweeps/b41, belongs to it.
     if name not in known and name != "wikis":
         name = next((x for x in reversed(Path(cwd).parts[:-1]) if x in known), None)
     _proj[cwd] = name

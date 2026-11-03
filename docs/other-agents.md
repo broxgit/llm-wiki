@@ -126,11 +126,11 @@ wiki setup microsoft-copilot --repo OWNER/REPO
 
 It needs Node.js, and uses `gh`, if you have it, to find the repository's wikis; without it, name one with `--wiki`. It registers a read-only GitHub App, generates the agent with Microsoft's Agents Toolkit and provisions it to your tenant. You do four things: select **Create GitHub App**, select **Install** and pick that repository alone, sign in to Microsoft 365, and sign in to GitHub in the first chat. If the automatic GitHub step fails, `--manual` has you register the app from a pre-filled link and paste its client ID and secret. `--help` lists the other options.
 
-Start a chat from the agent itself: a regular new chat doesn't use it. Ask something the wiki answers, then ask it to read a file from a private repository you didn't install the app on. It should fail.
+Start a chat from the agent itself, under **Agents** or **Plugins**: a regular new chat doesn't use it. In the Mac app, relaunch first. Ask something the wiki answers, then ask it to read a file from a private repository you didn't install the app on. It should fail.
 
 It reads what was last pushed, so answers are as fresh as your last sync, and it can't save notes. The server URL offers only read tools and the app's Contents permission is read-only. Don't swap in an OAuth App, as Microsoft's walkthrough does: its `repo` scope reaches every repository you can.
 
-The route was tried once by hand on 2026-11-03: the agent read a private repository and cited the page, and couldn't read another one. Whether it appears in the Mac app hasn't been checked.
+This has run end to end once, on 2026-11-03, with a test wiki: the agent read a private repository and cited the page, and got a 404 from another one. In the Mac app, the agent appeared after relaunching it.
 
 **Other web agents:** the same idea works wherever an agent has a GitHub connector that can read your private repository. Only claude.ai's and Microsoft 365 Copilot's have been tried.
 
