@@ -140,7 +140,7 @@ It reads what was last pushed, so answers are as fresh as your last sync, and it
 
 This has run end to end once, on 2026-11-03, with a test wiki: the agent read a private repository and cited the page, and got a 404 from another one. In the Mac app, the agent appeared after relaunching it.
 
-**Microsoft Copilot Cowork:** it can't reach your files or run your build, but it can still change your code. It publishes a folder to OneDrive, you run one command, and you attach the report it writes. It's a way to use Copilot on a real repository when work gives you far more Copilot than Claude. Check that your company allows the code you share to pass through its tenant. With OneDrive syncing, in a terminal:
+**Microsoft Copilot Cowork:** it can't reach your files or run your build, but it can still change your code. It publishes a folder to OneDrive, you run one command, and you attach the report it writes. It's a way to use Copilot on a real repository when work gives you far more Copilot than Claude. Check that your company allows your code in OneDrive and through its tenant. With OneDrive syncing, in a terminal:
 
 ```
 wiki setup copilot-cowork
@@ -148,15 +148,23 @@ wiki setup copilot-cowork
 
 It copies a skill called `remote-pair-run` to `Documents/Cowork/skills` in your work OneDrive, and Cowork finds it when a new session starts. Run it again to update the skill. If you have several work OneDrive folders, name one with `--dir`. If you use it for Go, attaching the Linux Go tarball from [go.dev/dl](https://go.dev/dl/) lets Cowork compile in its own sandbox first.
 
-Then ask Cowork to change something, and attach the files it needs. Each round goes like this:
+To share your code, run this in the repository, then tell Cowork what it prints:
 
-1. It gives you one command, ending in `--expect` and a version number. The command waits for OneDrive to catch up, and runs only once every file matches what Cowork published.
-2. The run compares the new output with the old, and restores what it touched. It never commits or pushes. Read what Cowork says it will change before you run it, because it runs on your machine.
-3. The last line of the output names a report in `~/pair-run-reports`. Attach it, and Cowork takes it from there.
+```
+wiki relay scan
+```
 
-If a run prints `killed` or `Operation not permitted` and no report, OneDrive probably hasn't finished delivering the files. Wait a couple of minutes and run the same command again. If it still fails, in Finder, right-click the task's `output` folder, choose **Always Keep on This Device**, and try once more.
+It puts the current branch and your uncommitted changes in OneDrive, at `Documents/Cowork/relay/scans`, so you don't have to attach anything. That includes the branch's whole history. Untracked files stay out.
 
-This has been through two test sessions with Cowork, on 2026-11-03, on a throwaway repository: the loop reached PASS, and the sync check waited for late files.
+Then ask Cowork to change something. Each round goes like this:
+
+1. It gives you one command, `wiki relay run` with a version number. The command waits for OneDrive to catch up, and copies the files out once every one matches what Cowork published.
+2. It shows you what's there. Press `y` to run it, `v` to read the files first, or `n` to stop. It runs on your machine, so read what Cowork says it will change. The run compares the new output with the old, and restores what it touched. It never commits or pushes.
+3. The report goes to OneDrive by itself, only if a run happened, and a copy stays in `~/pair-run-reports`. You see all of it in your terminal as it runs. Tell Cowork `done`, and it reads the report.
+
+If OneDrive never catches up, the command says so and sends nothing. Run it again, and if it keeps failing, in Finder, right-click the task's `output` folder and choose **Always Keep on This Device**.
+
+Two test sessions with Cowork, on 2026-11-03 on a throwaway repository, reached a verdict by attaching reports and running from the OneDrive folder. `wiki relay` came out of those, and hasn't run with Cowork yet.
 
 **Other web agents:** the same idea works wherever an agent has a GitHub connector that can read your private repository. Only claude.ai's and Microsoft 365 Copilot's have been tried.
 

@@ -174,6 +174,7 @@ Usage: $WIKI_CMD <command> [options]
   mcp [--print]        A local MCP server over the wikis, for sessions with no file
                        access. An MCP client starts it. --print gives its config entry.
   news [--all]         What's new in llm-wiki since you last looked.
+  relay run|scan       Run Microsoft Copilot Cowork's deliverables on this machine, and share code with it. relay --help has more.
   report [--since R]   Weekly look: tokens per project, what the wikis gained, hit
                        rate, and what needs you. An agent writes it up.
   stats [range]        How often wikis answered the questions sessions checked them for (default 30d).
@@ -4469,7 +4470,7 @@ EOF
 # Tab completion. `completion zsh|bash` prints a small script for the shell, which
 # asks `__complete` for candidates on every Tab. The candidates live here, so a
 # plugin update can't leave completion stale.
-COMMANDS="setup init new update start collections deps permissions seed harvest capture lock log sync index lint pending cover which status find stale patterns skills tips report stats feedback news mcp delegation upgrade unlock claude link journal standup completion"
+COMMANDS="setup init new update start collections deps permissions seed harvest capture lock log sync index lint pending cover which status find stale patterns skills tips report stats feedback news mcp relay delegation upgrade unlock claude link journal standup completion"
 RANGES="lastworkday yesterday today week lastweek 7d 14d 30d"
 
 wiki_names() {
@@ -4524,6 +4525,7 @@ cmd_complete() {
     tips) printf -- '--mute\n--unmute\n' ;;
     report) printf -- '--since\n' ;;
     news) printf -- '--all\n' ;;
+    relay) printf 'run\nscan\n--dir\n' ;;
     stats) printf '%s\n' $RANGES ;;
     delegation)
       if [ "$i" -eq 2 ]; then printf 'off\nask\nauto\nlog\n'
@@ -6141,9 +6143,43 @@ setup_cursor() {
   esac
 }
 
+# Prints the work OneDrive folder, or stops if there's none or several.
+onedrive_folder() {
+  local a found="" dir="" n=0
+  for a in "$HOME"/Library/CloudStorage/OneDrive-*; do
+    [ -d "$a" ] || continue
+    # Cowork needs a work or school account.
+    [ "$(basename "$a")" != OneDrive-Personal ] || continue
+    found="$found
+  $a"
+    dir="$a"
+    n=$((n + 1))
+  done
+  [ "$n" -gt 0 ] || die "no work OneDrive folder in ~/Library/CloudStorage. Sign in to OneDrive, or name the folder with --dir"
+  [ "$n" -eq 1 ] || die "several OneDrive folders. Name one with --dir:$found"
+  printf '%s' "$dir"
+}
+
+cmd_relay() {
+  local dir=""
+  if [ "${1:-}" = --dir ]; then
+    [ -n "${2:-}" ] || die "--dir needs your OneDrive folder"
+    dir="$2"
+    shift 2
+  fi
+  command -v git >/dev/null 2>&1 || die "relay needs git"
+  case "${1:-}" in
+    run | scan)
+      [ -n "$dir" ] || dir="$(onedrive_folder)" || exit 1
+      [ -d "$dir" ] || die "no such folder: $dir"
+      ;;
+  esac
+  LLM_WIKI_ONEDRIVE="$dir" WIKI_CMD="$WIKI_CMD" bash "$REPO/scripts/relay.sh" "$@"
+}
+
 # Copies the remote pair-run skill into the OneDrive folder Copilot Cowork reads skills from.
 setup_copilot_cowork() {
-  local dir="" a found="" n=0 target
+  local dir="" target
   while [ $# -gt 0 ]; do
     case "$1" in
       --dir)
@@ -6164,25 +6200,13 @@ EOF
       *) die "setup copilot-cowork: unknown option $1. Try $WIKI_CMD setup copilot-cowork --help" ;;
     esac
   done
-  if [ -z "$dir" ]; then
-    for a in "$HOME"/Library/CloudStorage/OneDrive-*; do
-      [ -d "$a" ] || continue
-      # Cowork needs a work or school account.
-      [ "$(basename "$a")" != OneDrive-Personal ] || continue
-      found="$found
-  $a"
-      dir="$a"
-      n=$((n + 1))
-    done
-    [ "$n" -gt 0 ] || die "no work OneDrive folder in ~/Library/CloudStorage. Sign in to OneDrive, or name the folder with --dir"
-    [ "$n" -eq 1 ] || die "several OneDrive folders. Name one with --dir:$found"
-  fi
+  [ -n "$dir" ] || dir="$(onedrive_folder)" || exit 1
   [ -d "$dir" ] || die "no such folder: $dir"
   target="$dir/Documents/Cowork/skills/remote-pair-run"
   mkdir -p "$target" || die "can't create $target"
   cp "$REPO/cowork/remote-pair-run/SKILL.md" "$REPO/cowork/remote-pair-run/runlib.sh" "$target/" || die "can't copy the skill to $target"
   echo "installed: $target"
-  echo "Cowork finds it when a new session starts, once OneDrive has synced. Ask it to change code in a repository, and it will publish a folder for you to run."
+  echo "Cowork finds it when a new session starts, once OneDrive has synced. Ask it to change code in a repository, and it will give you a $WIKI_CMD relay run command."
 }
 
 cmd_setup() {
@@ -6384,6 +6408,7 @@ case "$cmd" in
   capture) cmd_capture "$@"; exit 0 ;;
   feedback) cmd_feedback "$@"; exit 0 ;;
   news) cmd_news "$@"; exit 0 ;;
+  relay) cmd_relay "$@"; exit $? ;;
   mcp) cmd_mcp "$@"; exit 0 ;;
   lock) cmd_lock "$@"; exit 0 ;;
   log) cmd_log "$@"; exit 0 ;;

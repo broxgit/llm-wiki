@@ -14,7 +14,7 @@ You can write files, but you can't see the user's repository or run its build. T
 | Have | A sandbox, attached files, an output folder that syncs to their machine | The real repositories, compilers, private network, CI |
 | Don't have | Their repositories, their tools, a way to run the real build | Time to write boilerplate or diagnose every failure |
 
-Keep the user's job to this: run one command, attach one file, answer the occasional question.
+Keep the user's job to this: run one command, press a key, tell you "done", and answer the occasional question.
 
 ## Rules
 
@@ -27,7 +27,15 @@ Keep the user's job to this: run one command, attach one file, answer the occasi
 
 ### 1. Get the current code
 
-Work out which files you need, and ask for them. Ask for attachments, not pastes: a terminal paste turns tabs into spaces, which breaks patches.
+The best view is a relay scan. Ask the user to run this in the repository:
+
+```bash
+wiki relay scan
+```
+
+Then, with no attachment, read `Documents/Cowork/relay/scans/<repository>.txt` from their OneDrive. It gives the path, branch, commit, status, tool versions and the archive's sha256. Get `<repository>.tar.gz` from the same folder into your sandbox and check the hash: a download can report success before the file appears, so try again for a minute or two. Extract it, `git clone repo.bundle`, and apply `uncommitted.patch` if it isn't empty. You now have real history at the real commit. Untracked files aren't included, so ask for any you need.
+
+Without a scan, work out which files you need and ask for them. Ask for attachments, not pastes: a terminal paste turns tabs into spaces, which breaks patches.
 
 Before changing an existing file, you need its current contents, or proof that your copy matches the branch. If you only have an older scan, have the user attach the file, or the output of `git show HEAD:<path>`, and `git rev-parse HEAD`.
 
@@ -127,21 +135,29 @@ Publish the whole folder, then read `manifest.txt` back from the output folder, 
 
 ### 3. Hand it over
 
-Give the user one command, using the version the manifest printed, and say what it will change:
+Give the user one command, using the version the manifest printed and your task folder's name, and say what it will change:
+
+```bash
+wiki relay run <task-folder>/<deliverable> --expect 3
+```
+
+It waits until every file matches the manifest, which took about 90 seconds in one test, and retries if OneDrive refuses a file. It copies the listed files to a local folder, shows them, and runs the copy when the user presses y. It sends the report to OneDrive only if a run happened. So don't add checks of your own for stale files. If you don't know your task folder's name, `wiki relay run --expect 3` uses the newest deliverable. They can add `--no-install` to skip the install on a second run.
+
+**If they don't have the `wiki` command,** give them this instead. It's the usual path on a Mac, so ask once for the real one if their machine might differ, or has more than one `OneDrive-` folder:
 
 ```bash
 cd ~/Library/CloudStorage/OneDrive-*/Documents/Cowork/Tasks/<task-folder>/output/<deliverable> && find . -type f -exec cat {} + >/dev/null && bash run.sh --expect 3
 ```
 
-That is the usual path on a Mac. Ask once for the real one if the user's machine might differ, or has more than one `OneDrive-` folder.
-
-`--expect` makes the run wait for the sync, which took about 90 seconds in one test. It checks every file against the manifest, and if the files arrive late it starts again from the new ones. So don't add checks of your own for stale files. It only helps once `run.sh` can be opened, as the next paragraph explains. If they want to skip the install on a second run, they can add `--no-install`.
+`--expect` makes that run wait for the sync, and start again if files arrive late. It only helps once `run.sh` can be opened, as the next paragraph explains.
 
 **If the output says `killed` or `Operation not permitted`, with no report,** the shell couldn't open the files, so `runlib.sh` never started. The cause isn't proven, but it has only been seen soon after publishing, while OneDrive was still delivering them. Have the user wait a couple of minutes and run the same command again, which cleared `Operation not permitted` in one test. If it still fails, have them right-click the task's `output` folder in Finder, choose **Always Keep on This Device**, and run it again, which cleared `killed` in another. `ls -lO` can show `dataless` here, but it can be refused too, so don't depend on it. The `find` in the command reads every file first, which is meant to prevent this (**not validated**). Keep the command chained with `&&`, so a refused read doesn't run anything, and tell the user not to send you an old report in its place.
 
-Then tell them: attach the file named on the last line of the output, or paste the error if it never got that far. Reports are in `~/pair-run-reports/`.
+Then tell them to say "done" when it finishes. Without the relay, they attach the file named on the last line of the output, from `~/pair-run-reports/`, or paste the error if it never got that far.
 
 ### 4. Read the report
+
+When the user says "done", list `Documents/Cowork/relay/<task-folder>/reports/` in their OneDrive with no attachment, and read the newest file. It can take a minute or two to appear, so try again before asking them. If it doesn't appear, or they attached a report, use that.
 
 1. **Read the last lines first:** the verdict `<NAME> RUN: PASS` or `FAIL`, `version:`, `checks:`, and `first failure:`.
 2. **Check the header.** If `version:` is lower than the one you last published, or `started:` is before you published it, they ran an old copy or sent an old report: say so and stop. If the commit isn't the one you worked against, get the current files again before patching.

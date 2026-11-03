@@ -1616,8 +1616,12 @@ check "the skill reads the manifest back after publishing" grep -q 'read `manife
 # The skill's install.sh and run.sh examples, run as written, since Cowork will copy them.
 EX="$T/example"
 mkdir -p "$EX/home/dev/my-repo/testdata" "$EX/home/dev/my-repo/vendor/lib" "$EX/d/files" "$EX/bin"
-awk '/^```bash$/ { n++; next } /^```$/ { next } n == 1 && !done { print } /^cp -R / && n == 1 { done = 1 }' "$SK/SKILL.md" >"$EX/d/install.sh"
-awk '/^```bash$/ { n++; next } /^```$/ { next } n == 2 && !done { print } /^report_end$/ && n == 2 { done = 1 }' "$SK/SKILL.md" >"$EX/d/run.sh"
+# skill_block <text>: the skill's bash block containing that text.
+skill_block() {
+  awk -v want="$1" '/^```bash$/ { b = ""; inside = 1; next } /^```$/ { if (inside && index(b, want)) printf "%s", b; inside = 0; next } inside { b = b $0 "\n" }' "$SK/SKILL.md"
+}
+skill_block 'usage: install.sh' >"$EX/d/install.sh"
+skill_block 'report_start my-change' >"$EX/d/run.sh"
 cp "$LIB" "$EX/d/runlib.sh"
 (
   cd "$EX/home/dev/my-repo" || exit 1
@@ -1672,6 +1676,184 @@ refuse "--dir must exist" cw --dir "$CW/nope"
 refuse "an unknown option is refused" cw --nope
 expect "setup copilot-cowork has help" "Documents/Cowork/skills" "$W" setup copilot-cowork --help
 expect "setup --help lists it" "setup copilot-cowork" "$W" setup --help
+
+section "relay"
+RH="$T/relay-home"
+OD="$RH/Library/CloudStorage/OneDrive-Acme"
+mkdir -p "$OD/Documents/Cowork"
+# shellcheck source=/dev/null
+rl_sha() { ( . "$LIB"; sha256_of "$1" ); }
+# rl_new <task> <deliverable> <run.sh body>: a deliverable as Cowork would publish it.
+rl_new() {
+  local d="$OD/Documents/Cowork/Tasks/$1/output/$2"
+  mkdir -p "$d"
+  cp "$LIB" "$d/runlib.sh"
+  {
+    printf '#!/usr/bin/env bash\nset -u\nhere="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"\n. "$here/runlib.sh"\nreport_start demo "$@"\n'
+    printf '%s\n' "$3"
+  } >"$d/run.sh"
+  bash "$LIB" manifest "$d" >/dev/null
+  RL_D="$d"
+}
+# rl <answer> <args...>: wiki relay run, answering its question through a pipe.
+rl() {
+  local answer="$1"
+  shift
+  RL_OUT="$(printf '%s' "$answer" | env HOME="$RH" PAGER=cat LLM_WIKI_TEST_TTY=1 LLM_WIKI_RELAY_WAIT="${RL_WAIT:-0}" LLM_WIKI_RELAY_POLL=1 "$W" relay run "$@" 2>&1)"
+  RL_RC=$?
+}
+rl_expect() { case "$RL_RC:$RL_OUT" in "$2:"*"$3"*) ok "$1" ;; *) bad "$1" "exit $RL_RC, wanted $2 and: $3
+$RL_OUT" ;; esac; }
+rl_lacks() { case "$RL_OUT" in *"$2"*) bad "$1" "$RL_OUT" ;; *) ok "$1" ;; esac; }
+rl_sent() { ls "$OD/Documents/Cowork/relay/$1/reports" 2>/dev/null | wc -l | tr -d ' '; }
+
+rl_new t1 d1 'echo "HERE=$here"
+[ ! -e "$here/leftover.txt" ]; result "leftovers stay behind" $?
+result "fine" 0
+report_end'
+echo old >"$RL_D/leftover.txt"
+rl y t1/d1 --expect 1
+rl_expect "relay run runs a deliverable on y" 0 "DEMO RUN: PASS"
+rl_expect "it shows what will run" 0 "Deliverable: t1/d1"
+rl_expect "it says runlib.sh is the same" 0 "same as this machine's copy"
+rl_expect "it runs a copy" 0 "HERE=/"
+rl_lacks "the copy isn't in the OneDrive folder" "HERE=$OD"
+rl_expect "it leaves behind what the manifest doesn't list" 0 "RESULT leftovers stay behind: PASS"
+rl_expect "it sends the report to OneDrive" 0 "Sent to OneDrive: Documents/Cowork/relay/t1/reports/demo-v1-"
+rl_expect "it says what to tell Cowork" 0 "Now tell Cowork: done"
+[ "$(rl_sent t1)" = 1 ] && ok "one report is in the task's folder" || bad "one report is in the task's folder" "$(rl_sent t1)"
+check "the sent report is complete" bash -c "tail -n 1 '$OD'/Documents/Cowork/relay/t1/reports/demo-v1-*.txt | grep -q 'DEMO RUN: PASS'"
+check "a copy stays on the machine" bash -c "ls '$RH'/pair-run-reports/demo-v1-*.txt"
+sleep 1
+
+rl n t1/d1
+rl_expect "n runs nothing" 1 "Nothing ran, and no report was sent"
+rl_lacks "n really runs nothing" "HERE="
+[ "$(rl_sent t1)" = 1 ] && ok "n sends no report" || bad "n sends no report" "$(rl_sent t1)"
+rl '' t1/d1
+rl_expect "no answer runs nothing" 1 "Nothing ran"
+rl vy t1/d1
+rl_expect "v shows the files" 0 "===== run.sh ====="
+rl_expect "y after v runs it" 0 "DEMO RUN: PASS"
+out="$(env HOME="$RH" "$W" relay run t1/d1 </dev/null 2>&1)" && bad "relay run needs a terminal" "$out" || case "$out" in *"Agents: tell the user to run it"*) ok "relay run needs a terminal" ;; *) bad "relay run needs a terminal" "$out" ;; esac
+sleep 1
+
+rl_new t2 d2 'result "bad" 1
+report_end'
+rl y t2/d2
+rl_expect "a failed run exits non-zero" 1 "DEMO RUN: FAIL"
+rl_expect "a failed run still sends its report" 1 "Sent to OneDrive"
+rl_new t3 d3 'exit 7'
+sed -i.bak '/^report_start/d' "$RL_D/run.sh" && rm -f "$RL_D/run.sh.bak"
+bash "$LIB" manifest "$RL_D" >/dev/null
+rl y t3/d3
+rl_expect "a run with no report says nothing was sent" 7 "wrote no report, so nothing was sent"
+[ "$(rl_sent t3)" = 0 ] && ok "an old report never goes out in its place" || bad "an old report never goes out in its place" "$(rl_sent t3)"
+
+rl_new t4 d4 'result "fine" 0
+report_end'
+rl y t4/d4 --expect 9
+rl_expect "a version that never arrives runs nothing" 1 "manifest.txt is version 1, expected 9"
+rl_expect "it says nothing was sent" 1 "nothing ran and no report was sent"
+[ "$(rl_sent t4)" = 0 ] && ok "a version that never arrives sends nothing" || bad "a version that never arrives sends nothing" "$(rl_sent t4)"
+echo tampered >>"$RL_D/run.sh"
+rl y t4/d4
+rl_expect "a file that doesn't match runs nothing" 1 "hash differs: run.sh"
+rl y nothing/there
+rl_expect "a deliverable that isn't there says so" 1 "manifest.txt is missing"
+sleep 1
+
+# OneDrive's refusal, imitated: the file can't be read, then it can.
+rl_new t5 d5 'echo REFUSAL-CLEARED
+result "fine" 0
+report_end'
+chmod 000 "$RL_D/run.sh"
+(sleep 2; chmod 644 "$RL_D/run.sh") &
+RL_WAIT=15 rl y t5/d5 --expect 1
+wait
+rl_expect "a refused file is waited for" 0 "Waiting for OneDrive"
+rl_expect "the run goes ahead once it can be read" 0 "REFUSAL-CLEARED"
+sleep 1
+
+# A late version: the old one is there, then the new one arrives.
+rl_new t6 d6 'echo OLD-CODE
+result "fine" 0
+report_end'
+(sleep 2; sed 's/OLD-CODE/NEW-CODE/' "$RL_D/run.sh" >"$T/run.new"; mv "$T/run.new" "$RL_D/run.sh"; bash "$LIB" manifest "$RL_D" 2 >/dev/null) &
+RL_WAIT=15 rl y t6/d6 --expect 2
+wait
+rl_expect "a late version is waited for" 0 "NEW-CODE"
+rl_lacks "the old version never runs" "OLD-CODE"
+sleep 1
+
+# The hash is right, so only the path check can stop this one.
+rl_new t7 d7 'result "fine" 0
+report_end'
+echo outside >"$OD/Documents/Cowork/Tasks/t7/outside.txt"
+echo "sha256 $(rl_sha "$OD/Documents/Cowork/Tasks/t7/outside.txt")  ../../outside.txt" >>"$RL_D/manifest.txt"
+rl y t7/d7
+rl_expect "a manifest can't name a path outside its folder" 1 "names a path outside its folder"
+rl_lacks "and nothing runs" "DEMO RUN"
+rm -rf "$OD/Documents/Cowork/Tasks/t7"
+touch -t 203001010000 "$OD/Documents/Cowork/Tasks/t1/output/d1/manifest.txt"
+rl y
+rl_expect "with nothing named, it uses the newest" 0 "Deliverable: t1/d1"
+rl y a/b/c
+rl_expect "a badly named deliverable is refused" 1 "name a deliverable as TASK-FOLDER/DELIVERABLE"
+rl y --nope
+rl_expect "an unknown option is refused" 1 "unknown option --nope"
+sleep 1
+rl_new t8 d8 'should_install && echo INSTALLING
+result "fine" 0
+report_end'
+rl y t8/d8 --no-install
+rl_expect "--no-install still runs" 0 "DEMO RUN: PASS"
+rl_lacks "--no-install reaches the run" "INSTALLING"
+expect "relay has help" "Documents/Cowork/relay/scans" "$W" relay --help
+expect "usage lists relay" "relay run|scan" "$W" --help
+
+# Scans.
+SR="$T/scan-me"
+mkdir -p "$SR/sub"
+git -C "$SR" init -q
+printf 'one\ttabbed\n' >"$SR/a.txt"
+git -C "$SR" add a.txt
+git -C "$SR" commit -qm one
+printf 'two\n' >>"$SR/a.txt"
+echo secret >"$SR/untracked.env"
+sc() { env HOME="$RH" "$W" relay scan "$@"; }
+expect "relay scan says what it sent" "Now tell Cowork: read Documents/Cowork/relay/scans/scan-me.txt" sc "$SR"
+SD="$OD/Documents/Cowork/relay/scans"
+check "the note names the commit" grep -q "^commit: $(git -C "$SR" rev-parse HEAD)$" "$SD/scan-me.txt"
+check "the note names the branch" grep -q '^branch: main$' "$SD/scan-me.txt"
+check "the note says there are uncommitted changes" grep -q '^uncommitted changes: yes' "$SD/scan-me.txt"
+check "the note lists untracked files" grep -q '?? untracked.env' "$SD/scan-me.txt"
+check "the note's hash matches the archive" grep -q "^archive sha256: $(rl_sha "$SD/scan-me.tar.gz")$" "$SD/scan-me.txt"
+mkdir -p "$T/unpack"
+tar -xzf "$SD/scan-me.tar.gz" -C "$T/unpack"
+git clone -q "$T/unpack/repo.bundle" "$T/unpack/clone" 2>/dev/null
+check "the archive's bundle clones to the same commit" bash -c "[ \"\$(git -C '$T/unpack/clone' rev-parse HEAD)\" = \"\$(git -C '$SR' rev-parse HEAD)\" ]"
+check "the bundle keeps the branch" bash -c "[ \"\$(git -C '$T/unpack/clone' symbolic-ref --short HEAD)\" = main ]"
+check "the patch applies to the clone" git -C "$T/unpack/clone" apply "$T/unpack/uncommitted.patch"
+check "and gives the working copy, tabs and all" cmp "$SR/a.txt" "$T/unpack/clone/a.txt"
+check "untracked files stay out" bash -c "! grep -rq secret '$T/unpack/clone' && ! tar -tzf '$SD/scan-me.tar.gz' | grep -q untracked"
+git -C "$SR" checkout -q -- a.txt
+git -C "$SR" checkout -q --detach
+expect "a detached HEAD can be scanned" "detached HEAD" sc "$SR"
+check "with nothing uncommitted, it says so" grep -q '^uncommitted changes: no' "$SD/scan-me.txt"
+out="$(cd "$SR/sub" && env HOME="$RH" "$W" relay scan 2>&1)"
+case "$out" in *"Scanned scan-me"*) ok "scan defaults to the repository you're in" ;; *) bad "scan defaults to the repository you're in" "$out" ;; esac
+mkdir -p "$T/not-a-repo"
+refuse "scan needs a repository" sc "$T/not-a-repo"
+git -C "$T/not-a-repo" init -q
+refuse "scan needs a commit" sc "$T/not-a-repo"
+mkdir -p "$RH/Library/CloudStorage/OneDrive-Other"
+out="$(sc "$SR" 2>&1)" && bad "several OneDrive folders must be named for relay" "$out" || case "$out" in *"several OneDrive folders"*) ok "several OneDrive folders must be named for relay" ;; *) bad "several OneDrive folders must be named for relay" "$out" ;; esac
+check "relay --dir names one" env HOME="$RH" "$W" relay --dir "$RH/Library/CloudStorage/OneDrive-Other" scan "$SR"
+check "--dir puts the scan there" test -f "$RH/Library/CloudStorage/OneDrive-Other/Documents/Cowork/relay/scans/scan-me.txt"
+check "the skill points at the relay" grep -q 'wiki relay run <task-folder>/<deliverable> --expect 3' "$SK/SKILL.md"
+check "the skill reads reports from the relay's folder" grep -q 'Documents/Cowork/relay/<task-folder>/reports/' "$SK/SKILL.md"
+check "the skill reads scans from the relay's folder" grep -q 'Documents/Cowork/relay/scans/<repository>.txt' "$SK/SKILL.md"
 
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ]
