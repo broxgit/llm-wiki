@@ -1,6 +1,6 @@
 # Set up with another agent
 
-For Codex, Cursor, Copilot, Gemini, the Claude desktop app's **Chat** tab, claude.ai, or Claude Code without the plugin. Any agent that can read and write files on your machine works, with any model. About ten minutes.
+For Codex, Cursor, Copilot, Gemini, the Claude desktop app's **Chat** tab, claude.ai, Microsoft 365 Copilot, or Claude Code without the plugin. Any agent that can read and write files on your machine works, with any model. About ten minutes.
 
 Using Claude Code, including the desktop app's **Code** tab? [The plugin](claude-code.md) is less work.
 
@@ -116,7 +116,23 @@ An agent you've told to do it can run `wiki setup chat --yes`, which refuses whi
 
 Ask in a session inside the Project. It knows only the files you selected, and its copy goes stale until you select **Sync now**. It can read but not save notes, so capture from the Chat tab or an agent with file access.
 
-**Other web agents:** the same idea works wherever an agent has a GitHub connector that can read your private repository. Only claude.ai's has been tried.
+**Microsoft 365 Copilot:** it can't reach your files or a local server, and personal plans don't work with this. A work or school account can read a wiki through a custom agent and GitHub's MCP server. Your tenant must allow custom apps: in Teams, **Apps > Manage your apps > Upload an app** should offer **Upload a custom app**.
+
+Put only what the agent should see in its own private repository, because it can read everything there. A collection that mixes work and personal wikis should be split first ([Work and personal collections](using.md#work-and-personal-collections)). Check that your company allows the content to pass through its tenant, and that it allows the GitHub App. Then, in a terminal:
+
+```
+wiki setup microsoft-copilot --repo OWNER/REPO
+```
+
+It needs Node.js, and uses `gh`, if you have it, to find the repository's wikis; without it, name one with `--wiki`. It registers a read-only GitHub App, generates the agent with Microsoft's Agents Toolkit and provisions it to your tenant. You do four things: select **Create GitHub App**, select **Install** and pick that repository alone, sign in to Microsoft 365, and sign in to GitHub in the first chat. If the automatic GitHub step fails, `--manual` has you register the app from a pre-filled link and paste its client ID and secret. `--help` lists the other options.
+
+Start a chat from the agent itself, under **Agents** or **Plugins**: a regular new chat doesn't use it. In the Mac app, relaunch first. Ask something the wiki answers, then ask it to read a file from a private repository you didn't install the app on. It should fail.
+
+It reads what was last pushed, so answers are as fresh as your last sync, and it can't save notes. The server URL offers only read tools and the app's Contents permission is read-only. Don't swap in an OAuth App, as Microsoft's walkthrough does: its `repo` scope reaches every repository you can.
+
+This has run end to end once, on 2026-11-03, with a test wiki: the agent read a private repository and cited the page, and got a 404 from another one. In the Mac app, the agent appeared after relaunching it.
+
+**Other web agents:** the same idea works wherever an agent has a GitHub connector that can read your private repository. Only claude.ai's and Microsoft 365 Copilot's have been tried.
 
 **Sessions that can reach your files but have no instruction file:** zip the `skills/llm-wiki` folder, with the folder at the zip root, and add it under Customize > Skills. The skill finds wikis in the folders a conversation can reach.
 

@@ -1131,5 +1131,104 @@ out="$(PATH="$T/bin:$PATH" "$T/upd-clone/wiki.sh" update </dev/null 2>&1)"
 case "$out" in *"updated the installed plugin's copy (llm-wiki@mk)"*"Quit and reopen the Claude app and Cursor"*) ok "update in a clone refreshes the plugin's copy and says to restart Claude and Cursor" ;; *) bad "update in a clone refreshes the plugin's copy and says to restart Claude and Cursor" "$out" ;; esac
 rm -rf "$HOME/.cursor" "$HOME/.claude/plugins/installed_plugins.json" "$T/bin/claude"
 
+# setup microsoft-copilot, with a fake GitHub, gh, browser and Microsoft toolkit.
+MC="$T/mc"; mkdir -p "$MC/bin"
+cat > "$MC/github.py" <<'EOF'
+import json, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *_): pass
+    def do_POST(self):
+        body = {"client_id": "Iv1.fakeid", "client_secret": "real-secret-4242", "slug": "fake-slug", "pem": "pem-4242", "webhook_secret": "hook-4242"}
+        status = 201 if self.path == "/app-manifests/goodcode/conversions" else 404
+        data = json.dumps(body if status == 201 else {}).encode()
+        self.send_response(status); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
+s = HTTPServer(("127.0.0.1", 0), H)
+open(sys.argv[1], "w").write(str(s.server_address[1]))
+s.serve_forever()
+EOF
+python3 "$MC/github.py" "$MC/port" & MC_PID=$!
+i=0; while [ ! -s "$MC/port" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+# The fake browser does what GitHub would: reads the form, tries a wrong state, then redirects.
+cat > "$MC/browser.py" <<'EOF'
+import html, json, os, re, sys, urllib.error, urllib.parse, urllib.request
+mc, url = sys.argv[1], sys.argv[2]
+open(mc + "/opened", "a").write(url + "\n")
+if not url.endswith("/start"):
+    sys.exit(0)
+page = urllib.request.urlopen(url).read().decode()
+manifest = json.loads(html.unescape(re.search(r'name="manifest" value="([^"]*)"', page).group(1)))
+json.dump(manifest, open(mc + "/manifest.json", "w"))
+open(mc + "/action", "w").write(html.unescape(re.search(r'action="([^"]*)"', page).group(1)))
+state = urllib.parse.parse_qs(urllib.parse.urlparse(html.unescape(re.search(r'action="([^"]*)"', page).group(1))).query)["state"][0]
+try:
+    urllib.request.urlopen(manifest["redirect_url"] + "?code=goodcode&state=wrong")
+except urllib.error.HTTPError as e:
+    open(mc + "/wrong-state", "w").write(str(e.code))
+urllib.request.urlopen(manifest["redirect_url"] + "?code=goodcode&state=" + state)
+EOF
+printf '#!/bin/sh\nexec python3 "%s/browser.py" "%s" "$1"\n' "$MC" "$MC" > "$MC/open"; chmod +x "$MC/open"
+cat > "$MC/bin/gh" <<'EOF'
+#!/bin/sh
+case "$*" in
+  "repo view"*) echo '{"isPrivate": true}' ;;
+  *git/trees*) echo '{"tree": [{"path": "index.md"}, {"path": "work/index.md"}, {"path": "work/wiki/a.md"}, {"path": "global/index.md"}, {"path": "journal/x.md"}, {"path": ".github/x"}]}' ;;
+  "api users/"*) echo '{"type": "User"}' ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$MC/bin/gh"
+cat > "$MC/atk" <<'EOF'
+#!/bin/sh
+echo "$*" >> "$MC/atk.log"
+case "$1" in
+  new)
+    while [ $# -gt 0 ]; do case "$1" in -n) n="$2" ;; -f) f="$2" ;; esac; shift; done
+    mkdir -p "$f/$n/appPackage" "$f/$n/env"
+    printf 'SECRET_MCP_DA_OAUTH_CLIENT_SECRET_APIGITHUBC=crypto_abc\n' > "$f/$n/env/.env.dev.user"
+    printf 'sample\n' > "$f/$n/appPackage/instruction.txt"
+    printf '{"name": "x", "instructions": "$[file(%sinstruction.txt%s)]", "actions": [{"id": "a"}]}\n' "'" "'" > "$f/$n/appPackage/declarativeAgent.json"
+    ;;
+  provision)
+    while [ $# -gt 0 ]; do [ "$1" = -f ] && p="$2"; shift; done
+    cp "$p/env/.env.dev.user" "$MC/env-at-provision"
+    [ -z "$MC_FAIL" ] || exit 1
+    ;;
+esac
+EOF
+chmod +x "$MC/atk"
+mc_run() { env MC="$MC" MC_FAIL="${MC_FAIL:-}" PATH="$MC/bin:$PATH" LLM_WIKI_TEST_TTY=1 LLM_WIKI_OPEN="$MC/open" LLM_WIKI_ATK="$MC/atk" LLM_WIKI_GITHUB_API="http://127.0.0.1:$(cat "$MC/port")" LLM_WIKI_APP_WAIT=20 "$W" setup microsoft-copilot "$@"; }
+out="$(env LLM_WIKI_ATK="$MC/atk" "$W" setup microsoft-copilot --repo a/b </dev/null 2>&1)" && bad "setup microsoft-copilot needs a terminal" "$out" || case "$out" in *"Agents: tell the user to run it"*) ok "setup microsoft-copilot needs a terminal" ;; *) bad "setup microsoft-copilot needs a terminal" "$out" ;; esac
+out="$(printf 'n\n' | mc_run --repo acme/wikis --dir "$MC/a" 2>&1)"
+case "$out" in *"could read: global, journal, work"*"Stopped. Nothing was changed."*) ok "it names what the agent could read, and a no stops it" ;; *) bad "it names what the agent could read, and a no stops it" "$out" ;; esac
+check "a no opens nothing" test ! -e "$MC/opened"
+check "a no generates nothing" test ! -e "$MC/a"
+out="$(printf 'y\n\n' | mc_run --repo acme/wikis --wiki work --name notes --dir "$MC/a" 2>&1)"
+case "$out" in *"Done. To try it"*"notesdev"*) ok "it runs through to the agent's name" ;; *) bad "it runs through to the agent's name" "$out" ;; esac
+case "$out" in *real-secret-4242*|*pem-4242*|*hook-4242*) bad "it never prints the secrets" "$out" ;; *) ok "it never prints the secrets" ;; esac
+check "the wrong state is refused" grep -qx 400 "$MC/wrong-state"
+check "the app reads only, with no webhook, and stays private" python3 -c "import json,sys; m=json.load(open(sys.argv[1])); assert m['default_permissions']=={'contents':'read','metadata':'read'} and m['hook_attributes']['active'] is False and m['public'] is False and m['default_events']==[]" "$MC/manifest.json"
+check "its callback is Microsoft's" python3 -c "import json,sys; assert json.load(open(sys.argv[1]))['callback_urls']==['https://teams.microsoft.com/api/platform/v1.0/oAuthRedirect']" "$MC/manifest.json"
+check "it opens the app's install page" grep -q 'github.com/apps/fake-slug/installations/new' "$MC/opened"
+check "the agent uses the read-only server" grep -q -- '--mcp-da-server-url https://api.githubcopilot.com/mcp/x/repos/readonly' "$MC/atk.log"
+check "the toolkit gets the client ID" grep -q -- '--mcp-da-client-id Iv1.fakeid' "$MC/atk.log"
+if grep -q 'real-secret-4242' "$MC/atk.log"; then bad "the secret stays off the command line" "$(cat "$MC/atk.log")"; else ok "the secret stays off the command line"; fi
+check "provisioning sees the real secret" grep -qx 'SECRET_MCP_DA_OAUTH_CLIENT_SECRET_APIGITHUBC=real-secret-4242' "$MC/env-at-provision"
+check "afterwards the secret is gone from disk" grep -qx 'SECRET_MCP_DA_OAUTH_CLIENT_SECRET_APIGITHUBC=' "$MC/a/notes/env/.env.dev.user"
+if grep -rq -e 'pem-4242' -e 'hook-4242' "$MC/a"; then bad "the app's private key is never saved" "found"; else ok "the app's private key is never saved"; fi
+check "the instructions name the repository and the wiki's index" grep -q 'repository acme/wikis.*' "$MC/a/notes/appPackage/instruction.txt"
+check "they start from the wiki named" grep -q 'read work/index.md with get_file_contents' "$MC/a/notes/appPackage/instruction.txt"
+check "the agent keeps its action" python3 -c "import json,sys; a=json.load(open(sys.argv[1])); assert a['actions'] and 'acme/wikis' in a['description']" "$MC/a/notes/appPackage/declarativeAgent.json"
+expect "it won't overwrite a project" "already exists" bash -c "printf 'y\n\n' | env MC='$MC' PATH='$MC/bin:$PATH' LLM_WIKI_TEST_TTY=1 LLM_WIKI_ATK='$MC/atk' '$W' setup microsoft-copilot --repo acme/wikis --name notes --dir '$MC/a' 2>&1 || true"
+out="$(printf 'y\n\n' | MC_FAIL=1 mc_run --repo acme/wikis --name failed --dir "$MC/a" 2>&1)" && bad "a failed provision says so" "$out" || case "$out" in *"Provisioning failed"*"provision --env dev"*) ok "a failed provision says how to retry" ;; *) bad "a failed provision says how to retry" "$out" ;; esac
+check "a failed provision keeps the secret for the retry" grep -qx 'SECRET_MCP_DA_OAUTH_CLIENT_SECRET_APIGITHUBC=real-secret-4242' "$MC/a/failed/env/.env.dev.user"
+check "only the owner can read that file" python3 -c "import os,stat,sys; assert stat.S_IMODE(os.stat(sys.argv[1]).st_mode)==0o600" "$MC/a/failed/env/.env.dev.user"
+check "with no wiki named, it starts from every index" grep -q 'read global/index.md and index.md and work/index.md' "$MC/a/failed/appPackage/instruction.txt"
+out="$(printf 'y\nIv1.byhand\nhand-secret-4242\n\n' | mc_run --repo acme/wikis --name byhand --dir "$MC/a" --manual 2>&1)"
+case "$out" in *"contents=read"*"Done. To try it"*) ok "--manual prints the pre-filled link and takes pasted values" ;; *) bad "--manual prints the pre-filled link and takes pasted values" "$out" ;; esac
+case "$out" in *hand-secret-4242*) bad "--manual doesn't echo the secret" "$out" ;; *) ok "--manual doesn't echo the secret" ;; esac
+check "--manual uses the pasted client ID" grep -q -- '--mcp-da-client-id Iv1.byhand' "$MC/atk.log"
+kill "$MC_PID" 2>/dev/null; wait "$MC_PID" 2>/dev/null || true
+
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ]

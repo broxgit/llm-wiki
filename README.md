@@ -60,7 +60,7 @@ Everything is plain markdown, in git, readable in any editor. The rules are a ha
 | You use | Guide | Time |
 |---|---|---|
 | Claude Code: in a terminal, the Claude desktop app's **Code** tab, or an IDE | [Set up with Claude Code](docs/claude-code.md), as a plugin | 5 minutes |
-| Anything else: Codex, Antigravity, Cursor, Copilot, the desktop app's **Chat** tab, claude.ai | [Set up with another agent](docs/other-agents.md) | 10 minutes |
+| Anything else: Codex, Antigravity, Cursor, Copilot, the desktop app's **Chat** tab, claude.ai, Microsoft 365 Copilot | [Set up with another agent](docs/other-agents.md) | 10 minutes |
 
 Joining a team that already shares a collection? Read [Teams](docs/teams.md#join-a-shared-collection) first.
 

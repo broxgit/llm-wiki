@@ -30,6 +30,7 @@ tests/smoke.sh     Smoke tests for wiki.sh, the hook and the secret scan. CI run
 .github/workflows/ CI: shellcheck, plugin validation, and the smoke tests on Linux and macOS.
 scripts/
   migrate-to-plugin.sh  Moves a machine from the clone-and-line setup to the plugin.
+  microsoft_copilot_setup.py  wiki setup microsoft-copilot: a read-only GitHub App and a Microsoft 365 Copilot agent. Pins Microsoft's toolkit version.
 hooks/
   hooks.json       The plugin's session hook, which runs session-start.sh.
   session-start.sh Finds the session's wiki, points the session at it, and keeps the wiki command current.
