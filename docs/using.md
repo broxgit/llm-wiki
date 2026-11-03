@@ -332,6 +332,7 @@ Run `wiki` with no arguments for the full list. The ones you're likely to use:
 | `wiki unlock <name>` | Free a stuck compile lock. |
 | `wiki capture <wiki> <slug>` | Save a note piped in, named from the clock. Mostly for agents. |
 | `wiki mcp` | A local MCP server over your wikis, for sessions with no file access, such as the desktop app's Chat tab. `wiki setup chat` adds it there. |
+| `wiki news` | What's new in llm-wiki since you last looked. `wiki update` prints it too, and `wiki status` says when there's something new. `--all` prints everything. |
 | `wiki setup microsoft-copilot` | A Microsoft 365 Copilot agent that reads a wiki repository on GitHub. [Set up with another agent](other-agents.md) has what it needs. |
 | `wiki lock`, `wiki log`, `wiki sync` | The compile lock, a log entry, and commit-pull-push for one wiki. With no wiki named, `sync` uses this repository's. Mostly for agents. |
 | `wiki index <wiki>` | Bring `index.md` in step with the pages' titles and summaries, keeping its order and headings. |

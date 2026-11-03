@@ -12,6 +12,7 @@ AGENTS.md          Tells an agent this is the template and how to start a wiki f
 CLAUDE.md          Imports AGENTS.md for Claude Code.
 ROADMAP.md         Planned improvements, untested areas, and what was decided against.
 CHANGELOG.md       What each handbook version changed. upgrade prints the parts you missed.
+NEWS.md            What's new outside the handbook. update and news print what this machine hasn't seen.
 wiki.sh            Setup and upkeep. Run it with no arguments for the commands.
 template/          The scaffold, copied whole to start a wiki.
   AGENTS.md        The core handbook. Loaded in every session.
@@ -63,7 +64,7 @@ Merging to `main` is the release. The plugin has no version number, so every com
 
 Add a smoke test when you fix a bug or add a command. Each one is a line or two: see the helpers at the top of `tests/smoke.sh`.
 
-A change people will notice belongs in the setup guides or [Using it](using.md), not only in the CHANGELOG. The one `claude plugin validate` warning, no `version`, is on purpose.
+A change people will notice belongs in the setup guides or [Using it](using.md), not only in the CHANGELOG, and gets an entry at the top of `NEWS.md`. A new entry reaches plugin users through `wiki status`, even if they never run `wiki update`. The one `claude plugin validate` warning, no `version`, is on purpose.
 
 To try a change before pushing it, install the plugin from your clone: `claude plugin marketplace add <path to clone>`, then `claude plugin install llm-wiki@llm-wiki`. A marketplace added from a local path runs straight from your working tree, so a new session picks up your edits. Switch back with `claude plugin marketplace remove llm-wiki` and the install steps in [Set up with Claude Code](claude-code.md).
 

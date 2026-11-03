@@ -37,4 +37,6 @@ A new journal setting is one line in `JOURNAL_SETTINGS` in `wiki.sh`. It reaches
 
 The repo is also a Claude Code plugin: `.claude-plugin/` holds the manifest and the marketplace, `commands/` the slash commands, and `hooks/hooks.json` the session hook. Check changes to them with `claude plugin validate .`. Run `tests/smoke.sh` before any commit, and add a test for what you changed. Work on a branch: merging to `main` releases to every plugin user. `docs/maintaining.md` has the release steps.
 
+A change a user would notice, outside the handbook, gets an entry at the top of `NEWS.md`, written for them, with a `- Do:` line. Fixes they wouldn't notice don't. `wiki update` and `wiki news` print the ones they haven't seen.
+
 `ROADMAP.md` lists planned improvements and what is still untested. When you finish an item, move it to Done and say what changed.
