@@ -10,7 +10,7 @@ If work gives you far more Copilot than Claude, Cowork can now work on a real re
 
 - `wiki setup copilot-cowork` copies the `remote-pair-run` skill to your work OneDrive.
 - The run waits for OneDrive to catch up, checks every file against a manifest, and ends in a clear PASS or FAIL. It never commits or pushes.
-- It hasn't run with Cowork itself yet, only in local tests.
+- It has been through one test with Cowork, on a throwaway repository.
 - Do: nothing, unless you use Copilot Cowork at work. Then see "Set up with another agent" in the docs.
 
 ## 2026-11-03: Microsoft 365 Copilot can read your wikis

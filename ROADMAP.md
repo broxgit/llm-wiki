@@ -15,8 +15,9 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 ### Close the Copilot Cowork loop
 
 - **Why:** the `remote-pair-run` skill and `runlib.sh` cut the boilerplate and the stale runs, but the user still finds and attaches every report, and Cowork still works from scans that age.
-- **Sketch:** `wiki relay watch` waits for a new deliverable in OneDrive, shows what will run, runs it on a keypress, and puts the report where Cowork can read it, then wakes Cowork with a matching email or Teams message. `wiki relay scan` sends a zipped `git bundle` with the commit and tool versions, in place of a text scan. Notes Cowork drops in its output folder go through `wiki capture`.
-- **Open:** four tests on the work Mac come first. Does an attached OneDrive folder show files added later? Can an event-driven task continue the conversation and read the report? Can the sandbox run an uploaded Go toolchain, and do files survive between turns? Can Cowork's browser use reach internal review and CI pages?
+- **What the first test showed (2026-11-03, one session):** Cowork can read a OneDrive file by path with no attachment, and sees a new file in an attached folder within about 30 seconds. An email trigger woke the same conversation in 8 to 19 seconds, even with Cowork closed. An uploaded Go toolchain ran offline. Cowork's browser refused, with browsing not enabled for the workspace.
+- **Sketch:** `wiki relay watch` waits for a new deliverable in OneDrive, shows what will run, runs it on a keypress, puts the report in OneDrive, and wakes Cowork with an email. `wiki relay scan` puts the code in OneDrive with the commit and tool versions, in place of an attached scan. Notes Cowork drops in its output folder go through `wiki capture`.
+- **Open:** can a trigger whose own instructions say to fix a FAIL publish the fix? The test email asked for the change in its body, and Cowork rightly refused, so this is still unknown. Can the Mac send that email unattended? Can Cowork read a binary file, such as a `git bundle`, from OneDrive without an attachment? Does the toolchain survive an idle gap?
 - **After that:** a direct bridge, as an MCP connector through a dev tunnel, could replace the relay. It's a public URL into a work laptop, and Cowork also reads email and web pages, so it needs IT's approval and no general shell.
 
 ## Later
@@ -34,7 +35,7 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 
 Things that have never been run for real. Treat them as unproven until crossed off.
 
-- The `remote-pair-run` skill with Copilot Cowork itself, and `wiki setup copilot-cowork` on a real OneDrive folder. So far: the library and the skill's example run under smoke tests. Whether Cowork finds the skill, copies `runlib.sh` unchanged and makes the manifest in its sandbox is unknown, as is whether OneDrive's lag behaves as the sync check assumes.
+- The `remote-pair-run` skill on real code, and whether Cowork picks it without being told to. One session on a throwaway repository reached PASS on 2026-11-03. Whether reading every file first prevents the kill on OneDrive placeholders is unproven: reading one file cleared its placeholder, and **Always Keep on This Device** fixed the run.
 - `wiki.sh unlock` and `claude` on macOS. `setup` and `journal backfill` have since run on Macs in real use (2026-10-28 and 2026-10-29); every other command ran cleanly on macOS (bash 3.2, BSD `date`) on 2026-10-28.
 - `wiki.sh journal backfill` on transcripts from Claude Code versions other than the one it was written against. It needs `python3`.
 - Git sync between two people or two machines. Pull, commit, and push from one machine worked in real use on 2026-10-01.

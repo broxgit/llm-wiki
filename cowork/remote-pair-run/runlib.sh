@@ -23,13 +23,14 @@
 #   check NAME CMD ARG...        Run a command and record its result.
 #   expect_fail_with NAME PATTERN CMD ARG...  It must fail, and print PATTERN.
 #   result NAME RC               Record RESULT NAME: PASS or FAIL.
-#   abort MESSAGE                Stop now. The run fails.
+#   abort MESSAGE                Stop now. The run fails, and the summary names the message.
+#   sha256_of FILE               Print a file's SHA-256.
 #   report_end                   Finish. The last line is NAME RUN: PASS or FAIL.
 #
 # A run passes only if it reaches report_end with at least one check and no failures.
 # $RUN_TMP is a scratch folder, removed at exit.
 
-RUNLIB_VERSION=1
+RUNLIB_VERSION=2
 RUNLIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNLIB_EXIT_COUNT=0
 RUNLIB_STEP=0
@@ -45,6 +46,8 @@ _runlib_sha256() {
     shasum -a 256 <"$1" | cut -d' ' -f1
   fi
 }
+
+sha256_of() { _runlib_sha256 "$1"; }
 
 _runlib_manifest_version() {
   sed -n '1s/^version \([0-9][0-9]*\)$/\1/p' "$1" 2>/dev/null
@@ -101,7 +104,7 @@ _runlib_close_report() {
   local i=0
   exec 1>&8 2>&9 8>&- 9>&-
   # A background process left holding the pipe must not hang the run.
-  while kill -0 "$RUNLIB_TEE_PID" 2>/dev/null && [ "$i" -lt 50 ]; do
+  while kill -0 "$RUNLIB_TEE_PID" 2>/dev/null && [ "$i" -lt 30 ]; do
     sleep 0.1
     i=$((i + 1))
   done
@@ -140,6 +143,11 @@ _runlib_wait_for_sync() {
   abort "the folder doesn't match its manifest. Wait for OneDrive, or ask for the deliverable again"
 }
 
+# Copilot Cowork's sandbox has python3 but no mkfifo.
+_runlib_mkfifo() {
+  mkfifo "$1" 2>/dev/null || python3 -c 'import os, sys; os.mkfifo(sys.argv[1])' "$1" 2>/dev/null
+}
+
 report_start() {
   local name="${1:-}" version clean
   [ -n "$name" ] || { echo "report_start: a name is required" >&2; exit 2; }
@@ -171,13 +179,18 @@ report_start() {
   : >"$RUNLIB_TMP/allow"
 
   version="$(_runlib_manifest_version "$RUNLIB_DIR/manifest.txt")"
+  RUNLIB_RUN_VERSION="${version:-unknown}"
   clean="$(printf '%s' "$name" | tr -c 'A-Za-z0-9._-' '-')"
   RUNLIB_REPORT_DIR="${RUNLIB_REPORT_DIR:-$HOME/pair-run-reports}"
   mkdir -p "$RUNLIB_REPORT_DIR" || exit 2
   # The name changes every run, so an attached report never becomes "name (2).txt".
   RUNLIB_REPORT="$RUNLIB_REPORT_DIR/$clean-v${version:-0}-$(date -u +%Y%m%dT%H%M%SZ).txt"
 
-  mkfifo "$RUNLIB_TMP/fifo"
+  if ! _runlib_mkfifo "$RUNLIB_TMP/fifo"; then
+    echo "report_start: can't make the report's pipe. It needs mkfifo or python3" >&2
+    rm -rf "$RUNLIB_TMP"
+    exit 2
+  fi
   exec 8>&1 9>&2
   # -i: Ctrl-C must leave tee alive to write the verdict.
   tee -i "$RUNLIB_REPORT" <"$RUNLIB_TMP/fifo" >&8 &
@@ -370,6 +383,7 @@ expect_fail_with() {
 
 abort() {
   echo "ABORT: $*"
+  result "abort: $*" 1
   exit 1
 }
 
@@ -393,6 +407,8 @@ _runlib_on_exit() {
   failed="$(grep -c '^FAIL ' "$RUNLIB_TMP/results")"
   first="$(sed -n 's/^FAIL //p' "$RUNLIB_TMP/results" | head -n 1)"
   printf '\n== SUMMARY ==\n'
+  # Here too, so the end of a report is enough on its own.
+  echo "version: $RUNLIB_RUN_VERSION"
   echo "checks: $passed passed, $failed failed"
   [ -z "$first" ] || echo "first failure: $first"
   if [ -z "$RUNLIB_ENDED" ]; then

@@ -146,7 +146,7 @@ This has run end to end once, on 2026-11-03, with a test wiki: the agent read a 
 wiki setup copilot-cowork
 ```
 
-It copies a skill called `remote-pair-run` to `Documents/Cowork/skills` in your work OneDrive, and Cowork finds it when a new session starts. Run it again to update the skill. If you have several work OneDrive folders, name one with `--dir`.
+It copies a skill called `remote-pair-run` to `Documents/Cowork/skills` in your work OneDrive, and Cowork finds it when a new session starts. Run it again to update the skill. If you have several work OneDrive folders, name one with `--dir`. If you use it for Go, attaching the Linux Go tarball from [go.dev/dl](https://go.dev/dl/) lets Cowork compile in its own sandbox first.
 
 Then ask Cowork to change something, and attach the files it needs. Each round goes like this:
 
@@ -154,7 +154,9 @@ Then ask Cowork to change something, and attach the files it needs. Each round g
 2. The run compares the new output with the old, and restores what it touched. It never commits or pushes. Read what Cowork says it will change before you run it, because it runs on your machine.
 3. The last line of the output names a report in `~/pair-run-reports`. Attach it, and Cowork takes it from there.
 
-This has only been tested locally, with the library and the skill's example run on a Mac. It hasn't run with Cowork itself yet.
+If a run prints `killed` and no report, the files are still OneDrive placeholders. In Finder, right-click the task's `output` folder, choose **Always Keep on This Device**, and run the command again.
+
+This has been through one test with Cowork, on 2026-11-03, on a throwaway repository: the loop reached PASS, and the sync check waited for late files.
 
 **Other web agents:** the same idea works wherever an agent has a GitHub connector that can read your private repository. Only claude.ai's and Microsoft 365 Copilot's have been tried.
 

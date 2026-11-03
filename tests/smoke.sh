@@ -1384,6 +1384,9 @@ result "never" 0
 report_end'
 pr_run
 pr_expect "abort stops the run" 1 "ABORT: cannot go on"
+pr_expect "the summary names what aborted" 1 "first failure: abort: cannot go on"
+pr_expect "the summary says the version" 1 "== SUMMARY ==
+version: 1"
 pr_lacks "abort skips what follows" "RESULT never"
 
 pr_new 'result "fine" 0
@@ -1399,7 +1402,7 @@ PR_OUT="$(cat "$PR/term.out")"
 pr_expect "a killed run still gets a verdict" 1 "DEMO RUN: FAIL"
 
 pr_new 'result "fine" 0
-sleep 8 &
+sleep 20 &
 report_end'
 pr_start="$(date +%s)"
 # To a file: a capture would wait for the background process, which holds the same output.
@@ -1408,7 +1411,29 @@ PR_RC=$?
 pr_took=$(($(date +%s) - pr_start))
 PR_OUT="$(cat "$PR/bg.out")"
 pr_expect "a background process doesn't lose the verdict" 0 "DEMO RUN: PASS"
-[ "$pr_took" -lt 8 ] && ok "a background process doesn't hang the run" || bad "a background process doesn't hang the run" "took ${pr_took}s"
+[ "$pr_took" -lt 15 ] && ok "a background process doesn't hang the run" || bad "a background process doesn't hang the run" "took ${pr_took}s"
+
+pr_new 'result "fine" 0
+report_end'
+mkdir -p "$PR/stub"
+printf '#!/bin/sh\nexit 127\n' >"$PR/stub/mkfifo"
+chmod +x "$PR/stub/mkfifo"
+PR_OUT="$(env PATH="$PR/stub:$PATH" RUNLIB_SYNC_WAIT=0 bash "$PR/d/run.sh" 2>&1)"
+PR_RC=$?
+pr_expect "with no mkfifo, it makes the pipe with python3" 0 "DEMO RUN: PASS"
+cp "$PR/stub/mkfifo" "$PR/stub/python3"
+rm -f "$PR"/reports/*
+PR_OUT="$(env PATH="$PR/stub:$PATH" RUNLIB_SYNC_WAIT=0 bash "$PR/d/run.sh" 2>&1)"
+PR_RC=$?
+pr_expect "with neither, it says what it needs" 2 "It needs mkfifo or python3"
+PR_OUT="$(ls "$PR/reports" | wc -l | tr -d ' ')"
+[ "$PR_OUT" = 0 ] && ok "with neither, it leaves no report" || bad "with neither, it leaves no report" "$PR_OUT reports"
+
+pr_new 'echo "HASH=$(sha256_of "$here/run.sh")"
+result "fine" 0
+report_end'
+pr_run
+pr_expect "sha256_of matches the manifest" 0 "HASH=$(sed -n 's/^sha256 \([0-9a-f]*\)  run.sh$/\1/p' "$PR/d/manifest.txt")"
 
 # Trees. A helper builds two copies of the same tree, then the body changes them.
 pr_trees='mkdir -p "$RUN_TMP/a/sub" "$RUN_TMP/b/sub"
@@ -1581,6 +1606,9 @@ sed -n '/^\`\`\`bash\$/,/^\`\`\`\$/p' '$SK/SKILL.md' | grep -E '^(report_start|t
   grep -q \"^\$f() {\" '$LIB' || { echo \"no function \$f\"; exit 1; }
 done"
 check "the skill stays out of the plugin's skills" test ! -e "$REPO/skills/remote-pair-run"
+check "the skill's command reads the files before running them" grep -q 'find \. -type f -exec cat {} + >/dev/null && bash run\.sh --expect' "$SK/SKILL.md"
+check "the skill explains a killed run" grep -q 'Always Keep on This Device' "$SK/SKILL.md"
+check "the skill reads the manifest back after publishing" grep -q 'read `manifest.txt` back' "$SK/SKILL.md"
 
 # The skill's install.sh and run.sh examples, run as written, since Cowork will copy them.
 EX="$T/example"
