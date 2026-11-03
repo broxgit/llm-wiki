@@ -56,6 +56,8 @@ grep -q '^module example.com/my/repo$' "$repo/go.mod" || { echo "not the right r
 cp -R "$(dirname "${BASH_SOURCE[0]}")/files/." "$repo/"
 ```
 
+The sync may not keep the executable bit, so if `files/` has a script the repository runs directly, add a `chmod +x` for it here.
+
 `run.sh` proves the change. Use only the steps this task needs, and write no scaffolding of your own: `runlib.sh` handles the report, the sync check, the markers and the cleanup. Its header lists every function.
 
 ```bash
@@ -111,7 +113,7 @@ What makes a run worth trusting:
 - **Clean up with `on_exit`, never `trap`.** Restore only what the run changed. Refuse to run over uncommitted work that the restore would destroy.
 - **No `set -e` in `run.sh`.** A failure is a result, and the later checks still tell you something.
 
-Check what you can in your sandbox first: at least `bash -n` on each script, and anything your sandbox can compile or run. See Compile before you hand over. Your sandbox may lack tools the user's machine has, such as `cmp`, and the two can word errors differently, so choose negative-test text that your own script prints, or that both print.
+Check what you can in your sandbox first: at least `bash -n` on each script, and anything your sandbox can compile or run. See Compile before you hand over. Your sandbox may lack tools the user's machine has, such as `cmp`, and the two can word errors differently, so choose negative-test text that your own script prints, or that both print. Use `sha256sum` or `python3` rather than `cmp`, `od` or `xxd` in anything you try here. Make the manifest before a trial run, and set `RUNLIB_SYNC_WAIT=0`, or the sync check waits for files that aren't coming.
 
 Then make the manifest, last, after every file is final:
 
@@ -121,7 +123,7 @@ bash runlib.sh manifest <deliverable>
 
 It adds one to the version each time, so the first version you publish may not be 1. That's fine. Never edit `manifest.txt` by hand, and make it again after any change.
 
-Publish the whole folder, then read `manifest.txt` back from the output folder until it shows the version you just made. A write can report success several seconds before you can read it back, so allow up to 30 seconds. If it never shows the new version, say so instead of handing over a command.
+Publish the whole folder, then read `manifest.txt` back from the output folder, through your shell or your OneDrive tools, until it shows the version you just made. A write can report success several seconds before you can read it back, so allow up to 30 seconds. If it never shows the new version, say so instead of handing over a command.
 
 ### 3. Hand it over
 
@@ -133,16 +135,16 @@ cd ~/Library/CloudStorage/OneDrive-*/Documents/Cowork/Tasks/<task-folder>/output
 
 That is the usual path on a Mac. Ask once for the real one if the user's machine might differ, or has more than one `OneDrive-` folder.
 
-`--expect` makes the run wait for the sync, which took about 90 seconds in one test. It checks every file against the manifest, and if the files arrive late it starts again from the new ones. So don't add checks of your own for stale files. If they want to skip the install on a second run, they can add `--no-install`.
+`--expect` makes the run wait for the sync, which took about 90 seconds in one test. It checks every file against the manifest, and if the files arrive late it starts again from the new ones. So don't add checks of your own for stale files. It only helps once `run.sh` can be opened, as the next paragraph explains. If they want to skip the install on a second run, they can add `--no-install`.
 
-**If the output says `killed`, with no report,** the files are still OneDrive placeholders, and macOS killed `bash` before `runlib.sh` could start. `ls -lO` on the folder shows `dataless`. Have the user right-click the task's `output` folder in Finder, choose **Always Keep on This Device**, and run the command again. That fixed it in the one test where it happened (**validated**). The `find` in the command reads every file first, which is meant to prevent this (**not validated**).
+**If the output says `killed` or `Operation not permitted`, with no report,** the shell couldn't open the files, so `runlib.sh` never started. The cause isn't proven, but it has only been seen soon after publishing, while OneDrive was still delivering them. Have the user wait a couple of minutes and run the same command again, which cleared `Operation not permitted` in one test. If it still fails, have them right-click the task's `output` folder in Finder, choose **Always Keep on This Device**, and run it again, which cleared `killed` in another. `ls -lO` can show `dataless` here, but it can be refused too, so don't depend on it. The `find` in the command reads every file first, which is meant to prevent this (**not validated**). Keep the command chained with `&&`, so a refused read doesn't run anything, and tell the user not to send you an old report in its place.
 
 Then tell them: attach the file named on the last line of the output, or paste the error if it never got that far. Reports are in `~/pair-run-reports/`.
 
 ### 4. Read the report
 
 1. **Read the last lines first:** the verdict `<NAME> RUN: PASS` or `FAIL`, `version:`, `checks:`, and `first failure:`.
-2. **Check the header.** If `version:` is lower than the one you last published, they ran an old copy: say so and stop. If the commit isn't the one you worked against, get the current files again before patching.
+2. **Check the header.** If `version:` is lower than the one you last published, or `started:` is before you published it, they ran an old copy or sent an old report: say so and stop. If the commit isn't the one you worked against, get the current files again before patching.
 3. **Diagnose from the first failure,** not the last. Later failures often follow from it.
 4. **Doubt a PASS too.** Check that the checks ran what you meant, and that the output compared wasn't empty or unchanged because the install was skipped.
 5. **Fix, make the manifest again, and hand over the new command.** Say what changed and why, in a line or two.
@@ -153,7 +155,7 @@ Repeat until the report ends in PASS. If several reports are attached, go by the
 
 Use a patch for a change to existing code. Never write hunks by hand.
 
-1. Rebuild the file from the user's current copy in a scratch git repository: `git init`, commit it, and apply any earlier patches to reach the branch's state. An attached file loses its permissions, so set its mode to match the branch: ask for `git ls-files -s <path>`, or use 755 for a script with a shebang.
+1. Rebuild the file from the user's current copy in a scratch git repository under `/tmp`: `git init`, commit it, and apply any earlier patches to reach the branch's state. An attached file loses its permissions, and your working folder may drop the executable bit, which is why `/tmp`. Set the mode to match the branch: ask for `git ls-files -s <path>`, or use 755 for a script with a shebang.
 2. Edit with exact string replacements, and assert that each pattern matched the expected number of times.
 3. Make the patch with `git diff`, and check it with `git apply --check` against that base.
 4. Have `run.sh` compare `git show HEAD:<path>` with your copy, using `sha256_of`, and abort if they differ. Then have it run `git apply --check` and `git apply`, and run scripts the way the repository does, such as `./generate.sh`, so a lost permission shows up.

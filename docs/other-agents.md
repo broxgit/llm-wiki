@@ -154,9 +154,9 @@ Then ask Cowork to change something, and attach the files it needs. Each round g
 2. The run compares the new output with the old, and restores what it touched. It never commits or pushes. Read what Cowork says it will change before you run it, because it runs on your machine.
 3. The last line of the output names a report in `~/pair-run-reports`. Attach it, and Cowork takes it from there.
 
-If a run prints `killed` and no report, the files are still OneDrive placeholders. In Finder, right-click the task's `output` folder, choose **Always Keep on This Device**, and run the command again.
+If a run prints `killed` or `Operation not permitted` and no report, OneDrive probably hasn't finished delivering the files. Wait a couple of minutes and run the same command again. If it still fails, in Finder, right-click the task's `output` folder, choose **Always Keep on This Device**, and try once more.
 
-This has been through one test with Cowork, on 2026-11-03, on a throwaway repository: the loop reached PASS, and the sync check waited for late files.
+This has been through two test sessions with Cowork, on 2026-11-03, on a throwaway repository: the loop reached PASS, and the sync check waited for late files.
 
 **Other web agents:** the same idea works wherever an agent has a GitHub connector that can read your private repository. Only claude.ai's and Microsoft 365 Copilot's have been tried.
 

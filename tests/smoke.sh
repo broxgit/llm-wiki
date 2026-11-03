@@ -1608,6 +1608,9 @@ done"
 check "the skill stays out of the plugin's skills" test ! -e "$REPO/skills/remote-pair-run"
 check "the skill's command reads the files before running them" grep -q 'find \. -type f -exec cat {} + >/dev/null && bash run\.sh --expect' "$SK/SKILL.md"
 check "the skill explains a killed run" grep -q 'Always Keep on This Device' "$SK/SKILL.md"
+check "the skill explains a refused run" grep -q 'killed. or .Operation not permitted., with no report' "$SK/SKILL.md"
+check "the skill catches an old report by its start time" grep -q '`started:` is before you published it' "$SK/SKILL.md"
+check "the skill's trial runs don't wait for a sync" grep -q 'RUNLIB_SYNC_WAIT=0' "$SK/SKILL.md"
 check "the skill reads the manifest back after publishing" grep -q 'read `manifest.txt` back' "$SK/SKILL.md"
 
 # The skill's install.sh and run.sh examples, run as written, since Cowork will copy them.
