@@ -26,6 +26,7 @@ template/          The scaffold, copied whole to start a wiki.
 skills/llm-wiki/   The Claude skill that finds, runs, and scaffolds wikis.
 .claude-plugin/    The plugin manifest, and the marketplace that lists it.
 mcp/server.py      A local MCP server for sessions with no file access. wiki mcp starts it; it runs wiki.sh.
+cowork/            Skills for Microsoft Copilot Cowork, kept out of skills/ so Claude Code doesn't load them. wiki setup copilot-cowork copies them to OneDrive.
 commands/          The plugin's slash commands. wiki.sh also makes skills from them for Antigravity, Codex and Cursor.
 tests/smoke.sh     Smoke tests for wiki.sh, the hook and the secret scan. CI runs them.
 .github/workflows/ CI: shellcheck, plugin validation, and the smoke tests on Linux and macOS.

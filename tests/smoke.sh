@@ -1283,5 +1283,364 @@ assert h and all(re.match(r'## \d{4}-\d\d-\d\d: \S', l) for l in h) and len(set(
 d=[l[3:13] for l in h]
 assert d==sorted(d,reverse=True)" "$REPO/NEWS.md"
 
+section "remote pair-run"
+PR="$T/pair"
+LIB="$REPO/cowork/remote-pair-run/runlib.sh"
+export RUNLIB_REPORT_DIR="$PR/reports"
+# pr_new <body>: a deliverable whose run.sh is the body, with a fresh manifest and no reports.
+pr_new() {
+  rm -rf "$PR"
+  mkdir -p "$PR/d" "$PR/reports"
+  cp "$LIB" "$PR/d/runlib.sh"
+  {
+    printf '#!/usr/bin/env bash\nset -u\nhere="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"\n. "$here/runlib.sh"\nreport_start demo "$@"\n'
+    printf '%s\n' "$1"
+  } >"$PR/d/run.sh"
+  bash "$LIB" manifest "$PR/d" >/dev/null
+}
+pr_run() { PR_OUT="$(env RUNLIB_SYNC_WAIT="${PR_WAIT:-0}" RUNLIB_SYNC_POLL=1 bash "$PR/d/run.sh" "$@" 2>&1)"; PR_RC=$?; }
+# pr_expect <name> <rc> <text>: the last run exited with rc and printed the text.
+pr_expect() {
+  case "$PR_RC:$PR_OUT" in
+    "$2:"*"$3"*) ok "$1" ;;
+    *) bad "$1" "exit $PR_RC, wanted $2 and: $3
+$PR_OUT" ;;
+  esac
+}
+# pr_lacks <name> <text>: the last run didn't print the text.
+pr_lacks() { case "$PR_OUT" in *"$2"*) bad "$1" "$PR_OUT" ;; *) ok "$1" ;; esac; }
+
+pr_new 'report_end'
+expect "the manifest starts at version 1" "version 1" cat "$PR/d/manifest.txt"
+check "the manifest lists run.sh" grep -q '^sha256 [0-9a-f]\{64\}  run.sh$' "$PR/d/manifest.txt"
+bash "$LIB" manifest "$PR/d" >/dev/null
+expect "making it again adds one" "version 2" cat "$PR/d/manifest.txt"
+bash "$LIB" manifest "$PR/d" 7 >/dev/null
+expect "a version can be named" "version 7" cat "$PR/d/manifest.txt"
+check "the manifest leaves itself out" bash -c "! grep -q 'manifest.txt' '$PR/d/manifest.txt'"
+mkdir "$PR/empty"
+refuse "a manifest needs a run.sh" bash "$LIB" manifest "$PR/empty"
+refuse "a manifest needs a number" bash "$LIB" manifest "$PR/d" abc
+
+pr_new 'tools bash not-a-real-tool
+step "Works"
+result "first" 0
+check "second" true
+report_end'
+pr_run
+pr_expect "a good run ends in PASS" 0 "DEMO RUN: PASS"
+pr_expect "a step is numbered" 0 "== STEP 1: Works =="
+pr_expect "a result gets a marker" 0 "RESULT second: PASS"
+pr_expect "the header says the version" 0 "version: 1"
+pr_expect "a missing tool is reported" 0 "not-a-real-tool: not installed"
+pr_expect "it says where the report is" 0 "Report: $PR/reports/demo-v1-"
+report="$(ls "$PR"/reports/demo-v1-*.txt 2>/dev/null | head -n 1)"
+check "the report has the transcript" grep -q "RESULT first: PASS" "$report"
+check "the report's last line is the verdict" bash -c "[ \"\$(tail -n 1 '$report')\" = 'DEMO RUN: PASS' ]"
+check "the report leaves out its own path" bash -c "! grep -q '^Report:' '$report'"
+refuse "bad arguments stop before a report" bash "$PR/d/run.sh" --nope
+PR_OUT="$(ls "$PR/reports" | wc -l | tr -d ' ')"
+[ "$PR_OUT" = 1 ] && ok "bad arguments leave no report" || bad "bad arguments leave no report" "$PR_OUT reports"
+
+pr_new 'result "first bad" 1
+result "second bad" 1
+result "good" 0
+report_end'
+pr_run
+pr_expect "a failed check fails the run" 1 "DEMO RUN: FAIL"
+pr_expect "later checks still run" 1 "RESULT good: PASS"
+pr_expect "the summary counts them" 1 "checks: 1 passed, 2 failed"
+pr_expect "the summary names the first failure" 1 "first failure: first bad"
+
+pr_new 'report_end'
+pr_run
+pr_expect "a run with no checks fails" 1 "no checks ran"
+
+pr_new 'printf "x\n" | while read -r _; do result "in a pipeline" 1; done
+result "outside" 0
+report_end'
+pr_run
+pr_expect "a failure in a subshell still counts" 1 "DEMO RUN: FAIL"
+
+pr_new 'result "fine" 0
+on_exit touch "$here/first registered"
+on_exit bash -c "ls \"$here/first registered\" 2>/dev/null || touch \"$here/ran first\""
+exit 3'
+pr_run
+pr_expect "exiting early fails the run" 1 "ended early, exit code 3"
+pr_expect "exiting early still gets a verdict" 1 "DEMO RUN: FAIL"
+check "cleanup runs after a crash" test -e "$PR/d/first registered"
+check "cleanup runs in reverse order" test -e "$PR/d/ran first"
+
+pr_new 'result "fine" 0
+on_exit false
+report_end'
+pr_run
+pr_expect "a failed cleanup fails the run" 1 "RESULT cleanup: false"
+
+pr_new 'result "fine" 0
+abort "cannot go on"
+result "never" 0
+report_end'
+pr_run
+pr_expect "abort stops the run" 1 "ABORT: cannot go on"
+pr_lacks "abort skips what follows" "RESULT never"
+
+pr_new 'result "fine" 0
+sleep 1
+report_end'
+env RUNLIB_SYNC_WAIT=0 bash "$PR/d/run.sh" >"$PR/term.out" 2>&1 &
+pr_pid=$!
+sleep 0.5
+kill -TERM "$pr_pid"
+wait "$pr_pid"
+PR_RC=$?
+PR_OUT="$(cat "$PR/term.out")"
+pr_expect "a killed run still gets a verdict" 1 "DEMO RUN: FAIL"
+
+pr_new 'result "fine" 0
+sleep 8 &
+report_end'
+pr_start="$(date +%s)"
+# To a file: a capture would wait for the background process, which holds the same output.
+env RUNLIB_SYNC_WAIT=0 bash "$PR/d/run.sh" >"$PR/bg.out" 2>&1
+PR_RC=$?
+pr_took=$(($(date +%s) - pr_start))
+PR_OUT="$(cat "$PR/bg.out")"
+pr_expect "a background process doesn't lose the verdict" 0 "DEMO RUN: PASS"
+[ "$pr_took" -lt 8 ] && ok "a background process doesn't hang the run" || bad "a background process doesn't hang the run" "took ${pr_took}s"
+
+# Trees. A helper builds two copies of the same tree, then the body changes them.
+pr_trees='mkdir -p "$RUN_TMP/a/sub" "$RUN_TMP/b/sub"
+for t in a b; do echo one >"$RUN_TMP/$t/one.txt"; echo two >"$RUN_TMP/$t/sub/two file.txt"; done'
+
+pr_new "$pr_trees"'
+mkdir "$RUN_TMP/a/.git" "$RUN_TMP/b/.git"; echo x >"$RUN_TMP/a/.git/HEAD"
+compare_trees "$RUN_TMP/a" "$RUN_TMP/b"; result "folders" $?
+snapshot_tree "$RUN_TMP/a" "$RUN_TMP/a.snap"; snapshot_tree "$RUN_TMP/b" "$RUN_TMP/b.snap"
+compare_trees "$RUN_TMP/a.snap" "$RUN_TMP/b.snap"; result "snapshots" $?
+compare_trees "$RUN_TMP/a.snap" "$RUN_TMP/b"; result "one of each" $?
+report_end'
+pr_run
+pr_expect "identical trees compare clean, skipping .git" 0 "DEMO RUN: PASS"
+
+pr_new "$pr_trees"'
+echo changed >"$RUN_TMP/b/one.txt"; echo extra >"$RUN_TMP/b/extra.txt"; rm "$RUN_TMP/b/sub/two file.txt"
+compare_trees "$RUN_TMP/a" "$RUN_TMP/b"; result "same" $?
+report_end'
+pr_run
+pr_expect "a changed file is named" 1 "DIFF changed one.txt"
+pr_expect "the diff is shown" 1 "+changed"
+pr_expect "a new file is named" 1 "DIFF only-in-right extra.txt"
+pr_expect "a missing file is named, spaces and all" 1 "DIFF only-in-left sub/two file.txt"
+pr_expect "differences fail the comparison" 1 "RESULT same: FAIL"
+
+pr_new "$pr_trees"'
+echo changed >"$RUN_TMP/b/one.txt"
+allow_diff one.txt "carries the date"
+compare_trees "$RUN_TMP/a" "$RUN_TMP/b"; result "allowed" $?
+compare_trees "$RUN_TMP/a" "$RUN_TMP/b"; rc=$?; [ "$rc" -eq 1 ]; result "the allowance is used up" $?
+report_end'
+pr_run
+pr_expect "an allowed difference gives its reason" 0 "ALLOWED changed one.txt: carries the date"
+pr_expect "an allowance covers one comparison" 0 "RESULT the allowance is used up: PASS"
+
+pr_new 'mkdir "$RUN_TMP/none" "$RUN_TMP/also"
+snapshot_tree "$RUN_TMP/none" "$RUN_TMP/none.snap"; rc=$?; [ "$rc" -eq 1 ]; result "empty snapshot refused" $?
+compare_trees "$RUN_TMP/none" "$RUN_TMP/also"; rc=$?; [ "$rc" -eq 1 ]; result "empty trees are not identical" $?
+compare_trees "$RUN_TMP/nothing" "$RUN_TMP/also"; rc=$?; [ "$rc" -eq 1 ]; result "a missing tree is not identical" $?
+report_end'
+pr_run
+pr_expect "empty and missing trees never compare as identical" 0 "DEMO RUN: PASS"
+
+pr_new 'mkdir "$RUN_TMP/keep" "$RUN_TMP/skip" "$RUN_TMP/keep/gen"
+echo a >"$RUN_TMP/keep/a"; echo b >"$RUN_TMP/keep/gen/b"
+snapshot_tree "$RUN_TMP/keep" "$RUN_TMP/s" "gen/*"; result "snapshot" $?
+grep -q "gen/b" "$RUN_TMP/s"; rc=$?; [ "$rc" -eq 1 ]; result "the glob was skipped" $?
+ln -s a "$RUN_TMP/keep/link"
+snapshot_tree "$RUN_TMP/keep" "$RUN_TMP/s2"; result "with a link" $?
+grep -q "  link$" "$RUN_TMP/s2"; result "a link is recorded" $?
+report_end'
+pr_run
+pr_expect "snapshots skip globs and record links" 0 "DEMO RUN: PASS"
+
+pr_new 'expect_fail_with "right reason" "boom" bash -c "echo boom; exit 1"
+report_end'
+pr_run
+pr_expect "a failure with the right text passes" 0 "RESULT right reason: PASS"
+pr_new 'expect_fail_with "wrong reason" "boom" bash -c "echo other; exit 1"
+report_end'
+pr_run
+pr_expect "a failure with the wrong text fails" 1 "for the wrong reason"
+pr_new 'expect_fail_with "no failure" "boom" bash -c "echo boom"
+report_end'
+pr_run
+pr_expect "a command that succeeds fails the negative test" 1 "it exited 0"
+
+pr_new 'target="$here/vendor"
+mkdir "$target"; echo v >"$target/v"
+move_aside "$target"
+[ ! -e "$target" ]; result "it is gone" $?
+restore_aside "$target"
+[ -e "$target/v" ]; result "it is back" $?
+move_aside "$target"
+abort "crashed while aside"'
+pr_run
+pr_expect "move_aside hides a path" 1 "RESULT it is gone: PASS"
+pr_expect "restore_aside brings it back" 1 "RESULT it is back: PASS"
+check "a crash still restores it" test -e "$PR/d/vendor/v"
+
+pr_new 'target="$here/vendor"
+mkdir "$target"; echo original >"$target/v"
+move_aside "$target"
+mkdir "$target"; echo regenerated >"$target/v"
+result "fine" 0
+report_end'
+pr_run
+pr_expect "a restore never overwrites what is there" 1 "the original stays at"
+check "the original is kept" grep -q original "$PR/d/vendor.runlib-aside/v"
+
+pr_new 'should_install && echo INSTALLING
+result "fine" 0
+report_end'
+pr_run
+pr_expect "should_install is true by default" 0 "INSTALLING"
+pr_run --no-install
+pr_lacks "--no-install turns it off" "INSTALLING"
+
+# Sync checks.
+pr_new 'result "fine" 0
+report_end'
+pr_run --expect 1
+pr_expect "--expect passes when the version matches" 0 "every file matches its hash"
+pr_run --expect 2
+pr_expect "--expect refuses another version" 1 "manifest.txt is version 1, expected 2"
+pr_lacks "a refused run skips its checks" "RESULT fine"
+echo tampered >>"$PR/d/run.sh"
+pr_run
+pr_expect "a stale file is named" 1 "hash differs: run.sh"
+pr_new 'result "fine" 0
+report_end'
+echo extra >"$PR/d/old-file.txt"
+pr_run
+pr_expect "a leftover file is ignored, since Cowork can't delete" 0 "DEMO RUN: PASS"
+sed '$d' "$PR/d/manifest.txt" >"$PR/m" && mv "$PR/m" "$PR/d/manifest.txt"
+pr_run
+pr_expect "a manifest must list runlib.sh and run.sh" 1 "doesn't list"
+pr_new 'result "fine" 0
+report_end'
+echo 'sha256 0000000000000000000000000000000000000000000000000000000000000000  gone.txt' >>"$PR/d/manifest.txt"
+pr_run
+pr_expect "a missing file is named" 1 "missing: gone.txt"
+pr_new 'result "fine" 0
+report_end'
+rm "$PR/d/manifest.txt"
+pr_run
+pr_expect "no manifest, no run" 1 "manifest.txt is missing"
+
+# A late sync: the folder starts stale, then the new files arrive during the wait.
+pr_new 'echo RUNNING-OLD-CODE
+result "old" 0
+report_end'
+cp "$PR/d/run.sh" "$PR/run.old"
+sed 's/RUNNING-OLD-CODE/RUNNING-NEW-CODE/; s/"old"/"new"/' "$PR/d/run.sh" >"$PR/d/run.new"
+mv "$PR/d/run.new" "$PR/d/run.sh"
+bash "$LIB" manifest "$PR/d" >/dev/null
+cp "$PR/d/run.sh" "$PR/run.good"
+cp "$PR/run.old" "$PR/d/run.sh"
+(sleep 2; cp "$PR/run.good" "$PR/d/run.sh") &
+PR_WAIT=15 pr_run --expect 2
+wait
+pr_expect "a late sync is waited for" 0 "sync: not ready, waiting"
+pr_expect "it starts again from the new files" 0 "RUNNING-NEW-CODE"
+pr_lacks "the old code never runs" "RUNNING-OLD-CODE"
+pr_expect "the arguments survive the restart" 0 "RESULT new: PASS"
+PR_OUT="$(ls "$PR/reports" | wc -l | tr -d ' ')"
+[ "$PR_OUT" = 1 ] && ok "the restart leaves one report" || bad "the restart leaves one report" "$PR_OUT reports"
+unset RUNLIB_REPORT_DIR
+
+section "the Copilot Cowork skill"
+SK="$REPO/cowork/remote-pair-run"
+check "the skill's name matches its folder" grep -q '^name: remote-pair-run$' "$SK/SKILL.md"
+check "the skill fits Cowork's limits" python3 -c "
+import os,re,sys
+d=sys.argv[1]; s=open(d+'/SKILL.md').read()
+m=re.match(r'---\n(.*?)\n---\n',s,re.S); assert m
+desc=m.group(1).split('description:',1)[1]
+assert 0<len(desc)<=1024, len(desc)
+assert 'Use when' in desc
+assert len(s.encode())<=1024*1024
+others=[f for f in os.listdir(d) if f!='SKILL.md']
+assert 0<len(others)<=20
+assert all(os.path.getsize(d+'/'+f)<=5*1024*1024 for f in others)
+assert all(not f.startswith('.') for f in others)
+" "$SK"
+# Every function the skill's example calls must exist, so it can't drift from the library.
+check "the skill's example runs against the library" bash -c "
+sed -n '/^\`\`\`bash\$/,/^\`\`\`\$/p' '$SK/SKILL.md' | grep -E '^(report_start|tools|repo_state|step|on_exit|snapshot_tree|should_install|allow_diff|compare_trees|expect_fail_with|move_aside|restore_aside|report_end|result|check|abort) |^(report_end)\$' | cut -d' ' -f1 | sort -u | while read -r f; do
+  grep -q \"^\$f() {\" '$LIB' || { echo \"no function \$f\"; exit 1; }
+done"
+check "the skill stays out of the plugin's skills" test ! -e "$REPO/skills/remote-pair-run"
+
+# The skill's install.sh and run.sh examples, run as written, since Cowork will copy them.
+EX="$T/example"
+mkdir -p "$EX/home/dev/my-repo/testdata" "$EX/home/dev/my-repo/vendor/lib" "$EX/d/files" "$EX/bin"
+awk '/^```bash$/ { n++; next } /^```$/ { next } n == 1 && !done { print } /^cp -R / && n == 1 { done = 1 }' "$SK/SKILL.md" >"$EX/d/install.sh"
+awk '/^```bash$/ { n++; next } /^```$/ { next } n == 2 && !done { print } /^report_end$/ && n == 2 { done = 1 }' "$SK/SKILL.md" >"$EX/d/run.sh"
+cp "$LIB" "$EX/d/runlib.sh"
+(
+  cd "$EX/home/dev/my-repo" || exit 1
+  git init -q
+  echo 'module example.com/my/repo' >go.mod
+  printf '#!/bin/sh\nmkdir -p gen\necho same >gen/out.txt\necho old >gen/version.txt\n' >generate.sh
+  printf '#!/bin/sh\necho "bad_enum_name in $1"\nexit 1\n' >lint.sh
+  chmod +x generate.sh lint.sh
+  ./generate.sh
+  echo lib >vendor/lib/lib.go
+  echo 'bad' >testdata/bad.proto
+  git add . && git commit -qm init
+)
+printf '#!/bin/sh\nmkdir -p gen\necho same >gen/out.txt\necho new >gen/version.txt\n' >"$EX/d/files/generate.sh"
+chmod +x "$EX/d/files/generate.sh"
+printf '#!/bin/sh\ncase "$1" in version) echo "go version fake" ;; build) [ ! -e vendor ] ;; esac\n' >"$EX/bin/go"
+chmod +x "$EX/bin/go"
+bash "$LIB" manifest "$EX/d" 3 >/dev/null
+PR_OUT="$(env HOME="$EX/home" PATH="$EX/bin:$PATH" RUNLIB_REPORT_DIR="$EX/reports" RUNLIB_SYNC_WAIT=0 bash "$EX/d/run.sh" --expect 3 2>&1)"
+PR_RC=$?
+pr_expect "the skill's example run passes" 0 "MY-CHANGE RUN: PASS"
+pr_expect "its allowed difference is used" 0 "ALLOWED changed version.txt: carries the build date"
+pr_expect "its negative test runs" 0 "RESULT lint rejects a bad enum: PASS"
+pr_expect "its CI simulation runs" 0 "RESULT builds without vendor: PASS"
+pr_lacks "its report has no failures" ": FAIL"
+check "its install leaves the new file in place" cmp "$EX/d/files/generate.sh" "$EX/home/dev/my-repo/generate.sh"
+expect "its cleanup restores the generated output" "old" cat "$EX/home/dev/my-repo/gen/version.txt"
+check "its cleanup restores the vendor folder" test -f "$EX/home/dev/my-repo/vendor/lib/lib.go"
+check "it commits nothing" bash -c "[ \"\$(git -C '$EX/home/dev/my-repo' rev-list --count HEAD)\" = 1 ]"
+out="$(cd "$EX" && bash "$EX/d/install.sh" "$EX/d" 2>&1)" && bad "its install refuses the wrong repository" "$out" || case "$out" in *"not the right repository"*|*"No such file"*) ok "its install refuses the wrong repository" ;; *) bad "its install refuses the wrong repository" "$out" ;; esac
+
+CW="$T/cowork-home"
+mkdir -p "$CW"
+# shellcheck disable=SC2120  # check and refuse pass it arguments.
+cw() { env HOME="$CW" "$W" setup copilot-cowork "$@"; }
+out="$(cw 2>&1)" && bad "no OneDrive says so" "$out" || case "$out" in *"no work OneDrive folder"*) ok "no OneDrive says so" ;; *) bad "no OneDrive says so" "$out" ;; esac
+mkdir -p "$CW/Library/CloudStorage/OneDrive-Personal"
+out="$(cw 2>&1)" && bad "a personal OneDrive doesn't count" "$out" || case "$out" in *"no work OneDrive folder"*) ok "a personal OneDrive doesn't count" ;; *) bad "a personal OneDrive doesn't count" "$out" ;; esac
+mkdir -p "$CW/Library/CloudStorage/OneDrive-Acme"
+expect "setup copilot-cowork finds the work OneDrive" "installed: $CW/Library/CloudStorage/OneDrive-Acme/Documents/Cowork/skills/remote-pair-run" cw
+SKT="$CW/Library/CloudStorage/OneDrive-Acme/Documents/Cowork/skills/remote-pair-run"
+check "it copies the skill" cmp "$SK/SKILL.md" "$SKT/SKILL.md"
+check "it copies the library" cmp "$SK/runlib.sh" "$SKT/runlib.sh"
+echo stale >"$SKT/runlib.sh"
+check "running it again succeeds" cw
+check "running it again updates the skill" cmp "$SK/runlib.sh" "$SKT/runlib.sh"
+mkdir -p "$CW/Library/CloudStorage/OneDrive-Other"
+out="$(cw 2>&1)" && bad "several OneDrive folders must be named" "$out" || case "$out" in *"several OneDrive folders"*"OneDrive-Acme"*"OneDrive-Other"*) ok "several OneDrive folders must be named" ;; *) bad "several OneDrive folders must be named" "$out" ;; esac
+check "--dir names one" cw --dir "$CW/Library/CloudStorage/OneDrive-Other"
+check "--dir puts it there" test -f "$CW/Library/CloudStorage/OneDrive-Other/Documents/Cowork/skills/remote-pair-run/SKILL.md"
+refuse "--dir must exist" cw --dir "$CW/nope"
+refuse "an unknown option is refused" cw --nope
+expect "setup copilot-cowork has help" "Documents/Cowork/skills" "$W" setup copilot-cowork --help
+expect "setup --help lists it" "setup copilot-cowork" "$W" setup --help
+
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ]

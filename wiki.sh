@@ -6141,12 +6141,61 @@ setup_cursor() {
   esac
 }
 
+# Copies the remote pair-run skill into the OneDrive folder Copilot Cowork reads skills from.
+setup_copilot_cowork() {
+  local dir="" a found="" n=0 target
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dir)
+        [ -n "${2:-}" ] || die "--dir needs your OneDrive folder"
+        dir="$2"
+        shift 2
+        ;;
+      -h | --help)
+        cat <<EOF
+Usage: $WIKI_CMD setup copilot-cowork [--dir ONEDRIVE_FOLDER]
+
+Copies the remote-pair-run skill to Documents/Cowork/skills in your work OneDrive, for
+Microsoft Copilot Cowork. It finds OneDrive under ~/Library/CloudStorage. --dir names the
+folder if there are several, or it syncs elsewhere. Run it again to update the skill.
+EOF
+        return 0
+        ;;
+      *) die "setup copilot-cowork: unknown option $1. Try $WIKI_CMD setup copilot-cowork --help" ;;
+    esac
+  done
+  if [ -z "$dir" ]; then
+    for a in "$HOME"/Library/CloudStorage/OneDrive-*; do
+      [ -d "$a" ] || continue
+      # Cowork needs a work or school account.
+      [ "$(basename "$a")" != OneDrive-Personal ] || continue
+      found="$found
+  $a"
+      dir="$a"
+      n=$((n + 1))
+    done
+    [ "$n" -gt 0 ] || die "no work OneDrive folder in ~/Library/CloudStorage. Sign in to OneDrive, or name the folder with --dir"
+    [ "$n" -eq 1 ] || die "several OneDrive folders. Name one with --dir:$found"
+  fi
+  [ -d "$dir" ] || die "no such folder: $dir"
+  target="$dir/Documents/Cowork/skills/remote-pair-run"
+  mkdir -p "$target" || die "can't create $target"
+  cp "$REPO/cowork/remote-pair-run/SKILL.md" "$REPO/cowork/remote-pair-run/runlib.sh" "$target/" || die "can't copy the skill to $target"
+  echo "installed: $target"
+  echo "Cowork finds it when a new session starts, once OneDrive has synced. Ask it to change code in a repository, and it will publish a folder for you to run."
+}
+
 cmd_setup() {
   local what="" a n
   if [ "${1:-}" = microsoft-copilot ]; then
     shift
     command -v python3 >/dev/null 2>&1 || die "setup microsoft-copilot needs python3"
     exec python3 "$REPO/scripts/microsoft_copilot_setup.py" "$@"
+  fi
+  if [ "${1:-}" = copilot-cowork ]; then
+    shift
+    setup_copilot_cowork "$@"
+    return $?
   fi
   for a in "$@"; do
     case "$a" in
@@ -6164,6 +6213,8 @@ Usage: $WIKI_CMD setup [--new | --list | <section> | <setting>]
   setup chat --yes Add the Chat tab's server without asking, for an agent the user told to. The app must be closed.
   setup microsoft-copilot --repo OWNER/REPO
                    Set up a Microsoft 365 Copilot agent that reads a wiki repository on GitHub. --help for its options.
+  setup copilot-cowork
+                   Put the remote-pair-run skill in your OneDrive, so Copilot Cowork can change code through runs on this machine.
   setup <setting>  Just one setting: git.identity, or journal.<key> such as journal.format.
                    A bare journal key works too: setup format.
 EOF

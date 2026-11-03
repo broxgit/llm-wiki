@@ -140,6 +140,22 @@ It reads what was last pushed, so answers are as fresh as your last sync, and it
 
 This has run end to end once, on 2026-11-03, with a test wiki: the agent read a private repository and cited the page, and got a 404 from another one. In the Mac app, the agent appeared after relaunching it.
 
+**Microsoft Copilot Cowork:** it can't reach your files or run your build, but it can still change your code. It publishes a folder to OneDrive, you run one command, and you attach the report it writes. It's a way to use Copilot on a real repository when work gives you far more Copilot than Claude. Check that your company allows the code you share to pass through its tenant. With OneDrive syncing, in a terminal:
+
+```
+wiki setup copilot-cowork
+```
+
+It copies a skill called `remote-pair-run` to `Documents/Cowork/skills` in your work OneDrive, and Cowork finds it when a new session starts. Run it again to update the skill. If you have several work OneDrive folders, name one with `--dir`.
+
+Then ask Cowork to change something, and attach the files it needs. Each round goes like this:
+
+1. It gives you one command, ending in `--expect` and a version number. The command waits for OneDrive to catch up, and runs only once every file matches what Cowork published.
+2. The run compares the new output with the old, and restores what it touched. It never commits or pushes. Read what Cowork says it will change before you run it, because it runs on your machine.
+3. The last line of the output names a report in `~/pair-run-reports`. Attach it, and Cowork takes it from there.
+
+This has only been tested locally, with the library and the skill's example run on a Mac. It hasn't run with Cowork itself yet.
+
 **Other web agents:** the same idea works wherever an agent has a GitHub connector that can read your private repository. Only claude.ai's and Microsoft 365 Copilot's have been tried.
 
 **Sessions that can reach your files but have no instruction file:** zip the `skills/llm-wiki` folder, with the folder at the zip root, and add it under Customize > Skills. The skill finds wikis in the folders a conversation can reach.

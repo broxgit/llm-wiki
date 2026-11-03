@@ -12,6 +12,13 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 - **Sketch:** `wiki status` flags a wiki whose repository has commits in the last two weeks but no new notes in that time.
 - **Open:** wait for two weeks of `wiki stats` first. It may not be needed.
 
+### Close the Copilot Cowork loop
+
+- **Why:** the `remote-pair-run` skill and `runlib.sh` cut the boilerplate and the stale runs, but the user still finds and attaches every report, and Cowork still works from scans that age.
+- **Sketch:** `wiki relay watch` waits for a new deliverable in OneDrive, shows what will run, runs it on a keypress, and puts the report where Cowork can read it, then wakes Cowork with a matching email or Teams message. `wiki relay scan` sends a zipped `git bundle` with the commit and tool versions, in place of a text scan. Notes Cowork drops in its output folder go through `wiki capture`.
+- **Open:** four tests on the work Mac come first. Does an attached OneDrive folder show files added later? Can an event-driven task continue the conversation and read the report? Can the sandbox run an uploaded Go toolchain, and do files survive between turns? Can Cowork's browser use reach internal review and CI pages?
+- **After that:** a direct bridge, as an MCP connector through a dev tunnel, could replace the relay. It's a public URL into a work laptop, and Cowork also reads email and web pages, so it needs IT's approval and no general shell.
+
 ## Later
 
 - **Merge requests in standups.** Reviews and MRs opened live in GitHub or GitLab, not in git history. Pulling them in would need an API token and a host per remote.
@@ -27,6 +34,7 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 
 Things that have never been run for real. Treat them as unproven until crossed off.
 
+- The `remote-pair-run` skill with Copilot Cowork itself, and `wiki setup copilot-cowork` on a real OneDrive folder. So far: the library and the skill's example run under smoke tests. Whether Cowork finds the skill, copies `runlib.sh` unchanged and makes the manifest in its sandbox is unknown, as is whether OneDrive's lag behaves as the sync check assumes.
 - `wiki.sh unlock` and `claude` on macOS. `setup` and `journal backfill` have since run on Macs in real use (2026-10-28 and 2026-10-29); every other command ran cleanly on macOS (bash 3.2, BSD `date`) on 2026-10-28.
 - `wiki.sh journal backfill` on transcripts from Claude Code versions other than the one it was written against. It needs `python3`.
 - Git sync between two people or two machines. Pull, commit, and push from one machine worked in real use on 2026-10-01.
