@@ -31,6 +31,7 @@ GITHUB = "https://github.com"
 COPILOT_CHAT = "https://m365.cloud.microsoft/chat"
 WAIT_FOR_CREATE = int(os.environ.get("LLM_WIKI_APP_WAIT", "900"))
 PLACEHOLDER = "set-after-generating"
+SECRET_CLEARED = "cleared-after-provisioning"
 SECRET_KEY = re.compile(r"^(SECRET_MCP_DA_OAUTH_CLIENT_SECRET_\w+)=.*$", re.M)
 
 INSTRUCTIONS = """You answer from the user's knowledge wiki in the GitHub repository {repo}. It is plain markdown.
@@ -279,6 +280,52 @@ def write_instructions(project, repo, indexes):
         f.write("\n")
 
 
+def choose_indexes(repo, wikis, info):
+    if wikis:
+        return ["index.md" if w == "." else f"{w.rstrip('/')}/index.md" for w in wikis]
+    if info["indexes"]:
+        return info["indexes"]
+    if info["indexes"] is None:
+        die("Without gh signed in to GitHub, this can't look inside the repository. Name the wiki with --wiki, or run: gh auth login")
+    die(f"{repo} has no index.md at the top or in a top-level folder, so there's no wiki to start from. Push one first, or name it with --wiki.")
+
+
+def settings_file(project):
+    return os.path.join(project, ".llm-wiki.json")
+
+
+def save_settings(project, repo, wikis):
+    with open(settings_file(project), "w", encoding="utf-8") as f:
+        json.dump({"repo": repo, "wikis": wikis or []}, f, indent=2)
+        f.write("\n")
+
+
+def update_agent(args, toolkit, project):
+    if not os.path.isdir(project):
+        die(f"There's no agent at {project}. Updating has to run on the machine that created it. Check --name and --dir, or leave out --update to make one.")
+    saved = {}
+    if os.path.exists(settings_file(project)):
+        with open(settings_file(project), encoding="utf-8") as f:
+            saved = json.load(f)
+    repo = args.repo or saved.get("repo")
+    if not repo:
+        die("This agent was made before its settings were saved, so name its repository once with --repo.")
+    wikis = args.wiki or saved.get("wikis") or None
+    indexes = choose_indexes(repo, wikis, {"indexes": None} if wikis else inspect_repo(repo))
+    write_instructions(project, repo, indexes)
+    save_settings(project, repo, wikis)
+    # The toolkit won't run with an empty variable, and older agents left this one blank.
+    with open(secret_env_file(project), encoding="utf-8") as f:
+        if re.search(r"^SECRET_MCP_DA_OAUTH_CLIENT_SECRET_\w+=\s*$", f.read(), re.M):
+            write_secret(project, SECRET_CLEARED)
+    print(f"Updating the agent for {repo}. It starts from: {', '.join(plan_reading(indexes)[0]) or 'the index of whichever wiki a question is about'}.")
+    login = toolkit + ["auth", "login", "m365"]
+    if subprocess.run(toolkit + ["provision", "--env", "dev", "-f", project, "-i", "false", "--telemetry", "false"]).returncode != 0:
+        die(f"Updating failed. If the error is about signing in, run this, then try again:\n  {shlex.join(login)}")
+    write_secret(project, SECRET_CLEARED)
+    print(f"\nDone. Start a new chat from {args.name}dev: a chat already open may keep the old instructions. In the Mac app, relaunch first.")
+
+
 def main():
     parser = argparse.ArgumentParser(prog="wiki setup microsoft-copilot", description=__doc__.split("\n")[0])
     parser.add_argument("--repo", help="the private GitHub repository the agent reads, as OWNER/REPO")
@@ -286,6 +333,7 @@ def main():
     parser.add_argument("--name", default="wiki", help="the agent's name (default: wiki). Copilot shows it with dev on the end")
     parser.add_argument("--dir", help="where the agent's project goes")
     parser.add_argument("--manual", action="store_true", help="register the GitHub App by hand and paste its client ID and secret")
+    parser.add_argument("--update", action="store_true", help="update an existing agent on this machine: same agent, app and sign-in, with current instructions and wiki names")
     args = parser.parse_args()
 
     if not (sys.stdin.isatty() or os.environ.get("LLM_WIKI_TEST_TTY")):
@@ -295,27 +343,23 @@ def main():
     toolkit = toolkit_command()
     if not os.environ.get("LLM_WIKI_ATK") and subprocess.run(["sh", "-c", "command -v npx"], capture_output=True).returncode != 0:
         die("This needs Node.js, for Microsoft's Agents Toolkit, and npx isn't on your PATH. Install Node.js, then run this again.")
+    state_home = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+    parent = args.dir or os.path.join(state_home, "llm-wiki", "microsoft-copilot")
+    project = os.path.join(parent, args.name)
+    if args.update:
+        update_agent(args, toolkit, project)
+        return
     repo = args.repo
     if not repo:
         print("GitHub repository the agent reads (OWNER/REPO): ", end="", flush=True)
         repo = sys.stdin.readline().strip()
     if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo or ""):
         die("--repo takes OWNER/REPO, such as acme/work-wikis.")
-    state_home = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
-    parent = args.dir or os.path.join(state_home, "llm-wiki", "microsoft-copilot")
-    project = os.path.join(parent, args.name)
     if os.path.exists(project):
-        die(f"{project} already exists. Use another --name or --dir, or delete it to start over.")
+        die(f"{project} already exists. To change that agent, add --update. To make another, use a different --name or --dir.")
 
     info = inspect_repo(repo)
-    if args.wiki:
-        indexes = ["index.md" if w == "." else f"{w.rstrip('/')}/index.md" for w in args.wiki]
-    elif info["indexes"]:
-        indexes = info["indexes"]
-    elif info["indexes"] is None:
-        die("Without gh signed in to GitHub, this can't look inside the repository. Name the wiki with --wiki, or run: gh auth login")
-    else:
-        die(f"{repo} has no index.md at the top or in a top-level folder, so there's no wiki to start from. Push one first, or name it with --wiki.")
+    indexes = choose_indexes(repo, args.wiki, info)
     if info["private"] is False:
         print(f"Note: {repo} is public, so anyone can already read it.")
 
@@ -352,6 +396,7 @@ The agent can read everything in this repository, not only those wikis, and it r
     project = generate_agent(toolkit, args.name, parent, app["client_id"])
     write_secret(project, app["client_secret"])
     write_instructions(project, repo, indexes)
+    save_settings(project, repo, args.wiki)
     print(f"  {project}")
 
     print("\nSign in to Microsoft 365 with your work account, in the browser window that opens.")
@@ -367,8 +412,9 @@ The client secret stays in {secret_env_file(project)} so you can retry:
   {shlex.join(provision)}""", file=sys.stderr)
         sys.exit(1)
 
-    # Microsoft's vault holds it now, so it needn't stay on this machine.
-    write_secret(project, "")
+    # Microsoft's vault holds it now, so it needn't stay on this machine. Not blank: the toolkit
+    # refuses to provision again with an empty variable, though it won't use the value.
+    write_secret(project, SECRET_CLEARED)
     print(f"""
 Done. To try it:
   1. Open {COPILOT_CHAT} and start a chat from the agent, {args.name}dev, under Agents or Plugins. A regular new chat doesn't use it. In the Mac app, relaunch first.

@@ -1214,7 +1214,7 @@ check "the agent uses the read-only server" grep -q -- '--mcp-da-server-url http
 check "the toolkit gets the client ID" grep -q -- '--mcp-da-client-id Iv1.fakeid' "$MC/atk.log"
 if grep -q 'real-secret-4242' "$MC/atk.log"; then bad "the secret stays off the command line" "$(cat "$MC/atk.log")"; else ok "the secret stays off the command line"; fi
 check "provisioning sees the real secret" grep -qx 'SECRET_MCP_DA_OAUTH_CLIENT_SECRET_APIGITHUBC=real-secret-4242' "$MC/env-at-provision"
-check "afterwards the secret is gone from disk" grep -qx 'SECRET_MCP_DA_OAUTH_CLIENT_SECRET_APIGITHUBC=' "$MC/a/notes/env/.env.dev.user"
+check "afterwards the secret is gone from disk, leaving a value the toolkit accepts" grep -qx 'SECRET_MCP_DA_OAUTH_CLIENT_SECRET_APIGITHUBC=cleared-after-provisioning' "$MC/a/notes/env/.env.dev.user"
 if grep -rq -e 'pem-4242' -e 'hook-4242' "$MC/a"; then bad "the app's private key is never saved" "found"; else ok "the app's private key is never saved"; fi
 check "the instructions name the repository and the wiki's index" grep -q 'repository acme/wikis.*' "$MC/a/notes/appPackage/instruction.txt"
 check "they start from the wiki named" grep -q 'read work/index.md with get_file_contents' "$MC/a/notes/appPackage/instruction.txt"
@@ -1235,6 +1235,22 @@ out="$(printf 'y\nIv1.byhand\nhand-secret-4242\n\n' | mc_run --repo acme/wikis -
 case "$out" in *"contents=read"*"Done. To try it"*) ok "--manual prints the pre-filled link and takes pasted values" ;; *) bad "--manual prints the pre-filled link and takes pasted values" "$out" ;; esac
 case "$out" in *hand-secret-4242*) bad "--manual doesn't echo the secret" "$out" ;; *) ok "--manual doesn't echo the secret" ;; esac
 check "--manual uses the pasted client ID" grep -q -- '--mcp-da-client-id Iv1.byhand' "$MC/atk.log"
+# --update: the same agent, with current instructions, no clicks and no new sign-in registration.
+out="$(printf '\n' | mc_run --update --name missing --dir "$MC/a" 2>&1)" && bad "--update needs an agent to exist" "$out" || case "$out" in *"no agent at"*"machine that created it"*) ok "--update needs an agent to exist" ;; *) bad "--update needs an agent to exist" "$out" ;; esac
+: > "$MC/opened"; : > "$MC/atk.log"
+out="$(MC_TREE='{"tree": [{"path": "global/index.md"}, {"path": "a/index.md"}, {"path": "b/index.md"}, {"path": "newwiki/index.md"}]}' mc_run --update --name shared --dir "$MC/a" </dev/null 2>&1)"
+case "$out" in *"Updating the agent for acme/wikis"*"Start a new chat from shareddev"*) ok "--update remembers the repository and finishes" ;; *) bad "--update remembers the repository and finishes" "$out" ;; esac
+check "--update picks up a new wiki" grep -q 'index.md: a, b, newwiki\.' "$MC/a/shared/appPackage/instruction.txt"
+if grep -q '^new ' "$MC/atk.log"; then bad "--update generates nothing new" "$(cat "$MC/atk.log")"; else ok "--update generates nothing new"; fi
+check "--update provisions" grep -q '^provision ' "$MC/atk.log"
+check "--update opens no pages" test ! -s "$MC/opened"
+check "--update leaves no secret behind" grep -qx 'SECRET_MCP_DA_OAUTH_CLIENT_SECRET_APIGITHUBC=cleared-after-provisioning' "$MC/a/shared/env/.env.dev.user"
+sed -i.bak 's/^\(SECRET_MCP_DA_OAUTH_CLIENT_SECRET_APIGITHUBC\)=.*/\1=/' "$MC/a/notes/env/.env.dev.user"; rm -f "$MC/a/notes/.llm-wiki.json"
+out="$(mc_run --update --name notes --dir "$MC/a" </dev/null 2>&1)" && bad "an older agent asks for its repository once" "$out" || case "$out" in *"name its repository once with --repo"*) ok "an older agent asks for its repository once" ;; *) bad "an older agent asks for its repository once" "$out" ;; esac
+mc_run --update --name notes --dir "$MC/a" --repo acme/wikis --wiki work </dev/null >/dev/null 2>&1
+check "provisioning an older agent sees a value, not a blank" grep -qx 'SECRET_MCP_DA_OAUTH_CLIENT_SECRET_APIGITHUBC=cleared-after-provisioning' "$MC/env-at-provision"
+check "--update saves settings for next time" python3 -c "import json,sys; s=json.load(open(sys.argv[1])); assert s=={'repo':'acme/wikis','wikis':['work']}" "$MC/a/notes/.llm-wiki.json"
+expect "a second setup points at --update" "add --update" bash -c "printf 'y\n\n' | env MC='$MC' PATH='$MC/bin:$PATH' LLM_WIKI_TEST_TTY=1 LLM_WIKI_ATK='$MC/atk' '$W' setup microsoft-copilot --repo acme/wikis --name notes --dir '$MC/a' 2>&1 || true"
 kill "$MC_PID" 2>/dev/null; wait "$MC_PID" 2>/dev/null || true
 
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
