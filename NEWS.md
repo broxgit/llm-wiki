@@ -10,8 +10,10 @@ The first real Cowork review worked with almost no effort, but every finding cam
 
 - `wiki relay mr` offers to run `go build`, `go vet`, `go test` and `go mod tidy -diff` on a temporary copy of the branch, and sends the results to Cowork. It asks first, and names the author, because this runs the branch's code on your Mac. `--checks` and `--no-checks` answer for you.
 - Reviews now end with a Coverage section saying what Cowork read and skipped. `wiki relay review` shows it before you save, and warns if it's missing.
+- `relay mr` warns when your local branch has commits the merge request doesn't, because Cowork reviews what's pushed. The checks run with git hooks off.
 - The prompt on your clipboard asks for a verdict and for what wasn't covered, so there's nothing to add to it.
-- `remote-pair-run` now tells Cowork to follow every step of your review skill and load the skills it names, so your skill only needs the rules Cowork can't otherwise see. How well Cowork follows this hasn't been tried yet.
+- `remote-pair-run` now tells Cowork to follow every step of your review skill, load the skills it names and re-check what its sub-agents report, so your skill only needs the rules Cowork can't otherwise see. How well Cowork follows this hasn't been tried yet.
+- Runs that test a merge request use a new `safe_worktree`, which turns git hooks off and proves your checkout didn't change. A hook spoiled one real run before this.
 - Do: if you use Copilot Cowork, run `wiki setup copilot-cowork` again, and give it 10 minutes before a new conversation. You can remove the generic parts of any "In Copilot Cowork" section you added to your review skill. Otherwise, nothing.
 
 ## 2026-11-04: Review merge requests with Copilot Cowork

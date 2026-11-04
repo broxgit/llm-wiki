@@ -879,13 +879,22 @@ run_check() {
 }
 
 # run_checks <commit>: go checks on a clone of the bundle, so the user's clone stays out of it and
-# files they haven't committed can't change a result. Sets CHECKS_LINE.
+# files they haven't committed can't change a result. Hooks are off, because a post-checkout hook
+# that rewrote go.mod once spoiled every result of a real run. Sets CHECKS_LINE.
 run_checks() {
-  local commit="$1" tree="$WORK/checkout" f d slug label
+  local commit="$1" tree="$WORK/checkout" hooks="$WORK/no-hooks" f d slug label changed
   CHECKS_RUN=0
   CHECKS_BAD=0
-  if ! git clone -q "$WORK/repo.bundle" "$tree" 2>/dev/null || ! git -C "$tree" checkout -q --detach "$commit" 2>/dev/null; then
+  mkdir -p "$hooks"
+  if ! git -c core.hooksPath="$hooks" clone -q "$WORK/repo.bundle" "$tree" 2>/dev/null ||
+    ! git -C "$tree" config core.hooksPath "$hooks" ||
+    ! git -C "$tree" checkout -q --detach "$commit" 2>/dev/null; then
     CHECKS_LINE="not run, because git couldn't make a temporary copy"
+    echo "Checks $CHECKS_LINE."
+    return 0
+  fi
+  if [ -n "$(git -C "$tree" status --porcelain --untracked-files=all)" ]; then
+    CHECKS_LINE="not run, because the temporary copy didn't match the commit"
     echo "Checks $CHECKS_LINE."
     return 0
   fi
@@ -905,15 +914,52 @@ run_checks() {
     run_check "$tree/$d" "${label}go test" "$WORK/mr/checks/$slug-go-test.txt" go test ./...
     run_check "$tree/$d" "${label}go mod tidy -diff" "$WORK/mr/checks/$slug-go-mod-tidy.txt" go mod tidy -diff
   done < <(git -C "$tree" ls-files | grep -E '(^|/)go\.mod$' | grep -vE '(^|/)(vendor|testdata)/')
+  changed="$(git -C "$tree" status --porcelain --untracked-files=no)"
+  if [ -n "$changed" ]; then
+    CHECKS_BAD=$((CHECKS_BAD + 1))
+    echo "Warning: the checks changed tracked files, so later results may not be of this commit:"
+    printf '%s\n' "$changed" | head -n 10 | sed 's/^/  /'
+    {
+      echo "the checks changed tracked files, so later results may not be of this commit:"
+      printf '%s\n' "$changed"
+    } >>"$WORK/mr/checks/summary.txt"
+  fi
   # A build or test can leave read-only files, and the scratch folder has to be removable.
   chmod -R u+w "$tree" 2>/dev/null
   rm -rf "$tree"
   CHECKS_LINE="$CHECKS_RUN run, $CHECKS_BAD failed or stopped, in mr/checks/summary.txt"
 }
 
+# local_branch_line <clone> <branch> <commit>: whether this Mac has work the review won't see.
+local_branch_line() {
+  local here newer
+  here="$(git -C "$1" rev-parse --verify -q "refs/heads/$2")" || { echo "none here"; return 0; }
+  if [ "$here" = "$3" ]; then
+    echo "the same as the merge request"
+  else
+    newer="$(git -C "$1" rev-list --count "$3..$here" 2>/dev/null)" || newer="?"
+    echo "differs, at $here, with $newer commit(s) the merge request doesn't have"
+  fi
+}
+
+# Whether the person packing this wrote it, so a review knows who it's talking to.
+is_yours() {
+  local mine theirs
+  glab_call api user --repo "$MR_PROJECT" >"$WORK/me.json" 2>/dev/null || { echo unknown; return 0; }
+  mine="$(json_get "$WORK/me.json" username)"
+  theirs="$(json_get "$WORK/mr/view.json" author.username)"
+  if [ -z "$mine" ] || [ -z "$theirs" ]; then
+    echo unknown
+  elif [ "$mine" = "$theirs" ]; then
+    echo yes
+  else
+    echo no
+  fi
+}
+
 # pack_mr <url> <repo override> <no-wiki flag> <go prefixes> <also notes> <checks mode>: one MR, in OneDrive.
 pack_mr() {
-  local url="$1" repo_arg="$2" no_wiki="$3" prefixes="$4" also_notes="$5" checks_mode="$6" clone repo name ticket source target head base start commit page out n hash size dest review existing=none
+  local url="$1" repo_arg="$2" no_wiki="$3" prefixes="$4" also_notes="$5" checks_mode="$6" local_line yours clone repo name ticket source target head base start commit page out n hash size dest review existing=none
   parse_mr "$url"
   repo="${MR_PROJECT##*/}"
   name="$(printf '%s-%s' "$repo" "$MR_IID" | tr -c 'A-Za-z0-9._-' '-')"
@@ -993,6 +1039,9 @@ pack_mr() {
     run_checks "$commit"
   fi
 
+  local_line="$(local_branch_line "$clone" "$source" "$commit")"
+  yours="$(is_yours)"
+
   make_archive "$WORK/$name.tar.gz" -C "$WORK" repo.bundle mr ${MODULES_PART:+"$MODULES_PART"} ${WIKI_PART:+"$WIKI_PART"} || die "tar couldn't make the archive"
   hash="$(sha256_of "$WORK/$name.tar.gz")"
   size="$(wc -c <"$WORK/$name.tar.gz" | tr -d ' ')"
@@ -1003,6 +1052,7 @@ pack_mr() {
     echo "iid: $MR_IID"
     echo "title: $(json_get "$WORK/mr/view.json" title)"
     echo "author: $(json_get "$WORK/mr/view.json" author.name)"
+    echo "your merge request: $yours"
     echo "ticket: $ticket"
     echo "source branch: $source"
     echo "target branch: $target"
@@ -1012,6 +1062,8 @@ pack_mr() {
     echo "commit: $commit"
     [ -z "$head" ] || [ "$head" = "$commit" ] || echo "warning: the branch in the archive is at $commit, but GitLab says the merge request's head is $head"
     echo "taken: $(now)"
+    echo "clone: $clone"
+    echo "local branch: $local_line"
     echo "wiki: $WIKI_LINE"
     echo "go modules: $MODULES_LINE"
     echo "changed files: $(grep -c '^diff --git' "$WORK/mr/diff.patch")"
@@ -1038,6 +1090,7 @@ pack_mr() {
   echo "Checks: $CHECKS_LINE"
   [ "$existing" = none ] || echo "Included your earlier review, $REVIEWS_DIR/$review"
   [ -z "$head" ] || [ "$head" = "$commit" ] || echo "Warning: the branch here is at $commit, but GitLab says the merge request's head is $head."
+  case "$local_line" in differs*) echo "Warning: your local $source $local_line. Cowork will review $commit, so push first if you want the rest reviewed." ;; esac
   size_warning "$size"
   echo "Sent to OneDrive: Documents/Cowork/relay/mrs/$name.txt and $name.tar.gz"
 }

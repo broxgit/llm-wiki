@@ -1515,6 +1515,52 @@ pr_expect "move_aside hides a path" 1 "RESULT it is gone: PASS"
 pr_expect "restore_aside brings it back" 1 "RESULT it is back: PASS"
 check "a crash still restores it" test -e "$PR/d/vendor/v"
 
+# safe_worktree: hooks off, a tree that matches the commit, and a checkout proven untouched.
+SW="$T/safe-wt"
+git init -q "$SW"
+echo 'module x' >"$SW/go.mod"
+git -C "$SW" add .
+git -C "$SW" commit -qm one
+SW_C="$(git -C "$SW" rev-parse HEAD)"
+echo two >"$SW/two.txt"
+git -C "$SW" add .
+git -C "$SW" commit -qm two
+echo mine >"$SW/untracked.txt"
+printf '#!/bin/sh\necho HOOK RAN\necho "// hook" >>go.mod\nexit 2\n' >"$SW/.git/hooks/post-checkout"
+chmod +x "$SW/.git/hooks/post-checkout"
+pr_new "safe_worktree '$SW' '$SW_C'
+echo \"tree at \$WORKTREE\"
+[ ! -e \"\$WORKTREE/two.txt\" ]; result 'at the commit, not the checkout' \$?
+report_end"
+pr_run
+pr_expect "safe_worktree makes a worktree of the commit" 0 "RESULT at the commit, not the checkout: PASS"
+pr_expect "and says it matches" 0 "RESULT worktree identical to $SW_C: PASS"
+pr_expect "and that the run left its files alone" 0 "RESULT tracked files unchanged in the worktree: PASS"
+pr_expect "and that the checkout is the same" 0 "RESULT your checkout unchanged: PASS"
+pr_lacks "with the hook off" "HOOK RAN"
+check "and removes it" bash -c "[ \"\$(git -C '$SW' worktree list | wc -l | tr -d ' ')\" = 1 ]"
+check "the checkout keeps its work" test -f "$SW/untracked.txt"
+pr_new "safe_worktree '$SW' '$SW_C'
+echo '// changed' >>\"\$WORKTREE/go.mod\"
+report_end"
+pr_run
+pr_expect "a run that changes a tracked file fails" 1 "RESULT tracked files unchanged in the worktree: FAIL"
+pr_new "safe_worktree '$SW' '$SW_C'
+echo more >>'$SW/untracked.txt'
+report_end"
+pr_run
+pr_expect "a run that touches the checkout fails" 1 "RESULT your checkout unchanged: FAIL"
+pr_new "safe_worktree '$SW' notacommit
+result 'not reached' 0
+report_end"
+pr_run
+pr_expect "a commit that isn't there stops the run" 1 "has no commit notacommit"
+pr_lacks "before anything runs" "RESULT not reached"
+pr_new 'safe_worktree
+report_end'
+pr_run
+pr_expect "safe_worktree needs its arguments" 1 "needs a repository and a commit"
+
 pr_new 'target="$here/vendor"
 mkdir "$target"; echo original >"$target/v"
 move_aside "$target"
@@ -2068,8 +2114,9 @@ cat >"$FG/glab" <<FAKE
 #!/bin/sh
 echo "\$*" >>"$T/glab.log"
 case "\$*" in
-  *"mr view 7 "*) printf '{"title":"Fix the thing","source_branch":"ABC-12-work","target_branch":"master","sha":"%s","description":"Copy of !3 and see !7","author":{"name":"Some One"}}' "\${FAKE_MR_SHA:-$MR_HEAD}" ;;
+  *"mr view 7 "*) printf '{"title":"Fix the thing","source_branch":"ABC-12-work","target_branch":"master","sha":"%s","description":"Copy of !3 and see !7","author":{"name":"Some One","username":"someone"}}' "\${FAKE_MR_SHA:-$MR_HEAD}" ;;
   *"mr diff 7 "*) echo 'diff --git a/a.txt b/a.txt' ;;
+  *"api user "*) [ -z "\${FAKE_ME:-}" ] && exit 1; printf '{"username":"%s"}' "\$FAKE_ME" ;;
   *"merge_requests/7/versions"*) printf '[{"head_commit_sha":"$MR_HEAD","base_commit_sha":"$MR_BASE","start_commit_sha":"$MR_BASE"}]' ;;
   *"merge_requests/7/discussions"*"&page=1"*) echo '[{"id":"d1","notes":[{"body":"from a bot"}]}]' ;;
   *"merge_requests/7/discussions"*"&page=2"*) echo '[{"id":"d2","notes":[{"body":"second page"}]}]' ;;
@@ -2091,6 +2138,7 @@ case "\$*" in
   "build ./..." | "vet ./..." | "test ./..." | "mod tidy -diff")
     echo "\$(git rev-parse HEAD) \$(basename "\$PWD") \$*" >>"$T/go.log"
     mkdir -p leftovers && chmod 555 leftovers
+    [ "\${FAKE_GO_DIRTY:-}" = "" ] || echo "// changed" >>go.mod
     [ "\${FAKE_GO_NODIFF:-}" = "" ] || [ "\$1" != mod ] || { echo "flag provided but not defined: -diff"; exit 2; }
     [ "\${FAKE_GO_HANG:-}" != "\$1" ] || exec sleep 30
     [ "\${FAKE_GO_FAIL:-}" != "\$1" ] || { echo "boom from \$1"; exit 1; }
@@ -2216,6 +2264,33 @@ case "$out" in *"Run go build"*) bad "--no-checks doesn't ask" "$out" ;; *) ok "
 check "or run them" test ! -e "$T/go.log"
 out="$(mr_key n "$MRU" --checks)"
 case "$out" in *"Run go build"*) bad "--checks doesn't ask" "$out" ;; *"go test: passed"*) ok "--checks doesn't ask" ;; *) bad "--checks doesn't ask" "$out" ;; esac
+# A global hook has to stay off in the temporary copy, as it would rewrite go.mod there.
+GH="$T/global-hooks"
+mkdir -p "$GH"
+printf '#!/bin/sh\necho ran >>"%s/hook.log"\necho "// hook" >>go.mod\nexit 2\n' "$T" >"$GH/post-checkout"
+chmod +x "$GH/post-checkout"
+printf '[core]\n\thooksPath = %s\n' "$GH" >"$T/hooked.gitconfig"
+out="$(GIT_CONFIG_GLOBAL="$T/hooked.gitconfig" mr "$MRU" --checks 2>&1)"
+case "$out" in *"go test: passed"*"Checks: 8 run, 0 failed"*) ok "a global git hook doesn't stop the checks" ;; *) bad "a global git hook doesn't stop the checks" "$out" ;; esac
+check "and doesn't run" test ! -e "$T/hook.log"
+out="$(FAKE_GO_DIRTY=1 mr "$MRU" --checks 2>&1)"
+case "$out" in *"the checks changed tracked files"*"go.mod"*"failed or stopped"*) ok "checks that change a tracked file say so" ;; *) bad "checks that change a tracked file say so" "$out" ;; esac
+tar -xzf "$MD/svc-7.tar.gz" -C "$MK" mr/checks
+check "in the summary too" grep -q 'the checks changed tracked files' "$MK/mr/checks/summary.txt"
+out="$(mr "$MRU" 2>&1)"
+case "$out" in *"your local ABC-12-work"*) bad "no warning when the local branch matches" "$out" ;; *) ok "no warning when the local branch matches" ;; esac
+check "the note says it matches" grep -q '^local branch: the same as the merge request$' "$MD/svc-7.txt"
+check "the note names the clone" grep -q "^clone: $MC$" "$MD/svc-7.txt"
+check "with no login, the author is unknown" grep -q '^your merge request: unknown$' "$MD/svc-7.txt"
+FAKE_ME=someone mr "$MRU" >/dev/null 2>&1
+check "it knows your own merge request" grep -q '^your merge request: yes$' "$MD/svc-7.txt"
+FAKE_ME=other mr "$MRU" >/dev/null 2>&1
+check "and someone else's" grep -q '^your merge request: no$' "$MD/svc-7.txt"
+git -C "$MC" update-ref refs/heads/ABC-12-work "$MR_TIP"
+out="$(mr "$MRU" 2>&1)"
+case "$out" in *"Warning: your local ABC-12-work differs, at $MR_TIP"*"Cowork will review $MR_HEAD, so push first"*) ok "a different local branch gets a warning" ;; *) bad "a different local branch gets a warning" "$out" ;; esac
+check "and the note says so" grep -q "^local branch: differs, at $MR_TIP" "$MD/svc-7.txt"
+git -C "$MC" update-ref refs/heads/ABC-12-work "$MR_HEAD"
 FNG="$T/no-go-bin"
 mkdir -p "$FNG"
 cp "$FG/glab" "$FG/pbcopy" "$FNG/"
