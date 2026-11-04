@@ -35,6 +35,7 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 
 Things that have never been run for real. Treat them as unproven until crossed off.
 
+- Copilot Cowork reading a repository's wiki from `wiki relay scan`. It has only run in smoke tests, against a fake OneDrive folder.
 - The `remote-pair-run` skill and `wiki relay` on real code. Whole rounds passed on a throwaway repository from Apple's Terminal on 2026-11-04, with nothing attached and no Always Keep. The relay's refusal message has only run against an imitation, because iTerm wasn't refused in that test, and later read a file it had been refused an hour before. Why is unknown.
 - `wiki.sh unlock` and `claude` on macOS. `setup` and `journal backfill` have since run on Macs in real use (2026-10-28 and 2026-10-29); every other command ran cleanly on macOS (bash 3.2, BSD `date`) on 2026-10-28.
 - `wiki.sh journal backfill` on transcripts from Claude Code versions other than the one it was written against. It needs `python3`.
