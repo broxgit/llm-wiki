@@ -178,6 +178,19 @@ Four test sessions with Cowork, on a throwaway repository, led to this. On 2026-
 
 After you update the skill, a new Cowork session can still load the old copy for several minutes, so give it 10.
 
+**Reviewing a merge request in Cowork:** if you keep a review skill, Cowork can follow it, using what this command sends in place of `glab` and your clones. Run it in any terminal:
+
+```
+wiki relay mr <url> --also ~/dev/some-service --also ~/dev/deployments/my-service
+```
+
+- It sends the merge request's discussions and diff, its source and target branches, your own Go libraries at the versions `go.mod` pins, your earlier review, and the wiki. It only fetches in your clone, and puts a prompt for Cowork on your clipboard.
+- `--also` sends another repository at origin's default branch, or only one folder of it, and `PATH@BRANCH` names a branch. Use it as many times as you like. The first time, `wiki setup copilot-cowork` asks where your clones and reviews live.
+- Cowork publishes the review, and gives you `wiki relay review`. It shows you the file, and saves it where you keep your reviews when you press `y`. Your earlier copy is kept beside it as `.previous`. Run that one in Apple's Terminal.
+- For a fix you've proven, `wiki relay apply` leaves its patches in your working tree when you press `y`, and never commits.
+
+This has only run against fake services and one public merge request, not with Cowork. It's built for GitLab, and for Go libraries.
+
 **Other web agents:** the same idea works wherever an agent has a GitHub connector that can read your private repository. Only claude.ai's and Microsoft 365 Copilot's have been tried.
 
 **Sessions that can reach your files but have no instruction file:** zip the `skills/llm-wiki` folder, with the folder at the zip root, and add it under Customize > Skills. The skill finds wikis in the folders a conversation can reach.

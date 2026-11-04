@@ -174,7 +174,8 @@ Usage: $WIKI_CMD <command> [options]
   mcp [--print]        A local MCP server over the wikis, for sessions with no file
                        access. An MCP client starts it. --print gives its config entry.
   news [--all]         What's new in llm-wiki since you last looked.
-  relay run|scan       Run Microsoft Copilot Cowork's deliverables on this machine, and share code with it. relay --help has more.
+  relay run|scan|mr|review|apply
+                       Run Microsoft Copilot Cowork's deliverables on this machine, and share code with it. relay --help has more.
   report [--since R]   Weekly look: tokens per project, what the wikis gained, hit
                        rate, and what needs you. An agent writes it up.
   stats [range]        How often wikis answered the questions sessions checked them for (default 30d).
@@ -4525,7 +4526,7 @@ cmd_complete() {
     tips) printf -- '--mute\n--unmute\n' ;;
     report) printf -- '--since\n' ;;
     news) printf -- '--all\n' ;;
-    relay) printf 'run\nscan\n--dir\n' ;;
+    relay) printf 'run\nscan\nmr\nreview\napply\n--dir\n' ;;
     stats) printf '%s\n' $RANGES ;;
     delegation)
       if [ "$i" -eq 2 ]; then printf 'off\nask\nauto\nlog\n'
@@ -6169,7 +6170,7 @@ cmd_relay() {
   fi
   command -v git >/dev/null 2>&1 || die "relay needs git"
   case "${1:-}" in
-    run | scan)
+    run | scan | mr | review | apply)
       [ -n "$dir" ] || dir="$(onedrive_folder)" || exit 1
       [ -d "$dir" ] || die "no such folder: $dir"
       ;;
@@ -6178,8 +6179,25 @@ cmd_relay() {
 }
 
 # Copies the remote pair-run skill into the OneDrive folder Copilot Cowork reads skills from.
+# One relay setting: its value now, the one you passed, or an answer at a terminal.
+relay_setting() {
+  local file="$1" key="$2" passed="$3" default="$4" question="$5" old answer
+  old="$(sed -n "s/^$key=//p" "$file" 2>/dev/null | tail -n 1)" || old=""
+  answer="$passed"
+  if [ -z "$answer" ] && [ -z "$old" ] && { [ -t 0 ] || [ -n "${LLM_WIKI_TEST_TTY:-}" ]; }; then
+    printf '%s [%s]: ' "$question" "$default" >&2
+    IFS= read -r answer || answer=""
+    answer="${answer:-$default}"
+  fi
+  [ -n "$answer" ] || return 0
+  # shellcheck disable=SC2088
+  case "$answer" in "~/"*) answer="$HOME/${answer#"~/"}" ;; esac
+  mkdir -p "$(dirname "$file")" || die "can't create $(dirname "$file")"
+  { grep -v "^$key=" "$file" 2>/dev/null; echo "$key=$answer"; } >"$file.new" && mv "$file.new" "$file"
+}
+
 setup_copilot_cowork() {
-  local dir="" target
+  local dir="" target reviews="" clones="" settings
   while [ $# -gt 0 ]; do
     case "$1" in
       --dir)
@@ -6187,13 +6205,27 @@ setup_copilot_cowork() {
         dir="$2"
         shift 2
         ;;
+      --reviews)
+        [ -n "${2:-}" ] || die "--reviews needs a folder"
+        reviews="$2"
+        shift 2
+        ;;
+      --clones)
+        [ -n "${2:-}" ] || die "--clones needs a folder"
+        clones="$2"
+        shift 2
+        ;;
       -h | --help)
         cat <<EOF
-Usage: $WIKI_CMD setup copilot-cowork [--dir ONEDRIVE_FOLDER]
+Usage: $WIKI_CMD setup copilot-cowork [--dir ONEDRIVE_FOLDER] [--reviews FOLDER] [--clones FOLDERS]
 
 Copies the remote-pair-run skill to Documents/Cowork/skills in your work OneDrive, for
 Microsoft Copilot Cowork. It finds OneDrive under ~/Library/CloudStorage. --dir names the
 folder if there are several, or it syncs elsewhere. Run it again to update the skill.
+
+--reviews is where $WIKI_CMD relay review saves merge request reviews. --clones is where
+$WIKI_CMD relay mr looks for your clones, with several folders separated by colons. At a
+terminal, it asks for each the first time.
 EOF
         return 0
         ;;
@@ -6206,6 +6238,12 @@ EOF
   mkdir -p "$target" || die "can't create $target"
   cp "$REPO/cowork/remote-pair-run/SKILL.md" "$REPO/cowork/remote-pair-run/runlib.sh" "$target/" || die "can't copy the skill to $target"
   echo "installed: $target"
+  settings="${XDG_CONFIG_HOME:-$HOME/.config}/llm-wiki/relay"
+  relay_setting "$settings" reviews "$reviews" "$HOME/mr-reviews" "Where should merge request reviews go?"
+  relay_setting "$settings" clones "$clones" "$HOME/dev" "Where are your clones?"
+  if [ -f "$settings" ]; then
+    sed 's/^/relay setting: /' "$settings"
+  fi
   echo "Cowork finds it when a new session starts, but its copy can lag OneDrive by several minutes, so give it 10. Ask it to change code in a repository, and it will give you a $WIKI_CMD relay run command. Run that in Apple's Terminal: macOS can refuse other terminal apps."
 }
 

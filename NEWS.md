@@ -4,6 +4,16 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. A short paragraph, then lines starting `- ` for what changed and `- Do:` for what to do about it. Add an entry for anything a user would notice, and none for fixes they wouldn't.
 
+## 2026-11-04: Review merge requests with Copilot Cowork
+
+`wiki relay mr <url>` sends Cowork what a review needs, and `wiki relay review` brings the review back, so it no longer takes a pile of manual steps.
+
+- `relay mr` sends the merge request's discussions, diff and branches, your Go libraries at their pinned versions, your earlier review, and the wiki. `--also` adds other repositories, or one folder of one. It only fetches in your clone, and puts a prompt for Cowork on your clipboard.
+- `relay review` saves Cowork's file where you keep your reviews when you press `y`, and keeps your earlier copy as `.previous`.
+- `relay apply` leaves a proven patch in your working tree when you press `y`, and never commits.
+- It needs `glab`, and hasn't been tried with Cowork yet.
+- Do: if you use Copilot Cowork, run `wiki setup copilot-cowork` again. It updates the skill and asks where your clones and reviews live. Otherwise, nothing.
+
 ## 2026-11-04: Show Copilot Cowork another branch
 
 `wiki relay scan --branch master` shares that branch without you leaving yours, so Cowork can read the latest `master` while you're on a feature branch.

@@ -2029,6 +2029,233 @@ expect "with no --branch, the scan still follows the checkout" "feature/x at $FE
 check "and keeps the uncommitted changes" grep -q '^uncommitted changes: yes' "$SD/branch-me.txt"
 check "the skill knows --branch" grep -q 'wiki relay scan --branch master' "$SK/SKILL.md"
 
+# ---- merge requests, against a fake glab and go.
+FG="$T/fake-mr"
+mkdir -p "$FG"
+MO="$T/mr-origin.git"
+MC="$T/clones/team/svc"
+git init -q --bare "$MO"
+mkdir -p "$T/clones/team"
+git clone -q "$MO" "$MC" 2>/dev/null
+git -C "$MC" switch -q -c master 2>/dev/null
+printf 'module corp.example.com/team/svc\n\nrequire (\n\tcorp.example.com/lib/kafka v1.2.3\n\tcorp.example.com/lib/gone v0.0.1 // indirect\n\tgithub.com/public/thing v9.9.9\n)\n' >"$MC/go.mod"
+mkdir -p "$MC/deploy/prod"
+echo 'timeout: 5s' >"$MC/deploy/prod/values.yaml"
+echo base >"$MC/a.txt"
+git -C "$MC" add .
+git -C "$MC" commit -qm base
+git -C "$MC" push -q origin master 2>/dev/null
+MR_BASE="$(git -C "$MC" rev-parse HEAD)"
+git -C "$MC" switch -q -c ABC-12-work
+echo change >>"$MC/a.txt"
+git -C "$MC" commit -qam change
+git -C "$MC" push -q origin ABC-12-work 2>/dev/null
+MR_HEAD="$(git -C "$MC" rev-parse HEAD)"
+git -C "$MO" update-ref refs/merge-requests/7/head "$MR_HEAD"
+git -C "$MC" switch -q master
+echo newer >"$MC/newer.txt"
+git -C "$MC" add newer.txt
+git -C "$MC" commit -qm newer
+git -C "$MC" push -q origin master 2>/dev/null
+MR_TIP="$(git -C "$MC" rev-parse HEAD)"
+git -C "$MC" reset -q --hard "$MR_BASE"
+echo uncommitted >>"$MC/a.txt"
+git -C "$MC" config "url.$MO.insteadOf" https://gitlab.com/team/svc.git
+git -C "$MC" remote set-url origin https://gitlab.com/team/svc.git
+cat >"$FG/glab" <<FAKE
+#!/bin/sh
+echo "\$*" >>"$T/glab.log"
+case "\$*" in
+  *"mr view 7 "*) printf '{"title":"Fix the thing","source_branch":"ABC-12-work","target_branch":"master","sha":"%s","description":"Copy of !3 and see !7","author":{"name":"Some One"}}' "\${FAKE_MR_SHA:-$MR_HEAD}" ;;
+  *"mr diff 7 "*) echo 'diff --git a/a.txt b/a.txt' ;;
+  *"merge_requests/7/versions"*) printf '[{"head_commit_sha":"$MR_HEAD","base_commit_sha":"$MR_BASE","start_commit_sha":"$MR_BASE"}]' ;;
+  *"merge_requests/7/discussions"*"&page=1"*) echo '[{"id":"d1","notes":[{"body":"from a bot"}]}]' ;;
+  *"merge_requests/7/discussions"*"&page=2"*) echo '[{"id":"d2","notes":[{"body":"second page"}]}]' ;;
+  *"merge_requests/7/discussions"*) echo '[]' ;;
+  *"merge_requests/3/discussions"*) echo '[{"id":"r1","notes":[{"body":"on the related one"}]}]' ;;
+  *) echo "no such merge request" >&2; exit 1 ;;
+esac
+FAKE
+GM="$T/gomod/kafka"
+mkdir -p "$GM"
+echo 'package kafka // RETRIES' >"$GM/kafka.go"
+chmod 444 "$GM/kafka.go"
+cat >"$FG/go" <<FAKE
+#!/bin/sh
+case "\$*" in
+  "mod download -json corp.example.com/lib/kafka@v1.2.3") echo '{"Dir":"$GM"}' ;;
+  "version") echo "go version fake" ;;
+  *) echo '{"Error":"not found"}'; exit 1 ;;
+esac
+FAKE
+cat >"$FG/pbcopy" <<FAKE
+#!/bin/sh
+cat >"$T/clipboard"
+FAKE
+chmod +x "$FG/glab" "$FG/go" "$FG/pbcopy"
+MRU=https://gitlab.com/team/svc/-/merge_requests/7
+RV="$T/my-reviews"
+mkdir -p "$RH/.config/llm-wiki"
+printf 'reviews=%s\nclones=%s\n' "$RV" "$T/clones" >"$RH/.config/llm-wiki/relay"
+mr() { env HOME="$RH" PATH="$FG:$PATH" "$W" relay mr "$@"; }
+MD="$OD/Documents/Cowork/relay/mrs"
+expect "relay mr says what it packed" "Packed team/svc !7: ABC-12-work at $MR_HEAD, against master" mr "$MRU"
+check "it found the clone by its origin" test -f "$MD/svc-7.txt"
+check "the clone's checkout didn't move" bash -c "[ \"\$(git -C '$MC' symbolic-ref --short HEAD)\" = master ] && [ \"\$(git -C '$MC' rev-parse HEAD)\" = '$MR_BASE' ]"
+check "its uncommitted work is still there" grep -q uncommitted "$MC/a.txt"
+check "the note has the title" grep -q '^title: Fix the thing$' "$MD/svc-7.txt"
+check "the note has the ticket" grep -q '^ticket: ABC-12$' "$MD/svc-7.txt"
+check "the note has the base" grep -q "^base: $MR_BASE$" "$MD/svc-7.txt"
+check "the note says where the review goes" grep -q '^review goes in the deliverable at: reviews/ABC-12/svc-7.md$' "$MD/svc-7.txt"
+check "the note's hash matches" grep -q "^archive sha256: $(rl_sha "$MD/svc-7.tar.gz")$" "$MD/svc-7.txt"
+MU="$T/mr-unpacked"
+mkdir -p "$MU"
+tar -xzf "$MD/svc-7.tar.gz" -C "$MU"
+git clone -q "$MU/repo.bundle" "$MU/clone" 2>/dev/null
+check "the clone is on the source branch" bash -c "[ \"\$(git -C '$MU/clone' symbolic-ref --short HEAD)\" = ABC-12-work ] && [ \"\$(git -C '$MU/clone' rev-parse HEAD)\" = '$MR_HEAD' ]"
+check "it has origin's latest target" bash -c "[ \"\$(git -C '$MU/clone' rev-parse origin/master)\" = '$MR_TIP' ]"
+check "the base diff is what the MR shows" bash -c "git -C '$MU/clone' diff '$MR_BASE'...HEAD | grep -q '^+change$'"
+check "the uncommitted work stays out" bash -c "! git -C '$MU/clone' grep -q uncommitted HEAD"
+check "the discussions came" grep -q 'from a bot' "$MU/mr/discussions-1.json"
+check "all the pages of them" grep -q 'second page' "$MU/mr/discussions-2.json"
+check "with no empty page" test ! -e "$MU/mr/discussions-3.json"
+check "and the linked MR's" grep -q 'on the related one' "$MU/mr/related-3-discussions.json"
+check "but not this MR again" test ! -e "$MU/mr/related-7-discussions.json"
+check "the diff came" grep -q 'diff --git' "$MU/mr/diff.patch"
+check "the pinned library came" grep -q RETRIES "$MU/go-modules/corp.example.com/lib/kafka@v1.2.3/kafka.go"
+check "one that can't be fetched is listed" grep -q 'corp.example.com/lib/gone v0.0.1: couldn.t be downloaded' "$MU/go-modules/index.txt"
+check "public modules stay out" bash -c "! grep -q 'github.com/public' '$MU/go-modules/index.txt'"
+check "there's no earlier review yet" test ! -e "$MU/mr/existing-review.md"
+check "it puts a prompt on the clipboard" grep -q 'Documents/Cowork/relay/mrs/svc-7.txt' "$T/clipboard"
+out="$(mr "$MRU" 2>&1)"
+case "$out" in *"Paste this into Cowork. It's on your clipboard:"*"Documents/Cowork/relay/mrs/svc-7.txt"*) ok "and prints it" ;; *) bad "and prints it" "$out" ;; esac
+out="$(mr "$MRU" --go-prefix github.com/public 2>&1)"
+tar -tzf "$MD/svc-7.tar.gz" | grep -q 'go-modules/index.txt' && ok "--go-prefix chooses the modules" || bad "--go-prefix chooses the modules" "$out"
+refuse "a URL that isn't an MR is refused" mr https://gitlab.com/team/svc
+refuse "an MR glab can't read is refused" mr https://gitlab.com/team/svc/-/merge_requests/99
+refuse "an MR with no clone says so" mr https://gitlab.com/team/other/-/merge_requests/7
+expect "and --repo names one" "Packed team/other !7" mr https://gitlab.com/team/other/-/merge_requests/7 --repo "$MC"
+refuse "relay mr needs a URL" mr
+# A partial clone can't hand over files it never downloaded.
+git -C "$MO" config uploadpack.allowFilter true
+git clone -q --filter=blob:none "file://$MO" "$T/partial-clone" 2>/dev/null
+expect "a partial clone still sends a whole MR" "Packed team/partial !7" mr https://gitlab.com/team/partial/-/merge_requests/7 --repo "$T/partial-clone"
+MP="$T/partial-unpacked"
+mkdir -p "$MP"
+tar -xzf "$MD/partial-7.tar.gz" -C "$MP" repo.bundle
+git clone -q "$MP/repo.bundle" "$MP/clone" 2>/dev/null
+check "with its files" bash -c "git -C '$MP/clone' show HEAD:a.txt | grep -q change && git -C '$MP/clone' show origin/master:newer.txt | grep -q newer"
+
+# --also: a whole repository, a branch of it, and one folder of it, from origin.
+expect "--also sends a repository" "Scanned svc: master at $MR_TIP" mr "$MRU" --also "$MC"
+check "as a scan of its own" grep -q "^commit: $MR_TIP$" "$SD/svc.txt"
+check "with no wiki of its own" grep -q '^wiki: left out with --no-wiki$' "$SD/svc.txt"
+check "and the MR's note names it" grep -q '^  Documents/Cowork/relay/scans/svc.txt$' "$MD/svc-7.txt"
+out="$(mr "$MRU" --also "$MC@ABC-12-work" 2>&1)"
+case "$out" in *"ABC-12-work at $MR_HEAD"*) ok "--also can name a branch" ;; *) bad "--also can name a branch" "$out" ;; esac
+out="$(mr "$MRU" --also "$MC/deploy/prod" --also "$MC" 2>&1)"
+case "$out" in *"Scanned the deploy/prod folder of svc: master"*) ok "--also can send one folder" ;; *) bad "--also can send one folder" "$out" ;; esac
+check "with only that folder" bash -c "tar -tzf '$SD/svc-deploy-prod.tar.gz' | grep -q 'deploy/prod/values.yaml' && ! tar -tzf '$SD/svc-deploy-prod.tar.gz' | grep -q a.txt"
+check "the MR's note names both" bash -c "grep -q 'scans/svc-deploy-prod.txt' '$MD/svc-7.txt' && grep -q 'scans/svc.txt' '$MD/svc-7.txt'"
+refuse "--also needs a repository" mr "$MRU" --also "$T/not-a-repo-yet"
+
+# relay review: Cowork's file comes back to where the user keeps reviews.
+rv() { printf '%s' "$1" | { shift; env HOME="$RH" PATH="$FG:$PATH" PAGER=cat LLM_WIKI_TEST_TTY=1 LLM_WIKI_RELAY_WAIT=0 LLM_WIKI_RELAY_POLL=1 "$W" relay review "$@" 2>&1; }; }
+RD="$OD/Documents/Cowork/Tasks/t20/output/rev"
+mkdir -p "$RD/reviews/ABC-12"
+echo '# first review' >"$RD/reviews/ABC-12/svc-7.md"
+check "a review needs no run.sh" bash "$LIB" manifest "$RD"
+out="$(rv n t20/rev --expect 1)"
+case "$out" in *"ABC-12/svc-7.md"*"new"*"Nothing was saved"*) ok "review shows the file, and n saves nothing" ;; *) bad "review shows the file, and n saves nothing" "$out" ;; esac
+check "really nothing" test ! -e "$RV/ABC-12/svc-7.md"
+out="$(rv vy t20/rev --expect 1)"
+case "$out" in *"# first review"*"Saved: $RV/ABC-12/svc-7.md"*) ok "v shows it, and y saves it" ;; *) bad "v shows it, and y saves it" "$out" ;; esac
+check "it's where the user keeps reviews" grep -q 'first review' "$RV/ABC-12/svc-7.md"
+echo 'MY EDIT' >>"$RV/ABC-12/svc-7.md"
+out="$(mr "$MRU" 2>&1)"
+case "$out" in *"Included your earlier review"*) ok "mr sends the earlier review" ;; *) bad "mr sends the earlier review" "$out" ;; esac
+tar -xzf "$MD/svc-7.tar.gz" -C "$MU" mr/existing-review.md
+check "with the user's edits" grep -q 'MY EDIT' "$MU/mr/existing-review.md"
+echo '# second review' >"$RD/reviews/ABC-12/svc-7.md"
+bash "$LIB" manifest "$RD" >/dev/null
+out="$(rv y t20/rev --expect 2)"
+case "$out" in *"replaces yours"*"Saved:"*) ok "a new review says it replaces yours" ;; *) bad "a new review says it replaces yours" "$out" ;; esac
+check "it's saved" grep -q 'second review' "$RV/ABC-12/svc-7.md"
+check "and yours is kept" grep -q 'MY EDIT' "$RV/ABC-12/svc-7.md.previous"
+out="$(FAKE_MR_SHA=abc123 rv n t20/rev --expect 2)"
+case "$out" in *"reviews $MR_HEAD, but the merge request is now at abc123"*) ok "review warns when the MR has moved" ;; *) bad "review warns when the MR has moved" "$out" ;; esac
+out="$(rv n t20/rev --expect 2)"
+case "$out" in *"now at"*) bad "and not when it hasn't" "$out" ;; *) ok "and not when it hasn't" ;; esac
+echo x >"$RD/reviews/ABC-12/notes.txt"
+bash "$LIB" manifest "$RD" >/dev/null
+out="$(rv y t20/rev)"
+case "$out" in *"a review can't go at reviews/ABC-12/notes.txt"*) ok "review saves only markdown" ;; *) bad "review saves only markdown" "$out" ;; esac
+rm -f "$RD/reviews/ABC-12/notes.txt"
+mkdir -p "$RD/reviews/ABC-12/deep"
+echo x >"$RD/reviews/ABC-12/deep/x.md"
+bash "$LIB" manifest "$RD" >/dev/null
+out="$(rv y t20/rev)"
+case "$out" in *"a review can't go at"*) ok "and only one level down" ;; *) bad "and only one level down" "$out" ;; esac
+rm -rf "$RD/reviews/ABC-12/deep"
+RE="$OD/Documents/Cowork/Tasks/t21/output/noreview"
+mkdir -p "$RE/reviews"
+bash "$LIB" manifest "$RE" >/dev/null
+out="$(rv y t21/noreview)"
+case "$out" in *"nothing under reviews/"*) ok "an empty review is refused" ;; *) bad "an empty review is refused" "$out" ;; esac
+out="$(env HOME="$RH" "$W" relay review t20/rev </dev/null 2>&1)" && bad "review needs a terminal" "$out" || case "$out" in *"Agents: tell the user to run it"*) ok "review needs a terminal" ;; *) bad "review needs a terminal" "$out" ;; esac
+
+# relay apply: a proven patch stays in the working tree, uncommitted.
+ap() { printf '%s' "$1" | { shift; env HOME="$RH" PAGER=cat LLM_WIKI_TEST_TTY=1 LLM_WIKI_RELAY_WAIT=0 LLM_WIKI_RELAY_POLL=1 "$W" relay apply "$@" 2>&1; }; }
+AR="$T/apply-me"
+mkdir -p "$AR"
+git -C "$AR" init -q
+printf 'one\n' >"$AR/a.txt"
+printf 'one\n' >"$AR/b.txt"
+git -C "$AR" add .
+git -C "$AR" commit -qm one
+AH="$(git -C "$AR" rev-parse HEAD)"
+rl_new t22 fix 'result "fine" 0
+report_end'
+printf 'two\n' >>"$AR/a.txt"
+git -C "$AR" diff >"$RL_D/1-a.patch"
+git -C "$AR" checkout -q -- a.txt
+printf 'two\n' >>"$AR/b.txt"
+git -C "$AR" diff >"$RL_D/2-b.patch"
+git -C "$AR" checkout -q -- b.txt
+bash "$LIB" manifest "$RL_D" >/dev/null
+out="$(ap n t22/fix --repo "$AR" --expect 2)"
+case "$out" in *"Warning: there's no report"*"Nothing changed"*) ok "apply warns with no passing run, and n changes nothing" ;; *) bad "apply warns with no passing run, and n changes nothing" "$out" ;; esac
+check "really nothing" test -z "$(git -C "$AR" status --short)"
+RL_WAIT=0 rl y t22/fix --expect 2
+sleep 1
+out="$(ap y t22/fix --repo "$AR" --expect 2)"
+case "$out" in *"no report"*) bad "a passing run means no warning" "$out" ;; *) ok "a passing run means no warning" ;; esac
+check "apply changes the working tree" bash -c "grep -q two '$AR/a.txt' && grep -q two '$AR/b.txt'"
+check "and commits nothing" bash -c "[ \"\$(git -C '$AR' rev-parse HEAD)\" = '$AH' ]"
+git -C "$AR" checkout -q -- a.txt b.txt
+printf 'conflict\n' >"$AR/b.txt"
+git -C "$AR" commit -qam conflict
+out="$(ap y t22/fix --repo "$AR" --expect 2)"
+case "$out" in *"2-b.patch doesn't apply"*) ok "a patch that doesn't apply says so" ;; *) bad "a patch that doesn't apply says so" "$out" ;; esac
+check "and undoes the ones that did" test -z "$(git -C "$AR" status --short)"
+refuse "apply needs a repository" ap y t22/fix
+rl_new t23 nopatch 'result "fine" 0
+report_end'
+out="$(ap y t23/nopatch --repo "$AR")"
+case "$out" in *"has no patches"*) ok "apply needs patches" ;; *) bad "apply needs patches" "$out" ;; esac
+
+# Setup writes where reviews and clones are.
+check "setup records where reviews go" env HOME="$RH" "$W" setup copilot-cowork --dir "$OD" --reviews "$T/elsewhere" --clones "$T/c1:$T/c2"
+check "and it's in the settings" grep -q "^reviews=$T/elsewhere$" "$RH/.config/llm-wiki/relay"
+check "with the clones" grep -q "^clones=$T/c1:$T/c2$" "$RH/.config/llm-wiki/relay"
+out="$(printf '\n' | env HOME="$T/fresh-relay-home" LLM_WIKI_TEST_TTY=1 "$W" setup copilot-cowork --dir "$OD" --clones "$T/c1" 2>&1)"
+case "$out" in *"Where should merge request reviews go?"*"relay setting: reviews=$T/fresh-relay-home/mr-reviews"*) ok "setup asks once at a terminal" ;; *) bad "setup asks once at a terminal" "$out" ;; esac
+printf 'reviews=%s\nclones=%s\n' "$RV" "$T/clones" >"$RH/.config/llm-wiki/relay"
+check "the skill reads MR archives" grep -q 'Documents/Cowork/relay/mrs/<repo>-<iid>.txt' "$SK/SKILL.md"
+check "the skill keeps checkouts untouched" grep -q 'must never change the user.s checkout' "$SK/SKILL.md"
+check "the skill hands reviews back" grep -q 'wiki relay review <task-folder>/<deliverable>' "$SK/SKILL.md"
+check "the skill keeps a passing fix" grep -q 'wiki relay apply <task-folder>/<deliverable> --repo <path>' "$SK/SKILL.md"
+
 mkdir -p "$T/not-a-repo"
 refuse "scan needs a repository" sc "$T/not-a-repo"
 git -C "$T/not-a-repo" init -q
