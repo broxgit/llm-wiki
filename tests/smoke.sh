@@ -1918,6 +1918,65 @@ expect "a detached HEAD can be scanned" "detached HEAD" sc "$SR"
 check "with nothing uncommitted, it says so" grep -q '^uncommitted changes: no, uncommitted.patch is empty$' "$SD/scan-me.txt"
 out="$(cd "$SR/sub" && env HOME="$RH" "$W" relay scan 2>&1)"
 case "$out" in *"Scanned scan-me"*) ok "scan defaults to the repository you're in" ;; *) bad "scan defaults to the repository you're in" "$out" ;; esac
+check "a repository with no wiki says so" grep -q '^wiki: none covers this repository$' "$SD/scan-me.txt"
+check "and its archive has no wiki" bash -c "! tar -tzf '$SD/scan-me.tar.gz' | grep -q repo-wiki"
+
+# The wiki that covers a repository goes with its scan, and nothing else from the collection.
+"$W" new relay-covered >/dev/null
+RW="$WIKIS_DIR/relay-covered"
+mkdir -p "$RW/wiki/concepts"
+printf -- '- [A rule](wiki/concepts/rule.md): the rule\n' >>"$RW/index.md"
+echo 'THE-RULE' >"$RW/wiki/concepts/rule.md"
+echo 'NOT-A-PAGE' >"$RW/wiki/concepts/data.csv"
+echo 'HIDDEN-PAGE' >"$RW/wiki/concepts/.hidden.md"
+ln -s "$RW/log.md" "$RW/wiki/concepts/link.md"
+echo 'RAW-NOTE' >"$RW/raw/note.md"
+echo 'SHARED-RULE' >"$WIKIS_DIR/global/wiki/shared.md"
+CR="$T/covered/relay-covered"
+mkdir -p "$CR"
+git -C "$CR" init -q
+echo one >"$CR/a.txt"
+git -C "$CR" add a.txt
+git -C "$CR" commit -qm one
+expect "a scan says it's sending the wiki" "Included the relay-covered wiki (compiled pages: 1, no raw notes)" sc "$CR"
+check "the note names the wiki" grep -q '^wiki: relay-covered, compiled pages: 1, start at repo-wiki/index.md in the archive$' "$SD/relay-covered.txt"
+check "the note's hash still matches the archive" grep -q "^archive sha256: $(rl_sha "$SD/relay-covered.tar.gz")$" "$SD/relay-covered.txt"
+RU="$T/relay-unpacked"
+mkdir -p "$RU"
+tar -xzf "$SD/relay-covered.tar.gz" -C "$RU"
+check "the archive has the wiki's index" grep -q 'wiki/concepts/rule.md' "$RU/repo-wiki/index.md"
+check "and its pages, where the index says" grep -q THE-RULE "$RU/repo-wiki/wiki/concepts/rule.md"
+check "the repository still clones" git clone -q "$RU/repo.bundle" "$RU/clone"
+check "raw notes stay out" bash -c "! grep -rq RAW-NOTE '$RU/repo-wiki' && [ ! -e '$RU/repo-wiki/raw' ]"
+check "the log stays out" test ! -e "$RU/repo-wiki/log.md"
+check "only markdown goes" test ! -e "$RU/repo-wiki/wiki/concepts/data.csv"
+check "hidden files stay out" test ! -e "$RU/repo-wiki/wiki/concepts/.hidden.md"
+check "links stay out" test ! -e "$RU/repo-wiki/wiki/concepts/link.md"
+check "the shared wiki stays out" bash -c "! grep -rq SHARED-RULE '$RU/repo-wiki'"
+out="$(sc --no-wiki "$CR" 2>&1)"
+case "$out" in *"Included the"*) bad "--no-wiki sends no wiki" "$out" ;; *) ok "--no-wiki sends no wiki" ;; esac
+check "and its archive has none" bash -c "! tar -tzf '$SD/relay-covered.tar.gz' | grep -q repo-wiki"
+check "and the note says so" grep -q '^wiki: left out with --no-wiki$' "$SD/relay-covered.txt"
+"$W" new relay-empty >/dev/null
+EW="$T/covered/relay-empty"
+mkdir -p "$EW"
+git -C "$EW" init -q
+echo one >"$EW/a.txt"
+git -C "$EW" add a.txt
+git -C "$EW" commit -qm one
+sc "$EW" >/dev/null
+check "a wiki with no pages isn't sent" bash -c "! tar -tzf '$SD/relay-empty.tar.gz' | grep -q repo-wiki"
+check "and the note says so" grep -q '^wiki: relay-empty has no pages yet$' "$SD/relay-empty.txt"
+GR="$T/covered/global"
+mkdir -p "$GR"
+git -C "$GR" init -q
+echo one >"$GR/a.txt"
+git -C "$GR" add a.txt
+git -C "$GR" commit -qm one
+sc "$GR" >/dev/null
+check "a repository named global doesn't send the shared wiki" bash -c "! tar -tzf '$SD/global.tar.gz' | grep -q repo-wiki"
+check "the skill reads the wiki from the scan" grep -q 'read .repo-wiki/index.md. before you plan' "$SK/SKILL.md"
+
 mkdir -p "$T/not-a-repo"
 refuse "scan needs a repository" sc "$T/not-a-repo"
 git -C "$T/not-a-repo" init -q

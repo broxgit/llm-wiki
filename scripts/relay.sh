@@ -32,7 +32,7 @@ cleanup() {
 usage() {
   cat <<EOF
 Usage: $WIKI_CMD relay [--dir ONEDRIVE_FOLDER] run [TASK-FOLDER/DELIVERABLE] [--expect VERSION] [--no-install]
-       $WIKI_CMD relay [--dir ONEDRIVE_FOLDER] scan [REPOSITORY]
+       $WIKI_CMD relay [--dir ONEDRIVE_FOLDER] scan [REPOSITORY] [--no-wiki]
 
   run    Waits until a deliverable from Copilot Cowork matches its manifest, copies it to a
          local folder, shows you what's there, and runs the copy when you press y. If it gives up, it says what this Mac sees. The report
@@ -40,7 +40,8 @@ Usage: $WIKI_CMD relay [--dir ONEDRIVE_FOLDER] run [TASK-FOLDER/DELIVERABLE] [--
          happened. Then tell Cowork "done". With no deliverable named, it uses the newest.
   scan   Puts the repository's current branch and uncommitted changes in OneDrive, at
          Documents/Cowork/relay/scans, with a note of the commit and tool versions. Untracked
-         files stay out. Defaults to the repository you're in.
+         files stay out. Defaults to the repository you're in. The compiled pages of the wiki
+         that covers it go too, unless you add --no-wiki. Its raw notes and other wikis stay out.
 EOF
 }
 
@@ -339,11 +340,27 @@ cmd_run() {
 
 # ---- scan --------------------------------------------------------------------
 
+# Copies one wiki's index and compiled pages for Cowork to read, and prints how many pages.
+# Markdown only, so raw notes, the log and anything else in the wiki stay on this machine.
+copy_wiki() {
+  local wiki="$1" dst="$2"
+  mkdir -p "$dst" || return 1
+  cp "$wiki/index.md" "$dst/index.md" || return 1
+  if [ -d "$wiki/wiki" ]; then
+    cp -R "$wiki/wiki" "$dst/wiki" || return 1
+    find "$dst/wiki" ! -type f ! -type d -exec rm -f {} +
+    find "$dst/wiki" -type f ! -name '*.md' -exec rm -f {} +
+    find "$dst/wiki" -type f -name '.*' -exec rm -f {} +
+  fi
+  find "$dst" -type f -name '*.md' ! -path "$dst/index.md" | wc -l | tr -d ' '
+}
+
 cmd_scan() {
-  local dir="." root name branch commit t size hash dest dirty=no
+  local dir="." root name branch commit t size hash dest dirty=no no_wiki="" wiki="" wiki_name="" pages=0 wiki_line extra=""
   while [ $# -gt 0 ]; do
     case "$1" in
       -h | --help) usage; return 0 ;;
+      --no-wiki) no_wiki=1; shift ;;
       -*) die "relay scan: unknown option $1. Try $WIKI_CMD relay --help" ;;
       *) dir="$1"; shift ;;
     esac
@@ -363,6 +380,31 @@ cmd_scan() {
   fi
   git -C "$root" diff HEAD --binary >"$WORK/uncommitted.patch" || die "git couldn't read the uncommitted changes"
   [ -s "$WORK/uncommitted.patch" ] && dirty=yes
+
+  # Only the wiki for this repository. The shared wiki can hold personal rules, so it stays out.
+  wiki_line="none covers this repository"
+  if [ -n "$no_wiki" ]; then
+    wiki_line="left out with --no-wiki"
+  else
+    wiki="$("$REPO/wiki.sh" which "$(basename "$root")" 2>/dev/null)" || wiki=""
+    # wiki which shortens the path to a literal ~/.
+    # shellcheck disable=SC2088
+    case "$wiki" in "~/"*) wiki="$HOME/${wiki#"~/"}" ;; esac
+    wiki_name="${wiki##*/}"
+    if [ "$wiki_name" = global ]; then
+      wiki=""
+      wiki_line="left out, because the shared wiki isn't sent"
+    fi
+  fi
+  if [ -n "$wiki" ]; then
+    pages="$(copy_wiki "$wiki" "$WORK/repo-wiki")" || die "couldn't copy the $wiki_name wiki"
+    if [ "$pages" -gt 0 ]; then
+      wiki_line="$wiki_name, compiled pages: $pages, start at repo-wiki/index.md in the archive"
+      extra=repo-wiki
+    else
+      wiki_line="$wiki_name has no pages yet"
+    fi
+  fi
   {
     echo "LLM-WIKI RELAY SCAN"
     echo "repository: $name"
@@ -370,6 +412,7 @@ cmd_scan() {
     echo "branch: ${branch:-detached}"
     echo "commit: $commit"
     echo "taken: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "wiki: $wiki_line"
     if [ "$dirty" = yes ]; then
       echo "uncommitted changes: yes, in uncommitted.patch"
     else
@@ -388,7 +431,7 @@ cmd_scan() {
     done
   } >"$WORK/scan.txt"
   # COPYFILE_DISABLE keeps macOS's tar from adding ._ files.
-  COPYFILE_DISABLE=1 tar -czf "$WORK/$name.tar.gz" -C "$WORK" repo.bundle uncommitted.patch scan.txt || die "tar couldn't make the archive"
+  COPYFILE_DISABLE=1 tar -czf "$WORK/$name.tar.gz" -C "$WORK" repo.bundle uncommitted.patch scan.txt ${extra:+"$extra"} || die "tar couldn't make the archive"
   hash="$(sha256_of "$WORK/$name.tar.gz")"
   size="$(wc -c <"$WORK/$name.tar.gz" | tr -d ' ')"
   {
@@ -404,6 +447,7 @@ cmd_scan() {
   cp "$WORK/$name.tar.gz" "$dest/" || die "couldn't copy the archive to $dest"
   cp "$WORK/$name.txt" "$dest/" || die "couldn't copy the note to $dest"
   echo "Scanned $name: ${branch:-detached HEAD} at $commit, $size bytes, uncommitted changes: $dirty"
+  [ -z "$extra" ] || echo "Included the $wiki_name wiki (compiled pages: $pages, no raw notes). Add --no-wiki to leave it out."
   echo "Sent to OneDrive: Documents/Cowork/relay/scans/$name.txt and $name.tar.gz"
   echo "Now tell Cowork: read Documents/Cowork/relay/scans/$name.txt"
 }

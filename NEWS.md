@@ -4,6 +4,14 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. A short paragraph, then lines starting `- ` for what changed and `- Do:` for what to do about it. Add an entry for anything a user would notice, and none for fixes they wouldn't.
 
+## 2026-11-04: Copilot Cowork reads a repository's wiki
+
+`wiki relay scan` now also sends the wiki that covers the repository, so Cowork can follow your decisions and rules without you repeating them.
+
+- Only that wiki's `index.md` and compiled pages go. Raw notes, other wikis and the shared wiki stay on your machine. The command says when it sends one.
+- It's a read-only copy as of the scan, and Cowork can't save notes back. It hasn't been tried with Cowork yet.
+- Do: if you use Copilot Cowork, run `wiki setup copilot-cowork` again to update the skill. Check that your company allows that wiki's content in OneDrive and through its tenant, or add `--no-wiki`. Otherwise, nothing.
+
 ## 2026-11-04: wiki relay, so you stop attaching files to Copilot Cowork
 
 You no longer attach scans or reports. A round is now one command, one keypress, and telling Cowork "done".

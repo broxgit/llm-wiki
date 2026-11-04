@@ -6174,7 +6174,7 @@ cmd_relay() {
       [ -d "$dir" ] || die "no such folder: $dir"
       ;;
   esac
-  LLM_WIKI_ONEDRIVE="$dir" WIKI_CMD="$WIKI_CMD" bash "$REPO/scripts/relay.sh" "$@"
+  LLM_WIKI_ONEDRIVE="$dir" WIKIS_DIR="$WIKIS_DIR" WIKI_CMD="$WIKI_CMD" bash "$REPO/scripts/relay.sh" "$@"
 }
 
 # Copies the remote pair-run skill into the OneDrive folder Copilot Cowork reads skills from.
