@@ -140,7 +140,7 @@ It reads what was last pushed, so answers are as fresh as your last sync, and it
 
 This has run end to end once, on 2026-11-03, with a test wiki: the agent read a private repository and cited the page, and got a 404 from another one. In the Mac app, the agent appeared after relaunching it.
 
-**Microsoft Copilot Cowork:** it can't reach your files or run your build, but it can still change your code. It publishes a folder to OneDrive, you run one command, and you attach the report it writes. It's a way to use Copilot on a real repository when work gives you far more Copilot than Claude. Check that your company allows the code you share to pass through its tenant. With OneDrive syncing, in a terminal:
+**Microsoft Copilot Cowork:** it can't reach your files or run your build, but it can still change your code. It publishes a folder to OneDrive, you run one command, and you attach the report it writes. It's a way to use Copilot on a real repository when work gives you far more Copilot than Claude. Check that your company allows your code in OneDrive and through its tenant. With OneDrive syncing, in a terminal:
 
 ```
 wiki setup copilot-cowork
@@ -148,15 +148,27 @@ wiki setup copilot-cowork
 
 It copies a skill called `remote-pair-run` to `Documents/Cowork/skills` in your work OneDrive, and Cowork finds it when a new session starts. Run it again to update the skill. If you have several work OneDrive folders, name one with `--dir`. If you use it for Go, attaching the Linux Go tarball from [go.dev/dl](https://go.dev/dl/) lets Cowork compile in its own sandbox first.
 
-Then ask Cowork to change something, and attach the files it needs. Each round goes like this:
+To share your code, run this in the repository, then tell Cowork what it prints:
 
-1. It gives you one command, ending in `--expect` and a version number. The command waits for OneDrive to catch up, and runs only once every file matches what Cowork published.
-2. The run compares the new output with the old, and restores what it touched. It never commits or pushes. Read what Cowork says it will change before you run it, because it runs on your machine.
-3. The last line of the output names a report in `~/pair-run-reports`. Attach it, and Cowork takes it from there.
+```
+wiki relay scan
+```
 
-If a run prints `killed` and no report, the files are still OneDrive placeholders. In Finder, right-click the task's `output` folder, choose **Always Keep on This Device**, and run the command again.
+It puts the current branch and your uncommitted changes in OneDrive, at `Documents/Cowork/relay/scans`, so you don't have to attach anything. That includes the branch's whole history. Untracked files stay out.
 
-This has been through one test with Cowork, on 2026-11-03, on a throwaway repository: the loop reached PASS, and the sync check waited for late files.
+Then ask Cowork to change something. Each round goes like this:
+
+1. It gives you one command, `wiki relay run` with a version number. The command waits for OneDrive to catch up, and copies the files out once every one matches what Cowork published.
+2. It shows you what's there. Press `y` to run it, `v` to read the files first, or `n` to stop. It runs on your machine, so read what Cowork says it will change. The run compares the new output with the old, and restores what it touched. It never commits or pushes.
+3. The report goes to OneDrive by itself, only if a run happened, and a copy stays in `~/pair-run-reports`. You see all of it in your terminal as it runs. Tell Cowork `done`, and it reads the report.
+
+Run `wiki relay run` in Apple's Terminal. macOS can refuse other terminal apps on OneDrive files that aren't downloaded yet: in one test it refused iTerm with `Operation not permitted`, with no pop-up, and let Terminal read the same files. It doesn't always happen, and why isn't known. The command says so if it does.
+
+If OneDrive never catches up, the command gives up after 10 minutes, prints what your Mac sees for each file, and sends nothing. Paste that output to Cowork. If your OneDrive allows it, in Finder, right-click the task's `output` folder, choose **Always Keep on This Device**, and run it again.
+
+Four test sessions with Cowork, on a throwaway repository, led to this. On 2026-11-04, whole rounds ran from Apple's Terminal with nothing attached and no Always Keep: a fresh publish, a real failure, its fix, and pressing `n`. Scans worked at up to 50 MB. It hasn't run on real code yet.
+
+After you update the skill, a new Cowork session can still load the old copy for several minutes, so give it 10.
 
 **Other web agents:** the same idea works wherever an agent has a GitHub connector that can read your private repository. Only claude.ai's and Microsoft 365 Copilot's have been tried.
 

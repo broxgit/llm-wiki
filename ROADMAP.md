@@ -12,12 +12,12 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 - **Sketch:** `wiki status` flags a wiki whose repository has commits in the last two weeks but no new notes in that time.
 - **Open:** wait for two weeks of `wiki stats` first. It may not be needed.
 
-### Close the Copilot Cowork loop
+### Wake Copilot Cowork with no one typing
 
-- **Why:** the `remote-pair-run` skill and `runlib.sh` cut the boilerplate and the stale runs, but the user still finds and attaches every report, and Cowork still works from scans that age.
-- **What the first test showed (2026-11-03, one session):** Cowork can read a OneDrive file by path with no attachment, and sees a new file in an attached folder within about 30 seconds. An email trigger woke the same conversation in 8 to 19 seconds, even with Cowork closed. An uploaded Go toolchain ran offline. Cowork's browser refused, with browsing not enabled for the workspace.
-- **Sketch:** `wiki relay watch` waits for a new deliverable in OneDrive, shows what will run, runs it on a keypress, puts the report in OneDrive, and wakes Cowork with an email. `wiki relay scan` puts the code in OneDrive with the commit and tool versions, in place of an attached scan. Notes Cowork drops in its output folder go through `wiki capture`.
-- **Open:** can a trigger whose own instructions say to fix a FAIL publish the fix? The test email asked for the change in its body, and Cowork rightly refused, so this is still unknown. Can the Mac send that email unattended? Can Cowork read a binary file, such as a `git bundle`, from OneDrive without an attachment? Does the toolchain survive an idle gap?
+- **Why:** `wiki relay` removed the attachments, but the user still tells Cowork "done" after each run.
+- **What the tests showed (2026-11-03, two sessions):** Cowork picks the skill unprompted, and reads OneDrive by path with no attachment, including a `git bundle` in a tar.gz, with the bytes intact. An email trigger woke the same conversation in 8 to 67 seconds, even with Cowork closed, and refused a stale report. An uploaded Go toolchain ran offline. Cowork's browser refused, with browsing not enabled for the workspace. Running from the synced folder is fragile: `bash` was killed once and refused once with `Operation not permitted`, and a stale report got sent after the refusal. AppleScript can't send the email when the user is on Outlook on the web.
+- **Sketch:** after sending a report, `wiki relay run` posts through a Teams workflow webhook, and a Cowork trigger on that message reads the report and carries on. Notes Cowork drops in its output folder could go through `wiki capture` at the same time.
+- **Open:** whether the tenant allows the webhook, and whether a bot's message fires a trigger. Whether a trigger whose own instructions say to fix a FAIL can publish the fix is still untested, and only matters once this works. Also open: does the toolchain survive an idle gap?
 - **After that:** a direct bridge, as an MCP connector through a dev tunnel, could replace the relay. It's a public URL into a work laptop, and Cowork also reads email and web pages, so it needs IT's approval and no general shell.
 
 ## Later
@@ -35,7 +35,7 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 
 Things that have never been run for real. Treat them as unproven until crossed off.
 
-- The `remote-pair-run` skill on real code, and whether Cowork picks it without being told to. One session on a throwaway repository reached PASS on 2026-11-03. Whether reading every file first prevents the kill on OneDrive placeholders is unproven: reading one file cleared its placeholder, and **Always Keep on This Device** fixed the run.
+- The `remote-pair-run` skill and `wiki relay` on real code. Whole rounds passed on a throwaway repository from Apple's Terminal on 2026-11-04, with nothing attached and no Always Keep. The relay's refusal message has only run against an imitation, because iTerm wasn't refused in that test, and later read a file it had been refused an hour before. Why is unknown.
 - `wiki.sh unlock` and `claude` on macOS. `setup` and `journal backfill` have since run on Macs in real use (2026-10-28 and 2026-10-29); every other command ran cleanly on macOS (bash 3.2, BSD `date`) on 2026-10-28.
 - `wiki.sh journal backfill` on transcripts from Claude Code versions other than the one it was written against. It needs `python3`.
 - Git sync between two people or two machines. Pull, commit, and push from one machine worked in real use on 2026-10-01.

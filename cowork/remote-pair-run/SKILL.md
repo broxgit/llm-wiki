@@ -14,7 +14,7 @@ You can write files, but you can't see the user's repository or run its build. T
 | Have | A sandbox, attached files, an output folder that syncs to their machine | The real repositories, compilers, private network, CI |
 | Don't have | Their repositories, their tools, a way to run the real build | Time to write boilerplate or diagnose every failure |
 
-Keep the user's job to this: run one command, attach one file, answer the occasional question.
+Keep the user's job to this: run one command, press a key, tell you "done", and answer the occasional question.
 
 ## Rules
 
@@ -27,7 +27,15 @@ Keep the user's job to this: run one command, attach one file, answer the occasi
 
 ### 1. Get the current code
 
-Work out which files you need, and ask for them. Ask for attachments, not pastes: a terminal paste turns tabs into spaces, which breaks patches.
+The best view is a relay scan. Ask the user to run this in the repository:
+
+```bash
+wiki relay scan
+```
+
+Then, with no attachment, read `Documents/Cowork/relay/scans/<repository>.txt` from their OneDrive. If your tools need a drive's id, list the drives and use the one named OneDrive. The note gives the path, branch, commit, status, tool versions and the archive's sha256. Get `<repository>.tar.gz` from the same folder into your sandbox and check the hash: a download can report success before the file appears, so try again for a minute or two. That goes for any file you download. If you read the same OneDrive file twice in a session, check that it's new, such as by the note's `taken:` time, because your download tool may keep the first copy. Extract it, `git clone repo.bundle`, and apply `uncommitted.patch` if it isn't empty. You now have real history at the real commit. Untracked files aren't included, so ask for any you need.
+
+Without a scan, work out which files you need and ask for them. Ask for attachments, not pastes: a terminal paste turns tabs into spaces, which breaks patches.
 
 Before changing an existing file, you need its current contents, or proof that your copy matches the branch. If you only have an older scan, have the user attach the file, or the output of `git show HEAD:<path>`, and `git rev-parse HEAD`.
 
@@ -55,6 +63,8 @@ repo="${1:?usage: install.sh REPO_DIR}"
 grep -q '^module example.com/my/repo$' "$repo/go.mod" || { echo "not the right repository: $repo"; exit 1; }
 cp -R "$(dirname "${BASH_SOURCE[0]}")/files/." "$repo/"
 ```
+
+The sync may not keep the executable bit, so if `files/` has a script the repository runs directly, add a `chmod +x` for it here.
 
 `run.sh` proves the change. Use only the steps this task needs, and write no scaffolding of your own: `runlib.sh` handles the report, the sync check, the markers and the cleanup. Its header lists every function.
 
@@ -111,7 +121,7 @@ What makes a run worth trusting:
 - **Clean up with `on_exit`, never `trap`.** Restore only what the run changed. Refuse to run over uncommitted work that the restore would destroy.
 - **No `set -e` in `run.sh`.** A failure is a result, and the later checks still tell you something.
 
-Check what you can in your sandbox first: at least `bash -n` on each script, and anything your sandbox can compile or run. See Compile before you hand over. Your sandbox may lack tools the user's machine has, such as `cmp`, and the two can word errors differently, so choose negative-test text that your own script prints, or that both print.
+Check what you can in your sandbox first: at least `bash -n` on each script, and anything your sandbox can compile or run. See Compile before you hand over. Your sandbox may lack tools the user's machine has, such as `cmp`, and the two can word errors differently, so choose negative-test text that your own script prints, or that both print. Use `sha256sum` or `python3` rather than `cmp`, `od` or `xxd` in anything you try here. Make the manifest before a trial run, and set `RUNLIB_SYNC_WAIT=0`, or the sync check waits for files that aren't coming.
 
 Then make the manifest, last, after every file is final:
 
@@ -121,28 +131,38 @@ bash runlib.sh manifest <deliverable>
 
 It adds one to the version each time, so the first version you publish may not be 1. That's fine. Never edit `manifest.txt` by hand, and make it again after any change.
 
-Publish the whole folder, then read `manifest.txt` back from the output folder until it shows the version you just made. A write can report success several seconds before you can read it back, so allow up to 30 seconds. If it never shows the new version, say so instead of handing over a command.
+Publish the whole folder, then read `manifest.txt` back from the output folder until it shows the version you just made and every file matches it. The manifest can arrive first: in one test it showed the new version for at least 9 seconds while `run.sh` was still the old one. In the published folder, check with `sed -n 's/^sha256 //p' manifest.txt | sha256sum -c -`. If your shell can't reach the folder, compare through your OneDrive tools. A folder you've just published can list as not found, and a write can report success several seconds before you can read it back, so allow up to 30 seconds. If it never matches, say so instead of handing over a command.
 
 ### 3. Hand it over
 
-Give the user one command, using the version the manifest printed, and say what it will change:
+Give the user one command, using the version the manifest printed and your task folder's name, and say what it will change. Tell them to run it in Apple's Terminal:
+
+```bash
+wiki relay run <task-folder>/<deliverable> --expect 3
+```
+
+It waits up to 600 seconds for every file to match the manifest, reading each one, which is what makes OneDrive download it. It copies the listed files to a local folder, shows them, and runs the copy when the user presses y. It sends the report to OneDrive only if a run happened. So don't add checks of your own for stale files. Your publish result shows your task folder's name, as `Tasks/<task-folder>/output/...`. If you can't find it, `wiki relay run --expect 3` uses the newest deliverable. They can add `--no-install` to skip the install on a second run.
+
+If it gives up, it prints what the Mac sees for each file: its size, its flags, and the error from reading it. Have the user paste that output, and don't guess past it. Most failures to get ready are the refusal described below, so look for it first.
+
+**If they don't have the `wiki` command,** give them this instead. It's the usual path on a Mac, so ask once for the real one if their machine might differ, or has more than one `OneDrive-` folder:
 
 ```bash
 cd ~/Library/CloudStorage/OneDrive-*/Documents/Cowork/Tasks/<task-folder>/output/<deliverable> && find . -type f -exec cat {} + >/dev/null && bash run.sh --expect 3
 ```
 
-That is the usual path on a Mac. Ask once for the real one if the user's machine might differ, or has more than one `OneDrive-` folder.
+`--expect` makes that run wait for the sync, and start again if files arrive late. It only helps once `run.sh` can be opened, as the next paragraph explains. Reading every file first with `find` makes OneDrive download them, if macOS allows it.
 
-`--expect` makes the run wait for the sync, which took about 90 seconds in one test. It checks every file against the manifest, and if the files arrive late it starts again from the new ones. So don't add checks of your own for stale files. If they want to skip the install on a second run, they can add `--no-install`.
+**If the output says `Operation not permitted`,** macOS won't let their terminal app read files that OneDrive hasn't downloaded yet. In one test iTerm was refused for over an hour, while Apple's Terminal read the same files straight away. Later, whole rounds ran from Apple's Terminal with no refusal and no Always Keep (**validated**, on a throwaway repository), and iTerm later read files without a refusal, for a reason that isn't proven. Have them run the same command in Apple's Terminal. If that's refused too, have them right-click the task's `output` folder in Finder and choose **Always Keep on This Device**. `killed` with no report has been seen once on the same kind of file, and Always Keep cleared it, so treat it the same way, though the cause isn't proven. Keep the fallback command chained with `&&`, so a refused read doesn't run anything, and tell the user not to send you an old report in its place.
 
-**If the output says `killed`, with no report,** the files are still OneDrive placeholders, and macOS killed `bash` before `runlib.sh` could start. `ls -lO` on the folder shows `dataless`. Have the user right-click the task's `output` folder in Finder, choose **Always Keep on This Device**, and run the command again. That fixed it in the one test where it happened (**validated**). The `find` in the command reads every file first, which is meant to prevent this (**not validated**).
-
-Then tell them: attach the file named on the last line of the output, or paste the error if it never got that far. Reports are in `~/pair-run-reports/`.
+Then tell them to say "done" when it finishes. Without the relay, they attach the file named on the last line of the output, from `~/pair-run-reports/`, or paste the error if it never got that far.
 
 ### 4. Read the report
 
+When the user says "done", list `Documents/Cowork/relay/<task-folder>/reports/` in their OneDrive with no attachment, and read the newest file. It can take a minute or two to appear, so try again before asking them. If it doesn't appear, or they attached a report, use that.
+
 1. **Read the last lines first:** the verdict `<NAME> RUN: PASS` or `FAIL`, `version:`, `checks:`, and `first failure:`.
-2. **Check the header.** If `version:` is lower than the one you last published, they ran an old copy: say so and stop. If the commit isn't the one you worked against, get the current files again before patching.
+2. **Check the header.** If `version:` is lower than the one you last published, or `started:` is before you published it, they ran an old copy or sent an old report: say so and stop. If the commit isn't the one you worked against, get the current files again before patching.
 3. **Diagnose from the first failure,** not the last. Later failures often follow from it.
 4. **Doubt a PASS too.** Check that the checks ran what you meant, and that the output compared wasn't empty or unchanged because the install was skipped.
 5. **Fix, make the manifest again, and hand over the new command.** Say what changed and why, in a line or two.
@@ -153,7 +173,7 @@ Repeat until the report ends in PASS. If several reports are attached, go by the
 
 Use a patch for a change to existing code. Never write hunks by hand.
 
-1. Rebuild the file from the user's current copy in a scratch git repository: `git init`, commit it, and apply any earlier patches to reach the branch's state. An attached file loses its permissions, so set its mode to match the branch: ask for `git ls-files -s <path>`, or use 755 for a script with a shebang.
+1. Rebuild the file from the user's current copy in a scratch git repository under `/tmp`: `git init`, commit it, and apply any earlier patches to reach the branch's state. An attached file loses its permissions, and your working folder may drop the executable bit, which is why `/tmp`. `/tmp` can vanish if your container restarts, so check that the repository is still there, and rebuild it if not. Set the mode to match the branch: ask for `git ls-files -s <path>`, or use 755 for a script with a shebang.
 2. Edit with exact string replacements, and assert that each pattern matched the expected number of times.
 3. Make the patch with `git diff`, and check it with `git apply --check` against that base.
 4. Have `run.sh` compare `git show HEAD:<path>` with your copy, using `sha256_of`, and abort if they differ. Then have it run `git apply --check` and `git apply`, and run scripts the way the repository does, such as `./generate.sh`, so a lost permission shows up.
