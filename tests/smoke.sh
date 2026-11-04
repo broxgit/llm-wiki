@@ -1977,6 +1977,58 @@ sc "$GR" >/dev/null
 check "a repository named global doesn't send the shared wiki" bash -c "! tar -tzf '$SD/global.tar.gz' | grep -q repo-wiki"
 check "the skill reads the wiki from the scan" grep -q 'read .repo-wiki/index.md. before you plan' "$SK/SKILL.md"
 
+# Scanning a named branch: origin is ahead of the local main, and the checkout is on another branch.
+BO="$T/branch-origin.git"
+BM="$T/branch-me"
+git init -q --bare "$BO"
+git clone -q "$BO" "$BM" 2>/dev/null
+git -C "$BM" switch -q -c main 2>/dev/null
+echo one >"$BM/a.txt"
+git -C "$BM" add a.txt
+git -C "$BM" commit -qm one
+git -C "$BM" push -q origin main 2>/dev/null
+OLD_MAIN="$(git -C "$BM" rev-parse main)"
+git clone -q -b main "$BO" "$T/branch-other" 2>/dev/null
+echo two >>"$T/branch-other/a.txt"
+git -C "$T/branch-other" commit -qam two
+git -C "$T/branch-other" push -q origin main 2>/dev/null
+NEW_MAIN="$(git -C "$T/branch-other" rev-parse HEAD)"
+git -C "$BM" switch -q -c feature/x
+echo feature >"$BM/f.txt"
+git -C "$BM" add f.txt
+git -C "$BM" commit -qm feature
+FEATURE="$(git -C "$BM" rev-parse HEAD)"
+echo dirty >>"$BM/f.txt"
+expect "--branch scans origin's copy" "main at $NEW_MAIN, from origin/main" sc --branch main "$BM"
+check "the note names the branch" grep -q '^branch: main$' "$SD/branch-me.txt"
+check "the note names the commit" grep -q "^commit: $NEW_MAIN$" "$SD/branch-me.txt"
+check "the note names the source" grep -q '^source: origin/main$' "$SD/branch-me.txt"
+check "the note says no uncommitted changes" grep -q '^uncommitted changes: no, uncommitted.patch is empty$' "$SD/branch-me.txt"
+check "the note skips the checkout's status" bash -c "! grep -q '^status' '$SD/branch-me.txt'"
+BU="$T/branch-unpacked"
+mkdir -p "$BU"
+tar -xzf "$SD/branch-me.tar.gz" -C "$BU"
+git clone -q "$BU/repo.bundle" "$BU/clone" 2>/dev/null
+check "the clone is on that branch" bash -c "[ \"\$(git -C '$BU/clone' symbolic-ref --short HEAD)\" = main ]"
+check "at that commit" bash -c "[ \"\$(git -C '$BU/clone' rev-parse HEAD)\" = '$NEW_MAIN' ]"
+check "the other branch stays out" bash -c "! git -C '$BU/clone' cat-file -e '$FEATURE' 2>/dev/null"
+check "uncommitted changes stay out" test ! -s "$BU/uncommitted.patch"
+check "the checkout stays on its branch" bash -c "[ \"\$(git -C '$BM' symbolic-ref --short HEAD)\" = feature/x ]"
+check "with its uncommitted changes" grep -q dirty "$BM/f.txt"
+check "the local branch doesn't move" bash -c "[ \"\$(git -C '$BM' rev-parse main)\" = '$OLD_MAIN' ]"
+expect "a branch only here scans the local copy" "from your local feature/x, not on origin" sc --branch feature/x "$BM"
+check "and keeps its slash" grep -q '^branch: feature/x$' "$SD/branch-me.txt"
+refuse "a branch that doesn't exist is refused" sc --branch nope "$BM"
+refuse "--branch needs a name" sc "$BM" --branch
+refuse "a bad branch name is refused" sc --branch '..bad' "$BM"
+git -C "$BM" remote set-url origin "$T/nowhere.git"
+expect "with origin out of reach, it uses the last fetch" "from origin/main as of your last fetch" sc --branch main "$BM"
+git -C "$BM" remote remove origin
+expect "with no origin, it scans the local copy" "main at $OLD_MAIN, from your local main" sc --branch main "$BM"
+expect "with no --branch, the scan still follows the checkout" "feature/x at $FEATURE" sc "$BM"
+check "and keeps the uncommitted changes" grep -q '^uncommitted changes: yes' "$SD/branch-me.txt"
+check "the skill knows --branch" grep -q 'wiki relay scan --branch master' "$SK/SKILL.md"
+
 mkdir -p "$T/not-a-repo"
 refuse "scan needs a repository" sc "$T/not-a-repo"
 git -C "$T/not-a-repo" init -q

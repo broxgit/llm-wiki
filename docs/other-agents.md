@@ -156,6 +156,12 @@ wiki relay scan
 
 It puts the current branch and your uncommitted changes in OneDrive, at `Documents/Cowork/relay/scans`, so you don't have to attach anything. That includes the branch's whole history. Untracked files stay out.
 
+To share a different branch without leaving yours, add `--branch`. It fetches, and sends that branch as origin has it, or your local copy if origin doesn't have it. Your checkout isn't touched, and uncommitted changes stay out:
+
+```
+wiki relay scan --branch master
+```
+
 If a wiki covers the repository, its `index.md` and compiled pages go too, and the command says so. Cowork reads them before it plans, so you don't have to repeat your rules. It gets a read-only copy, as of that scan, and can't save notes. Raw notes, other wikis and the shared wiki stay on your machine. Check that your company allows that wiki's content in OneDrive and through its tenant, or add `--no-wiki`.
 
 Then ask Cowork to change something. Each round goes like this:

@@ -32,7 +32,7 @@ cleanup() {
 usage() {
   cat <<EOF
 Usage: $WIKI_CMD relay [--dir ONEDRIVE_FOLDER] run [TASK-FOLDER/DELIVERABLE] [--expect VERSION] [--no-install]
-       $WIKI_CMD relay [--dir ONEDRIVE_FOLDER] scan [REPOSITORY] [--no-wiki]
+       $WIKI_CMD relay [--dir ONEDRIVE_FOLDER] scan [REPOSITORY] [--branch NAME] [--no-wiki]
 
   run    Waits until a deliverable from Copilot Cowork matches its manifest, copies it to a
          local folder, shows you what's there, and runs the copy when you press y. If it gives up, it says what this Mac sees. The report
@@ -42,6 +42,9 @@ Usage: $WIKI_CMD relay [--dir ONEDRIVE_FOLDER] run [TASK-FOLDER/DELIVERABLE] [--
          Documents/Cowork/relay/scans, with a note of the commit and tool versions. Untracked
          files stay out. Defaults to the repository you're in. The compiled pages of the wiki
          that covers it go too, unless you add --no-wiki. Its raw notes and other wikis stay out.
+         --branch NAME scans that branch instead, as origin has it after a fetch, or your
+         local copy if origin doesn't have it. Your checkout isn't touched, and uncommitted
+         changes stay out.
 EOF
 }
 
@@ -355,31 +358,74 @@ copy_wiki() {
   find "$dst" -type f -name '*.md' ! -path "$dst/index.md" | wc -l | tr -d ' '
 }
 
+# Finds a named branch, preferring origin's copy, so "master" means what everyone else sees.
+# Sets SCAN_REF to the ref and SCAN_SOURCE to what to call it.
+find_branch() {
+  local root="$1" want="$2"
+  git check-ref-format --branch "$want" >/dev/null 2>&1 || die "not a branch name: $want"
+  if git -C "$root" remote get-url origin >/dev/null 2>&1; then
+    if GIT_TERMINAL_PROMPT=0 git -C "$root" fetch -q origin "+refs/heads/$want:refs/remotes/origin/$want" 2>/dev/null; then
+      SCAN_REF="refs/remotes/origin/$want"
+      SCAN_SOURCE="origin/$want"
+      return 0
+    fi
+    if git -C "$root" rev-parse --verify -q "refs/remotes/origin/$want" >/dev/null; then
+      SCAN_REF="refs/remotes/origin/$want"
+      SCAN_SOURCE="origin/$want as of your last fetch, because origin couldn't be reached"
+      return 0
+    fi
+  fi
+  git -C "$root" rev-parse --verify -q "refs/heads/$want" >/dev/null || die "no branch named $want, on origin or here"
+  SCAN_REF="refs/heads/$want"
+  SCAN_SOURCE="your local $want, not on origin"
+}
+
 cmd_scan() {
-  local dir="." root name branch commit t size hash dest dirty=no no_wiki="" wiki="" wiki_name="" pages=0 wiki_line extra=""
+  local dir="." root name branch commit t size hash dest dirty=no no_wiki="" wiki="" wiki_name="" pages=0 wiki_line extra="" want=""
   while [ $# -gt 0 ]; do
     case "$1" in
       -h | --help) usage; return 0 ;;
       --no-wiki) no_wiki=1; shift ;;
+      --branch)
+        [ -n "${2:-}" ] || die "--branch needs a branch name"
+        want="$2"
+        shift 2
+        ;;
       -*) die "relay scan: unknown option $1. Try $WIKI_CMD relay --help" ;;
       *) dir="$1"; shift ;;
     esac
   done
   root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" || die "not a git repository: $dir"
-  commit="$(git -C "$root" rev-parse --verify -q HEAD)" || die "$root has no commits yet"
   name="$(basename "$root" | tr -c 'A-Za-z0-9._\n-' '-')"
   [ -n "$name" ] || die "can't name a scan after $root"
-  branch="$(git -C "$root" symbolic-ref -q --short HEAD)" || branch=""
+  if [ -n "$want" ]; then
+    find_branch "$root" "$want"
+    commit="$(git -C "$root" rev-parse --verify -q "$SCAN_REF")" || die "can't read $want"
+    branch="$want"
+  else
+    commit="$(git -C "$root" rev-parse --verify -q HEAD)" || die "$root has no commits yet"
+    branch="$(git -C "$root" symbolic-ref -q --short HEAD)" || branch=""
+  fi
 
   WORK="$(mktemp -d "${TMPDIR:-/tmp}/llm-wiki-relay.XXXXXX")" || die "can't make a scratch folder"
   trap cleanup EXIT
-  if [ -n "$branch" ]; then
+  if [ -n "$want" ]; then
+    # A scratch repository, so the clone gets the branch under its own name, without moving
+    # any branch in the real one.
+    git init -q --bare "$WORK/branch.git" || die "git couldn't make a scratch repository"
+    git -C "$WORK/branch.git" fetch -q "$root" "+$SCAN_REF:refs/heads/$want" || die "git couldn't read $want from $root"
+    git -C "$WORK/branch.git" symbolic-ref HEAD "refs/heads/$want"
+    git -C "$WORK/branch.git" bundle create -q "$WORK/repo.bundle" HEAD "refs/heads/$want" || die "git couldn't bundle $want"
+    : >"$WORK/uncommitted.patch"
+  elif [ -n "$branch" ]; then
     git -C "$root" bundle create -q "$WORK/repo.bundle" HEAD "refs/heads/$branch" || die "git couldn't bundle $root"
   else
     git -C "$root" bundle create -q "$WORK/repo.bundle" HEAD || die "git couldn't bundle $root"
   fi
-  git -C "$root" diff HEAD --binary >"$WORK/uncommitted.patch" || die "git couldn't read the uncommitted changes"
-  [ -s "$WORK/uncommitted.patch" ] && dirty=yes
+  if [ -z "$want" ]; then
+    git -C "$root" diff HEAD --binary >"$WORK/uncommitted.patch" || die "git couldn't read the uncommitted changes"
+    [ -s "$WORK/uncommitted.patch" ] && dirty=yes
+  fi
 
   # Only the wiki for this repository. The shared wiki can hold personal rules, so it stays out.
   wiki_line="none covers this repository"
@@ -410,6 +456,7 @@ cmd_scan() {
     echo "repository: $name"
     echo "path: $root"
     echo "branch: ${branch:-detached}"
+    [ -z "$want" ] || echo "source: $SCAN_SOURCE"
     echo "commit: $commit"
     echo "taken: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "wiki: $wiki_line"
@@ -418,8 +465,10 @@ cmd_scan() {
     else
       echo "uncommitted changes: no, uncommitted.patch is empty"
     fi
-    echo "status (untracked files, marked ??, are not in the archive):"
-    git -C "$root" status --short | head -n 200 | sed 's/^/  /'
+    if [ -z "$want" ]; then
+      echo "status (untracked files, marked ??, are not in the archive):"
+      git -C "$root" status --short | head -n 200 | sed 's/^/  /'
+    fi
     echo "tools:"
     for t in go git buf protoc python3 node; do
       command -v "$t" >/dev/null 2>&1 || continue
@@ -446,7 +495,11 @@ cmd_scan() {
   # The note goes last, so its hash never describes an archive that isn't there yet.
   cp "$WORK/$name.tar.gz" "$dest/" || die "couldn't copy the archive to $dest"
   cp "$WORK/$name.txt" "$dest/" || die "couldn't copy the note to $dest"
-  echo "Scanned $name: ${branch:-detached HEAD} at $commit, $size bytes, uncommitted changes: $dirty"
+  if [ -n "$want" ]; then
+    echo "Scanned $name: $want at $commit, from $SCAN_SOURCE, $size bytes, uncommitted changes left out"
+  else
+    echo "Scanned $name: ${branch:-detached HEAD} at $commit, $size bytes, uncommitted changes: $dirty"
+  fi
   [ -z "$extra" ] || echo "Included the $wiki_name wiki (compiled pages: $pages, no raw notes). Add --no-wiki to leave it out."
   echo "Sent to OneDrive: Documents/Cowork/relay/scans/$name.txt and $name.tar.gz"
   echo "Now tell Cowork: read Documents/Cowork/relay/scans/$name.txt"
