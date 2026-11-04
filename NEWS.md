@@ -4,6 +4,13 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. A short paragraph, then lines starting `- ` for what changed and `- Do:` for what to do about it. Add an entry for anything a user would notice, and none for fixes they wouldn't.
 
+## 2026-11-04: Show Copilot Cowork another branch
+
+`wiki relay scan --branch master` shares that branch without you leaving yours, so Cowork can read the latest `master` while you're on a feature branch.
+
+- It fetches, and sends the branch as origin has it, or your local copy if origin doesn't have it. Your checkout and uncommitted changes aren't touched, and those changes stay out of the scan.
+- Do: if you use Copilot Cowork, run `wiki setup copilot-cowork` again so it knows to ask for this. Otherwise, nothing.
+
 ## 2026-11-04: Copilot Cowork reads a repository's wiki
 
 `wiki relay scan` now also sends the wiki that covers the repository, so Cowork can follow your decisions and rules without you repeating them.
