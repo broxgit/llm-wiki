@@ -22,8 +22,12 @@ POLL="${LLM_WIKI_RELAY_POLL:-5}"
 READ_LIMIT="${LLM_WIKI_RELAY_READ_LIMIT:-120}"
 REPORTS="${RUNLIB_REPORT_DIR:-$HOME/pair-run-reports}"
 WORK=""
+RUN_STARTED=""
 
-cleanup() { [ -z "$WORK" ] || rm -rf "$WORK"; }
+cleanup() {
+  [ -z "$WORK" ] || rm -rf "$WORK"
+  [ -z "$RUN_STARTED" ] || echo "Relay run ended at $(now)."
+}
 
 usage() {
   cat <<EOF
@@ -138,8 +142,8 @@ try_copy() {
   _runlib_sync_problems
 }
 
-# macOS decides this per terminal app: iTerm was refused for over an hour while Apple's
-# Terminal read the same files at once. So say it the moment it shows, not after the wait.
+# iTerm was refused for over an hour while Apple's Terminal read the same files at once,
+# though not every time. So say it the moment it shows, not after the wait.
 refusal_advice() {
   if [ "${TERM_PROGRAM:-}" = Apple_Terminal ]; then
     echo "macOS is refusing to let Apple's Terminal read OneDrive files that aren't on this Mac yet. More waiting rarely helps."
@@ -221,7 +225,11 @@ view_deliverable() {
   local copy="$1" p
   {
     while IFS= read -r p; do
-      [ "$p" = runlib.sh ] && continue
+      # A runlib.sh that differs from this machine's is the one to read, so only a match is skipped.
+      if [ "$p" = runlib.sh ] && cmp -s "$copy/$p" "$RUNLIB"; then
+        printf "\n===== %s: same as this machine's copy, not shown =====\n" "$p"
+        continue
+      fi
       printf '\n===== %s =====\n' "$p"
       cat "$copy/$p"
     done < <(manifest_paths "$copy")
@@ -294,6 +302,7 @@ cmd_run() {
   copy="$WORK/deliverable"
   RUNLIB_EXPECT="$expect"
   echo "Relay run started at $(now)."
+  RUN_STARTED=1
   wait_for_deliverable "$named" "$copy" || return 1
 
   version="$(_runlib_manifest_version "$copy/manifest.txt")"
@@ -325,7 +334,6 @@ cmd_run() {
     return "$rc"
   fi
   send_report "$REPORTS/$new" "$task" || { [ "$rc" -ne 0 ] || rc=1; }
-  echo "Relay run ended at $(now)."
   return "$rc"
 }
 

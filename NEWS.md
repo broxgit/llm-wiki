@@ -4,13 +4,13 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. A short paragraph, then lines starting `- ` for what changed and `- Do:` for what to do about it. Add an entry for anything a user would notice, and none for fixes they wouldn't.
 
-## 2026-11-03: wiki relay, so you stop attaching files to Copilot Cowork
+## 2026-11-04: wiki relay, so you stop attaching files to Copilot Cowork
 
 You no longer attach scans or reports. A round is now one command, one keypress, and telling Cowork "done".
 
 - `wiki relay run` waits for OneDrive, checks every file, and runs a local copy once you press `y`. Running from the OneDrive folder itself sometimes got killed or refused. The report goes back by itself, only if a run happened.
 - `wiki relay scan` shares your branch and uncommitted changes through OneDrive, including the branch's history. Untracked files stay out.
-- Scans work with real Cowork, up to 50 MB in one test. Runs never got past waiting for OneDrive in that test, because macOS refused iTerm and the relay hid the error. It now says so at once. A whole run from Apple's Terminal hasn't been tried with Cowork yet.
+- It has worked with real Cowork from Apple's Terminal, on a throwaway repository: scans up to 50 MB, a failed run, its fix, and pressing `n`. macOS can refuse other terminal apps with `Operation not permitted`, as it once did iTerm, and the relay says so if it happens.
 - Do: if you use Copilot Cowork, run `wiki setup copilot-cowork` again to update the skill, and run `wiki relay run` in Apple's Terminal. Otherwise, nothing.
 
 ## 2026-11-03: Copilot Cowork can change code through runs on your Mac

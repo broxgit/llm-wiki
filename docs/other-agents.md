@@ -162,11 +162,13 @@ Then ask Cowork to change something. Each round goes like this:
 2. It shows you what's there. Press `y` to run it, `v` to read the files first, or `n` to stop. It runs on your machine, so read what Cowork says it will change. The run compares the new output with the old, and restores what it touched. It never commits or pushes.
 3. The report goes to OneDrive by itself, only if a run happened, and a copy stays in `~/pair-run-reports`. You see all of it in your terminal as it runs. Tell Cowork `done`, and it reads the report.
 
-Run `wiki relay run` in Apple's Terminal. macOS decides per app whether a terminal may read OneDrive files that aren't downloaded yet: in one test it refused iTerm with `Operation not permitted`, with no pop-up, and let Terminal read the same files. The command says so if it happens.
+Run `wiki relay run` in Apple's Terminal. macOS can refuse other terminal apps on OneDrive files that aren't downloaded yet: in one test it refused iTerm with `Operation not permitted`, with no pop-up, and let Terminal read the same files. It doesn't always happen, and why isn't known. The command says so if it does.
 
 If OneDrive never catches up, the command gives up after 10 minutes, prints what your Mac sees for each file, and sends nothing. Paste that output to Cowork. If your OneDrive allows it, in Finder, right-click the task's `output` folder, choose **Always Keep on This Device**, and run it again.
 
-Two test sessions with Cowork, on 2026-11-03 on a throwaway repository, reached a verdict by attaching reports and running from the OneDrive folder. `wiki relay` came out of those. In a third session, on 2026-11-04, its scans worked at up to 50 MB, but its runs never got past waiting for OneDrive. The cause was macOS refusing iTerm, and a whole run from Apple's Terminal hasn't been tried with Cowork yet.
+Four test sessions with Cowork, on a throwaway repository, led to this. On 2026-11-04, whole rounds ran from Apple's Terminal with nothing attached and no Always Keep: a fresh publish, a real failure, its fix, and pressing `n`. Scans worked at up to 50 MB. It hasn't run on real code yet.
+
+After you update the skill, a new Cowork session can still load the old copy for several minutes, so give it 10.
 
 **Other web agents:** the same idea works wherever an agent has a GitHub connector that can read your private repository. Only claude.ai's and Microsoft 365 Copilot's have been tried.
 

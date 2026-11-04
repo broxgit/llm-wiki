@@ -1808,6 +1808,23 @@ sleep 1
 rl y t1/d1
 rl_expect "a run says when it started" 0 "Relay run started at 20"
 rl_expect "a run says when it ended" 0 "Relay run ended at 20"
+rl vn t1/d1
+rl_expect "n says when it ended too" 1 "Relay run ended at 20"
+rl_expect "v says it skipped a matching runlib.sh" 1 "runlib.sh: same as this machine's copy, not shown"
+rl_new t13 d13 'result "fine" 0
+report_end'
+echo '# changed' >>"$RL_D/runlib.sh"
+bash "$LIB" manifest "$RL_D" >/dev/null
+rl vn t13/d13
+rl_expect "v shows a runlib.sh that differs" 1 "===== runlib.sh ====="
+rl_expect "and its contents" 1 "# changed"
+# The skill's read-back command, on a manifest that's ahead of its files.
+if command -v sha256sum >/dev/null 2>&1; then
+  check "the skill's read-back passes when the files match" bash -c "cd '$RL_D' && sed -n 's/^sha256 //p' manifest.txt | sha256sum -c -"
+  echo late >>"$RL_D/run.sh"
+  refuse "and fails when a file is behind" bash -c "cd '$RL_D' && sed -n 's/^sha256 //p' manifest.txt | sha256sum -c -"
+fi
+check "the skill has that read-back" grep -q "sed -n 's/^sha256 //p' manifest.txt | sha256sum -c -" "$SK/SKILL.md"
 sleep 1
 
 # macOS's refusal, imitated by a cat on the PATH that refuses only this deliverable's manifest.

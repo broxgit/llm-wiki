@@ -33,7 +33,7 @@ The best view is a relay scan. Ask the user to run this in the repository:
 wiki relay scan
 ```
 
-Then, with no attachment, read `Documents/Cowork/relay/scans/<repository>.txt` from their OneDrive. If your tools need a drive's id, list the drives and use the one named OneDrive. The note gives the path, branch, commit, status, tool versions and the archive's sha256. Get `<repository>.tar.gz` from the same folder into your sandbox and check the hash: a download can report success before the file appears, so try again for a minute or two. Extract it, `git clone repo.bundle`, and apply `uncommitted.patch` if it isn't empty. You now have real history at the real commit. Untracked files aren't included, so ask for any you need.
+Then, with no attachment, read `Documents/Cowork/relay/scans/<repository>.txt` from their OneDrive. If your tools need a drive's id, list the drives and use the one named OneDrive. The note gives the path, branch, commit, status, tool versions and the archive's sha256. Get `<repository>.tar.gz` from the same folder into your sandbox and check the hash: a download can report success before the file appears, so try again for a minute or two. That goes for any file you download. If you read the same OneDrive file twice in a session, check that it's new, such as by the note's `taken:` time, because your download tool may keep the first copy. Extract it, `git clone repo.bundle`, and apply `uncommitted.patch` if it isn't empty. You now have real history at the real commit. Untracked files aren't included, so ask for any you need.
 
 Without a scan, work out which files you need and ask for them. Ask for attachments, not pastes: a terminal paste turns tabs into spaces, which breaks patches.
 
@@ -131,11 +131,11 @@ bash runlib.sh manifest <deliverable>
 
 It adds one to the version each time, so the first version you publish may not be 1. That's fine. Never edit `manifest.txt` by hand, and make it again after any change.
 
-Publish the whole folder, then read `manifest.txt` back from the output folder, through your shell or your OneDrive tools, until it shows the version you just made. A write can report success several seconds before you can read it back, so allow up to 30 seconds. If it never shows the new version, say so instead of handing over a command.
+Publish the whole folder, then read `manifest.txt` back from the output folder until it shows the version you just made and every file matches it. The manifest can arrive first: in one test it showed the new version for at least 9 seconds while `run.sh` was still the old one. In the published folder, check with `sed -n 's/^sha256 //p' manifest.txt | sha256sum -c -`. If your shell can't reach the folder, compare through your OneDrive tools. A folder you've just published can list as not found, and a write can report success several seconds before you can read it back, so allow up to 30 seconds. If it never matches, say so instead of handing over a command.
 
 ### 3. Hand it over
 
-Give the user one command, using the version the manifest printed and your task folder's name, and say what it will change:
+Give the user one command, using the version the manifest printed and your task folder's name, and say what it will change. Tell them to run it in Apple's Terminal:
 
 ```bash
 wiki relay run <task-folder>/<deliverable> --expect 3
@@ -153,7 +153,7 @@ cd ~/Library/CloudStorage/OneDrive-*/Documents/Cowork/Tasks/<task-folder>/output
 
 `--expect` makes that run wait for the sync, and start again if files arrive late. It only helps once `run.sh` can be opened, as the next paragraph explains. Reading every file first with `find` makes OneDrive download them, if macOS allows it.
 
-**If the output says `Operation not permitted`,** macOS won't let their terminal app read files that OneDrive hasn't downloaded yet. It's per app, and waiting doesn't clear it: in one test iTerm was refused for over an hour, while Apple's Terminal read the same files straight away (**validated** for reading, not yet for a whole run). Have them run the same command in Apple's Terminal. If that's refused too, have them right-click the task's `output` folder in Finder and choose **Always Keep on This Device**. `killed` with no report has been seen once on the same kind of file, and Always Keep cleared it, so treat it the same way, though the cause isn't proven. Keep the fallback command chained with `&&`, so a refused read doesn't run anything, and tell the user not to send you an old report in its place.
+**If the output says `Operation not permitted`,** macOS won't let their terminal app read files that OneDrive hasn't downloaded yet. In one test iTerm was refused for over an hour, while Apple's Terminal read the same files straight away. Later, whole rounds ran from Apple's Terminal with no refusal and no Always Keep (**validated**, on a throwaway repository), and iTerm later read files without a refusal, for a reason that isn't proven. Have them run the same command in Apple's Terminal. If that's refused too, have them right-click the task's `output` folder in Finder and choose **Always Keep on This Device**. `killed` with no report has been seen once on the same kind of file, and Always Keep cleared it, so treat it the same way, though the cause isn't proven. Keep the fallback command chained with `&&`, so a refused read doesn't run anything, and tell the user not to send you an old report in its place.
 
 Then tell them to say "done" when it finishes. Without the relay, they attach the file named on the last line of the output, from `~/pair-run-reports/`, or paste the error if it never got that far.
 
