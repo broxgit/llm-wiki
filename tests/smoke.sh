@@ -2042,6 +2042,8 @@ printf 'module corp.example.com/team/svc\n\nrequire (\n\tcorp.example.com/lib/ka
 mkdir -p "$MC/deploy/prod"
 echo 'timeout: 5s' >"$MC/deploy/prod/values.yaml"
 echo base >"$MC/a.txt"
+mkdir -p "$MC/sub" "$MC/vendor/x" "$MC/testdata/y"
+for f in sub vendor/x testdata/y; do printf 'module corp.example.com/team/%s\n' "$f" >"$MC/$f/go.mod"; done
 git -C "$MC" add .
 git -C "$MC" commit -qm base
 git -C "$MC" push -q origin master 2>/dev/null
@@ -2079,12 +2081,21 @@ FAKE
 GM="$T/gomod/kafka"
 mkdir -p "$GM"
 echo 'package kafka // RETRIES' >"$GM/kafka.go"
+if command -v xattr >/dev/null 2>&1; then xattr -w user.test y "$GM/kafka.go" 2>/dev/null; fi
 chmod 444 "$GM/kafka.go"
 cat >"$FG/go" <<FAKE
 #!/bin/sh
 case "\$*" in
   "mod download -json corp.example.com/lib/kafka@v1.2.3") echo '{"Dir":"$GM"}' ;;
   "version") echo "go version fake" ;;
+  "build ./..." | "vet ./..." | "test ./..." | "mod tidy -diff")
+    echo "\$(git rev-parse HEAD) \$(basename "\$PWD") \$*" >>"$T/go.log"
+    mkdir -p leftovers && chmod 555 leftovers
+    [ "\${FAKE_GO_NODIFF:-}" = "" ] || [ "\$1" != mod ] || { echo "flag provided but not defined: -diff"; exit 2; }
+    [ "\${FAKE_GO_HANG:-}" != "\$1" ] || exec sleep 30
+    [ "\${FAKE_GO_FAIL:-}" != "\$1" ] || { echo "boom from \$1"; exit 1; }
+    echo "fine from \$1"
+    ;;
   *) echo '{"Error":"not found"}'; exit 1 ;;
 esac
 FAKE
@@ -2097,7 +2108,7 @@ MRU=https://gitlab.com/team/svc/-/merge_requests/7
 RV="$T/my-reviews"
 mkdir -p "$RH/.config/llm-wiki"
 printf 'reviews=%s\nclones=%s\n' "$RV" "$T/clones" >"$RH/.config/llm-wiki/relay"
-mr() { env HOME="$RH" PATH="$FG:$PATH" "$W" relay mr "$@"; }
+mr() { env HOME="$RH" PATH="$FG:$PATH" "$W" relay mr "$@" </dev/null; }
 MD="$OD/Documents/Cowork/relay/mrs"
 expect "relay mr says what it packed" "Packed team/svc !7: ABC-12-work at $MR_HEAD, against master" mr "$MRU"
 check "it found the clone by its origin" test -f "$MD/svc-7.txt"
@@ -2127,6 +2138,8 @@ check "one that can't be fetched is listed" grep -q 'corp.example.com/lib/gone v
 check "public modules stay out" bash -c "! grep -q 'github.com/public' '$MU/go-modules/index.txt'"
 check "there's no earlier review yet" test ! -e "$MU/mr/existing-review.md"
 check "it puts a prompt on the clipboard" grep -q 'Documents/Cowork/relay/mrs/svc-7.txt' "$T/clipboard"
+check "and the prompt asks for a verdict" grep -q 'Finish with a verdict' "$T/clipboard"
+check "and for what wasn't covered" grep -q "Say what you didn't cover" "$T/clipboard"
 out="$(mr "$MRU" 2>&1)"
 case "$out" in *"Paste this into Cowork. It's on your clipboard:"*"Documents/Cowork/relay/mrs/svc-7.txt"*) ok "and prints it" ;; *) bad "and prints it" "$out" ;; esac
 out="$(mr "$MRU" --go-prefix github.com/public 2>&1)"
@@ -2159,6 +2172,68 @@ check "with only that folder" bash -c "tar -tzf '$SD/svc-deploy-prod.tar.gz' | g
 check "the MR's note names both" bash -c "grep -q 'scans/svc-deploy-prod.txt' '$MD/svc-7.txt' && grep -q 'scans/svc.txt' '$MD/svc-7.txt'"
 refuse "--also needs a repository" mr "$MRU" --also "$T/not-a-repo-yet"
 
+# Checks before packing: they run on a copy of the branch, and only when the user says so.
+rm -f "$T/go.log"
+mr "$MRU" >/dev/null 2>&1
+check "with no terminal, checks don't run" test ! -e "$T/go.log"
+check "and the note says why" grep -q '^checks: not run, because there was no terminal to ask at$' "$MD/svc-7.txt"
+check "the note counts the changed files" grep -q '^changed files: 1$' "$MD/svc-7.txt"
+check "and no results are sent" bash -c "! tar -tzf '$MD/svc-7.tar.gz' | grep -q mr/checks"
+mkdir -p "$T/mr-tmp"
+out="$(env TMPDIR="$T/mr-tmp" HOME="$RH" PATH="$FG:$PATH" "$W" relay mr "$MRU" --checks </dev/null 2>&1)"
+case "$out" in *"go build: passed"*"go vet: passed"*"go test: passed"*"go mod tidy -diff: passed"*"sub: go test: passed"*"Checks: 8 run, 0 failed"*) ok "--checks runs them in every module" ;; *) bad "--checks runs them in every module" "$out" ;; esac
+check "not in vendor or testdata" bash -c "! grep -qE ' (x|y) ' '$T/go.log'"
+check "on the merge request's commit" bash -c "[ \"\$(cut -d' ' -f1 '$T/go.log' | sort -u)\" = '$MR_HEAD' ]"
+check "and the scratch folder is gone, read-only files too" bash -c "[ -z \"\$(ls -A '$T/mr-tmp')\" ]"
+check "the clone isn't touched" bash -c "[ ! -e '$MC/.git/worktrees' ] && [ ! -e '$MC/leftovers' ] && [ \"\$(git -C '$MC' rev-parse HEAD)\" = '$MR_BASE' ]"
+check "its uncommitted work can't reach them" grep -q uncommitted "$MC/a.txt"
+check "the note has the count" grep -q '^checks: 8 run, 0 failed or stopped, in mr/checks/summary.txt$' "$MD/svc-7.txt"
+MK="$T/mr-checks"
+mkdir -p "$MK"
+tar -xzf "$MD/svc-7.tar.gz" -C "$MK" mr/checks
+check "the summary says which commit, and on what" bash -c "grep -q '^commit: $MR_HEAD$' '$MK/mr/checks/summary.txt' && grep -q '^ran on: .*go version fake$' '$MK/mr/checks/summary.txt'"
+check "each check's output comes" bash -c "grep -q 'fine from test' '$MK/mr/checks/root-go-test.txt' && grep -q 'fine from build' '$MK/mr/checks/sub-go-build.txt'"
+check "the archive has no macOS attributes" bash -c "! gzip -dc '$MD/svc-7.tar.gz' | LC_ALL=C grep -qa 'LIBARCHIVE.xattr'"
+out="$(FAKE_GO_FAIL="test" mr "$MRU" --checks 2>&1)"
+case "$out" in *"go test: FAILED, exit 1"*"Packed team/svc"*"Checks: 8 run, 2 failed"*) ok "a failed check is reported, and it still packs" ;; *) bad "a failed check is reported, and it still packs" "$out" ;; esac
+tar -xzf "$MD/svc-7.tar.gz" -C "$MK" mr/checks
+check "with its output" grep -q 'boom from test' "$MK/mr/checks/root-go-test.txt"
+out="$(FAKE_GO_NODIFF=1 mr "$MRU" --checks 2>&1)"
+case "$out" in *"go mod tidy -diff: skipped"*"Checks: 6 run, 0 failed"*) ok "an old Go without tidy -diff isn't a failure" ;; *) bad "an old Go without tidy -diff isn't a failure" "$out" ;; esac
+out="$(FAKE_GO_HANG="test" LLM_WIKI_RELAY_CHECK_LIMIT=1 mr "$MRU" --checks 2>&1)"
+case "$out" in *"go test: stopped after 1s"*"Packed team/svc"*) ok "a check that hangs is stopped" ;; *) bad "a check that hangs is stopped" "$out" ;; esac
+mr_key() { printf '%s' "$1" | { shift; env LLM_WIKI_TEST_TTY=1 HOME="$RH" PATH="$FG:$PATH" "$W" relay mr "$@" 2>&1; }; }
+rm -f "$T/go.log"
+out="$(mr_key n "$MRU")"
+case "$out" in *"Run go build, vet, test and mod tidy"*"at $MR_HEAD, by Some One"*"runs that branch's code"*) ok "at a terminal it asks, naming the author" ;; *) bad "at a terminal it asks, naming the author" "$out" ;; esac
+check "and n runs nothing" test ! -e "$T/go.log"
+check "and the note says so" grep -q '^checks: not run, because the user chose not to$' "$MD/svc-7.txt"
+out="$(mr_key y "$MRU")"
+case "$out" in *"go test: passed"*) ok "y runs them" ;; *) bad "y runs them" "$out" ;; esac
+rm -f "$T/go.log"
+out="$(mr_key y "$MRU" --no-checks)"
+case "$out" in *"Run go build"*) bad "--no-checks doesn't ask" "$out" ;; *) ok "--no-checks doesn't ask" ;; esac
+check "or run them" test ! -e "$T/go.log"
+out="$(mr_key n "$MRU" --checks)"
+case "$out" in *"Run go build"*) bad "--checks doesn't ask" "$out" ;; *"go test: passed"*) ok "--checks doesn't ask" ;; *) bad "--checks doesn't ask" "$out" ;; esac
+FNG="$T/no-go-bin"
+mkdir -p "$FNG"
+cp "$FG/glab" "$FG/pbcopy" "$FNG/"
+env HOME="$RH" PATH="$FNG:/usr/bin:/bin" "$W" relay mr "$MRU" --checks </dev/null >/dev/null 2>&1
+check "with no go, the note says why" grep -q "^checks: not run, because go isn't on this machine$" "$MD/svc-7.txt"
+MNG="$T/no-gomod"
+git init -q "$MNG"
+git -C "$MNG" switch -q -c master 2>/dev/null
+echo x >"$MNG/x.txt"
+git -C "$MNG" add .
+git -C "$MNG" commit -qm x
+git -C "$MNG" switch -q -c ABC-12-work
+git -C "$MNG" remote add origin "$MNG/.git"
+git -C "$MNG" update-ref refs/merge-requests/7/head HEAD
+git -C "$MNG" update-ref refs/remotes/origin/master master
+mr https://gitlab.com/team/nogo/-/merge_requests/7 --repo "$MNG" --checks >/dev/null 2>&1
+check "a repository with no go.mod says so" grep -q '^checks: not run, because this repository has no go.mod$' "$MD/nogo-7.txt"
+
 # relay review: Cowork's file comes back to where the user keeps reviews.
 rv() { printf '%s' "$1" | { shift; env HOME="$RH" PATH="$FG:$PATH" PAGER=cat LLM_WIKI_TEST_TTY=1 LLM_WIKI_RELAY_WAIT=0 LLM_WIKI_RELAY_POLL=1 "$W" relay review "$@" 2>&1; }; }
 RD="$OD/Documents/Cowork/Tasks/t20/output/rev"
@@ -2167,6 +2242,7 @@ echo '# first review' >"$RD/reviews/ABC-12/svc-7.md"
 check "a review needs no run.sh" bash "$LIB" manifest "$RD"
 out="$(rv n t20/rev --expect 1)"
 case "$out" in *"ABC-12/svc-7.md"*"new"*"Nothing was saved"*) ok "review shows the file, and n saves nothing" ;; *) bad "review shows the file, and n saves nothing" "$out" ;; esac
+case "$out" in *"svc-7.md has no Coverage section"*) ok "review warns when there's no Coverage section" ;; *) bad "review warns when there's no Coverage section" "$out" ;; esac
 check "really nothing" test ! -e "$RV/ABC-12/svc-7.md"
 out="$(rv vy t20/rev --expect 1)"
 case "$out" in *"# first review"*"Saved: $RV/ABC-12/svc-7.md"*) ok "v shows it, and y saves it" ;; *) bad "v shows it, and y saves it" "$out" ;; esac
@@ -2186,6 +2262,15 @@ out="$(FAKE_MR_SHA=abc123 rv n t20/rev --expect 2)"
 case "$out" in *"reviews $MR_HEAD, but the merge request is now at abc123"*) ok "review warns when the MR has moved" ;; *) bad "review warns when the MR has moved" "$out" ;; esac
 out="$(rv n t20/rev --expect 2)"
 case "$out" in *"now at"*) bad "and not when it hasn't" "$out" ;; *) ok "and not when it hasn't" ;; esac
+printf '# third review\n\n## Findings\nA finding\n\n## Coverage\n\n- Read 3 of 9 files\n- Skipped: \033[31mdocs\n\n## After\nNot this\n' >"$RD/reviews/ABC-12/svc-7.md"
+bash "$LIB" manifest "$RD" >/dev/null
+out="$(rv n t20/rev --expect 3)"
+case "$out" in *"svc-7.md says it covered:"*"  - Read 3 of 9 files"*"Skipped: [31mdocs"*) ok "review shows the Coverage section" ;; *) bad "review shows the Coverage section" "$out" ;; esac
+case "$out" in *"no Coverage section"*) bad "with no warning" "$out" ;; *) ok "with no warning" ;; esac
+case "$out" in *"Not this"* | *"A finding"*) bad "and only that section" "$out" ;; *) ok "and only that section" ;; esac
+case "$out" in *$'\033'*) bad "and no control characters" "$out" ;; *) ok "and no control characters" ;; esac
+echo '# second review' >"$RD/reviews/ABC-12/svc-7.md"
+bash "$LIB" manifest "$RD" >/dev/null
 echo x >"$RD/reviews/ABC-12/notes.txt"
 bash "$LIB" manifest "$RD" >/dev/null
 out="$(rv y t20/rev)"

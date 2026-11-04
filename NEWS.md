@@ -4,6 +4,16 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. A short paragraph, then lines starting `- ` for what changed and `- Do:` for what to do about it. Add an entry for anything a user would notice, and none for fixes they wouldn't.
 
+## 2026-11-04: Cowork reviews can see test results and say what they skipped
+
+The first real Cowork review worked with almost no effort, but every finding came from reading code, and its gaps only came out when asked. These changes address both.
+
+- `wiki relay mr` offers to run `go build`, `go vet`, `go test` and `go mod tidy -diff` on a temporary copy of the branch, and sends the results to Cowork. It asks first, and names the author, because this runs the branch's code on your Mac. `--checks` and `--no-checks` answer for you.
+- Reviews now end with a Coverage section saying what Cowork read and skipped. `wiki relay review` shows it before you save, and warns if it's missing.
+- The prompt on your clipboard asks for a verdict and for what wasn't covered, so there's nothing to add to it.
+- `remote-pair-run` now tells Cowork to follow every step of your review skill and load the skills it names, so your skill only needs the rules Cowork can't otherwise see. How well Cowork follows this hasn't been tried yet.
+- Do: if you use Copilot Cowork, run `wiki setup copilot-cowork` again, and give it 10 minutes before a new conversation. You can remove the generic parts of any "In Copilot Cowork" section you added to your review skill. Otherwise, nothing.
+
 ## 2026-11-04: Review merge requests with Copilot Cowork
 
 `wiki relay mr <url>` sends Cowork what a review needs, and `wiki relay review` brings the review back, so it no longer takes a pile of manual steps.

@@ -23,6 +23,7 @@ COWORK="${LLM_WIKI_ONEDRIVE:-}/Documents/Cowork"
 WAIT="${LLM_WIKI_RELAY_WAIT:-600}"
 POLL="${LLM_WIKI_RELAY_POLL:-5}"
 READ_LIMIT="${LLM_WIKI_RELAY_READ_LIMIT:-120}"
+CHECK_LIMIT="${LLM_WIKI_RELAY_CHECK_LIMIT:-600}"
 REPORTS="${RUNLIB_REPORT_DIR:-$HOME/pair-run-reports}"
 SETTINGS="${XDG_CONFIG_HOME:-$HOME/.config}/llm-wiki/relay"
 WORK=""
@@ -46,7 +47,7 @@ usage() {
   cat <<EOF
 Usage: $WIKI_CMD relay [--dir ONEDRIVE_FOLDER] run [TASK-FOLDER/DELIVERABLE] [--expect VERSION] [--no-install]
        $WIKI_CMD relay [--dir ONEDRIVE_FOLDER] scan [REPOSITORY] [--branch NAME] [--no-wiki]
-       $WIKI_CMD relay [--dir ONEDRIVE_FOLDER] mr URL... [--also PATH[@BRANCH]]... [--repo PATH] [--go-prefix PREFIX]... [--no-wiki]
+       $WIKI_CMD relay [--dir ONEDRIVE_FOLDER] mr URL... [--also PATH[@BRANCH]]... [--repo PATH] [--go-prefix PREFIX]... [--checks | --no-checks] [--no-wiki]
        $WIKI_CMD relay [--dir ONEDRIVE_FOLDER] review TASK-FOLDER/DELIVERABLE [--expect VERSION]
        $WIKI_CMD relay [--dir ONEDRIVE_FOLDER] apply TASK-FOLDER/DELIVERABLE --repo PATH [--expect VERSION]
 
@@ -68,8 +69,11 @@ Usage: $WIKI_CMD relay [--dir ONEDRIVE_FOLDER] run [TASK-FOLDER/DELIVERABLE] [--
          --also sends another repository, or just one folder of it, at origin's default
          branch or the one you name. Use it as many times as you like. --go-prefix says which
          modules count as yours, if it's not the ones that share your module's host.
-  review Waits for the review Cowork published, shows it, and when you press y saves it under
-         $REVIEWS_DIR. A copy you already have is kept as <name>.previous.
+         If it's Go, it asks whether to run go build, vet, test and mod tidy on a temporary
+         copy of the branch first, and sends the results. --checks and --no-checks answer for you.
+  review Waits for the review Cowork published, shows it and what it says it covered, and when
+         you press y saves it under $REVIEWS_DIR. A copy you already have is kept as
+         <name>.previous.
   apply  Waits for a deliverable, and when you press y applies its patches to the repository's
          working tree. It never commits. Use it once a run has passed.
 EOF
@@ -114,6 +118,13 @@ check_manifest_paths() {
 }
 
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+# macOS marks files with attributes such as com.apple.provenance, and Linux tar warns about each one.
+make_archive() {
+  local out="$1"
+  shift
+  COPYFILE_DISABLE=1 tar --no-xattrs -czf "$out" "$@" 2>/dev/null || COPYFILE_DISABLE=1 tar -czf "$out" "$@"
+}
 
 # What this Mac says about a file, without reading it. A refusal shows up here too.
 describe_file() {
@@ -553,7 +564,7 @@ cmd_scan() {
     list_tools
   } >"$WORK/scan.txt"
   # COPYFILE_DISABLE keeps macOS's tar from adding ._ files.
-  COPYFILE_DISABLE=1 tar -czf "$WORK/$name.tar.gz" -C "$WORK" repo.bundle uncommitted.patch scan.txt ${WIKI_PART:+"$WIKI_PART"} || die "tar couldn't make the archive"
+  make_archive "$WORK/$name.tar.gz" -C "$WORK" repo.bundle uncommitted.patch scan.txt ${WIKI_PART:+"$WIKI_PART"} || die "tar couldn't make the archive"
   hash="$(sha256_of "$WORK/$name.tar.gz")"
   size="$(wc -c <"$WORK/$name.tar.gz" | tr -d ' ')"
   {
@@ -769,7 +780,7 @@ collect_modules() {
           case "$mod" in "$p" | "$p"/*) echo "$mod $ver" >>"$wanted" ;; esac
         done
       done
-  done < <(git -C "$clone" ls-tree -r --name-only "$commit" | grep -E '(^|/)go\.mod$' | grep -v '(^|/)vendor/')
+  done < <(git -C "$clone" ls-tree -r --name-only "$commit" | grep -E '(^|/)go\.mod$' | grep -vE '(^|/)vendor/')
   [ -n "$MODULES_LINE" ] || MODULES_LINE="none of its dependencies are yours"
   [ -s "$wanted" ] || return 0
   if ! command -v go >/dev/null 2>&1; then
@@ -796,9 +807,113 @@ collect_modules() {
   MODULES_PART=go-modules
 }
 
-# pack_mr <url> <repo override> <no-wiki flag> <go prefixes> <also notes>: one MR, in OneDrive.
+# want_checks <mode> <clone> <commit> <author>: whether to run this MR's checks. Sets CHECKS_LINE
+# when they won't run. Asks on fd 3, because the caller's stdin is the list of URLs.
+want_checks() {
+  local mode="$1" clone="$2" commit="$3" author="$4" key
+  if ! git -C "$clone" ls-tree -r --name-only "$commit" | grep -qE '(^|/)go\.mod$'; then
+    CHECKS_LINE="not run, because this repository has no go.mod"
+    return 1
+  fi
+  if ! command -v go >/dev/null 2>&1; then
+    CHECKS_LINE="not run, because go isn't on this machine"
+    return 1
+  fi
+  case "$mode" in
+    yes) return 0 ;;
+    no)
+      CHECKS_LINE="not run, because the user chose not to"
+      return 1
+      ;;
+  esac
+  if ! [ -t 3 ] && [ -z "${LLM_WIKI_TEST_TTY:-}" ]; then
+    CHECKS_LINE="not run, because there was no terminal to ask at"
+    return 1
+  fi
+  echo "Run go build, vet, test and mod tidy on a temporary copy of !$MR_IID at $commit, by ${author:-an unknown author}?"
+  echo "This runs that branch's code on this Mac, and sends the output to OneDrive."
+  while :; do
+    printf '[y]es, [n]o: '
+    IFS= read -r -n 1 key <&3 || { echo; key=n; }
+    [ -z "$key" ] || echo
+    case "$key" in
+      y | Y) return 0 ;;
+      n | N)
+        CHECKS_LINE="not run, because the user chose not to"
+        return 1
+        ;;
+    esac
+  done
+}
+
+# run_check <folder> <label> <output file> <command...>: one check, under a time limit.
+run_check() {
+  local dir="$1" label="$2" out="$3" start="$SECONDS" rc result
+  shift 3
+  printf '%s: ' "$label"
+  (cd "$dir" && limited "$CHECK_LIMIT" "$@") >"$out" 2>&1
+  rc=$?
+  CHECKS_RUN=$((CHECKS_RUN + 1))
+  case "$rc" in
+    0) result=passed ;;
+    124)
+      result="stopped after ${CHECK_LIMIT}s"
+      CHECKS_BAD=$((CHECKS_BAD + 1))
+      ;;
+    *)
+      if grep -q 'flag provided but not defined: -diff' "$out"; then
+        result="skipped, because this Go has no mod tidy -diff"
+        CHECKS_RUN=$((CHECKS_RUN - 1))
+      else
+        result="FAILED, exit $rc"
+        CHECKS_BAD=$((CHECKS_BAD + 1))
+      fi
+      ;;
+  esac
+  if [ "$(wc -c <"$out")" -gt 1000000 ]; then
+    tail -c 1000000 "$out" >"$out.end"
+    mv "$out.end" "$out"
+  fi
+  echo "$result ($((SECONDS - start))s)"
+  echo "$label: $result ($((SECONDS - start))s)" >>"$WORK/mr/checks/summary.txt"
+}
+
+# run_checks <commit>: go checks on a clone of the bundle, so the user's clone stays out of it and
+# files they haven't committed can't change a result. Sets CHECKS_LINE.
+run_checks() {
+  local commit="$1" tree="$WORK/checkout" f d slug label
+  CHECKS_RUN=0
+  CHECKS_BAD=0
+  if ! git clone -q "$WORK/repo.bundle" "$tree" 2>/dev/null || ! git -C "$tree" checkout -q --detach "$commit" 2>/dev/null; then
+    CHECKS_LINE="not run, because git couldn't make a temporary copy"
+    echo "Checks $CHECKS_LINE."
+    return 0
+  fi
+  mkdir -p "$WORK/mr/checks"
+  {
+    echo "commit: $commit"
+    echo "ran on: $(uname -sm), $(go version 2>&1 | head -n 1)"
+  } >"$WORK/mr/checks/summary.txt"
+  while IFS= read -r f; do
+    d="$(dirname "$f")"
+    slug="$(printf '%s' "$d" | tr -c 'A-Za-z0-9._-' '-')"
+    [ "$d" != . ] || slug=root
+    label=""
+    [ "$d" = . ] || label="$d: "
+    run_check "$tree/$d" "${label}go build" "$WORK/mr/checks/$slug-go-build.txt" go build ./...
+    run_check "$tree/$d" "${label}go vet" "$WORK/mr/checks/$slug-go-vet.txt" go vet ./...
+    run_check "$tree/$d" "${label}go test" "$WORK/mr/checks/$slug-go-test.txt" go test ./...
+    run_check "$tree/$d" "${label}go mod tidy -diff" "$WORK/mr/checks/$slug-go-mod-tidy.txt" go mod tidy -diff
+  done < <(git -C "$tree" ls-files | grep -E '(^|/)go\.mod$' | grep -vE '(^|/)(vendor|testdata)/')
+  # A build or test can leave read-only files, and the scratch folder has to be removable.
+  chmod -R u+w "$tree" 2>/dev/null
+  rm -rf "$tree"
+  CHECKS_LINE="$CHECKS_RUN run, $CHECKS_BAD failed or stopped, in mr/checks/summary.txt"
+}
+
+# pack_mr <url> <repo override> <no-wiki flag> <go prefixes> <also notes> <checks mode>: one MR, in OneDrive.
 pack_mr() {
-  local url="$1" repo_arg="$2" no_wiki="$3" prefixes="$4" also_notes="$5" clone repo name ticket source target head base start commit page out n hash size dest review existing=none
+  local url="$1" repo_arg="$2" no_wiki="$3" prefixes="$4" also_notes="$5" checks_mode="$6" clone repo name ticket source target head base start commit page out n hash size dest review existing=none
   parse_mr "$url"
   repo="${MR_PROJECT##*/}"
   name="$(printf '%s-%s' "$repo" "$MR_IID" | tr -c 'A-Za-z0-9._-' '-')"
@@ -874,8 +989,11 @@ pack_mr() {
   fi
   collect_modules "$clone" "$commit" "$prefixes"
   collect_wiki "$repo" "$no_wiki"
+  if want_checks "$checks_mode" "$clone" "$commit" "$(json_get "$WORK/mr/view.json" author.name)"; then
+    run_checks "$commit"
+  fi
 
-  COPYFILE_DISABLE=1 tar -czf "$WORK/$name.tar.gz" -C "$WORK" repo.bundle mr ${MODULES_PART:+"$MODULES_PART"} ${WIKI_PART:+"$WIKI_PART"} || die "tar couldn't make the archive"
+  make_archive "$WORK/$name.tar.gz" -C "$WORK" repo.bundle mr ${MODULES_PART:+"$MODULES_PART"} ${WIKI_PART:+"$WIKI_PART"} || die "tar couldn't make the archive"
   hash="$(sha256_of "$WORK/$name.tar.gz")"
   size="$(wc -c <"$WORK/$name.tar.gz" | tr -d ' ')"
   {
@@ -896,6 +1014,8 @@ pack_mr() {
     echo "taken: $(now)"
     echo "wiki: $WIKI_LINE"
     echo "go modules: $MODULES_LINE"
+    echo "changed files: $(grep -c '^diff --git' "$WORK/mr/diff.patch")"
+    echo "checks: $CHECKS_LINE"
     echo "earlier review: $existing"
     echo "review goes in the deliverable at: reviews/$review"
     if [ -n "$also_notes" ]; then
@@ -915,6 +1035,7 @@ pack_mr() {
   echo "Packed $MR_PROJECT !$MR_IID: $source at $commit, against $target, $size bytes"
   [ -z "$WIKI_PART" ] || echo "Included the $WIKI_NAME wiki (compiled pages: $WIKI_PAGES, no raw notes). Add --no-wiki to leave it out."
   [ -z "$MODULES_PART" ] || echo "Go modules: $MODULES_LINE"
+  echo "Checks: $CHECKS_LINE"
   [ "$existing" = none ] || echo "Included your earlier review, $REVIEWS_DIR/$review"
   [ -z "$head" ] || [ "$head" = "$commit" ] || echo "Warning: the branch here is at $commit, but GitLab says the merge request's head is $head."
   size_warning "$size"
@@ -922,7 +1043,7 @@ pack_mr() {
 }
 
 cmd_mr() {
-  local urls="" also="" also_notes="" repo_arg="" no_wiki="" prefixes="" url spec note prompt names=""
+  local urls="" also="" also_notes="" repo_arg="" no_wiki="" prefixes="" checks="" url spec note prompt names=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --also)
@@ -941,6 +1062,8 @@ cmd_mr() {
         prefixes="$prefixes $2"
         shift 2
         ;;
+      --checks) checks=yes; shift ;;
+      --no-checks) checks=no; shift ;;
       --no-wiki) no_wiki=1; shift ;;
       -h | --help) usage; return 0 ;;
       -*) die "relay mr: unknown option $1. Try $WIKI_CMD relay --help" ;;
@@ -972,9 +1095,10 @@ $also
 EOF
   also_notes="${also_notes%
 }"
+  exec 3<&0
   while IFS= read -r url; do
     [ -n "$url" ] || continue
-    (pack_mr "$url" "$repo_arg" "$no_wiki" "$prefixes" "$also_notes") || exit 1
+    (pack_mr "$url" "$repo_arg" "$no_wiki" "$prefixes" "$also_notes" "$checks") || exit 1
   done <<EOF
 $urls
 EOF
@@ -987,7 +1111,7 @@ EOF
 $names
 EOF
   prompt="$prompt
-If I have a skill for reviewing merge requests, use it for the review itself and the file it writes. Before you run anything on my Mac, tell me what you found that needs it."
+If I have a skill for reviewing merge requests, follow all of it for the review and the file it writes. Finish with a verdict: are these changes solid, and what has to change before this merges? Say what you didn't cover. When a finding depends on running the code, or you need another repository or config, ask me, with one line on why."
   echo
   if command -v pbcopy >/dev/null 2>&1 && printf '%s\n' "$prompt" | pbcopy 2>/dev/null; then
     echo "Paste this into Cowork. It's on your clipboard:"
@@ -1029,6 +1153,18 @@ warn_if_moved() {
   now_sha="$(json_get "$WORK/now.json" sha)"
   [ -z "$now_sha" ] || [ -z "$old_sha" ] || [ "$now_sha" = "$old_sha" ] ||
     echo "Warning: ${f##*/} reviews $old_sha, but the merge request is now at $now_sha."
+}
+
+# What Cowork says it skipped has to be seen before saving. It comes from the cloud, so control
+# characters don't reach the terminal.
+show_coverage() {
+  local file="$1" name="$2"
+  if ! grep -qE '^##+ Coverage' "$file"; then
+    echo "Warning: $name has no Coverage section, so you can't tell what Cowork skipped. Ask it to add one."
+    return 0
+  fi
+  echo "What $name says it covered:"
+  awk '/^##+ Coverage/ { on = 1; next } on && /^#/ { exit } on' "$file" | sed '/^[[:space:]]*$/d' | head -n 30 | LC_ALL=C tr -d '\000-\010\013-\037\177' | sed 's/^/  /'
 }
 
 cmd_review() {
@@ -1074,6 +1210,7 @@ cmd_review() {
       echo "  $f ($(wc -c <"$copy/reviews/$f" | tr -d ' ') bytes, new)"
     fi
     warn_if_moved "$f"
+    show_coverage "$copy/reviews/$f" "${f##*/}"
   done <<EOF
 $files
 EOF
