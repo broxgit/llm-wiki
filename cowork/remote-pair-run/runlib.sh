@@ -4,7 +4,8 @@
 # on a real machine and hands back the report. Works with Apple's bash 3.2.
 #
 # On the assistant's side, after the files are final:
-#   bash runlib.sh manifest DIR [VERSION]    Hash the folder into DIR/manifest.txt.
+#   bash runlib.sh manifest DIR [VERSION]    Hash the folder into DIR/manifest.txt. DIR needs
+#                                            run.sh and runlib.sh, or a reviews/ folder.
 #
 # In run.sh, with no `set -e` and no `trap ... EXIT` (use on_exit):
 #   . "$(dirname "${BASH_SOURCE[0]}")/runlib.sh"
@@ -30,7 +31,7 @@
 # A run passes only if it reaches report_end with at least one check and no failures.
 # $RUN_TMP is a scratch folder, removed at exit.
 
-RUNLIB_VERSION=2
+RUNLIB_VERSION=3
 RUNLIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNLIB_EXIT_COUNT=0
 RUNLIB_STEP=0
@@ -56,9 +57,12 @@ _runlib_manifest_version() {
 runlib_manifest() {
   local dir="${1:-}" version="${2:-}" old f tmp
   [ -d "$dir" ] || { echo "manifest: no folder: $dir" >&2; return 2; }
-  for f in run.sh runlib.sh; do
-    [ -f "$dir/$f" ] || { echo "manifest: $dir has no $f" >&2; return 2; }
-  done
+  # A review has nothing to run, so it needs only the review.
+  if [ ! -d "$dir/reviews" ]; then
+    for f in run.sh runlib.sh; do
+      [ -f "$dir/$f" ] || { echo "manifest: $dir has no $f" >&2; return 2; }
+    done
+  fi
   if [ -z "$version" ]; then
     old="$(_runlib_manifest_version "$dir/manifest.txt")"
     version=$((${old:-0} + 1))
@@ -88,7 +92,7 @@ _runlib_sync_problems() {
   if [ -n "$RUNLIB_EXPECT" ] && [ "$version" != "$RUNLIB_EXPECT" ]; then
     echo "manifest.txt is version $version, expected $RUNLIB_EXPECT"
   fi
-  for need in run.sh runlib.sh; do
+  for need in ${RUNLIB_NEEDS-run.sh runlib.sh}; do
     grep -q "^sha256 [0-9a-f]*  $need\$" "$m" || echo "manifest.txt doesn't list $need"
   done
   sed -n 's/^sha256 \([0-9a-f]*\)  \(.*\)$/\1 \2/p' "$m" | while IFS=' ' read -r hash path; do
