@@ -1515,6 +1515,52 @@ pr_expect "move_aside hides a path" 1 "RESULT it is gone: PASS"
 pr_expect "restore_aside brings it back" 1 "RESULT it is back: PASS"
 check "a crash still restores it" test -e "$PR/d/vendor/v"
 
+# safe_worktree: hooks off, a tree that matches the commit, and a checkout proven untouched.
+SW="$T/safe-wt"
+git init -q "$SW"
+echo 'module x' >"$SW/go.mod"
+git -C "$SW" add .
+git -C "$SW" commit -qm one
+SW_C="$(git -C "$SW" rev-parse HEAD)"
+echo two >"$SW/two.txt"
+git -C "$SW" add .
+git -C "$SW" commit -qm two
+echo mine >"$SW/untracked.txt"
+printf '#!/bin/sh\necho HOOK RAN\necho "// hook" >>go.mod\nexit 2\n' >"$SW/.git/hooks/post-checkout"
+chmod +x "$SW/.git/hooks/post-checkout"
+pr_new "safe_worktree '$SW' '$SW_C'
+echo \"tree at \$WORKTREE\"
+[ ! -e \"\$WORKTREE/two.txt\" ]; result 'at the commit, not the checkout' \$?
+report_end"
+pr_run
+pr_expect "safe_worktree makes a worktree of the commit" 0 "RESULT at the commit, not the checkout: PASS"
+pr_expect "and says it matches" 0 "RESULT worktree identical to $SW_C: PASS"
+pr_expect "and that the run left its files alone" 0 "RESULT tracked files unchanged in the worktree: PASS"
+pr_expect "and that the checkout is the same" 0 "RESULT your checkout unchanged: PASS"
+pr_lacks "with the hook off" "HOOK RAN"
+check "and removes it" bash -c "[ \"\$(git -C '$SW' worktree list | wc -l | tr -d ' ')\" = 1 ]"
+check "the checkout keeps its work" test -f "$SW/untracked.txt"
+pr_new "safe_worktree '$SW' '$SW_C'
+echo '// changed' >>\"\$WORKTREE/go.mod\"
+report_end"
+pr_run
+pr_expect "a run that changes a tracked file fails" 1 "RESULT tracked files unchanged in the worktree: FAIL"
+pr_new "safe_worktree '$SW' '$SW_C'
+echo more >>'$SW/untracked.txt'
+report_end"
+pr_run
+pr_expect "a run that touches the checkout fails" 1 "RESULT your checkout unchanged: FAIL"
+pr_new "safe_worktree '$SW' notacommit
+result 'not reached' 0
+report_end"
+pr_run
+pr_expect "a commit that isn't there stops the run" 1 "has no commit notacommit"
+pr_lacks "before anything runs" "RESULT not reached"
+pr_new 'safe_worktree
+report_end'
+pr_run
+pr_expect "safe_worktree needs its arguments" 1 "needs a repository and a commit"
+
 pr_new 'target="$here/vendor"
 mkdir "$target"; echo original >"$target/v"
 move_aside "$target"
@@ -2042,6 +2088,8 @@ printf 'module corp.example.com/team/svc\n\nrequire (\n\tcorp.example.com/lib/ka
 mkdir -p "$MC/deploy/prod"
 echo 'timeout: 5s' >"$MC/deploy/prod/values.yaml"
 echo base >"$MC/a.txt"
+mkdir -p "$MC/sub" "$MC/vendor/x" "$MC/testdata/y"
+for f in sub vendor/x testdata/y; do printf 'module corp.example.com/team/%s\n' "$f" >"$MC/$f/go.mod"; done
 git -C "$MC" add .
 git -C "$MC" commit -qm base
 git -C "$MC" push -q origin master 2>/dev/null
@@ -2066,8 +2114,9 @@ cat >"$FG/glab" <<FAKE
 #!/bin/sh
 echo "\$*" >>"$T/glab.log"
 case "\$*" in
-  *"mr view 7 "*) printf '{"title":"Fix the thing","source_branch":"ABC-12-work","target_branch":"master","sha":"%s","description":"Copy of !3 and see !7","author":{"name":"Some One"}}' "\${FAKE_MR_SHA:-$MR_HEAD}" ;;
+  *"mr view 7 "*) printf '{"title":"Fix the thing","source_branch":"ABC-12-work","target_branch":"master","sha":"%s","description":"Copy of !3 and see !7","author":{"name":"Some One","username":"someone"}}' "\${FAKE_MR_SHA:-$MR_HEAD}" ;;
   *"mr diff 7 "*) echo 'diff --git a/a.txt b/a.txt' ;;
+  *"api user "*) [ -z "\${FAKE_ME:-}" ] && exit 1; printf '{"username":"%s"}' "\$FAKE_ME" ;;
   *"merge_requests/7/versions"*) printf '[{"head_commit_sha":"$MR_HEAD","base_commit_sha":"$MR_BASE","start_commit_sha":"$MR_BASE"}]' ;;
   *"merge_requests/7/discussions"*"&page=1"*) echo '[{"id":"d1","notes":[{"body":"from a bot"}]}]' ;;
   *"merge_requests/7/discussions"*"&page=2"*) echo '[{"id":"d2","notes":[{"body":"second page"}]}]' ;;
@@ -2079,12 +2128,22 @@ FAKE
 GM="$T/gomod/kafka"
 mkdir -p "$GM"
 echo 'package kafka // RETRIES' >"$GM/kafka.go"
+if command -v xattr >/dev/null 2>&1; then xattr -w user.test y "$GM/kafka.go" 2>/dev/null; fi
 chmod 444 "$GM/kafka.go"
 cat >"$FG/go" <<FAKE
 #!/bin/sh
 case "\$*" in
   "mod download -json corp.example.com/lib/kafka@v1.2.3") echo '{"Dir":"$GM"}' ;;
   "version") echo "go version fake" ;;
+  "build ./..." | "vet ./..." | "test ./..." | "mod tidy -diff")
+    echo "\$(git rev-parse HEAD) \$(basename "\$PWD") \$*" >>"$T/go.log"
+    mkdir -p leftovers && chmod 555 leftovers
+    [ "\${FAKE_GO_DIRTY:-}" = "" ] || echo "// changed" >>go.mod
+    [ "\${FAKE_GO_NODIFF:-}" = "" ] || [ "\$1" != mod ] || { echo "flag provided but not defined: -diff"; exit 2; }
+    [ "\${FAKE_GO_HANG:-}" != "\$1" ] || exec sleep 30
+    [ "\${FAKE_GO_FAIL:-}" != "\$1" ] || { echo "boom from \$1"; exit 1; }
+    echo "fine from \$1"
+    ;;
   *) echo '{"Error":"not found"}'; exit 1 ;;
 esac
 FAKE
@@ -2097,7 +2156,7 @@ MRU=https://gitlab.com/team/svc/-/merge_requests/7
 RV="$T/my-reviews"
 mkdir -p "$RH/.config/llm-wiki"
 printf 'reviews=%s\nclones=%s\n' "$RV" "$T/clones" >"$RH/.config/llm-wiki/relay"
-mr() { env HOME="$RH" PATH="$FG:$PATH" "$W" relay mr "$@"; }
+mr() { env HOME="$RH" PATH="$FG:$PATH" "$W" relay mr "$@" </dev/null; }
 MD="$OD/Documents/Cowork/relay/mrs"
 expect "relay mr says what it packed" "Packed team/svc !7: ABC-12-work at $MR_HEAD, against master" mr "$MRU"
 check "it found the clone by its origin" test -f "$MD/svc-7.txt"
@@ -2127,6 +2186,8 @@ check "one that can't be fetched is listed" grep -q 'corp.example.com/lib/gone v
 check "public modules stay out" bash -c "! grep -q 'github.com/public' '$MU/go-modules/index.txt'"
 check "there's no earlier review yet" test ! -e "$MU/mr/existing-review.md"
 check "it puts a prompt on the clipboard" grep -q 'Documents/Cowork/relay/mrs/svc-7.txt' "$T/clipboard"
+check "and the prompt asks for a verdict" grep -q 'Finish with a verdict' "$T/clipboard"
+check "and for what wasn't covered" grep -q "Say what you didn't cover" "$T/clipboard"
 out="$(mr "$MRU" 2>&1)"
 case "$out" in *"Paste this into Cowork. It's on your clipboard:"*"Documents/Cowork/relay/mrs/svc-7.txt"*) ok "and prints it" ;; *) bad "and prints it" "$out" ;; esac
 out="$(mr "$MRU" --go-prefix github.com/public 2>&1)"
@@ -2159,6 +2220,99 @@ check "with only that folder" bash -c "tar -tzf '$SD/svc-deploy-prod.tar.gz' | g
 check "the MR's note names both" bash -c "grep -q 'scans/svc-deploy-prod.txt' '$MD/svc-7.txt' && grep -q 'scans/svc.txt' '$MD/svc-7.txt'"
 refuse "--also needs a repository" mr "$MRU" --also "$T/not-a-repo-yet"
 
+# Checks before packing: they run on a copy of the branch, and only when the user says so.
+rm -f "$T/go.log"
+mr "$MRU" >/dev/null 2>&1
+check "with no terminal, checks don't run" test ! -e "$T/go.log"
+check "and the note says why" grep -q '^checks: not run, because there was no terminal to ask at$' "$MD/svc-7.txt"
+check "the note counts the changed files" grep -q '^changed files: 1$' "$MD/svc-7.txt"
+check "and no results are sent" bash -c "! tar -tzf '$MD/svc-7.tar.gz' | grep -q mr/checks"
+mkdir -p "$T/mr-tmp"
+out="$(env TMPDIR="$T/mr-tmp" HOME="$RH" PATH="$FG:$PATH" "$W" relay mr "$MRU" --checks </dev/null 2>&1)"
+case "$out" in *"go build: passed"*"go vet: passed"*"go test: passed"*"go mod tidy -diff: passed"*"sub: go test: passed"*"Checks: 8 run, 0 failed"*) ok "--checks runs them in every module" ;; *) bad "--checks runs them in every module" "$out" ;; esac
+check "not in vendor or testdata" bash -c "! grep -qE ' (x|y) ' '$T/go.log'"
+check "on the merge request's commit" bash -c "[ \"\$(cut -d' ' -f1 '$T/go.log' | sort -u)\" = '$MR_HEAD' ]"
+check "and the scratch folder is gone, read-only files too" bash -c "[ -z \"\$(ls -A '$T/mr-tmp')\" ]"
+check "the clone isn't touched" bash -c "[ ! -e '$MC/.git/worktrees' ] && [ ! -e '$MC/leftovers' ] && [ \"\$(git -C '$MC' rev-parse HEAD)\" = '$MR_BASE' ]"
+check "its uncommitted work can't reach them" grep -q uncommitted "$MC/a.txt"
+check "the note has the count" grep -q '^checks: 8 run, 0 failed or stopped, in mr/checks/summary.txt$' "$MD/svc-7.txt"
+MK="$T/mr-checks"
+mkdir -p "$MK"
+tar -xzf "$MD/svc-7.tar.gz" -C "$MK" mr/checks
+check "the summary says which commit, and on what" bash -c "grep -q '^commit: $MR_HEAD$' '$MK/mr/checks/summary.txt' && grep -q '^ran on: .*go version fake$' '$MK/mr/checks/summary.txt'"
+check "each check's output comes" bash -c "grep -q 'fine from test' '$MK/mr/checks/root-go-test.txt' && grep -q 'fine from build' '$MK/mr/checks/sub-go-build.txt'"
+check "the archive has no macOS attributes" bash -c "! gzip -dc '$MD/svc-7.tar.gz' | LC_ALL=C grep -qa 'LIBARCHIVE.xattr'"
+out="$(FAKE_GO_FAIL="test" mr "$MRU" --checks 2>&1)"
+case "$out" in *"go test: FAILED, exit 1"*"Packed team/svc"*"Checks: 8 run, 2 failed"*) ok "a failed check is reported, and it still packs" ;; *) bad "a failed check is reported, and it still packs" "$out" ;; esac
+tar -xzf "$MD/svc-7.tar.gz" -C "$MK" mr/checks
+check "with its output" grep -q 'boom from test' "$MK/mr/checks/root-go-test.txt"
+out="$(FAKE_GO_NODIFF=1 mr "$MRU" --checks 2>&1)"
+case "$out" in *"go mod tidy -diff: skipped"*"Checks: 6 run, 0 failed"*) ok "an old Go without tidy -diff isn't a failure" ;; *) bad "an old Go without tidy -diff isn't a failure" "$out" ;; esac
+out="$(FAKE_GO_HANG="test" LLM_WIKI_RELAY_CHECK_LIMIT=1 mr "$MRU" --checks 2>&1)"
+case "$out" in *"go test: stopped after 1s"*"Packed team/svc"*) ok "a check that hangs is stopped" ;; *) bad "a check that hangs is stopped" "$out" ;; esac
+mr_key() { printf '%s' "$1" | { shift; env LLM_WIKI_TEST_TTY=1 HOME="$RH" PATH="$FG:$PATH" "$W" relay mr "$@" 2>&1; }; }
+rm -f "$T/go.log"
+out="$(mr_key n "$MRU")"
+case "$out" in *"Run go build, vet, test and mod tidy"*"at $MR_HEAD, by Some One"*"runs that branch's code"*) ok "at a terminal it asks, naming the author" ;; *) bad "at a terminal it asks, naming the author" "$out" ;; esac
+check "and n runs nothing" test ! -e "$T/go.log"
+check "and the note says so" grep -q '^checks: not run, because the user chose not to$' "$MD/svc-7.txt"
+out="$(mr_key y "$MRU")"
+case "$out" in *"go test: passed"*) ok "y runs them" ;; *) bad "y runs them" "$out" ;; esac
+rm -f "$T/go.log"
+out="$(mr_key y "$MRU" --no-checks)"
+case "$out" in *"Run go build"*) bad "--no-checks doesn't ask" "$out" ;; *) ok "--no-checks doesn't ask" ;; esac
+check "or run them" test ! -e "$T/go.log"
+out="$(mr_key n "$MRU" --checks)"
+case "$out" in *"Run go build"*) bad "--checks doesn't ask" "$out" ;; *"go test: passed"*) ok "--checks doesn't ask" ;; *) bad "--checks doesn't ask" "$out" ;; esac
+# A global hook has to stay off in the temporary copy, as it would rewrite go.mod there.
+GH="$T/global-hooks"
+mkdir -p "$GH"
+printf '#!/bin/sh\necho ran >>"%s/hook.log"\necho "// hook" >>go.mod\nexit 2\n' "$T" >"$GH/post-checkout"
+chmod +x "$GH/post-checkout"
+printf '[core]\n\thooksPath = %s\n' "$GH" >"$T/hooked.gitconfig"
+out="$(GIT_CONFIG_GLOBAL="$T/hooked.gitconfig" mr "$MRU" --checks 2>&1)"
+case "$out" in *"go test: passed"*"Checks: 8 run, 0 failed"*) ok "a global git hook doesn't stop the checks" ;; *) bad "a global git hook doesn't stop the checks" "$out" ;; esac
+check "and doesn't run" test ! -e "$T/hook.log"
+out="$(FAKE_GO_DIRTY=1 mr "$MRU" --checks 2>&1)"
+case "$out" in *"the checks changed tracked files"*"go.mod"*"failed or stopped"*) ok "checks that change a tracked file say so" ;; *) bad "checks that change a tracked file say so" "$out" ;; esac
+tar -xzf "$MD/svc-7.tar.gz" -C "$MK" mr/checks
+check "in the summary too" grep -q 'the checks changed tracked files' "$MK/mr/checks/summary.txt"
+out="$(mr "$MRU" 2>&1)"
+case "$out" in *"your local ABC-12-work"*) bad "no warning when the local branch matches" "$out" ;; *) ok "no warning when the local branch matches" ;; esac
+check "the note says it matches" grep -q '^local branch: the same as the merge request$' "$MD/svc-7.txt"
+check "the note names the clone" grep -q "^clone: $MC$" "$MD/svc-7.txt"
+check "with no login, the author is unknown" grep -q '^your merge request: unknown$' "$MD/svc-7.txt"
+FAKE_ME=someone mr "$MRU" >/dev/null 2>&1
+check "it knows your own merge request" grep -q '^your merge request: yes$' "$MD/svc-7.txt"
+FAKE_ME=other mr "$MRU" >/dev/null 2>&1
+check "and someone else's" grep -q '^your merge request: no$' "$MD/svc-7.txt"
+git -C "$MC" update-ref refs/heads/ABC-12-work "$MR_TIP"
+out="$(mr "$MRU" 2>&1)"
+case "$out" in *"Warning: your local ABC-12-work differs, at $MR_TIP"*"Cowork will review $MR_HEAD, so push first"*) ok "a different local branch gets a warning" ;; *) bad "a different local branch gets a warning" "$out" ;; esac
+check "and the note says so" grep -q "^local branch: differs, at $MR_TIP" "$MD/svc-7.txt"
+git -C "$MC" update-ref refs/heads/ABC-12-work "$MR_HEAD"
+FNG="$T/no-go-bin"
+mkdir -p "$FNG"
+cp "$FG/glab" "$FG/pbcopy" "$FNG/"
+if PATH="/usr/bin:/bin" command -v go >/dev/null 2>&1; then
+  skipped "with no go, the note says why (this machine has go in /usr/bin)"
+else
+  env HOME="$RH" PATH="$FNG:/usr/bin:/bin" "$W" relay mr "$MRU" --checks </dev/null >/dev/null 2>&1
+  check "with no go, the note says why" grep -q "^checks: not run, because go isn't on this machine$" "$MD/svc-7.txt"
+fi
+MNG="$T/no-gomod"
+git init -q "$MNG"
+git -C "$MNG" switch -q -c master 2>/dev/null
+echo x >"$MNG/x.txt"
+git -C "$MNG" add .
+git -C "$MNG" commit -qm x
+git -C "$MNG" switch -q -c ABC-12-work
+git -C "$MNG" remote add origin "$MNG/.git"
+git -C "$MNG" update-ref refs/merge-requests/7/head HEAD
+git -C "$MNG" update-ref refs/remotes/origin/master master
+mr https://gitlab.com/team/nogo/-/merge_requests/7 --repo "$MNG" --checks >/dev/null 2>&1
+check "a repository with no go.mod says so" grep -q '^checks: not run, because this repository has no go.mod$' "$MD/nogo-7.txt"
+
 # relay review: Cowork's file comes back to where the user keeps reviews.
 rv() { printf '%s' "$1" | { shift; env HOME="$RH" PATH="$FG:$PATH" PAGER=cat LLM_WIKI_TEST_TTY=1 LLM_WIKI_RELAY_WAIT=0 LLM_WIKI_RELAY_POLL=1 "$W" relay review "$@" 2>&1; }; }
 RD="$OD/Documents/Cowork/Tasks/t20/output/rev"
@@ -2167,6 +2321,7 @@ echo '# first review' >"$RD/reviews/ABC-12/svc-7.md"
 check "a review needs no run.sh" bash "$LIB" manifest "$RD"
 out="$(rv n t20/rev --expect 1)"
 case "$out" in *"ABC-12/svc-7.md"*"new"*"Nothing was saved"*) ok "review shows the file, and n saves nothing" ;; *) bad "review shows the file, and n saves nothing" "$out" ;; esac
+case "$out" in *"svc-7.md has no Coverage section"*) ok "review warns when there's no Coverage section" ;; *) bad "review warns when there's no Coverage section" "$out" ;; esac
 check "really nothing" test ! -e "$RV/ABC-12/svc-7.md"
 out="$(rv vy t20/rev --expect 1)"
 case "$out" in *"# first review"*"Saved: $RV/ABC-12/svc-7.md"*) ok "v shows it, and y saves it" ;; *) bad "v shows it, and y saves it" "$out" ;; esac
@@ -2186,6 +2341,15 @@ out="$(FAKE_MR_SHA=abc123 rv n t20/rev --expect 2)"
 case "$out" in *"reviews $MR_HEAD, but the merge request is now at abc123"*) ok "review warns when the MR has moved" ;; *) bad "review warns when the MR has moved" "$out" ;; esac
 out="$(rv n t20/rev --expect 2)"
 case "$out" in *"now at"*) bad "and not when it hasn't" "$out" ;; *) ok "and not when it hasn't" ;; esac
+printf '# third review\n\n## Findings\nA finding\n\n## Coverage\n\n- Read 3 of 9 files\n- Skipped: \033[31mdocs\n\n## After\nNot this\n' >"$RD/reviews/ABC-12/svc-7.md"
+bash "$LIB" manifest "$RD" >/dev/null
+out="$(rv n t20/rev --expect 3)"
+case "$out" in *"svc-7.md says it covered:"*"  - Read 3 of 9 files"*"Skipped: [31mdocs"*) ok "review shows the Coverage section" ;; *) bad "review shows the Coverage section" "$out" ;; esac
+case "$out" in *"no Coverage section"*) bad "with no warning" "$out" ;; *) ok "with no warning" ;; esac
+case "$out" in *"Not this"* | *"A finding"*) bad "and only that section" "$out" ;; *) ok "and only that section" ;; esac
+case "$out" in *$'\033'*) bad "and no control characters" "$out" ;; *) ok "and no control characters" ;; esac
+echo '# second review' >"$RD/reviews/ABC-12/svc-7.md"
+bash "$LIB" manifest "$RD" >/dev/null
 echo x >"$RD/reviews/ABC-12/notes.txt"
 bash "$LIB" manifest "$RD" >/dev/null
 out="$(rv y t20/rev)"

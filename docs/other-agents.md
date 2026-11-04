@@ -178,7 +178,7 @@ Four test sessions with Cowork, on a throwaway repository, led to this. On 2026-
 
 After you update the skill, a new Cowork session can still load the old copy for several minutes, so give it 10.
 
-**Reviewing a merge request in Cowork:** if you keep a review skill, Cowork can follow it, using what this command sends in place of `glab` and your clones. Run it in any terminal:
+**Reviewing a merge request in Cowork:** if you keep a review skill, Cowork can follow it, using what this command sends in place of `glab` and your clones. Your skill only needs to add the rules Cowork can't otherwise see, such as ones in your agent's memory. Run it in any terminal:
 
 ```
 wiki relay mr <url> --also ~/dev/some-service --also ~/dev/deployments/my-service
@@ -186,10 +186,12 @@ wiki relay mr <url> --also ~/dev/some-service --also ~/dev/deployments/my-servic
 
 - It sends the merge request's discussions and diff, its source and target branches, your own Go libraries at the versions `go.mod` pins, your earlier review, and the wiki. It only fetches in your clone, and puts a prompt for Cowork on your clipboard.
 - `--also` sends another repository at origin's default branch, or only one folder of it, and `PATH@BRANCH` names a branch. Use it as many times as you like. The first time, `wiki setup copilot-cowork` asks where your clones and reviews live.
-- Cowork publishes the review, and gives you `wiki relay review`. It shows you the file, and saves it where you keep your reviews when you press `y`. Your earlier copy is kept beside it as `.previous`. Run that one in Apple's Terminal.
+- For a Go repository, it asks whether to run `go build`, `go vet`, `go test` and `go mod tidy -diff` first, and sends the results. They run on a temporary copy of the branch with git hooks off, so your clone and uncommitted work stay out of it, but the branch's code does run on your Mac. Each check stops after 10 minutes. `--checks` and `--no-checks` answer for you.
+- It reviews what's pushed, and warns if your local branch has commits the merge request doesn't.
+- Cowork publishes the review, and gives you `wiki relay review`. It shows you the file and its Coverage section, which says what Cowork read and skipped, and saves it where you keep your reviews when you press `y`. Your earlier copy is kept beside it as `.previous`. Run that one in Apple's Terminal.
 - For a fix you've proven, `wiki relay apply` leaves its patches in your working tree when you press `y`, and never commits.
 
-This has only run against fake services and one public merge request, not with Cowork. It's built for GitLab, and for Go libraries.
+It has run once with Cowork on a real merge request, on 2026-11-04, before the checks and the Coverage section were added. In that review, a run on the Mac proved a build failure that Cowork had only rated Low from reading the code. It's built for GitLab and Go. Cowork still can't see production data, and it reads other services only if it asks or you add `--also`.
 
 **Other web agents:** the same idea works wherever an agent has a GitHub connector that can read your private repository. Only claude.ai's and Microsoft 365 Copilot's have been tried.
 

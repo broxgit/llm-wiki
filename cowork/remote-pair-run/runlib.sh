@@ -17,6 +17,9 @@
 #   on_exit CMD ARG...           Run at exit, last registered first, even after a crash.
 #   move_aside PATH              Hide a path, as CI won't have it. Restored at exit at the latest.
 #   restore_aside PATH           Put it back early.
+#   safe_worktree REPO COMMIT    Make a temporary worktree with git hooks off, and set $WORKTREE.
+#                                Records whether it matches the commit, whether the run changed
+#                                its tracked files, and whether REPO's checkout stayed the same.
 #   snapshot_tree DIR OUT [GLOB...]  Hash a tree into OUT, skipping .git and GLOBs.
 #   allow_diff PATH REASON       The next compare_trees may differ here, for this reason. PATH is
 #                                relative to the trees compared.
@@ -31,7 +34,7 @@
 # A run passes only if it reaches report_end with at least one check and no failures.
 # $RUN_TMP is a scratch folder, removed at exit.
 
-RUNLIB_VERSION=3
+RUNLIB_VERSION=4
 RUNLIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNLIB_EXIT_COUNT=0
 RUNLIB_STEP=0
@@ -274,6 +277,60 @@ restore_aside() {
     return 1
   fi
   mv "$path.runlib-aside" "$path" && echo "restored: $path"
+}
+
+_runlib_checkout_print() {
+  local out f
+  out="$RUNLIB_TMP/checkout.$$"
+  {
+    git -C "$1" rev-parse HEAD
+    git -C "$1" status --porcelain --untracked-files=all
+    git -C "$1" diff HEAD --binary
+    # Status names an untracked file, but says nothing about a change inside one.
+    git -C "$1" ls-files --others --exclude-standard | while IFS= read -r f; do
+      [ ! -f "$1/$f" ] || printf '%s  %s\n' "$(_runlib_sha256 "$1/$f")" "$f"
+    done
+  } >"$out" 2>&1
+  _runlib_sha256 "$out"
+}
+
+_runlib_checkout_same() {
+  [ "$(_runlib_checkout_print "$1")" = "$2" ]
+  result "your checkout unchanged" $?
+}
+
+_runlib_tree_unchanged() {
+  local changed
+  changed="$(git -C "$1" status --porcelain --untracked-files=no)"
+  [ -z "$changed" ] || printf 'changed in the worktree:\n%s\n' "$changed"
+  [ -z "$changed" ]
+  result "tracked files unchanged in the worktree" $?
+}
+
+_runlib_worktree_remove() {
+  git -C "$1" worktree remove --force "$2" && git -C "$1" worktree prune
+}
+
+# Hooks stay off because a post-checkout hook once rewrote go.mod in a worktree, which spoiled
+# every result of a real run while the user's checkout looked fine.
+safe_worktree() {
+  local repo="${1:-}" commit="${2:-}" hooks dirty
+  [ -n "$repo" ] && [ -n "$commit" ] || abort "safe_worktree needs a repository and a commit"
+  git -C "$repo" rev-parse --verify -q "$commit^{commit}" >/dev/null || abort "safe_worktree: $repo has no commit $commit"
+  on_exit _runlib_checkout_same "$repo" "$(_runlib_checkout_print "$repo")"
+  hooks="$RUNLIB_TMP/no-hooks"
+  mkdir -p "$hooks"
+  RUNLIB_WORKTREES=$((${RUNLIB_WORKTREES:-0} + 1))
+  WORKTREE="$RUNLIB_TMP/worktree-$RUNLIB_WORKTREES"
+  git -C "$repo" -c core.hooksPath="$hooks" worktree add -q --detach "$WORKTREE" "$commit" || abort "safe_worktree: git couldn't make a worktree of $commit"
+  on_exit _runlib_worktree_remove "$repo" "$WORKTREE"
+  dirty="$(git -C "$WORKTREE" -c core.hooksPath="$hooks" status --porcelain --untracked-files=all)"
+  [ -z "$dirty" ] || printf 'the new worktree differs:\n%s\n' "$dirty"
+  [ -z "$dirty" ]
+  result "worktree identical to $commit" $?
+  [ -z "$dirty" ] || abort "the worktree doesn't match $commit, so nothing run in it would count"
+  on_exit _runlib_tree_unchanged "$WORKTREE"
+  echo "worktree: $WORKTREE, at $commit, with git hooks off"
 }
 
 snapshot_tree() {
