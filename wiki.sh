@@ -6206,7 +6206,7 @@ EOF
   mkdir -p "$target" || die "can't create $target"
   cp "$REPO/cowork/remote-pair-run/SKILL.md" "$REPO/cowork/remote-pair-run/runlib.sh" "$target/" || die "can't copy the skill to $target"
   echo "installed: $target"
-  echo "Cowork finds it when a new session starts, once OneDrive has synced. Ask it to change code in a repository, and it will give you a $WIKI_CMD relay run command."
+  echo "Cowork finds it when a new session starts, once OneDrive has synced. Ask it to change code in a repository, and it will give you a $WIKI_CMD relay run command. Run that in Apple's Terminal: macOS can refuse other terminal apps."
 }
 
 cmd_setup() {

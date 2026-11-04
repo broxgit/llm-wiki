@@ -33,7 +33,7 @@ The best view is a relay scan. Ask the user to run this in the repository:
 wiki relay scan
 ```
 
-Then, with no attachment, read `Documents/Cowork/relay/scans/<repository>.txt` from their OneDrive. It gives the path, branch, commit, status, tool versions and the archive's sha256. Get `<repository>.tar.gz` from the same folder into your sandbox and check the hash: a download can report success before the file appears, so try again for a minute or two. Extract it, `git clone repo.bundle`, and apply `uncommitted.patch` if it isn't empty. You now have real history at the real commit. Untracked files aren't included, so ask for any you need.
+Then, with no attachment, read `Documents/Cowork/relay/scans/<repository>.txt` from their OneDrive. If your tools need a drive's id, list the drives and use the one named OneDrive. The note gives the path, branch, commit, status, tool versions and the archive's sha256. Get `<repository>.tar.gz` from the same folder into your sandbox and check the hash: a download can report success before the file appears, so try again for a minute or two. Extract it, `git clone repo.bundle`, and apply `uncommitted.patch` if it isn't empty. You now have real history at the real commit. Untracked files aren't included, so ask for any you need.
 
 Without a scan, work out which files you need and ask for them. Ask for attachments, not pastes: a terminal paste turns tabs into spaces, which breaks patches.
 
@@ -141,7 +141,9 @@ Give the user one command, using the version the manifest printed and your task 
 wiki relay run <task-folder>/<deliverable> --expect 3
 ```
 
-It waits until every file matches the manifest, which took about 90 seconds in one test, and retries if OneDrive refuses a file. It copies the listed files to a local folder, shows them, and runs the copy when the user presses y. It sends the report to OneDrive only if a run happened. So don't add checks of your own for stale files. If you don't know your task folder's name, `wiki relay run --expect 3` uses the newest deliverable. They can add `--no-install` to skip the install on a second run.
+It waits up to 600 seconds for every file to match the manifest, reading each one, which is what makes OneDrive download it. It copies the listed files to a local folder, shows them, and runs the copy when the user presses y. It sends the report to OneDrive only if a run happened. So don't add checks of your own for stale files. Your publish result shows your task folder's name, as `Tasks/<task-folder>/output/...`. If you can't find it, `wiki relay run --expect 3` uses the newest deliverable. They can add `--no-install` to skip the install on a second run.
+
+If it gives up, it prints what the Mac sees for each file: its size, its flags, and the error from reading it. Have the user paste that output, and don't guess past it. Most failures to get ready are the refusal described below, so look for it first.
 
 **If they don't have the `wiki` command,** give them this instead. It's the usual path on a Mac, so ask once for the real one if their machine might differ, or has more than one `OneDrive-` folder:
 
@@ -149,9 +151,9 @@ It waits until every file matches the manifest, which took about 90 seconds in o
 cd ~/Library/CloudStorage/OneDrive-*/Documents/Cowork/Tasks/<task-folder>/output/<deliverable> && find . -type f -exec cat {} + >/dev/null && bash run.sh --expect 3
 ```
 
-`--expect` makes that run wait for the sync, and start again if files arrive late. It only helps once `run.sh` can be opened, as the next paragraph explains.
+`--expect` makes that run wait for the sync, and start again if files arrive late. It only helps once `run.sh` can be opened, as the next paragraph explains. Reading every file first with `find` makes OneDrive download them, if macOS allows it.
 
-**If the output says `killed` or `Operation not permitted`, with no report,** the shell couldn't open the files, so `runlib.sh` never started. The cause isn't proven, but it has only been seen soon after publishing, while OneDrive was still delivering them. Have the user wait a couple of minutes and run the same command again, which cleared `Operation not permitted` in one test. If it still fails, have them right-click the task's `output` folder in Finder, choose **Always Keep on This Device**, and run it again, which cleared `killed` in another. `ls -lO` can show `dataless` here, but it can be refused too, so don't depend on it. The `find` in the command reads every file first, which is meant to prevent this (**not validated**). Keep the command chained with `&&`, so a refused read doesn't run anything, and tell the user not to send you an old report in its place.
+**If the output says `Operation not permitted`,** macOS won't let their terminal app read files that OneDrive hasn't downloaded yet. It's per app, and waiting doesn't clear it: in one test iTerm was refused for over an hour, while Apple's Terminal read the same files straight away (**validated** for reading, not yet for a whole run). Have them run the same command in Apple's Terminal. If that's refused too, have them right-click the task's `output` folder in Finder and choose **Always Keep on This Device**. `killed` with no report has been seen once on the same kind of file, and Always Keep cleared it, so treat it the same way, though the cause isn't proven. Keep the fallback command chained with `&&`, so a refused read doesn't run anything, and tell the user not to send you an old report in its place.
 
 Then tell them to say "done" when it finishes. Without the relay, they attach the file named on the last line of the output, from `~/pair-run-reports/`, or paste the error if it never got that far.
 
@@ -171,7 +173,7 @@ Repeat until the report ends in PASS. If several reports are attached, go by the
 
 Use a patch for a change to existing code. Never write hunks by hand.
 
-1. Rebuild the file from the user's current copy in a scratch git repository under `/tmp`: `git init`, commit it, and apply any earlier patches to reach the branch's state. An attached file loses its permissions, and your working folder may drop the executable bit, which is why `/tmp`. Set the mode to match the branch: ask for `git ls-files -s <path>`, or use 755 for a script with a shebang.
+1. Rebuild the file from the user's current copy in a scratch git repository under `/tmp`: `git init`, commit it, and apply any earlier patches to reach the branch's state. An attached file loses its permissions, and your working folder may drop the executable bit, which is why `/tmp`. `/tmp` can vanish if your container restarts, so check that the repository is still there, and rebuild it if not. Set the mode to match the branch: ask for `git ls-files -s <path>`, or use 755 for a script with a shebang.
 2. Edit with exact string replacements, and assert that each pattern matched the expected number of times.
 3. Make the patch with `git diff`, and check it with `git apply --check` against that base.
 4. Have `run.sh` compare `git show HEAD:<path>` with your copy, using `sha256_of`, and abort if they differ. Then have it run `git apply --check` and `git apply`, and run scripts the way the repository does, such as `./generate.sh`, so a lost permission shows up.

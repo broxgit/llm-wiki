@@ -19,6 +19,7 @@ die() { echo "error: $*" >&2; exit 1; }
 COWORK="${LLM_WIKI_ONEDRIVE:-}/Documents/Cowork"
 WAIT="${LLM_WIKI_RELAY_WAIT:-600}"
 POLL="${LLM_WIKI_RELAY_POLL:-5}"
+READ_LIMIT="${LLM_WIKI_RELAY_READ_LIMIT:-120}"
 REPORTS="${RUNLIB_REPORT_DIR:-$HOME/pair-run-reports}"
 WORK=""
 
@@ -30,7 +31,7 @@ Usage: $WIKI_CMD relay [--dir ONEDRIVE_FOLDER] run [TASK-FOLDER/DELIVERABLE] [--
        $WIKI_CMD relay [--dir ONEDRIVE_FOLDER] scan [REPOSITORY]
 
   run    Waits until a deliverable from Copilot Cowork matches its manifest, copies it to a
-         local folder, shows you what's there, and runs the copy when you press y. The report
+         local folder, shows you what's there, and runs the copy when you press y. If it gives up, it says what this Mac sees. The report
          goes to Documents/Cowork/relay/<task-folder>/reports in OneDrive, only if a run
          happened. Then tell Cowork "done". With no deliverable named, it uses the newest.
   scan   Puts the repository's current branch and uncommitted changes in OneDrive, at
@@ -64,53 +65,138 @@ check_manifest_paths() {
   done < <(manifest_paths "$1")
 }
 
-# Copies only what the manifest lists, because Cowork can't delete old files from OneDrive.
-# Nothing here can be half-delivered: the copy is checked against the manifest afterward.
-copy_listed() {
-  local src="$1" dst="$2" p
+now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+# What this Mac says about a file, without reading it. A refusal shows up here too.
+describe_file() {
+  local out
+  out="$(stat -c 'size %s, %b blocks' "$1" 2>/dev/null)" || out="$(stat -f 'size %z, %b blocks, flags %Sf' "$1" 2>&1)"
+  printf '%s' "${out##*: }"
+}
+
+# Runs a command for at most $1 seconds, so a download that never finishes can't outlast the wait.
+limited() {
+  local secs="$1" pid i=0
+  shift
+  "$@" </dev/null &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$i" -ge $((secs * 10)) ]; then
+      kill -9 "$pid" 2>/dev/null
+      wait "$pid" 2>/dev/null
+      return 124
+    fi
+    sleep 0.1
+    i=$((i + 1))
+  done
+  wait "$pid" 2>/dev/null
+}
+
+# Reads a file out of OneDrive. A read is what makes OneDrive download a file that's only in
+# the cloud. This is the only way anything here reads the synced folder, and it always says
+# why it couldn't.
+read_file() {
+  local src="$1" dst="$2" name="$3" rc why
+  limited "$READ_LIMIT" cat "$src" >"$dst" 2>"$WORK/read.err"
+  rc=$?
+  [ "$rc" -eq 0 ] && return 0
+  why="$(head -n 1 "$WORK/read.err")"
+  case "$rc:$why" in
+    124:*) why="still reading after ${READ_LIMIT}s" ;;
+    137:*) why="the read was killed" ;;
+    *"No such file"*) echo "$name is missing"; return 1 ;;
+    *) why="${why##*: }" ;;
+  esac
+  echo "$name can't be read: ${why:-exit $rc} ($(describe_file "$src"))"
+  return 1
+}
+
+# One try at copying a deliverable. Copies only what the manifest lists, because Cowork can't
+# delete old files from OneDrive, and checks the copy, so nothing can be half-delivered. Prints
+# each problem, and prints nothing when the copy is good.
+try_copy() {
+  local src="$1" dst="$2" p version bad=""
   rm -rf "$dst"
-  mkdir -p "$dst" || return 1
-  cp "$src/manifest.txt" "$dst/manifest.txt" 2>/dev/null || return 1
+  mkdir -p "$dst" || { echo "can't write to $dst"; return 1; }
+  read_file "$src/manifest.txt" "$dst/manifest.txt" manifest.txt || return 1
+  version="$(_runlib_manifest_version "$dst/manifest.txt")"
+  if [ -z "$version" ]; then
+    echo "manifest.txt has no version line: read $(wc -c <"$dst/manifest.txt" | tr -d ' ') bytes, starting $(head -c 12 "$dst/manifest.txt" | od -An -tx1 | tr -s ' ' | sed 's/^ //; s/ $//') ($(describe_file "$src/manifest.txt"))"
+    return 1
+  fi
+  if [ -n "$RUNLIB_EXPECT" ] && [ "$version" != "$RUNLIB_EXPECT" ]; then
+    echo "manifest.txt is version $version, expected $RUNLIB_EXPECT"
+    return 1
+  fi
+  check_manifest_paths "$dst"
   while IFS= read -r p; do
-    mkdir -p "$dst/$(dirname "$p")" || return 1
-    cp "$src/$p" "$dst/$p" 2>/dev/null || return 1
-  done < <(manifest_paths "$src")
+    mkdir -p "$dst/$(dirname "$p")" || { echo "can't write to $dst"; return 1; }
+    read_file "$src/$p" "$dst/$p" "$p" || bad=1
+  done < <(manifest_paths "$dst")
+  [ -z "$bad" ] || return 1
   RUNLIB_DIR="$dst"
-  [ -z "$(_runlib_sync_problems 2>/dev/null)" ]
+  _runlib_sync_problems
+}
+
+# macOS decides this per terminal app: iTerm was refused for over an hour while Apple's
+# Terminal read the same files at once. So say it the moment it shows, not after the wait.
+refusal_advice() {
+  if [ "${TERM_PROGRAM:-}" = Apple_Terminal ]; then
+    echo "macOS is refusing to let Apple's Terminal read OneDrive files that aren't on this Mac yet. More waiting rarely helps."
+    echo "If your OneDrive allows it, in Finder, right-click the task's output folder and choose Always Keep on This Device."
+  else
+    echo "macOS is refusing to let ${TERM_PROGRAM:-this terminal app} read OneDrive files that aren't on this Mac yet. More waiting rarely helps."
+    echo "Press Ctrl-C, and run the same command in Apple's Terminal, which could read them in one test."
+  fi
 }
 
 # Keeps trying through every way OneDrive has shown a file isn't ready: missing, out of date,
-# or refused with "Operation not permitted". Each try runs in a child process that can fail.
+# unreadable, or refused with "Operation not permitted".
 wait_for_deliverable() {
-  local named="$1" dst="$2" waited=0 problems last=""
+  local named="$1" dst="$2" start="$SECONDS" waited=0 said=0 advised="" problems last=""
   while :; do
     SRC="$named"
     [ -n "$SRC" ] || SRC="$(newest_deliverable)"
     if [ -z "$SRC" ]; then
       problems="no deliverable in $COWORK/Tasks yet"
+      # A refused folder looks empty to a glob.
+      if ! ls "$COWORK/Tasks" >/dev/null 2>"$WORK/read.err"; then
+        grep -q "No such file" "$WORK/read.err" || problems="can't list $COWORK/Tasks: $(sed 's/^.*: //' "$WORK/read.err" | head -n 1)"
+      fi
     else
-      RUNLIB_DIR="$SRC"
-      problems="$(_runlib_sync_problems 2>/dev/null)"
+      try_copy "$SRC" "$dst" >"$WORK/problems"
+      problems="$(cat "$WORK/problems")"
       if [ -z "$problems" ]; then
-        check_manifest_paths "$SRC"
-        if copy_listed "$SRC" "$dst"; then
-          return 0
-        fi
-        problems="a file couldn't be copied, or changed during the copy"
+        [ -z "$last" ] || echo "Ready after $((SECONDS - start))s."
+        return 0
       fi
     fi
+    waited=$((SECONDS - start))
     if [ "$problems" != "$last" ]; then
-      echo "Waiting for OneDrive, up to ${WAIT}s:"
+      echo "Waiting for OneDrive (${waited}s of ${WAIT}s):"
       printf '%s\n' "$problems" | head -n 8 | sed 's/^/  /'
       last="$problems"
+      said="$waited"
+      case "$problems" in
+        *"Operation not permitted"*)
+          if [ -z "$advised" ]; then
+            refusal_advice
+            advised=1
+          fi
+          ;;
+      esac
+    elif [ $((waited - said)) -ge 60 ]; then
+      echo "Still waiting (${waited}s of ${WAIT}s)."
+      said="$waited"
     fi
     if [ "$waited" -ge "$WAIT" ]; then
-      echo "Still not ready after ${WAIT}s, so nothing ran and no report was sent." >&2
-      echo "Run the same command again. If it keeps failing, in Finder, right-click the task's output folder and choose Always Keep on This Device." >&2
+      {
+        echo "Still not ready after ${waited}s, at $(now), so nothing ran and no report was sent."
+        echo "Paste this output to Cowork. If your OneDrive allows it, in Finder, right-click the task's output folder, choose Always Keep on This Device, and run the same command again."
+      } >&2
       return 1
     fi
     sleep "$POLL"
-    waited=$((waited + POLL))
   done
 }
 
@@ -207,6 +293,7 @@ cmd_run() {
   trap cleanup EXIT
   copy="$WORK/deliverable"
   RUNLIB_EXPECT="$expect"
+  echo "Relay run started at $(now)."
   wait_for_deliverable "$named" "$copy" || return 1
 
   version="$(_runlib_manifest_version "$copy/manifest.txt")"
@@ -238,6 +325,7 @@ cmd_run() {
     return "$rc"
   fi
   send_report "$REPORTS/$new" "$task" || { [ "$rc" -ne 0 ] || rc=1; }
+  echo "Relay run ended at $(now)."
   return "$rc"
 }
 
@@ -274,7 +362,11 @@ cmd_scan() {
     echo "branch: ${branch:-detached}"
     echo "commit: $commit"
     echo "taken: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    echo "uncommitted changes: $dirty, in uncommitted.patch"
+    if [ "$dirty" = yes ]; then
+      echo "uncommitted changes: yes, in uncommitted.patch"
+    else
+      echo "uncommitted changes: no, uncommitted.patch is empty"
+    fi
     echo "status (untracked files, marked ??, are not in the archive):"
     git -C "$root" status --short | head -n 200 | sed 's/^/  /'
     echo "tools:"

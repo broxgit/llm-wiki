@@ -1608,7 +1608,7 @@ done"
 check "the skill stays out of the plugin's skills" test ! -e "$REPO/skills/remote-pair-run"
 check "the skill's command reads the files before running them" grep -q 'find \. -type f -exec cat {} + >/dev/null && bash run\.sh --expect' "$SK/SKILL.md"
 check "the skill explains a killed run" grep -q 'Always Keep on This Device' "$SK/SKILL.md"
-check "the skill explains a refused run" grep -q 'killed. or .Operation not permitted., with no report' "$SK/SKILL.md"
+check "the skill explains a refused run" grep -q 'If the output says .Operation not permitted.,.* Have them run the same command in Apple.s Terminal' "$SK/SKILL.md"
 check "the skill catches an old report by its start time" grep -q '`started:` is before you published it' "$SK/SKILL.md"
 check "the skill's trial runs don't wait for a sync" grep -q 'RUNLIB_SYNC_WAIT=0' "$SK/SKILL.md"
 check "the skill reads the manifest back after publishing" grep -q 'read `manifest.txt` back' "$SK/SKILL.md"
@@ -1773,7 +1773,65 @@ RL_WAIT=15 rl y t5/d5 --expect 1
 wait
 rl_expect "a refused file is waited for" 0 "Waiting for OneDrive"
 rl_expect "the run goes ahead once it can be read" 0 "REFUSAL-CLEARED"
+rl_expect "it says how long the wait took" 0 "Ready after "
 sleep 1
+
+# The reason has to reach the screen: the first real run hid it, and 30 minutes of waiting taught nothing.
+rl_new t9 d9 'result "fine" 0
+report_end'
+if [ "$(id -u)" != 0 ]; then
+  chmod 000 "$RL_D/manifest.txt"
+  rl y t9/d9 --expect 1
+  rl_expect "an unreadable manifest gives its reason" 1 "manifest.txt can't be read: Permission denied (size "
+  rl_lacks "and it isn't called missing" "manifest.txt is missing"
+  rl_expect "and it says what to do next" 1 "Paste this output to Cowork"
+  chmod 644 "$RL_D/manifest.txt"
+fi
+printf '\n' >"$RL_D/manifest.txt"
+rl y t9/d9
+rl_expect "a manifest with no version shows what it read" 1 "manifest.txt has no version line: read 1 bytes, starting 0a (size 1"
+: >"$RL_D/manifest.txt"
+rl y t9/d9
+rl_expect "an empty manifest says it's empty" 1 "manifest.txt has no version line: read 0 bytes"
+
+# A download that never finishes can't outlast the wait.
+rl_new t10 d10 'result "fine" 0
+report_end'
+rm -f "$RL_D/manifest.txt"
+mkfifo "$RL_D/manifest.txt"
+LLM_WIKI_RELAY_READ_LIMIT=1 rl y t10/d10
+rl_expect "a read that never ends gives up" 1 "manifest.txt can't be read: still reading after 1s"
+rm -f "$RL_D/manifest.txt"
+bash "$LIB" manifest "$RL_D" 1 >/dev/null
+sleep 1
+
+rl y t1/d1
+rl_expect "a run says when it started" 0 "Relay run started at 20"
+rl_expect "a run says when it ended" 0 "Relay run ended at 20"
+sleep 1
+
+# macOS's refusal, imitated by a cat on the PATH that refuses only this deliverable's manifest.
+rl_new t12 d12 'result "fine" 0
+report_end'
+FC="$T/fake-cat"
+mkdir -p "$FC"
+cat >"$FC/cat" <<'FAKE'
+#!/bin/sh
+case "$1" in
+  */t12/output/d12/manifest.txt) echo "cat: $1: Operation not permitted" >&2; exit 1 ;;
+esac
+exec /bin/cat "$@"
+FAKE
+chmod +x "$FC/cat"
+TERM_PROGRAM=iTerm.app PATH="$FC:$PATH" rl y t12/d12 --expect 1
+rl_expect "a refusal is named" 1 "manifest.txt can't be read: Operation not permitted"
+rl_expect "it names the app and the way out" 1 "refusing to let iTerm.app read OneDrive files"
+rl_expect "it points at Apple's Terminal" 1 "run the same command in Apple's Terminal"
+TERM_PROGRAM=Apple_Terminal PATH="$FC:$PATH" rl y t12/d12 --expect 1
+rl_expect "in Apple's Terminal, it points at Always Keep" 1 "refusing to let Apple's Terminal read"
+rl_lacks "and doesn't send you to the app you're in" "run the same command in Apple's Terminal"
+rl y t8/nothing --expect 1
+rl_lacks "other failures don't blame macOS" "refusing to let"
 
 # A late version: the old one is there, then the new one arrives.
 rl_new t6 d6 'echo OLD-CODE
@@ -1840,7 +1898,7 @@ check "untracked files stay out" bash -c "! grep -rq secret '$T/unpack/clone' &&
 git -C "$SR" checkout -q -- a.txt
 git -C "$SR" checkout -q --detach
 expect "a detached HEAD can be scanned" "detached HEAD" sc "$SR"
-check "with nothing uncommitted, it says so" grep -q '^uncommitted changes: no' "$SD/scan-me.txt"
+check "with nothing uncommitted, it says so" grep -q '^uncommitted changes: no, uncommitted.patch is empty$' "$SD/scan-me.txt"
 out="$(cd "$SR/sub" && env HOME="$RH" "$W" relay scan 2>&1)"
 case "$out" in *"Scanned scan-me"*) ok "scan defaults to the repository you're in" ;; *) bad "scan defaults to the repository you're in" "$out" ;; esac
 mkdir -p "$T/not-a-repo"
