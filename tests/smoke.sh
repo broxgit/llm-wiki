@@ -2220,7 +2220,7 @@ FNG="$T/no-go-bin"
 mkdir -p "$FNG"
 cp "$FG/glab" "$FG/pbcopy" "$FNG/"
 if PATH="/usr/bin:/bin" command -v go >/dev/null 2>&1; then
-  skip "with no go, the note says why (this machine has go in /usr/bin)"
+  skipped "with no go, the note says why (this machine has go in /usr/bin)"
 else
   env HOME="$RH" PATH="$FNG:/usr/bin:/bin" "$W" relay mr "$MRU" --checks </dev/null >/dev/null 2>&1
   check "with no go, the note says why" grep -q "^checks: not run, because go isn't on this machine$" "$MD/svc-7.txt"
