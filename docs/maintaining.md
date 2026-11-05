@@ -49,6 +49,8 @@ The handbook is `template/AGENTS.md` plus `template/rules/`. `AGENTS.md` loads i
 3. Add a section for that version to `CHANGELOG.md`, written for the person upgrading: what changed, and `- Do:` lines for anything they need to do. `wiki upgrade` prints it.
 4. Run `wiki upgrade --all` to roll it out to your own wikis.
 
+The tour in `tour/guide.md` runs on the real handbook, and holds some of its steps back for later chapters. When a handbook change moves a step the tour shows, such as when to compile or propose a pattern, check the guide still fits. `tests/smoke.sh` checks that the sandbox has what the guide promises, not what an agent does with it.
+
 Batch handbook changes: at most one version a day. Each version makes every machine's next session upgrade and commit. Seven versions in one day left people seeing "behind template" over and over.
 
 ## Add a setting

@@ -916,6 +916,7 @@ check "its plugin.json has only fields Antigravity reads" python3 -c "import jso
 check "it links the llm-wiki skill" test -f "$HOME/.gemini/config/plugins/llm-wiki/skills/llm-wiki/SKILL.md"
 A="$HOME/.gemini/config/plugins/llm-wiki/skills"
 check "it makes a skill from each slash command" test -f "$A/wiki-compile/SKILL.md" -a -f "$A/wiki-save/SKILL.md" -a -f "$A/wiki-standup/SKILL.md" -a -f "$A/wiki-status/SKILL.md"
+check "including the tour" grep -q '^Run `.*wiki.sh tour` for the tour.s guide, and read its output.$' "$A/wiki-tour/SKILL.md"
 check "named and described for the agent" grep -q '^name: wiki-standup$' "$A/wiki-standup/SKILL.md"
 check "an inline command becomes one to run, by a path the agent can use" grep -q '^Run `.*wiki.sh standup <options the user gave, if any>` for raw activity, and read its output.$' "$A/wiki-standup/SKILL.md"
 lacks "and nothing Claude-only is left in them" 'ARGUMENTS\|CLAUDE_PLUGIN_ROOT\|^!`\|,,' cat "$A/wiki-compile/SKILL.md" "$A/wiki-save/SKILL.md" "$A/wiki-standup/SKILL.md" "$A/wiki-status/SKILL.md"
@@ -2618,6 +2619,53 @@ check "--dir puts the scan there" test -f "$RH/Library/CloudStorage/OneDrive-Oth
 check "the skill points at the relay" grep -q 'wiki relay run <task-folder>/<deliverable> --expect 3' "$SK/SKILL.md"
 check "the skill reads reports from the relay's folder" grep -q 'Documents/Cowork/relay/<task-folder>/reports/' "$SK/SKILL.md"
 check "the skill reads scans from the relay's folder" grep -q 'Documents/Cowork/relay/scans/<repository>.txt' "$SK/SKILL.md"
+
+section "Tour"
+TH="$T/tour-home"
+TD="$TH/tmp/llm-wiki-tour"
+mkdir -p "$TH/tmp"
+# shellcheck disable=SC2120
+tour() { env -u WIKIS_DIR -u XDG_CONFIG_HOME -u XDG_STATE_HOME HOME="$TH" TMPDIR="$TH/tmp" "$W" tour "$@"; }
+tour_again() { tour >/dev/null && find "$TD/wikis/harbor-api/raw" -name '*tour-note*' | grep -q .; }
+tw() { env -u WIKIS_DIR "$TD/wiki" "$@"; }
+out="$(tour)"
+case "$out" in *"# The llm-wiki tour"*"$TD/wiki"*) ok "the tour prints its guide, naming the sandbox's command" ;; *) bad "the tour prints its guide, naming the sandbox's command" "$out" ;; esac
+case "$out" in *"@DIR@"* | *"@W@"* | *"@REAL@"*) bad "and fills in every placeholder" "$out" ;; *) ok "and fills in every placeholder" ;; esac
+check "the guide's sandbox has the code" test -f "$TD/code/harbor-api/delivery/retry.go"
+expect "the sandbox's start finds the project" "Webhook retries" tw start harbor-api
+n="$(tw pending harbor-api | grep -c '^raw/')"
+if [ "$n" = 2 ]; then ok "two notes wait to be compiled"; else bad "two notes wait to be compiled ($n)"; fi
+expect "the planted page is stale" "webhook-retries.md" tw stale
+expect "lint finds the planted broken link" "on-call.md" tw lint harbor-api
+lacks "and no orphan pages" "orphan" tw lint harbor-api
+lacks "fixture placeholders are filled in" "@TODAY@\|@COMMIT@" grep -r '@TODAY@\|@COMMIT@' "$TD/wikis/harbor-api/wiki"
+c="$(sed -n 's/^commit: //p' "$TD/wikis/harbor-api/wiki/concepts/webhook-retries.md")"
+expect "the page's commit is from before the code changed" "maxAttempts = 6" git -C "$TD/code/harbor-api" show "$c:delivery/retry.go"
+expect "the code now disagrees with the page" "maxAttempts = 8" cat "$TD/code/harbor-api/delivery/retry.go"
+expect "a peer wiki holds what the page cites" "delivery.succeeded" cat "$TD/wikis/billing/wiki/concepts/invoice-events.md"
+expect "the shared wiki turns up in a search" "Run Postgres locally" tw find postgres
+expect "standup sees the sandbox's commits" "Raise the retry cap" tw standup --since today
+expect "the planted pattern isn't ready before the compile" "0 ready" tw patterns
+TP="$TD/wikis/harbor-api/patterns.md"
+cp "$TP" "$T/tour-patterns"
+echo "- seen: 2026-01-20 harbor-api raw/2026-01-20-153000-rate-limit-decision.md" >> "$TP"
+expect "and the compile's sighting makes it ready, as the guide says" "READY" tw patterns
+cp "$T/tour-patterns" "$TP"
+check "a capture works" tw capture harbor-api tour-note --file "$TD/code/harbor-api/README.md"
+expect "and a sync commits it, with no remote" "no remote" tw sync harbor-api -m "harbor-api: tour"
+check "nothing is left uncommitted in the sandbox" test -z "$(git -C "$TD/wikis" status --porcelain)"
+check "nothing lands in the home folder" test -z "$(find "$TH" -type f ! -path "$TD/*")"
+check "a repeat keeps the sandbox, so a tour can pick up later" tour_again
+mkdir -p "$T/not-a-tour" && echo keep > "$T/not-a-tour/keep"
+expect "clean refuses a folder that isn't a sandbox" "isn't a tour's sandbox" tour --dir "$T/not-a-tour" --clean
+expect "and the tour won't build in one" "already holds other files" tour --dir "$T/not-a-tour"
+check "so it's still there" test -f "$T/not-a-tour/keep"
+expect "--dir needs a folder" "--dir needs a value" tour --dir
+expect "tour completes its options" "--clean" "$W" __complete 2 tour ""
+expect "clean removes the sandbox" "Removed" tour --clean
+check "and it's gone" test ! -e "$TD"
+expect "clean with no sandbox says so" "No tour sandbox" tour --clean
+expect "unknown options are refused" "tour options" tour --nope
 
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ]

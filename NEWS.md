@@ -17,6 +17,15 @@ Sessions spend their first minutes compiling notes that earlier sessions left, a
 - Sessions still compile at a pause, as the handbook says. This only takes the notes waiting at session start.
 - Do: to try it, run `wiki compile on`, and look at `wiki compile` after a week. Read a few of the pages it wrote before trusting it.
 
+## 2026-11-05: Take the tour
+
+Ask your agent "Give me the llm-wiki tour" and it teaches you the features by doing them, on a made-up project. You ask its wiki a question, save a decision, watch notes become pages, rule on a contradiction, and see a wrong page get caught against the code.
+
+- It runs in a sandbox in your temp folder, with its own wikis, code and settings, so your wikis and tips aren't touched. The last chapter reads your real setup, and says what would help you most.
+- The short version takes about 10 minutes. You can skip around, or stop and pick up later. `wiki tour --clean` removes the sandbox.
+- It's `/llm-wiki:tour` in the plugin, and the `wiki-tour` skill in Antigravity, Codex and Cursor. Any other agent that can run commands can follow `wiki tour`. The desktop app's Chat tab can't.
+- Do: try it, or point a new teammate at it. Otherwise, nothing.
+
 ## 2026-11-05: Wikis in a second collection get found from anywhere
 
 A second review of the code by Gemini found these, and each one was checked against the code first.
