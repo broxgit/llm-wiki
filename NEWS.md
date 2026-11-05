@@ -4,6 +4,18 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. A short paragraph, then lines starting `- ` for what changed and `- Do:` for what to do about it. Add an entry for anything a user would notice, and none for fixes they wouldn't.
 
+## 2026-11-05: Fixes from a test run in another agent's sandbox
+
+Gemini ran the day's changes in Antigravity's sandbox and found six bugs. They are fixed.
+
+- `wiki lint`, `wiki stale` and `wiki deps` printed nothing and failed when one folder under your code folders couldn't be read, which is the usual case inside an agent's sandbox. They now work with what they can read.
+- With background compile on, `wiki start` says so when the agent's command isn't on that shell's PATH, where before it left the notes waiting without a word.
+- The compile agent can be Claude Code by its full path, such as `agent=/Users/you/.local/bin/claude` in `~/.config/llm-wiki/compile`. It used to be run as an unknown agent, with no tool list.
+- In a reminder's pattern only `*` is special, as the handbook says. A `[` or `?` used to be read as a shell glob, so a pattern like `[ -f x ]` matched nearly every command.
+- The compiled helper put a reply on the wrong day within an hour of your day's start on a morning the clocks change, and left a transcript it couldn't read out of the token table. It now matches the built-in code in both.
+- Session start replaces a downloaded helper that is damaged.
+- Do: run `wiki update`. Nothing else.
+
 ## 2026-11-05: wiki journal backfill gets faster too
 
 `wiki journal backfill` now writes its digest with the same compiled helper as `wiki report` and `wiki standup`. On one machine the default 14 days went from 14 seconds to under 3. The digest is the same.

@@ -75,6 +75,7 @@ func Run(o Options) (string, error) {
 
 	sc := newScanner(o.Start, o.End, shift, o.Wikis)
 	results := make([]scanned, len(files))
+	errs := make([]error, len(files))
 	var wg sync.WaitGroup
 	slots := make(chan struct{}, runtime.NumCPU())
 	for i, f := range files {
@@ -83,11 +84,18 @@ func Run(o Options) (string, error) {
 			defer wg.Done()
 			slots <- struct{}{}
 			base := filepath.Base(f)
-			results[i], _ = sc.file(f, strings.TrimSuffix(base, filepath.Ext(base)))
+			results[i], errs[i] = sc.file(f, strings.TrimSuffix(base, filepath.Ext(base)))
 			<-slots
 		}(i, f)
 	}
 	wg.Wait()
+	// The Python stops at a transcript it can't read. Failing here hands the report to
+	// it, so a file is never left out of the totals without a word.
+	for _, err := range errs {
+		if err != nil {
+			return "", err
+		}
+	}
 
 	var cwds []string
 	for _, res := range results {

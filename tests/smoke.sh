@@ -759,6 +759,34 @@ lacks "and the hook starts nothing then" "in the background" bg_hook
 expect "compile off turns it off" "compile: off" "$W" compile off
 expect "off, start leaves the notes to the session" "Compile them before the user's request" "$W" start bg
 refuse "compile rejects an unknown option" "$W" compile bg --nope
+printf 'auto=off\nagent=no-such-agent-here\n' > "$BGC"
+lacks "off, start says nothing about a missing agent" "isn't a command in this shell" "$W" start bg
+printf 'auto=on\nagent=no-such-agent-here\n' > "$BGC"
+expect "on with its agent missing, start says why nothing started" "no-such-agent-here isn't a command in this shell" "$W" start bg
+expect "and still leaves the notes to the session" "Compile them before the user's request" "$W" start bg
+# A stand-in for Claude Code, which unlike another agent is run headless with a tool
+# list. It keeps its arguments and logs the waiting notes as compiled.
+mkdir -p "$T/claude-bin"
+cat > "$T/claude-bin/claude" <<FAKE
+#!/bin/sh
+printf '%s\n' "\$@" > "$T/claude-args"
+cat > /dev/null
+for f in \$("$W" pending bg | sed -n 's/^\(raw\/[^ ]*\).*/\1/p'); do
+  "$W" log bg ingest "Fake" --source "\$f" >/dev/null
+done
+FAKE
+chmod +x "$T/claude-bin/claude"
+printf 'agent=%s\n' "$T/claude-bin/claude" > "$BGC"
+out="$("$W" compile bg 2>&1)"
+case "$out" in *"1 of 1 note(s)"*", ok."*) ok "claude named by its full path runs" ;; *) bad "claude named by its full path runs" "$out" ;; esac
+check "as Claude Code: headless, on sonnet, with a tool list" bash -c "grep -qx -- '-p' '$T/claude-args' && grep -qx 'sonnet' '$T/claude-args' && grep -qx -- '--allowedTools' '$T/claude-args'"
+check "allowed the wiki commands a compile needs" grep -q '^Bash(.* pending \*)$' "$T/claude-args"
+check "and recorded by its name" grep -q ',ok,claude$' "$BGR"
+rm -f "$BGC" "$T/claude-args"
+bg_note 7
+out="$(PATH="$T/claude-bin:$PATH" "$W" compile bg 2>&1)"
+case "$out" in *"1 of 1 note(s)"*", ok."*) ok "with no agent named, claude on the PATH runs" ;; *) bad "with no agent named, claude on the PATH runs" "$out" ;; esac
+check "the same way" grep -qx -- '--allowedTools' "$T/claude-args"
 rm -f "$BGC"
 
 section "Reminders"
@@ -783,6 +811,7 @@ verified: 2026-11-05
 - before bash `git push`: Before a push, make sure the hooks ran. [raw/2026-01-01-000000-x.md]
 - on edit `payments/*`: Money is in cents. (raw/2026-01-01-000000-y.md)
 - on tool `Agent`: Set the model.
+- on bash `[ -f retry.conf ]`: Read retry.conf first.
 - sometimes bash `x`: not a reminder
 
 ```
@@ -799,7 +828,7 @@ out="$("$W" __reminders "$RM" 2>&1)"
 case "$out" in *"before${TAB}bash${TAB}git push${TAB}Before a push, make sure the hooks ran.${TAB}rem"*) ok "a reminder line is read, without its citation" ;; *) bad "a reminder line is read, without its citation" "$out" ;; esac
 case "$out" in *"on${TAB}edit${TAB}payments/*${TAB}Money is in cents.${TAB}rem"*) ok "or its citation in round brackets, which pages also use" ;; *) bad "or its citation in round brackets, which pages also use" "$out" ;; esac
 case "$out" in "on${TAB}bash${TAB}npm publish${TAB}Ask first.${TAB}global"*) ok "the shared wiki's reminders come first" ;; *) bad "the shared wiki's reminders come first" "$out" ;; esac
-check "four are read: one shared, three of its own" test "$(printf '%s\n' "$out" | grep -c .)" = 4
+check "five are read: one shared, four of its own" test "$(printf '%s\n' "$out" | grep -c .)" = 5
 case "$out" in *"not a reminder"* | *"inside a fence"*) bad "a line that isn't a reminder, or sits in a code fence, is left out" "$out" ;; *) ok "a line that isn't a reminder, or sits in a code fence, is left out" ;; esac
 out="$("$W" lint rem 2>&1)"
 case "$out" in *"reminder line not understood: 1"*"sometimes bash"*) ok "lint names the line it couldn't read" ;; *) bad "lint names the line it couldn't read" "$out" ;; esac
@@ -812,7 +841,7 @@ check "its Python parses" python3 -c "import ast, sys; ast.parse(open(sys.argv[1
 out="$(tool_call '{"session_id":"s-1","tool_name":"Bash","tool_input":{"command":"git push"}}')"
 [ -z "$out" ] && ok "with no session started, a tool call gets nothing" || bad "with no session started, a tool call gets nothing" "$out"
 hook "$T/projects/rem" '{"session_id":"s-1","source":"startup"}' >/dev/null
-check "session start writes the session's reminders" test "$(grep -c . "$RD/s-1.tsv")" = 4
+check "session start writes the session's reminders" test "$(grep -c . "$RD/s-1.tsv")" = 5
 push='{"session_id":"s-1","cwd":"'"$T/projects/rem"'","tool_name":"Bash","tool_input":{"command":"cd x && git push origin main"}}'
 out="$(tool_call "$push")"
 case "$out" in *'"permissionDecision": "deny"'*"make sure the hooks ran"*"from the wiki rem"*) ok "a before reminder stops the call once, with the rule" ;; *) bad "a before reminder stops the call once, with the rule" "$out" ;; esac
@@ -831,6 +860,20 @@ expect "a tool reminder matches the tool's name" "Set the model" tool_call '{"se
 expect "the shared wiki's reminder applies too" "Ask first. (from the wiki global" tool_call '{"session_id":"s-1","tool_name":"Bash","tool_input":{"command":"npm publish"}}'
 out="$(tool_call '{"session_id":"s-1","tool_name":"Bash","tool_input":{"command":"ls"}}')"
 [ -z "$out" ] && ok "a call no reminder covers gets nothing" || bad "a call no reminder covers gets nothing" "$out"
+# Only * is special. Read as a shell glob, [ -f retry.conf ] is a set of letters, and
+# any command holding one of them would match.
+out="$(tool_call '{"session_id":"s-1","tool_name":"Bash","tool_input":{"command":"git status"}}')"
+[ -z "$out" ] && ok "a bracket in a pattern is a bracket, not a set of letters" || bad "a bracket in a pattern is a bracket, not a set of letters" "$out"
+expect "and matches the command that holds it" "Read retry.conf first" tool_call '{"session_id":"s-1","tool_name":"Bash","tool_input":{"command":"[ -f retry.conf ] && cat retry.conf"}}'
+check "a question mark is itself too" python3 -B -c "
+import io, sys
+sys.argv, sys.stdin = ['x', '/nowhere'], io.StringIO('')
+sys.path.insert(0, '$REPO/hooks')
+import reminders
+assert reminders.glob('is it up?', '*up?'), 'a ? matches itself'
+assert not reminders.glob('is it upx', '*up?'), 'a ? matched another character'
+assert reminders.glob('a\\nb', 'a*b'), 'a * crosses lines'
+"
 out="$(tool_call 'not json'; echo "rc=$?")"
 [ "$out" = "rc=0" ] && ok "input it can't read is ignored, and the hook still exits 0" || bad "input it can't read is ignored, and the hook still exits 0" "$out"
 out="$(tool_call '{"session_id":"../s-1","tool_name":"Bash","tool_input":{"command":"git push"}}')"
@@ -1206,6 +1249,22 @@ done
 case "$out" in *"app owns npm inner-only"*) bad "deps counts a nested repository under its own name" "$out" ;; *) ok "deps counts a nested repository under its own name" ;; esac
 case "$out" in *"github.com/other/thing"*) bad "deps lists only uses of your own repositories' packages" "$out" ;; *) ok "deps lists only uses of your own repositories' packages" ;; esac
 lacks "by default deps leaves out repositories no wiki covers" "example.com/me/lib" "$W" deps
+# One folder nobody may read, as an agent's sandbox has, used to end every command
+# that maps repositories to wikis: nothing printed, exit 1.
+if [ "$(id -u)" != 0 ]; then
+  with_rc() { "$@" 2>&1; echo "rc=$?"; }
+  lint_was="$(with_rc "$W" lint demo)"; stale_was="$(with_rc "$W" stale 90)"; deps_was="$(with_rc "$W" deps --all)"
+  mkdir -p "$T/code/locked/inner" && chmod 000 "$T/code/locked"
+  now="$(with_rc "$W" lint demo)"
+  [ "$now" = "$lint_was" ] && [ "$(printf '%s\n' "$now" | grep -c .)" -gt 1 ] && ok "lint is the same with a code folder it can't read" || bad "lint is the same with a code folder it can't read" "$now"
+  now="$(with_rc "$W" stale 90)"
+  [ "$now" = "$stale_was" ] && [ "$(printf '%s\n' "$now" | grep -c .)" -gt 1 ] && ok "and so is stale" || bad "and so is stale" "$now"
+  now="$(with_rc "$W" deps --all)"
+  [ "$now" = "$deps_was" ] && [ "$(printf '%s\n' "$now" | grep -c .)" -gt 1 ] && ok "and deps" || bad "and deps" "$now"
+  chmod 755 "$T/code/locked" && rmdir "$T/code/locked/inner" "$T/code/locked"
+else
+  skipped "a code folder that can't be read (root can read anything)"
+fi
 "$W" deps --all --write >/dev/null 2>&1
 check "deps --write saves the shared wiki's data/dependencies.csv" grep -q '^uses,app,go,example.com/me/lib/sub,lib,' "$WIKIS_DIR/global/data/dependencies.csv"
 rm -rf "$D" "$WIKIS_DIR/global/data/dependencies.csv"
@@ -2004,6 +2063,16 @@ if command -v go >/dev/null 2>&1 && [ -n "$HPLAT" ]; then
   case "$out" in *"Fetch it automatically at session start?"*"helper auto: off"*) ok "setup helper asks, and a no turns it off" ;; *) bad "setup helper asks, and a no turns it off" "$out" ;; esac
   lacks "and the question isn't new any more" "<- new" bash -c "'$HW' setup --list | grep '^helper'"
   "$HW" helper auto on >/dev/null
+  # A file that isn't the release's bytes is a broken download.
+  hwhole() { local i=0; while [ "$i" -lt 100 ]; do [ "$(sha "$HDIR/$HSRC/llm-wiki" 2>/dev/null)" = "$(sha "$T/release-good")" ] && return 0; sleep 0.1; i=$((i + 1)); done; return 1; }
+  hgone again
+  printf '#!/bin/sh\nexit 1\n' > "$HDIR/$HSRC/llm-wiki"
+  chmod +x "$HDIR/$HSRC/llm-wiki"
+  "$HW" __helper-auto
+  check "session start replaces a helper that is there but broken" hwhole
+  rm -f "$HDIR/$HSRC/.tried"
+  "$HW" __helper-auto
+  check "and leaves a whole one alone" test ! -e "$HDIR/$HSRC/.tried"
 else
   skipped "fetching and verifying a release (go isn't installed)"
 fi

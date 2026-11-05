@@ -149,7 +149,7 @@ func (s *scanner) line(line []byte, stem string) (record, bool) {
 	if !ok {
 		return record{}, false
 	}
-	day := t.Local().Add(-s.dayShift).Format("2006-01-02")
+	day := dayOf(t, s.dayShift)
 	rec := record{inRange: day >= s.start && day <= s.end}
 	rec.cwd, _ = asString(raw.Cwd)
 	if !rec.inRange {
@@ -378,6 +378,17 @@ var timeLayouts = []string{
 	"2006-01-02 15:04:05.999999999Z07:00",
 	"2006-01-02 15:04:05.999999999",
 	"2006-01-02",
+}
+
+// dayOf is the day a moment counts toward, as the Python has it:
+//
+//	(t.astimezone() - timedelta(hours=h, minutes=m)).date()
+//
+// astimezone gives a fixed offset, the one in force at that moment, so the day's start
+// is taken off in that offset even when the clocks changed in between.
+func dayOf(t time.Time, shift time.Duration) string {
+	name, offset := t.Local().Zone()
+	return t.Add(-shift).In(time.FixedZone(name, offset)).Format("2006-01-02")
 }
 
 // parseTime reads an ISO time. One with no zone is local time, as Python has it.
