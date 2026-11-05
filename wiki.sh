@@ -221,6 +221,22 @@ die() { echo "error: $*" >&2; exit 1; }
 # need_value "$@", in a flag's arm: without it, shift fails and set -e ends the script with no message.
 need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 
+# The compiled helper, bin/llm-wiki, built from cmd/llm-wiki with
+#   go build -o bin/llm-wiki ./cmd/llm-wiki
+# It is optional. Where it hasn't been built, or was built from an older checkout,
+# wiki.sh does the work itself with the code it has always had, so the two must print
+# the same thing: a smoke test compares them. go_helper prints the helper's path when
+# it can be trusted. Raise GO_PROTOCOL, with the constant in cmd/llm-wiki/main.go,
+# whenever a ported command's arguments or output change.
+GO_PROTOCOL=1
+go_helper() {
+  local b="${LLM_WIKI_GO:-$REPO/bin/llm-wiki}"
+  [ -z "${LLM_WIKI_NO_GO:-}" ] || return 1
+  [ -x "$b" ] || return 1
+  [ "$("$b" protocol 2>/dev/null)" = "$GO_PROTOCOL" ] || return 1
+  printf '%s' "$b"
+}
+
 # Show a path with ~ in place of the home folder. The tilde is meant literally.
 # shellcheck disable=SC2088
 tilde() {
@@ -5169,7 +5185,13 @@ PY
 
 # report_tokens <start> <end>: the Tokens section, from transcripts.
 report_tokens() {
-  local from="$HOME/.claude/projects"
+  local from="$HOME/.claude/projects" bin
+  # The compiled helper prints the same table several times faster. It prints nothing
+  # when it fails, so the Python below still answers.
+  if [ -d "$from" ] && bin="$(go_helper)" \
+    && "$bin" report-tokens "$from" "$1" "$2" "$(journal_get day_starts)" "$WIKIS_DIR" "$(journal_get exclude)" 2>/dev/null; then
+    return 0
+  fi
   if [ ! -d "$from" ] || ! command -v python3 >/dev/null 2>&1; then
     echo "No Claude Code transcripts on this machine${from:+ (or no python3)}, so no token counts."
     return 0
@@ -5186,7 +5208,7 @@ dh, dm = (int(x) for x in day_starts.split(":"))
 wikis_real = os.path.realpath(wikis)
 
 cover = {}
-for rp in Path(wikis).glob("*/repos.md"):
+for rp in sorted(Path(wikis).glob("*/repos.md")):  # sorted, as the Go version reads them
     for line in rp.read_text(errors="replace").splitlines():
         if line.startswith("- "):
             cover[line[2:].strip()] = rp.parent.name
@@ -5242,7 +5264,7 @@ def note_pages(use, session):
 cutoff = datetime.combine(start - timedelta(days=1), datetime.min.time()).timestamp()
 rows = {}      # project -> counts
 seen = set()   # message ids already counted
-for f in Path(sess_dir).rglob("*.jsonl"):
+for f in sorted(Path(sess_dir).rglob("*.jsonl")):  # in a fixed order: a reply in two files counts where it is met first
     if f.stat().st_mtime < cutoff: continue
     wiki_uses = {}   # tool_use id -> project
     recs = []

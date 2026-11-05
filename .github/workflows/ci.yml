@@ -19,6 +19,21 @@ jobs:
       - name: Validate the plugin and marketplace
         run: npx --yes @anthropic-ai/claude-code@2.1.170 plugin validate .
 
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # Only the helper's own packages: tour/ holds Go that is sample code for the tour.
+      - name: gofmt
+        run: test -z "$(gofmt -l cmd internal)"
+      - name: go vet
+        run: go vet ./cmd/... ./internal/...
+      - name: go test
+        run: go test ./cmd/... ./internal/...
+
   smoke:
     strategy:
       fail-fast: false
@@ -50,6 +65,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/bash32"
           ln -s /bin/bash "$RUNNER_TEMP/bash32/bash"
           echo "$RUNNER_TEMP/bash32" >> "$GITHUB_PATH"
+      # With Go there, the smoke tests build the helper and compare it with the code
+      # it stands in for.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
       - name: Smoke tests
         run: |
           bash --version | head -n 1

@@ -368,6 +368,41 @@ big="$(awk 'BEGIN { for (i = 0; i < 4000; i++) printf "x" }')"
 out="$("$W" report 2>&1)"
 case "$out" in *"| demo | 1 | 2k | 50k | 300 | 1k |"*) ok "tokens: a covered repository's session counts toward its wiki, each reply once" ;; *) bad "tokens: a covered repository's session counts toward its wiki, each reply once" "$out" ;; esac
 case "$out" in *"Wiki reads are about 5"[0-9].[0-9]"% of new input"*) ok "tokens: wiki reads are estimated against new input" ;; *) bad "tokens: wiki reads are estimated against new input" "$out" ;; esac
+# The compiled helper stands in for the Python above, so it must print the same report.
+# A second transcript holds the cases the two could differ on.
+{
+  printf '{"type":"assistant","timestamp":"%s","cwd":"%s","sessionId":"s2","message":{"id":"m2","usage":{"input_tokens":7,"cache_creation_input_tokens":1200,"cache_read_input_tokens":3000000,"output_tokens":1500},"content":[{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"%s find caf\\u00e9 \\u2603 \\ud83d\\ude00","timeout":0.5,"nested":[1,2.50,{"a":null,"b":true}]}}]}}\n' "$now" "$T/projects/nowhere/deep" "$W"
+  printf '{"type":"user","timestamp":"%s","cwd":"%s","sessionId":"s2","message":{"content":[{"type":"tool_result","tool_use_id":"t2","content":[{"type":"text","text":"%s"},{"type":"text","text":"d\\u00e9f"}]}]}}\n' "$now" "$T/projects/nowhere/deep" "$big"
+  printf '{"type":"assistant","timestamp":"%s","cwd":"%s","sessionId":"s2","message":{"id":"m1","usage":{"input_tokens":100,"cache_creation_input_tokens":1900,"cache_read_input_tokens":50000,"output_tokens":300},"content":"said twice, in two files"}}\n' "$now" "$T/projects/web"
+  printf '{"type":"assistant","timestamp":"%s","cwd":"%s","message":{"usage":{"input_tokens":40,"output_tokens":9},"content":[{"type":"tool_use","id":"t3","name":"mcp__llm-wiki__wiki_read","input":{"wiki":"demo","path":"wiki/x.md"}},{"type":"tool_use","id":"t4","name":"Edit","input":{"file_path":"%s/demo/wiki/a.md","old_string":"x"}},{"type":"tool_use","id":"t5","name":"Read","input":{"file_path":"%s/demo/wiki/a.md"}}]}}\n' "$now" "$T/projects/web" "$WIKIS_DIR" "$WIKIS_DIR"
+  printf '{"type":"assistant","timestamp":"%s","cwd":"%s","sessionId":"s3","message":{"usage":{"input_tokens":50,"output_tokens":5}}}\n' "$now" "$WIKIS_DIR"
+  printf '{"type":"user","timestamp":"%s","cwd":"%s","sessionId":"s3","message":{"content":[{"type":"tool_result","tool_use_id":"t5","content":"%s"}]}}\n' "$now" "$WIKIS_DIR" "$big"
+  printf '{"type":"assistant","timestamp":"2020-01-01T00:00:00Z","cwd":"%s","sessionId":"old","message":{"id":"m9","usage":{"input_tokens":999999,"output_tokens":999999}}}\n' "$T/projects/web"
+  printf '{"type":"summary","cwd":"%s","message":{"id":"m8","usage":{"input_tokens":999999,"output_tokens":999999}}}\n' "$T/projects/web"
+  printf 'not json at all\n\n'
+} > "$HOME/.claude/projects/p1/s2.jsonl"
+if command -v go >/dev/null 2>&1; then
+  check "the Go helper builds" bash -c "cd '$REPO' && go build -o '$T/bin/llm-wiki' ./cmd/llm-wiki"
+  check "it speaks the protocol wiki.sh expects" test "$("$T/bin/llm-wiki" protocol)" = "$(sed -n 's/^GO_PROTOCOL=//p' "$W")"
+  py="$(LLM_WIKI_NO_GO=1 "$W" report 2>&1)"
+  go="$(LLM_WIKI_GO="$T/bin/llm-wiki" "$W" report 2>&1)"
+  case "$py" in *"| demo | 2 | 3k | 3.0M | 2k | 3k |"*"| all | 2 | 3k | 3.0M | 2k | 3k |"*) ok "the Python counts the second transcript's cases" ;; *) bad "the Python counts the second transcript's cases" "$py" ;; esac
+  [ "$py" = "$go" ] && ok "the Go helper prints the same report as the Python" || bad "the Go helper prints the same report as the Python" "$(diff <(printf '%s\n' "$py") <(printf '%s\n' "$go"))"
+  expect "and the same wiki use" "- demo: pages opened in 1 session(s)" env LLM_WIKI_GO="$T/bin/llm-wiki" "$W" report
+  "$W" journal set exclude 'de*' >/dev/null
+  [ "$(LLM_WIKI_NO_GO=1 "$W" report 2>&1)" = "$(LLM_WIKI_GO="$T/bin/llm-wiki" "$W" report 2>&1)" ] && ok "with a project excluded too" || bad "with a project excluded too"
+  "$W" journal set exclude "" >/dev/null
+  [ "$(LLM_WIKI_NO_GO=1 "$W" report --since 2019-12-25 2>&1)" = "$(LLM_WIKI_GO="$T/bin/llm-wiki" "$W" report --since 2019-12-25 2>&1)" ] && ok "and over a longer range" || bad "and over a longer range"
+  printf '#!/bin/sh\n[ "$1" = protocol ] && { echo 0; exit 0; }\necho "STALE TABLE"\n' > "$T/bin/stale-helper"
+  printf '#!/bin/sh\n[ "$1" = protocol ] && { sed -n "s/^GO_PROTOCOL=//p" "%s"; exit 0; }\nexit 1\n' "$W" > "$T/bin/broken-helper"
+  chmod +x "$T/bin/stale-helper" "$T/bin/broken-helper"
+  lacks "a helper built for another protocol is passed over" "STALE TABLE" env LLM_WIKI_GO="$T/bin/stale-helper" "$W" report
+  expect "and the Python answers" "| demo | 2 | 3k | 3.0M | 2k | 3k |" env LLM_WIKI_GO="$T/bin/stale-helper" "$W" report
+  expect "a helper that fails falls back to the Python" "| demo | 2 | 3k | 3.0M | 2k | 3k |" env LLM_WIKI_GO="$T/bin/broken-helper" "$W" report
+else
+  skipped "the Go helper against the Python (go isn't installed)"
+fi
+rm -f "$HOME/.claude/projects/p1/s2.jsonl"
 case "$out" in *"## What the wikis gained"*"- demo:"*"note(s) captured"*) ok "report lists what each wiki gained" ;; *) bad "report lists what each wiki gained" "$out" ;; esac
 case "$out" in *"Corrections recorded as Feedback lines:"*) ok "report counts recorded corrections" ;; *) bad "report counts recorded corrections" "$out" ;; esac
 case "$out" in *"Tokens (Gemini"*) bad "without Antigravity, no Gemini token table" "$out" ;; *) ok "without Antigravity, no Gemini token table" ;; esac

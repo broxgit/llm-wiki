@@ -14,6 +14,7 @@ ROADMAP.md         Planned improvements, untested areas, and what was decided ag
 CHANGELOG.md       What each handbook version changed. upgrade prints the parts you missed.
 NEWS.md            What's new outside the handbook. update and news print what this machine hasn't seen.
 wiki.sh            Setup and upkeep. Run it with no arguments for the commands.
+go.mod cmd/ internal/  The compiled helper, llm-wiki, which wiki.sh uses for ported commands when it's built. See below.
 template/          The scaffold, copied whole to start a wiki.
   AGENTS.md        The core handbook. Loaded in every session.
   rules/           The rest of the handbook. Read on demand.
@@ -33,10 +34,31 @@ scripts/
   migrate-to-plugin.sh  Moves a machine from the clone-and-line setup to the plugin.
   microsoft_copilot_setup.py  wiki setup microsoft-copilot: a read-only GitHub App and a Microsoft 365 Copilot agent. Pins Microsoft's toolkit version.
 hooks/
-  hooks.json       The plugin's session hook, which runs session-start.sh.
-  session-start.sh Finds the session's wiki, points the session at it, and keeps the wiki command current.
+  hooks.json       The plugin's hooks: session-start.sh at session start, pre-tool-use.sh before tool calls.
+  session-start.sh Finds the session's wiki, points the session at it, keeps the wiki command current, and writes the session's reminders.
+  pre-tool-use.sh  Hands a session the wiki reminders that apply to a tool call. reminders.py does the matching.
   pre-commit       The secret scan that wiki.sh installs in wiki repos.
 ```
+
+## The compiled helper
+
+`wiki.sh` is being ported to Go one command at a time. The Go lives in `cmd/llm-wiki` and `internal/`, uses the standard library only, and builds to `bin/llm-wiki`, which git ignores:
+
+```
+go build -o bin/llm-wiki ./cmd/llm-wiki
+```
+
+Nobody needs it. `wiki.sh` uses it when it's there and prints the protocol number `wiki.sh` expects, and otherwise runs the Bash and Python it always has. Plugin users don't have it yet. So for now every ported command exists twice, and the rules are:
+
+- **Same output.** A port prints what the old code prints, byte for byte. `tests/smoke.sh` runs both and compares them when `go` is installed. Change both together.
+- **New features wait.** A port changes nothing a user can see. Add to a command after its port has landed, not in it.
+- **The protocol.** When a ported command's arguments or output change, raise `protocol` in `cmd/llm-wiki/main.go` and `GO_PROTOCOL` in `wiki.sh` together. A binary built from an older checkout is then passed over, not trusted.
+- **Fail quietly.** The helper prints a command's output only once it has all of it, so a failure leaves nothing behind and `wiki.sh` falls back.
+- **Checks.** `gofmt -l cmd internal`, `go vet ./cmd/... ./internal/...` and `go test ./cmd/... ./internal/...`. Name the packages: `tour/` holds Go too, as sample code for the tour.
+
+`LLM_WIKI_NO_GO=1` makes `wiki.sh` ignore the helper, and `LLM_WIKI_GO=<path>` points it at another build.
+
+Ported so far: the Claude Code token table in `wiki report` (`report_tokens`). `internal/pyjson` holds the Python behaviours a port has to copy, such as the length of `json.dumps`.
 
 ## Change the rules
 
