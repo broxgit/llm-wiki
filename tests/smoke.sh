@@ -483,6 +483,100 @@ expect "lock --release frees it" "released:" "$W" lock demo --release
 printf 'held abc123 2020-01-01T00:00:00Z\n' > "$WIKIS_DIR/demo/.compile-lock"
 expect "a lock older than 30 minutes is taken" "locked:" "$W" lock demo
 "$W" lock demo --release >/dev/null
+
+section "Background compile"
+# A stand-in for the headless agent: it keeps the prompt, and logs each waiting note
+# as compiled, which is what marks one done.
+cat > "$T/bin/fake-agent" <<FAKE
+#!/bin/sh
+cat > "$T/fake-prompt"
+[ -z "\${FAKE_SLEEP:-}" ] || sleep "\$FAKE_SLEEP"
+[ -z "\${FAKE_FAIL:-}" ] || exit 3
+for f in \$("$W" pending "\$LLM_WIKI_COMPILE_WIKI" | sed -n 's/^\(raw\/[^ ]*\).*/\1/p'); do
+  "$W" log "\$LLM_WIKI_COMPILE_WIKI" ingest "Fake" --source "\$f" >/dev/null
+done
+echo "0 created, 0 updated"
+FAKE
+chmod +x "$T/bin/fake-agent"
+"$W" new bg >/dev/null
+BG="$WIKIS_DIR/bg"
+BGC="$HOME/.config/llm-wiki/compile"
+BGR="$HOME/.local/state/llm-wiki/compile/runs.csv"
+bg_note() { printf 'Captured: 2026-01-01\n\nNote %s.\n' "$1" > "$BG/raw/2026-01-01-00000$1-note.md"; }
+# bg_runs <n>: wait for the nth run to be recorded, which is the last thing a run does.
+bg_runs() {
+  local i=0
+  while [ "$i" -lt 150 ]; do
+    [ "$(grep -c ',bg,' "$BGR" 2>/dev/null || true)" -lt "$1" ] || return 0
+    sleep 0.2
+    i=$((i + 1))
+  done
+  return 1
+}
+bg_hook() { hook "$T/projects/bg" | context; }
+mkdir -p "$T/projects/bg" "${BGC%/*}" && git -C "$T/projects/bg" init -q
+bg_note 1
+bg_note 2
+expect "background compile is off by default" "at session start: off" "$W" compile
+expect "setup --list says sessions compile" "background compile is off" "$W" setup --list
+lacks "off, the hook leaves the notes to the session" "in the background" bg_hook
+printf 'agent=no-such-agent-here\n' > "$BGC"
+out="$("$W" compile bg 2>&1)" && bad "compile needs its agent installed" "$out" || case "$out" in *"isn't a command here"*) ok "compile needs its agent installed" ;; *) bad "compile needs its agent installed" "$out" ;; esac
+check "and takes no lock" test ! -f "$BG/.compile-lock"
+printf 'agent=%s\n' "$T/bin/fake-agent" > "$BGC"
+out="$("$W" compile bg 2>&1)"
+case "$out" in *"compiled: bg, 2 of 2 note(s)"*", ok."*) ok "compile runs the agent and reports" ;; *) bad "compile runs the agent and reports" "$out" ;; esac
+case "$out" in *Terminated*) bad "stopping its timer prints nothing" "$out" ;; *) ok "stopping its timer prints nothing" ;; esac
+check "the agent is told which wiki, and that nobody is watching" grep -q "wiki at $BG, unattended" "$T/fake-prompt"
+check "and that the lock is already its own" grep -q "lock is already held for you" "$T/fake-prompt"
+check "and never to resolve a contradiction" grep -q "Never resolve a contradiction" "$T/fake-prompt"
+expect "the lock is free afterwards" "free" cat "$BG/.compile-lock"
+expect "nothing is left waiting" "nothing waiting" "$W" pending bg
+check "the run is recorded" grep -q ',bg,2,0,[0-9]*,[0-9]*,ok,fake-agent$' "$BGR"
+check "and committed" bash -c "git -C '$WIKIS_DIR' log --format=%s -5 | grep -q 'bg: background compile, 2 of 2 note(s), ok'"
+expect "compile alone shows the last runs" ",bg,2,0," "$W" compile
+expect "with nothing waiting, it says so" "nothing waiting" "$W" compile bg
+bg_note 3
+out="$(FAKE_FAIL=1 "$W" compile bg 2>&1)" && bad "a failed agent is a failed run" "$out" || case "$out" in *"0 of 1 note(s)"*", failed."*) ok "a failed agent is a failed run" ;; *) bad "a failed agent is a failed run" "$out" ;; esac
+expect "and the lock is freed all the same" "free" cat "$BG/.compile-lock"
+out="$(FAKE_SLEEP=30 LLM_WIKI_COMPILE_TIMEOUT=1 "$W" compile bg 2>&1)" && bad "a run past its time limit is stopped" "$out" || case "$out" in *", timeout."*) ok "a run past its time limit is stopped" ;; *) bad "a run past its time limit is stopped" "$out" ;; esac
+expect "and the lock is freed then too" "free" cat "$BG/.compile-lock"
+"$W" lock bg >/dev/null
+rm -f "$T/fake-prompt"
+refuse "compile leaves a held lock alone" "$W" compile bg
+refuse "in the background too" "$W" compile bg --background
+check "and runs no agent" test ! -f "$T/fake-prompt"
+"$W" lock bg --release >/dev/null
+n="$(grep -c ',bg,' "$BGR")"
+out="$(FAKE_SLEEP=1 "$W" compile bg --background 2>&1)"
+case "$out" in *"1 note(s)"*"in the background"*) ok "--background returns at once" ;; *) bad "--background returns at once" "$out" ;; esac
+expect "holding the lock while it runs" "held " cat "$BG/.compile-lock"
+check "the background run finishes" bg_runs $((n + 1))
+expect "having compiled the note" "nothing waiting" "$W" pending bg
+expect "and freed the lock" "free" cat "$BG/.compile-lock"
+bg_note 4
+expect "compile on turns it on for session start" "compile: on" "$W" compile on
+expect "setup --list says so" "in the background at session start" "$W" setup --list
+out="$(LLM_WIKI_BACKGROUND=1 hook "$T/projects/bg")"
+[ -z "$out" ] && ok "a background run's own session gets nothing from the hook" || bad "a background run's own session gets nothing from the hook" "$out"
+expect "and starts no run of its own" "free" cat "$BG/.compile-lock"
+expect "its start says the notes are its own" "This run is the one compiling them" env LLM_WIKI_BACKGROUND=1 "$W" start bg
+n="$(grep -c ',bg,' "$BGR")"
+expect "on, the hook hands the notes to a background run" "being compiled in the background now" bg_hook
+check "which finishes" bg_runs $((n + 1))
+expect "and compiles them" "nothing waiting" "$W" pending bg
+bg_note 5
+expect "start hands notes over too" "being compiled in the background now" "$W" start bg
+check "and that run finishes" bg_runs $((n + 2))
+bg_note 6
+"$W" lock bg >/dev/null
+expect "start says when another session holds the lock" "another session holds the compile lock" "$W" start bg
+lacks "and the hook starts nothing then" "in the background" bg_hook
+"$W" lock bg --release >/dev/null
+expect "compile off turns it off" "compile: off" "$W" compile off
+expect "off, start leaves the notes to the session" "Compile them before the user's request" "$W" start bg
+refuse "compile rejects an unknown option" "$W" compile bg --nope
+rm -f "$BGC"
 expect "log prints the counts" "2 created, 1 updated" "$W" log demo ingest "Note: smoke" --created wiki/sources/a.md --created wiki/x.md --updated wiki/y.md
 check "log writes the handbook's format" bash -c "tail -n 5 '$WIKIS_DIR/demo/log.md' | grep -q '^- conflicts: 0' && grep -q '^## 20[0-9-]* ingest: Note: smoke' '$WIKIS_DIR/demo/log.md'"
 refuse "log needs a title for an ingest" "$W" log demo ingest

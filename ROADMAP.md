@@ -43,6 +43,7 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - `wiki.sh journal backfill` on transcripts from Claude Code versions other than the one it was written against. It needs `python3`.
 - Git sync between two people or two machines. Pull, commit, and push from one machine worked in real use on 2026-10-01.
 - Two sessions taking the compile lock in the same second.
+- Background compile in real use. One real run so far. Unknown: whether a cheaper model's pages are as good as a session's, whether a run started from the session hook survives the hook ending in every agent, how it behaves inside Codex's and Cursor's sandboxes, and any agent other than `claude`. After a week, read `wiki compile` and some of the pages it wrote. If it holds, the handbook can stop telling sessions to compile, which is the larger gain.
 - A wiki with two shared wikis listed in `links.md`.
 - Real scale: hundreds of wikis, hundreds of pages. Real use so far is 10 wikis and 53 pages.
 - The version 8 triggers in real use. They passed a dry run only.
@@ -73,6 +74,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Background compile, as an experiment (2026-11-05)
+
+- **Why:** compiling is a cost the user watches at the start of a session, and it is the step that failed in the first week (50 of 109 notes never compiled). A run nobody waits for can take it.
+- **What changed:** `wiki compile <wiki>` runs a headless agent on the waiting notes, with `--background` to not wait, and `wiki compile on` has `wiki start` and the session hook start one. The script takes and frees the lock and syncs; the agent only writes pages, the index and the log. Runs are recorded in `~/.local/state/llm-wiki/compile/runs.csv`. Off by default, with no setup question yet: it gets one if the experiment holds. The handbook is unchanged, so sessions still compile at a pause.
 
 ### Fixes from a second review by Gemini (2026-11-05)
 

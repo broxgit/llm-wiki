@@ -4,6 +4,19 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. A short paragraph, then lines starting `- ` for what changed and `- Do:` for what to do about it. Add an entry for anything a user would notice, and none for fixes they wouldn't.
 
+## 2026-11-05: Notes can be compiled in the background, as an experiment
+
+Sessions spend their first minutes compiling notes that earlier sessions left, and in the first week half the notes never got compiled at all. A background run can take that over. It is off unless you turn it on.
+
+- `wiki compile <wiki>` has a headless agent compile the wiki's waiting notes, and waits. `--background` doesn't wait.
+- `wiki compile on` makes session start hand waiting notes to a background run, and tells your session to leave them. `wiki compile off` goes back.
+- `wiki compile` alone shows the setting and the last runs: how many notes, how long, how old the oldest was, and how it ended.
+- A run takes the compile lock, gets 20 minutes, never resolves a contradiction or lints, and syncs when it ends. The script frees the lock, so a run that dies can't leave it held.
+- The agent is `claude` on sonnet. `~/.config/llm-wiki/compile` can name another: `agent=<a command that reads the prompt on stdin>`, or `model=<name>`.
+- The run uses your own Claude Code permissions as well as the few it is given, so it can do what your sessions can.
+- Sessions still compile at a pause, as the handbook says. This only takes the notes waiting at session start.
+- Do: to try it, run `wiki compile on`, and look at `wiki compile` after a week. Read a few of the pages it wrote before trusting it.
+
 ## 2026-11-05: Take the tour
 
 Ask your agent "Give me the llm-wiki tour" and it teaches you the features by doing them, on a made-up project. You ask its wiki a question, save a decision, watch notes become pages, rule on a contradiction, and see a wrong page get caught against the code.
