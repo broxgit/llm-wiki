@@ -237,7 +237,7 @@ need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 # Raise GO_PROTOCOL, with the constant in cmd/llm-wiki/main.go, whenever a ported
 # command's arguments or output change. scripts/helper.sh builds releases and writes
 # helper.lock.
-GO_PROTOCOL=4
+GO_PROTOCOL=5
 HELPER_LOCK="$REPO/helper.lock"
 HELPER_DIR="${LLM_WIKI_HELPER_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/llm-wiki/helper}"
 
@@ -343,14 +343,18 @@ helper_auto_set() {
 # every six hours at most, because offline or inside a sandbox every try fails, and
 # every session would try again.
 helper_auto() {
-  local src dir
+  local src dir want
   [ -z "${LLM_WIKI_NO_GO:-}" ] && [ -z "${LLM_WIKI_GO:-}" ] && [ -z "${LLM_WIKI_BACKGROUND:-}" ] || return 0
   helper_auto_on || return 0
   src="$(helper_source)"
   [ -n "$src" ] && [ -n "$(helper_platform)" ] || return 0
   if helper_ok "$REPO/bin/llm-wiki"; then return 0; fi
   dir="$HELPER_DIR/$src"
-  [ ! -x "$dir/llm-wiki" ] || return 0
+  # A file that isn't the release's bytes is a broken download, and is fetched again.
+  # One that is, and still doesn't run here, would be no better the second time.
+  want="$(sed -n "s/^$(helper_platform) //p" "$HELPER_LOCK" 2>/dev/null | head -n 1)"
+  [ -n "$want" ] || return 0
+  if [ -x "$dir/llm-wiki" ] && [ "$(sha256_of "$dir/llm-wiki")" = "$want" ]; then return 0; fi
   mkdir -p "$dir" 2>/dev/null || return 0
   [ -z "$(find "$dir/.tried" -mmin -360 2>/dev/null)" ] || return 0
   : 2>/dev/null > "$dir/.tried" || return 0
@@ -647,7 +651,7 @@ EOF2
 # Agents without the plugin's hook made five or six calls for this, and skipped the
 # pull in every run of the first test with another agent (Gemini, 2026-10-29).
 cmd_start() {
-  local arg="${1:-$PWD}" repo="" top w="" wiki="" note="" out sshc tv v line sname spath d n
+  local arg="${1:-$PWD}" repo="" top w="" wiki="" note="" out sshc tv v line sname spath d n hinted=""
   if [ -d "$arg" ]; then
     if top="$(git -C "$arg" rev-parse --show-toplevel 2>/dev/null)"; then repo="$(repo_name "$top")"; fi
   else
@@ -723,7 +727,13 @@ EOF2
     elif [ -n "${LLM_WIKI_BACKGROUND:-}" ]; then echo "$(tilde "$d"): $n note(s). This run is the one compiling them."
     elif compile_auto_on && compile_background "$d"; then echo "$(tilde "$d"): $n note(s), being compiled in the background now. Don't compile them: that run holds the lock."
     elif [ -n "$(lock_holder "$d")" ]; then echo "$(tilde "$d"): $n note(s), and another session holds the compile lock. Leave them and carry on."
-    else echo "$(tilde "$d"): $n note(s). Compile them before the user's request, as the handbook's session start says, unless there are more than ten."
+    else
+      echo "$(tilde "$d"): $n note(s). Compile them before the user's request, as the handbook's session start says, unless there are more than ten."
+      # Said once, or every wiki with notes would repeat it.
+      if [ -z "$hinted" ] && compile_auto_on && ! compile_agent_ready; then
+        hinted=1
+        echo "Background compile is on, but $(compile_agent | awk '{ print $1 }') isn't a command in this shell, so it didn't start. Tell the user once: its folder may be missing from this tool's PATH."
+      fi
     fi
   done
   # Feedback on llm-wiki, when the user turned it on. A wiki not yet upgraded has no
@@ -930,6 +940,15 @@ compile_set() {
   mv "$COMPILE_FILE.tmp" "$COMPILE_FILE"
 }
 
+# compile_agent_is_claude: whether the agent is Claude Code, named bare or by its path.
+# Anything with a space in it is a command of the user's own.
+compile_agent_is_claude() {
+  local a
+  a="$(compile_agent)"
+  case "$a" in *[[:space:]]*) return 1 ;; esac
+  [ "${a##*/}" = claude ]
+}
+
 # compile_agent_ready: whether the agent's command is installed.
 compile_agent_ready() {
   local a
@@ -964,7 +983,7 @@ compile_agent_run() {
   local root="$1" name="$2" agent c f s model rules=()
   agent="$(compile_agent)"
   if from_plugin; then c="$(plugin_cmd)"; else c="$REPO/wiki.sh"; fi
-  if [ "$agent" != claude ]; then
+  if ! compile_agent_is_claude; then
     compile_prompt "$root" "$name" "$c" | (cd "$root" && LLM_WIKI_COMPILE_WIKI="$name" sh -c "$agent")
     return $?
   fi
@@ -978,7 +997,7 @@ $(perm_forms)
 EOF2
   model="$(compile_get model)"
   compile_prompt "$root" "$name" "$c" \
-    | (cd "$root" && claude -p --model "${model:-sonnet}" --permission-mode acceptEdits \
+    | (cd "$root" && "$agent" -p --model "${model:-sonnet}" --permission-mode acceptEdits \
         --allowedTools Read Glob Grep Edit Write "${rules[@]}")
 }
 
@@ -4498,7 +4517,9 @@ find_repos() {
   for d in $dirs; do
     case "$d" in "~/"*) d="$HOME/${d:2}" ;; "~") d="$HOME" ;; esac
     [ -d "$d" ] || continue
-    find "$d" -maxdepth "$depth" -name .git -prune -print 2>/dev/null
+    # find fails when one folder under $d can't be read. What it did find still counts,
+    # and under pipefail its failure would end every command that asks for the map.
+    find "$d" -maxdepth "$depth" -name .git -prune -print 2>/dev/null || true
   done | sed 's#/\.git$##' | LC_ALL=C sort -u
 }
 

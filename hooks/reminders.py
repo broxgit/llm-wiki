@@ -18,21 +18,27 @@ In every pattern, * matches anything.
 A hook must never break a session, so anything unexpected ends quietly with no reply.
 """
 
-import fnmatch
 import json
 import os
+import re
 import sys
 
 EDIT_TOOLS = ("Edit", "Write", "NotebookEdit", "MultiEdit")
 SAFE = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
 
 
+def glob(text, pattern):
+    """Whether the whole text fits the pattern. Only * is special: [ and ? are
+    themselves, since a shell command is full of them."""
+    return re.fullmatch("(?s)" + ".*".join(re.escape(p) for p in pattern.split("*")), text) is not None
+
+
 def matches(kind, pattern, tool, tool_input, cwd):
     if kind == "tool":
-        return fnmatch.fnmatchcase(tool, pattern)
+        return glob(tool, pattern)
     if kind == "bash":
         command = tool_input.get("command") if tool == "Bash" else None
-        return isinstance(command, str) and fnmatch.fnmatchcase(command, "*" + pattern + "*")
+        return isinstance(command, str) and glob(command, "*" + pattern + "*")
     if kind == "edit":
         if tool not in EDIT_TOOLS:
             return False
@@ -42,7 +48,7 @@ def matches(kind, pattern, tool, tool_input, cwd):
         names = [path]
         if cwd and path.startswith(cwd.rstrip("/") + "/"):
             names.append(path[len(cwd.rstrip("/")) + 1:])
-        return any(fnmatch.fnmatchcase(n, pattern) or fnmatch.fnmatchcase(n, "*/" + pattern) for n in names)
+        return any(glob(n, pattern) or glob(n, "*/" + pattern) for n in names)
     return False
 
 

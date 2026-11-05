@@ -1,6 +1,8 @@
 package tokens
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -29,5 +31,65 @@ func TestShort(t *testing.T) {
 		if got := short(n); got != want {
 			t.Errorf("short(%d) = %s, want %s", n, got, want)
 		}
+	}
+}
+
+// Printed by Python 3.14 with TZ=America/New_York:
+//
+//	(datetime.fromisoformat(ts).astimezone() - timedelta(hours=4)).date()
+//
+// The clocks went back at 06:00Z on 1 November 2026 and forward at 07:00Z on 8 March.
+func TestDayOfAcrossAClockChange(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skip("no time zone data here")
+	}
+	old := time.Local
+	time.Local = loc
+	defer func() { time.Local = old }()
+	for ts, want := range map[string]string{
+		"2026-07-01T07:59:00Z": "2026-06-30",
+		"2026-07-01T08:00:00Z": "2026-07-01",
+		"2026-11-01T08:30:00Z": "2026-10-31", // 03:30 EST, four hours after 23:30 the night before
+		"2026-11-01T09:00:00Z": "2026-11-01",
+		"2026-03-08T07:30:00Z": "2026-03-07",
+		"2026-03-08T08:10:00Z": "2026-03-08", // 04:10 EDT, though four hours earlier was 23:10 EST
+		"2026-11-01T03:30:00":  "2026-10-31",
+	} {
+		at, ok := parseTime(ts)
+		if !ok {
+			t.Fatalf("parseTime(%q) failed", ts)
+		}
+		if got := dayOf(at, 4*time.Hour); got != want {
+			t.Errorf("dayOf(%s) = %s, want %s", ts, got, want)
+		}
+	}
+}
+
+// The Python stops at a transcript it can't open, so the port must not answer for it
+// with that file left out.
+func TestRunFailsOnATranscriptItCannotRead(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read anything")
+	}
+	dir := t.TempDir()
+	wikis := t.TempDir()
+	today := time.Now().Format("2006-01-02")
+	opts := Options{Transcripts: dir, Start: today, End: today, DayStarts: "04:00", Wikis: wikis}
+	p := filepath.Join(dir, "proj", "a.jsonl")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(opts); err != nil {
+		t.Fatalf("Run with a readable transcript: %v", err)
+	}
+	if err := os.Chmod(p, 0); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := Run(opts); err == nil {
+		t.Errorf("Run left an unreadable transcript out and printed:\n%s", out)
 	}
 }
