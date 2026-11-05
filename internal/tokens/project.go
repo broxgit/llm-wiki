@@ -62,11 +62,22 @@ func splitLines(s string) []string {
 	return strings.FieldsFunc(strings.ReplaceAll(s, "\r\n", "\n"), func(r rune) bool { return r == '\n' || r == '\r' })
 }
 
-// resolve looks up every folder not seen yet, several at a time.
+// resolve looks up every session folder not seen yet.
 func (p *projects) resolve(cwds []string) {
-	var todo []string
+	var dirs []string
 	for _, c := range cwds {
-		if _, ok := p.names[c]; !ok && c != "" {
+		if c != "" {
+			dirs = append(dirs, c)
+		}
+	}
+	p.resolveWith(dirs, p.lookup)
+}
+
+// resolveWith runs a lookup on every folder not seen yet, several at a time.
+func (p *projects) resolveWith(dirs []string, lookup func(string) string) {
+	var todo []string
+	for _, c := range dirs {
+		if _, ok := p.names[c]; !ok {
 			todo = append(todo, c)
 			p.names[c] = ""
 		}
@@ -79,7 +90,7 @@ func (p *projects) resolve(cwds []string) {
 		go func(i int, c string) {
 			defer wg.Done()
 			slots <- struct{}{}
-			out[i] = p.lookup(c)
+			out[i] = lookup(c)
 			<-slots
 		}(i, c)
 	}
@@ -98,12 +109,8 @@ func (p *projects) lookup(cwd string) string {
 		name = cwd
 	}
 	if st, err := os.Stat(cwd); err == nil && st.IsDir() {
-		if url := git(cwd, "config", "--get", "remote.origin.url"); url != "" {
-			name = dotGit.ReplaceAllString(strings.TrimRight(url, "/"), "")
-			name = name[strings.LastIndex(name, "/")+1:]
-			name = name[strings.LastIndex(name, ":")+1:]
-		} else if top := git(cwd, "rev-parse", "--show-toplevel"); top != "" {
-			name = filepath.Base(top)
+		if n, ok := repoName(cwd); ok {
+			name = n
 		}
 	}
 	if realPath(cwd) == p.wikisReal {
@@ -124,6 +131,51 @@ func (p *projects) lookup(cwd string) string {
 		}
 	}
 	return name
+}
+
+// lookupPath names the project a folder a Gemini tool call pointed at belongs to: a
+// wiki when it is inside the collection, and otherwise only a repository a wiki knows.
+// A folder that names no project gets "".
+func (p *projects) lookupPath(dir string) string {
+	real := realPath(dir)
+	if real == p.wikisReal {
+		return "wikis"
+	}
+	if rel, ok := strings.CutPrefix(real, p.wikisReal+"/"); ok {
+		first, _, _ := strings.Cut(rel, "/")
+		if p.known[first] {
+			return first
+		}
+		return "wikis"
+	}
+	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+		return ""
+	}
+	name, ok := repoName(dir)
+	if !ok {
+		return ""
+	}
+	if w, ok := p.cover[name]; ok {
+		name = w
+	}
+	if !p.known[name] {
+		return ""
+	}
+	return name
+}
+
+// repoName is a folder's repository name: from its remote, or its top folder. It says
+// false when git knows neither.
+func repoName(dir string) (string, bool) {
+	if url := git(dir, "config", "--get", "remote.origin.url"); url != "" {
+		name := dotGit.ReplaceAllString(strings.TrimRight(url, "/"), "")
+		name = name[strings.LastIndex(name, "/")+1:]
+		return name[strings.LastIndex(name, ":")+1:], true
+	}
+	if top := git(dir, "rev-parse", "--show-toplevel"); top != "" {
+		return filepath.Base(top), true
+	}
+	return "", false
 }
 
 // pathParts is Path(p).parts: the root, then each folder.

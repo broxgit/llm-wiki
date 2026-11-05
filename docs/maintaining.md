@@ -58,7 +58,7 @@ Nobody needs it. `wiki.sh` uses it when it's there and prints the protocol numbe
 
 `LLM_WIKI_NO_GO=1` makes `wiki.sh` ignore the helper, and `LLM_WIKI_GO=<path>` points it at another build.
 
-Ported so far: the Claude Code token table in `wiki report` (`report_tokens`). `internal/pyjson` holds the Python behaviours a port has to copy, such as the length of `json.dumps`.
+Ported so far: both token tables in `wiki report` (`report_tokens` and `report_tokens_gemini`). The Gemini table's Python stops at the first step it can't read, so its port doesn't copy each way of failing. It returns an error on anything it isn't sure of, and the Python decides. `internal/pyjson` holds the Python behaviours a port has to copy, such as the length of `json.dumps`.
 
 ## Change the rules
 
