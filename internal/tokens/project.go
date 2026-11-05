@@ -1,15 +1,13 @@
 package tokens
 
 import (
-	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
-	"time"
+
+	"github.com/broxgit/llm-wiki/internal/pyos"
 )
 
 // projects names the project a session's working folder belongs to, as the report
@@ -24,10 +22,8 @@ type projects struct {
 	names     map[string]string
 }
 
-var dotGit = regexp.MustCompile(`\.git$`)
-
 func newProjects(wikis string) (*projects, error) {
-	p := &projects{wikis: wikis, wikisReal: realPath(wikis), cover: map[string]string{}, known: map[string]bool{}, names: map[string]string{}}
+	p := &projects{wikis: wikis, wikisReal: pyos.RealPath(wikis), cover: map[string]string{}, known: map[string]bool{}, names: map[string]string{}}
 	entries, err := os.ReadDir(wikis)
 	if err != nil {
 		return nil, err
@@ -109,11 +105,11 @@ func (p *projects) lookup(cwd string) string {
 		name = cwd
 	}
 	if st, err := os.Stat(cwd); err == nil && st.IsDir() {
-		if n, ok := repoName(cwd); ok {
+		if n, ok := pyos.RepoName(cwd); ok {
 			name = n
 		}
 	}
-	if realPath(cwd) == p.wikisReal {
+	if pyos.RealPath(cwd) == p.wikisReal {
 		name = "wikis"
 	}
 	if w, ok := p.cover[name]; ok {
@@ -121,7 +117,7 @@ func (p *projects) lookup(cwd string) string {
 	}
 	// A scratch folder inside a project, such as myapp/sweeps/b41, belongs to it.
 	if !p.known[name] && name != "wikis" {
-		parts := pathParts(cwd)
+		parts := pyos.PathParts(cwd)
 		name = ""
 		for i := len(parts) - 2; i >= 0; i-- {
 			if p.known[parts[i]] {
@@ -137,7 +133,7 @@ func (p *projects) lookup(cwd string) string {
 // wiki when it is inside the collection, and otherwise only a repository a wiki knows.
 // A folder that names no project gets "".
 func (p *projects) lookupPath(dir string) string {
-	real := realPath(dir)
+	real := pyos.RealPath(dir)
 	if real == p.wikisReal {
 		return "wikis"
 	}
@@ -151,7 +147,7 @@ func (p *projects) lookupPath(dir string) string {
 	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 		return ""
 	}
-	name, ok := repoName(dir)
+	name, ok := pyos.RepoName(dir)
 	if !ok {
 		return ""
 	}
@@ -162,40 +158,4 @@ func (p *projects) lookupPath(dir string) string {
 		return ""
 	}
 	return name
-}
-
-// repoName is a folder's repository name: from its remote, or its top folder. It says
-// false when git knows neither.
-func repoName(dir string) (string, bool) {
-	if url := git(dir, "config", "--get", "remote.origin.url"); url != "" {
-		name := dotGit.ReplaceAllString(strings.TrimRight(url, "/"), "")
-		name = name[strings.LastIndex(name, "/")+1:]
-		return name[strings.LastIndex(name, ":")+1:], true
-	}
-	if top := git(dir, "rev-parse", "--show-toplevel"); top != "" {
-		return filepath.Base(top), true
-	}
-	return "", false
-}
-
-// pathParts is Path(p).parts: the root, then each folder.
-func pathParts(p string) []string {
-	var parts []string
-	if strings.HasPrefix(p, "/") {
-		parts = append(parts, "/")
-	}
-	for _, s := range strings.Split(p, "/") {
-		if s != "" && s != "." {
-			parts = append(parts, s)
-		}
-	}
-	return parts
-}
-
-// git runs one git command in a folder and gives its trimmed output, or "".
-func git(dir string, args ...string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	out, _ := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...).Output()
-	return strings.TrimSpace(string(out))
 }

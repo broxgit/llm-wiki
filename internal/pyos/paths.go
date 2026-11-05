@@ -1,4 +1,4 @@
-package tokens
+package pyos
 
 import (
 	"os"
@@ -7,8 +7,8 @@ import (
 	"strings"
 )
 
-// expandUser is os.path.expanduser for the forms transcripts hold: ~ and ~/path.
-func expandUser(p string) string {
+// ExpandUser is os.path.expanduser for the forms transcripts hold: ~ and ~/path.
+func ExpandUser(p string) string {
 	if p == "~" || strings.HasPrefix(p, "~/") {
 		if home, err := os.UserHomeDir(); err == nil {
 			return home + p[1:]
@@ -17,9 +17,9 @@ func expandUser(p string) string {
 	return p
 }
 
-// pyDirname is os.path.dirname, which unlike filepath.Dir gives "" for a bare name and
+// Dirname is os.path.dirname, which unlike filepath.Dir gives "" for a bare name and
 // cleans nothing but the slashes at the end.
-func pyDirname(p string) string {
+func Dirname(p string) string {
 	head := p[:strings.LastIndex(p, "/")+1]
 	if head != "" && strings.Trim(head, "/") != "" {
 		return strings.TrimRight(head, "/")
@@ -27,10 +27,10 @@ func pyDirname(p string) string {
 	return head
 }
 
-// realPath is os.path.realpath as Python does it when the path may not exist: each
+// RealPath is os.path.realpath as Python does it when the path may not exist: each
 // part that is a symlink is followed, a part that doesn't exist is kept as written,
 // and ".." drops the last part of what has been resolved so far.
-func realPath(p string) string {
+func RealPath(p string) string {
 	if !filepath.IsAbs(p) {
 		if cwd, err := os.Getwd(); err == nil {
 			p = cwd + "/" + p
@@ -59,14 +59,14 @@ func joinReal(path, rest string, seen map[string]string) (string, bool) {
 					path = "/"
 				}
 				if last == ".." {
-					path = pyJoin(pyJoin(path, ".."), "..")
+					path = join(join(path, ".."), "..")
 				}
 			} else {
 				path = ".."
 			}
 			continue
 		}
-		next := pyJoin(path, name)
+		next := join(path, name)
 		st, err := os.Lstat(next)
 		if err != nil || st.Mode()&os.ModeSymlink == 0 {
 			path = next
@@ -78,7 +78,7 @@ func joinReal(path, rest string, seen map[string]string) (string, bool) {
 				continue
 			}
 			// A loop of links: give back what there is.
-			return pyJoin(next, rest), false
+			return join(next, rest), false
 		}
 		seen[next] = ""
 		target, err := os.Readlink(next)
@@ -88,7 +88,7 @@ func joinReal(path, rest string, seen map[string]string) (string, bool) {
 		}
 		resolved, ok := joinReal(path, target, seen)
 		if !ok {
-			return pyJoin(resolved, rest), false
+			return join(resolved, rest), false
 		}
 		path = resolved
 		seen[next] = path
@@ -96,8 +96,8 @@ func joinReal(path, rest string, seen map[string]string) (string, bool) {
 	return path, true
 }
 
-// pyJoin is os.path.join for two parts.
-func pyJoin(a, b string) string {
+// join is os.path.join for two parts.
+func join(a, b string) string {
 	switch {
 	case strings.HasPrefix(b, "/") || a == "":
 		return b
@@ -107,9 +107,9 @@ func pyJoin(a, b string) string {
 	return a + "/" + b
 }
 
-// globToRegexp turns a shell pattern into a regexp the way Python's fnmatch does:
+// Glob turns a shell pattern into a regexp the way Python's fnmatch does:
 // * matches anything, slashes included, ? one character, and [..] a set.
-func globToRegexp(glob string) *regexp.Regexp {
+func Glob(glob string) *regexp.Regexp {
 	var b strings.Builder
 	b.WriteString(`(?s)\A(?:`)
 	for i := 0; i < len(glob); i++ {
@@ -154,8 +154,8 @@ func globToRegexp(glob string) *regexp.Regexp {
 	return re
 }
 
-// lessByParts orders two paths as Python orders Path objects: part by part.
-func lessByParts(a, b string) bool {
+// LessByParts orders two paths as Python orders Path objects: part by part.
+func LessByParts(a, b string) bool {
 	pa, pb := strings.Split(a, "/"), strings.Split(b, "/")
 	for i := 0; i < len(pa) && i < len(pb); i++ {
 		if pa[i] != pb[i] {

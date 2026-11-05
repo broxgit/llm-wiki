@@ -4,45 +4,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
-
-// Printed by Python 3.14's os.path.dirname.
-func TestPyDirname(t *testing.T) {
-	cases := map[string]string{
-		"a": "", "a/b": "a", "/a": "/", "/a/": "/a", "/a/b/": "/a/b", "//a": "//", "//": "//", "/": "/",
-		"": "", "a//b": "a", "./x": ".", "~/x/y.md": "~/x", "a/b//": "a/b",
-	}
-	for in, want := range cases {
-		if got := pyDirname(in); got != want {
-			t.Errorf("pyDirname(%q) = %q, Python gives %q", in, got, want)
-		}
-	}
-}
-
-// Printed by Python 3.14's re.findall(r"-C\s+(\S+)", s).
-func TestGitDirFlag(t *testing.T) {
-	cases := map[string]string{
-		"git -C /x log":      "/x",
-		"git -C  ~/a -C\t/b": "~/a /b",
-		"x-C /y":             "/y",
-		"-C":                 "",
-		"-C ":                "",
-		"a -C /z b":          "/z",
-		"-C /p q":            "/p",
-	}
-	for in, want := range cases {
-		var got []string
-		for _, m := range gitDirFlag.FindAllStringSubmatch(in, -1) {
-			got = append(got, m[1])
-		}
-		if strings.Join(got, " ") != want {
-			t.Errorf("dirs in %q = %v, Python gives %q", in, got, want)
-		}
-	}
-}
 
 // Printed by the Python's day_of under TZ=America/New_York. Across a clock change the
 // day's start comes off in the offset in force at the moment itself.

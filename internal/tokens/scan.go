@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/broxgit/llm-wiki/internal/pyjson"
+	"github.com/broxgit/llm-wiki/internal/pyos"
 )
 
 // What a transcript line holds, read loosely: any field may be missing or a type
@@ -67,10 +68,7 @@ type scanned struct {
 	records []record
 }
 
-// Python's \s, which takes in more than ASCII space. A path in a command can't hold any.
-const pySpace = `\t\n\x0b\f\r \x1c-\x1f\x{85}\x{a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}`
-
-var wikiCommand = regexp.MustCompile(`\A[` + pySpace + `]*wiki[` + pySpace + `]`)
+var wikiCommand = regexp.MustCompile(`\A[` + pyos.Space + `]*wiki[` + pyos.Space + `]`)
 
 type scanner struct {
 	start, end string // days, as YYYY-MM-DD
@@ -82,14 +80,14 @@ type scanner struct {
 }
 
 func newScanner(start, end string, dayShift time.Duration, wikis string) *scanner {
-	s := &scanner{start: start, end: end, dayShift: dayShift, wikis: wikis, wikisReal: realPath(wikis)}
+	s := &scanner{start: start, end: end, dayShift: dayShift, wikis: wikis, wikisReal: pyos.RealPath(wikis)}
 	alts := []string{regexp.QuoteMeta(wikis)}
 	for _, x := range []string{s.wikisReal, tilde(wikis)} {
 		if q := regexp.QuoteMeta(x); !contains(alts, q) {
 			alts = append(alts, q)
 		}
 	}
-	s.page = regexp.MustCompile(`(?:` + strings.Join(alts, "|") + `)/([^/` + pySpace + `"']+)/wiki(?:/|\b)`)
+	s.page = regexp.MustCompile(`(?:` + strings.Join(alts, "|") + `)/([^/` + pyos.Space + `"']+)/wiki(?:/|\b)`)
 	return s
 }
 
@@ -233,7 +231,7 @@ func (s *scanner) inWikis(p string) bool {
 	if v, ok := s.real.Load(p); ok {
 		return v.(bool)
 	}
-	in := strings.HasPrefix(realPath(expandUser(p)), s.wikisReal+"/")
+	in := strings.HasPrefix(pyos.RealPath(pyos.ExpandUser(p)), s.wikisReal+"/")
 	s.real.Store(p, in)
 	return in
 }

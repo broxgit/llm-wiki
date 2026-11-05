@@ -237,7 +237,7 @@ need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 # Raise GO_PROTOCOL, with the constant in cmd/llm-wiki/main.go, whenever a ported
 # command's arguments or output change. scripts/helper.sh builds releases and writes
 # helper.lock.
-GO_PROTOCOL=3
+GO_PROTOCOL=4
 HELPER_LOCK="$REPO/helper.lock"
 HELPER_DIR="${LLM_WIKI_HELPER_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/llm-wiki/helper}"
 
@@ -4204,7 +4204,7 @@ cmd_journal_note() {
 # Antigravity, into journal/backfill.md. An agent then writes entries from it. See
 # rules/journal.md.
 journal_backfill() {
-  local since="14d" until="" from="$HOME/.claude/projects" today start out
+  local since="14d" until="" from="$HOME/.claude/projects" today start out bin
   while [ $# -gt 0 ]; do
     case "$1" in
       --since) need_value "$@"; since="${2:-}"; shift 2 ;;
@@ -4228,7 +4228,14 @@ journal_backfill() {
   start="$(since_to_date "$today" "$since")"
   until="${until:-$today}"
   out="$JOURNAL_DIR/backfill.md"
-  python3 - "$from" "$start" "$until" "$(journal_get day_starts)" "$WIKIS_DIR" "$(journal_get exclude)" "$out" "$AGY_HOME/antigravity/brain" <<'PY'
+  # The compiled helper writes the same digest several times faster. It writes the
+  # digest whole or not at all, and prints nothing when it fails, so the Python below
+  # still answers.
+  if bin="$(go_helper)" \
+    && "$bin" journal-backfill "$from" "$start" "$until" "$(journal_get day_starts)" "$WIKIS_DIR" "$(journal_get exclude)" "$out" "$AGY_HOME/antigravity/brain" 2>/dev/null; then
+    :
+  else
+    python3 - "$from" "$start" "$until" "$(journal_get day_starts)" "$WIKIS_DIR" "$(journal_get exclude)" "$out" "$AGY_HOME/antigravity/brain" <<'PY'
 # Digest Claude Code transcripts into one markdown file: per local day, per
 # project, the user's prompts, files changed, whether it committed, and how it ended.
 import json, os, re, subprocess, sys, fnmatch
@@ -4242,7 +4249,7 @@ excl = [g for g in exclude.split(",") if g]
 
 # repo -> wiki, from each wiki's repos.md
 cover = {}
-for rp in Path(wikis).glob("*/repos.md"):
+for rp in sorted(Path(wikis).glob("*/repos.md")):  # sorted, as the Go version reads them
     for line in rp.read_text(errors="replace").splitlines():
         if line.startswith("- "):
             cover[line[2:].strip()] = rp.parent.name
@@ -4298,7 +4305,9 @@ def texts(content):
 # (day, project) -> record
 work = {}
 cutoff = datetime.combine(start - timedelta(days=1), datetime.min.time()).timestamp()
-files = [p for p in Path(sess_dir).rglob("*.jsonl") if p.stat().st_mtime >= cutoff] if os.path.isdir(sess_dir) else []
+# In a fixed order, as the Go version reads them: ties among prompts, the last reply
+# and the order of files changed go by it.
+files = [p for p in sorted(Path(sess_dir).rglob("*.jsonl")) if p.stat().st_mtime >= cutoff] if os.path.isdir(sess_dir) else []
 for f in files:
     recs = []
     for line in open(f, errors="replace"):
@@ -4351,7 +4360,7 @@ for f in files:
 # Gemini conversations in Antigravity: one transcript per conversation, which
 # doesn't record its workspace. The project is the one its file paths and
 # `git -C` folders point at most often.
-agy = [p for p in Path(agy_dir).glob("*/.system_generated/logs/transcript_full.jsonl") if p.stat().st_mtime >= cutoff] if os.path.isdir(agy_dir) else []
+agy = [p for p in sorted(Path(agy_dir).glob("*/.system_generated/logs/transcript_full.jsonl")) if p.stat().st_mtime >= cutoff] if os.path.isdir(agy_dir) else []
 for f in agy:
     steps = []
     for line in open(f, errors="replace"):
@@ -4418,6 +4427,7 @@ with open(out, "w") as o:
 n = sum(1 for k in work if work[k]["prompts"])
 print(f"{n} project-day(s) from {len(files)} Claude Code transcript(s) and {len(agy)} Gemini conversation(s)")
 PY
+  fi
   echo "digest:  $(tilde "$out") ($start to $until)"
   echo "Next: tell an agent \"backfill my journal from the digest\". It writes the entries, then deletes the digest."
 }

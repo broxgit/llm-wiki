@@ -9,7 +9,7 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 ### Port wiki.sh to Go, one command at a time
 
 - **Why:** see the first step under Done. The aim is one binary that needs no Bash 3.2 workarounds and no Python.
-- **Sketch:** next `journal backfill`, which reads transcripts too. Then routing as one package, `find` with ranked section results, and the MCP server in-process. Each port prints what the old code prints, checked by the smoke tests, and adds nothing.
+- **Sketch:** next routing as one package, `find` with ranked section results, and the MCP server in-process. Each port prints what the old code prints, checked by the smoke tests, and adds nothing.
 - **Open:** when the ported commands may drop their old Bash and Python. The helper now reaches people through `wiki update`, but that has to prove itself first. The core commands (`start`, `capture`, `lock`, `sync`, `index`) stay in Bash until then, so a session can never break over a missing binary.
 
 ### Know whether sessions capture and compile
@@ -71,6 +71,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### The Go port: journal backfill (2026-11-05)
+
+- **Why:** `wiki journal backfill` took about 13 seconds for the default 14 days on the maintainer's Mac (1,160 transcripts, 2.2 GB). Timing its Python's parts showed 8 of those seconds went to 730 git calls, one after another, and 5 to reading JSON, most of it in one 282 MB transcript.
+- **What changed:** the helper's `journal-backfill` takes the Python's arguments, writes the same digest through a temporary file renamed into place, and prints the same line. `journal_backfill` keeps the options, the dates and `--done`. It asks git side by side and reads a long transcript in pieces side by side. 14 days now take about 2.5 seconds, not 14, and one day about 1.2, not 5. The digest matched byte for byte for 20 runs on a frozen copy, from one day to the full history, with and without excludes. The Python now reads files in sorted order: ties between prompts in one minute, the last reply and the order of files changed used to follow the directory order. Records it might read differently or stop at, such as JSON that isn't an object, bad UTF-8 or a lone surrogate, stay with the Python. `internal/pyos` now holds the path, glob, time and git code the ports share.
 
 ### Session start fetches the helper (2026-11-05)
 
