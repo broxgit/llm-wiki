@@ -140,59 +140,6 @@ It reads what was last pushed, so answers are as fresh as your last sync, and it
 
 This has run end to end once, on 2026-11-03, with a test wiki: the agent read a private repository and cited the page, and got a 404 from another one. In the Mac app, the agent appeared after relaunching it.
 
-**Microsoft Copilot Cowork:** it can't reach your files or run your build, but it can still change your code. It publishes a folder to OneDrive, you run one command, and you attach the report it writes. It's a way to use Copilot on a real repository when work gives you far more Copilot than Claude. Check that your company allows your code in OneDrive and through its tenant. With OneDrive syncing, in a terminal:
-
-```
-wiki setup copilot-cowork
-```
-
-It copies a skill called `remote-pair-run` to `Documents/Cowork/skills` in your work OneDrive, and Cowork finds it when a new session starts. Run it again to update the skill. If you have several work OneDrive folders, name one with `--dir`. If you use it for Go, attaching the Linux Go tarball from [go.dev/dl](https://go.dev/dl/) lets Cowork compile in its own sandbox first.
-
-To share your code, run this in the repository, then tell Cowork what it prints:
-
-```
-wiki relay scan
-```
-
-It puts the current branch and your uncommitted changes in OneDrive, at `Documents/Cowork/relay/scans`, so you don't have to attach anything. That includes the branch's whole history. Untracked files stay out.
-
-To share a different branch without leaving yours, add `--branch`. It fetches, and sends that branch as origin has it, or your local copy if origin doesn't have it. Your checkout isn't touched, and uncommitted changes stay out:
-
-```
-wiki relay scan --branch master
-```
-
-If a wiki covers the repository, its `index.md` and compiled pages go too, and the command says so. Cowork reads them before it plans, so you don't have to repeat your rules. It gets a read-only copy, as of that scan, and can't save notes. Raw notes, other wikis and the shared wiki stay on your machine. Check that your company allows that wiki's content in OneDrive and through its tenant, or add `--no-wiki`.
-
-Then ask Cowork to change something. Each round goes like this:
-
-1. It gives you one command, `wiki relay run` with a version number. The command waits for OneDrive to catch up, and copies the files out once every one matches what Cowork published.
-2. It shows you what's there. Press `y` to run it, `v` to read the files first, or `n` to stop. It runs on your machine, so read what Cowork says it will change. The run compares the new output with the old, and restores what it touched. It never commits or pushes.
-3. The report goes to OneDrive by itself, only if a run happened, and a copy stays in `~/pair-run-reports`. You see all of it in your terminal as it runs. Tell Cowork `done`, and it reads the report.
-
-Run `wiki relay run` in Apple's Terminal. macOS can refuse other terminal apps on OneDrive files that aren't downloaded yet: in one test it refused iTerm with `Operation not permitted`, with no pop-up, and let Terminal read the same files. It doesn't always happen, and why isn't known. The command says so if it does.
-
-If OneDrive never catches up, the command gives up after 10 minutes, prints what your Mac sees for each file, and sends nothing. Paste that output to Cowork. If your OneDrive allows it, in Finder, right-click the task's `output` folder, choose **Always Keep on This Device**, and run it again.
-
-Four test sessions with Cowork, on a throwaway repository, led to this. On 2026-11-04, whole rounds ran from Apple's Terminal with nothing attached and no Always Keep: a fresh publish, a real failure, its fix, and pressing `n`. Scans worked at up to 50 MB. It hasn't run on real code yet.
-
-After you update the skill, a new Cowork session can still load the old copy for several minutes, so give it 10.
-
-**Reviewing a merge request in Cowork:** if you keep a review skill, Cowork can follow it, using what this command sends in place of `glab` and your clones. Your skill only needs to add the rules Cowork can't otherwise see, such as ones in your agent's memory. Run it in any terminal:
-
-```
-wiki relay mr <url> --also ~/dev/some-service --also ~/dev/deployments/my-service
-```
-
-- It sends the merge request's discussions and diff, its source and target branches, your own Go libraries at the versions `go.mod` pins, your earlier review, and the wiki. It only fetches in your clone, and puts a prompt for Cowork on your clipboard.
-- `--also` sends another repository at origin's default branch, or only one folder of it, and `PATH@BRANCH` names a branch. Use it as many times as you like. The first time, `wiki setup copilot-cowork` asks where your clones and reviews live.
-- For a Go repository, it asks whether to run `go build`, `go vet`, `go test` and `go mod tidy -diff` first, and sends the results. They run on a temporary copy of the branch with git hooks off, so your clone and uncommitted work stay out of it, but the branch's code does run on your Mac. Each check stops after 10 minutes. `--checks` and `--no-checks` answer for you.
-- It reviews what's pushed, and warns if your local branch has commits the merge request doesn't.
-- Cowork publishes the review, and gives you `wiki relay review`. It shows you the file and its Coverage section, which says what Cowork read and skipped, and saves it where you keep your reviews when you press `y`. Your earlier copy is kept beside it as `.previous`. Run that one in Apple's Terminal.
-- For a fix you've proven, `wiki relay apply` leaves its patches in your working tree when you press `y`, and never commits.
-
-It has run once with Cowork on a real merge request, on 2026-11-04, before the checks and the Coverage section were added. In that review, a run on the Mac proved a build failure that Cowork had only rated Low from reading the code. It's built for GitLab and Go. Cowork still can't see production data, and it reads other services only if it asks or you add `--also`.
-
 **Other web agents:** the same idea works wherever an agent has a GitHub connector that can read your private repository. Only claude.ai's and Microsoft 365 Copilot's have been tried.
 
 **Sessions that can reach your files but have no instruction file:** zip the `skills/llm-wiki` folder, with the folder at the zip root, and add it under Customize > Skills. The skill finds wikis in the folders a conversation can reach.

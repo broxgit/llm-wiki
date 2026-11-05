@@ -12,14 +12,6 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 - **Sketch:** `wiki status` flags a wiki whose repository has commits in the last two weeks but no new notes in that time.
 - **Open:** wait for two weeks of `wiki stats` first. It may not be needed.
 
-### Wake Copilot Cowork with no one typing
-
-- **Why:** `wiki relay` removed the attachments, but the user still tells Cowork "done" after each run.
-- **What the tests showed (2026-11-03, two sessions):** Cowork picks the skill unprompted, and reads OneDrive by path with no attachment, including a `git bundle` in a tar.gz, with the bytes intact. An email trigger woke the same conversation in 8 to 67 seconds, even with Cowork closed, and refused a stale report. An uploaded Go toolchain ran offline. Cowork's browser refused, with browsing not enabled for the workspace. Running from the synced folder is fragile: `bash` was killed once and refused once with `Operation not permitted`, and a stale report got sent after the refusal. AppleScript can't send the email when the user is on Outlook on the web.
-- **Sketch:** after sending a report, `wiki relay run` posts through a Teams workflow webhook, and a Cowork trigger on that message reads the report and carries on. Notes Cowork drops in its output folder could go through `wiki capture` at the same time.
-- **Open:** whether the tenant allows the webhook, and whether a bot's message fires a trigger. Whether a trigger whose own instructions say to fix a FAIL can publish the fix is still untested, and only matters once this works. Also open: does the toolchain survive an idle gap?
-- **After that:** a direct bridge, as an MCP connector through a dev tunnel, could replace the relay. It's a public URL into a work laptop, and Cowork also reads email and web pages, so it needs IT's approval and no general shell.
-
 ## Later
 
 - **Merge requests in standups.** Reviews and MRs opened live in GitHub or GitLab, not in git history. Pulling them in would need an API token and a host per remote.
@@ -36,9 +28,6 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 Things that have never been run for real. Treat them as unproven until crossed off.
 
 - `wiki tour` with a person, or with any agent but Claude. Whether its chapters land, and how long they take, is a guess until then.
-- `wiki relay mr` and `review` with Copilot Cowork ran once on a real merge request on 2026-11-04, and every finding was reading only. The checks, the Coverage section and the fuller skill instructions came after that, so whether Cowork follows them is untested, and its findings have never been compared with a Claude review. A second pass in that session sent real runs to the Mac, which is how a hook spoiling the tree came to light, and the fix, `safe_worktree`, has only run in smoke tests. `apply` has only run in smoke tests.
-- Copilot Cowork reading a repository's wiki from `wiki relay scan`. It has only run in smoke tests, against a fake OneDrive folder.
-- The `remote-pair-run` skill and `wiki relay` on real code. Whole rounds passed on a throwaway repository from Apple's Terminal on 2026-11-04, with nothing attached and no Always Keep. The relay's refusal message has only run against an imitation, because iTerm wasn't refused in that test, and later read a file it had been refused an hour before. Why is unknown.
 - `wiki.sh unlock` and `claude` on macOS. `setup` and `journal backfill` have since run on Macs in real use (2026-10-28 and 2026-10-29); every other command ran cleanly on macOS (bash 3.2, BSD `date`) on 2026-10-28.
 - `wiki.sh journal backfill` on transcripts from Claude Code versions other than the one it was written against. It needs `python3`.
 - Git sync between two people or two machines. Pull, commit, and push from one machine worked in real use on 2026-10-01.
@@ -75,6 +64,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### The relay moved to its own repository (2026-11-05)
+
+- **Why:** one repository per tool. The relay is about Copilot Cowork and OneDrive, not wikis, and every plugin user was getting it.
+- **What changed:** `scripts/relay.sh`, `cowork/` and their tests and docs moved to [llm-relay](https://github.com/broxgit/llm-relay), with their history. What was planned and untested for them moved to its roadmap. `wiki relay` and `wiki setup copilot-cowork` print where they went and exit non-zero, for one release. Remove those two stubs and their smoke tests after that.
 
 ### Reminders at the point of use (handbook version 28, 2026-11-05)
 

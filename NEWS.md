@@ -4,6 +4,16 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. A short paragraph, then lines starting `- ` for what changed and `- Do:` for what to do about it. Add an entry for anything a user would notice, and none for fixes they wouldn't.
 
+## 2026-11-05: wiki relay is now its own tool
+
+The Copilot Cowork relay moved to its own repository, [llm-relay](https://github.com/broxgit/llm-relay), since it has little to do with wikis. Nothing else in llm-wiki changes, including `wiki setup microsoft-copilot`.
+
+- `wiki relay` and `wiki setup copilot-cowork` now only print where they went, and fail. They'll go away in a later release.
+- The commands are the same with a shorter name: `relay run`, `relay scan`, `relay mr`, `relay review` and `relay apply`. `relay setup` replaces `wiki setup copilot-cowork`.
+- It keeps reading your settings from `~/.config/llm-wiki/relay` until you set new ones. It still sends a repository's wiki if the `wiki` command is installed.
+- `--collection` didn't come along. To pick a collection for a scan, set `WIKIS_DIR`.
+- Do: if you use Copilot Cowork, install `relay` as its README says, and run `relay setup`. That reinstalls the skill in OneDrive, which you have to do, because the old copy tells Cowork to give you `wiki relay` commands. Give it 10 minutes before a new conversation. Otherwise, nothing.
+
 ## 2026-11-05: Reminders at the moment a rule applies
 
 A rule your agent read at session start is easy to lose two hours in. Now a wiki can say when a rule applies, and Claude Code puts it in front of the agent then.
