@@ -58,7 +58,7 @@ Nobody needs it. `wiki.sh` uses it when it's there and prints the protocol numbe
 
 `LLM_WIKI_NO_GO=1` makes `wiki.sh` ignore the helper, and `LLM_WIKI_GO=<path>` points it at another build.
 
-Ported so far: both token tables in `wiki report` (`report_tokens` and `report_tokens_gemini`). The Gemini table's Python stops at the first step it can't read, so its port doesn't copy each way of failing. It returns an error on anything it isn't sure of, and the Python decides. `internal/pyjson` holds the Python behaviours a port has to copy, such as the length of `json.dumps`.
+Ported so far: both token tables in `wiki report` (`report_tokens` and `report_tokens_gemini`), and the body of `wiki standup` (`standup_activity`, in `internal/standup`). The Gemini table's Python stops at the first step it can't read, so its port doesn't copy each way of failing. It returns an error on anything it isn't sure of, and the Python decides. `cmd_standup` keeps the options, the dates and `--save`, runs under `LC_ALL=C` so order and matching don't depend on the locale, and passes its repositories and comma lists in final form. Anything that port isn't sure of, such as a pattern with a bracket or a file grep would call binary, is an error, and the Bash answers. `internal/pyjson` holds the Python behaviours a port has to copy, such as the length of `json.dumps`.
 
 ## Change the rules
 

@@ -966,6 +966,119 @@ mkdir -p "$T/code-empty"
 "$W" journal set code_dirs "$T/code-empty" >/dev/null
 expect "and says when it found no repositories at all" "No git repositories found under $T/code-empty" "$W" standup --since 2d
 "$W" journal set code_dirs "$T/code" >/dev/null
+# The compiled helper built above, against the Bash, on a fixture with fixed dates.
+if [ -x "$T/bin/llm-wiki" ]; then
+  S="$T/code-s"; d1="2026-01-15T12:00:00"
+  scommit() { GIT_AUTHOR_DATE="$d1" GIT_COMMITTER_DATE="$d1" git -C "$1" -c user.email="${3:-}" commit -q --allow-empty -m "$2"; }
+  mkdir -p "$S/plain" "$S/remoted" "$S/branch" "$S/unborn" "$S/noemail" "$S/other" "$S/up" "$S/deep/er/still" "$S/WorkTree"
+  for r in plain remoted branch unborn noemail other WorkTree deep/er/still; do git -C "$S/$r" init -q -b main; done
+  me="$(git -C "$S/plain" config user.email || echo smoke@example.com)"
+  for i in 1 2 3 4; do scommit "$S/plain" "plain commit $i" "$me"; done
+  scommit "$S/remoted" "remoted commit" "$me"; git -C "$S/remoted" remote add origin 'git@host:me/named-remote.git/'
+  printf 'x\n' > "$S/remoted/dirty.txt"; printf 'x\n' > "$S/remoted/dirty2.txt"
+  git -C "$S/branch" checkout -q -b feature; scommit "$S/branch" "branch commit: colons, 100% and \$HOME" "$me"
+  scommit "$S/noemail" "no email" "$me"; git -C "$S/noemail" config user.email ""
+  scommit "$S/other" "someone else's" "else@example.com"
+  scommit "$S/WorkTree" "capital name" "$me"
+  git clone -q "$S/plain" "$S/up/clone"; scommit "$S/up/clone" "not pushed" "$me"
+  "$W" journal set code_dirs "$S" >/dev/null
+  J="$WIKIS_DIR/journal/2026-01-15.md"; mkdir -p "$WIKIS_DIR/journal"
+  printf '# 2026-01-15\n\n- 10:00 [plain] a day of work\nnot a bullet\n- 11:00 [branch] more [work] here\n- no brackets at all\n-no space\n' > "$J"
+  Z="$WIKIS_DIR/Zeta"; mkdir -p "$Z/raw" "$Z/wiki/sub" "$WIKIS_DIR/notawiki/raw" "$WIKIS_DIR/.hidden/raw"
+  : > "$Z/AGENTS.md"; : > "$Z/index.md"
+  printf '# A title: with colon\r\n\nbody\n' > "$Z/raw/2026-01-15-120000-titled.md"
+  printf 'no heading\n' > "$Z/raw/2026-01-15-120001-untitled.md"
+  printf '# \n\n# second\n' > "$Z/raw/2026-01-15-120002-empty-title.md"
+  printf '# no extension\n' > "$Z/raw/2026-01-15-120003-noext"
+  printf '# day only\n' > "$Z/raw/2026-01-16.md"
+  printf '# day and word\n' > "$Z/raw/2026-01-16-word.v2.md"
+  printf '# too old\n' > "$Z/raw/2025-01-15-120000-old.md"
+  printf '# not dated\n' > "$Z/raw/notes.md"
+  mkdir "$Z/raw/2026-01-15-120004-folder"
+  printf '# Log\n\n## 2026-01-15 ingest:   spaced\tout  words  \n## 2026-01-16 lint\n##  2026-01-15 two spaces\n## 2025-01-15 too old\n## 2026-01-15\ntext\n' > "$Z/log.md"
+  printf '> **Check:** b one\n> **Conflict:** b two\n' > "$Z/wiki/b.md"
+  printf '> **Check:** a-b one\n' > "$Z/wiki/a-b.md"
+  printf '```\n> **Check:** fenced\n```\n> **Check:** a one\n> **Other:** no\n' > "$Z/wiki/a.md"
+  printf '> **Check:** sub one\n> **Check:** sub two\n> **Check:** sub three\n' > "$Z/wiki/sub/c.md"
+  printf '> **Check:** a.b one\n' > "$Z/wiki/a.b.md"
+  printf '# hidden\n' > "$WIKIS_DIR/.hidden/raw/2026-01-15-120000-x.md"; : > "$WIKIS_DIR/.hidden/AGENTS.md"; : > "$WIKIS_DIR/.hidden/index.md"
+  printf '# not a wiki\n' > "$WIKIS_DIR/notawiki/raw/2026-01-15-120000-x.md"
+  SP=(--since 2026-01-10 --until 2026-01-20)
+  sbash="$(LLM_WIKI_NO_GO=1 "$W" standup "${SP[@]}" 2>&1)"
+  sgo="$(LLM_WIKI_GO="$T/bin/llm-wiki" "$W" standup "${SP[@]}" 2>&1)"
+  # What the Bash printed for this fixture.
+  case "$sbash" in *"### named-remote"*"(2 of 9 repo(s) couldn't be read"*"(1 repo(s) skipped: no user.email"*"- 2026-01-15 10:00 [plain] a day of work"*"- 2026-01-15 no brackets at all"*"- 2026-01-15-120000-titled: A title: with colon"*"- 2026-01-15-120001-untitled: (no title)"*"- 2026-01-15-120002-empty-title: (no title)"*"- 2026-01-15-120003-noext: no extension"*"- 2026-01-16-word.v2: day and word"*"- 2026-01-16: day only"*"- Zeta: 2026-01-15 ingest: spaced out words"*"- Zeta: 2026-01-16 lint"*"- named-remote: branch main, 2 uncommitted file(s), 0 unpushed commit(s)"*"- Zeta: **Check:** a-b one"*"- Zeta: **Check:** a.b one"*"- Zeta: **Check:** a one"*"- Zeta: **Check:** b one"*"- Zeta: **Conflict:** b two"*"Totals: "*) ok "the Bash reports the standup fixture's cases" ;; *) bad "the Bash reports the standup fixture's cases" "$sbash" ;; esac
+  case "$sbash" in *"sub one"*) bad "only a wiki's first five callouts are listed, by file" "$sbash" ;; *) ok "only a wiki's first five callouts are listed, by file" ;; esac
+  case "$sbash" in *"too old"*|*"fenced"*|*"not dated"*|*"not a wiki"*|*"# hidden"*|*"someone else"*|*"not a bullet"*|*"no space"*|*"two spaces"*) bad "and what the range or the rules leave out stays out" "$sbash" ;; *) ok "and what the range or the rules leave out stays out" ;; esac
+  [ "$sbash" = "$sgo" ] && ok "the Go helper prints the same standup as the Bash" || bad "the Go helper prints the same standup as the Bash" "$(diff <(printf '%s\n' "$sbash") <(printf '%s\n' "$sgo"))"
+  ssame() {
+    local name="$1" a g; shift
+    a="$(LLM_WIKI_NO_GO=1 "$W" standup "$@" 2>&1)"; g="$(LLM_WIKI_GO="$T/bin/llm-wiki" "$W" standup "$@" 2>&1)"
+    [ "$a" = "$g" ] && ok "and with $name" || bad "and with $name" "$(diff <(printf '%s\n' "$a") <(printf '%s\n' "$g"))"
+  }
+  ssame "--day" --day 2026-01-15
+  ssame "--since 2d" --since 2d
+  ssame "--since lastweek" --since lastweek
+  ssame "--format summary" "${SP[@]}" --format summary
+  ssame "--format detailed and --max" "${SP[@]}" --format detailed --max 1
+  ssame "--max 2" "${SP[@]}" --max 2
+  ssame "--max 0" "${SP[@]}" --max 0
+  ssame "--max 010, which is ten" "${SP[@]}" --max 010
+  ssame "--only" "${SP[@]}" --only plain
+  ssame "--only and a star" "${SP[@]}" --only 'b*'
+  ssame "--only and a question mark" "${SP[@]}" --only 'pl?in'
+  ssame "--only matching a journal project" "${SP[@]}" --only '- no*'
+  ssame "--only and a bracket, for the Bash" "${SP[@]}" --only '[bp]*'
+  ssame "--exclude" "${SP[@]}" --exclude plain
+  ssame "--exclude twice, with spaces and an empty item" "${SP[@]}" --exclude ' pl* ,,Z?ta' --exclude 'named-*'
+  ssame "--exclude and a star across a slash" "${SP[@]}" --exclude '*/*'
+  ssame "--exclude and a backslash, for the Bash" "${SP[@]}" --exclude 'pl\ain'
+  ssame "--only and --exclude" "${SP[@]}" --only '*e*' --exclude 'named*'
+  "$W" journal set authors ' else@example.com , nobody ' >/dev/null
+  ssame "authors set" "${SP[@]}"
+  "$W" journal set authors "" >/dev/null
+  "$W" journal set exclude 'Z*' >/dev/null
+  ssame "journal exclude set" "${SP[@]}"
+  "$W" journal set exclude "" >/dev/null
+  "$W" journal set code_dirs "$T/code-empty" >/dev/null
+  ssame "no repositories at all" "${SP[@]}"
+  "$W" journal set code_dirs "$S:$WIKIS_DIR" >/dev/null
+  git -C "$Z" init -q 2>/dev/null
+  ssame "a repository under the wikis, left out" "${SP[@]}"
+  rm -rf "$Z/.git"
+  "$W" journal set code_dirs "$S" >/dev/null
+  # The same order whatever the locale: capitals before lowercase, in glob and sort alike.
+  if locale -a 2>/dev/null | grep -qi '^en_US.utf-\?8$'; then
+    ulocale="$(locale -a | grep -i '^en_US.utf-\?8$' | head -n 1)"
+    a="$(LC_ALL="$ulocale" LLM_WIKI_NO_GO=1 "$W" standup "${SP[@]}" 2>&1)"
+    case "$a" in *"### Zeta"*"### demo"*) bad "wikis keep byte order under $ulocale" "$a" ;; *) ok "wikis keep byte order under $ulocale" ;; esac
+    [ "$a" = "$(LC_ALL="$ulocale" LLM_WIKI_GO="$T/bin/llm-wiki" "$W" standup "${SP[@]}" 2>&1)" ] && ok "and the helper agrees there" || bad "and the helper agrees there"
+  else
+    skipped "standup under en_US.UTF-8 (no such locale here)"
+  fi
+  # Proof the helper ran: a wrapper leaves a mark, and it isn't asked twice.
+  printf '#!/bin/sh\n[ "$1" = protocol ] || echo "$1" >> "%s"\nexec "%s" "$@"\n' "$T/helper-ran" "$T/bin/llm-wiki" > "$T/bin/spy-helper"
+  chmod +x "$T/bin/spy-helper"; : > "$T/helper-ran"
+  LLM_WIKI_NO_GO="" LLM_WIKI_GO="$T/bin/spy-helper" "$W" standup "${SP[@]}" >/dev/null 2>&1
+  [ "$(grep -c '^standup-activity$' "$T/helper-ran")" = 1 ] && ok "wiki.sh runs the helper for the standup" || bad "wiki.sh runs the helper for the standup" "$(cat "$T/helper-ran")"
+  [ "$(LLM_WIKI_GO="$T/bin/broken-helper" "$W" standup "${SP[@]}" 2>&1)" = "$sbash" ] && ok "a helper that fails falls back to the Bash for the standup too" || bad "a helper that fails falls back to the Bash for the standup too"
+  [ "$(LLM_WIKI_GO="$T/bin/stale-helper" "$W" standup "${SP[@]}" 2>&1)" = "$sbash" ] && ok "and one built for another protocol is passed over" || bad "and one built for another protocol is passed over"
+  out="$(LLM_WIKI_GO="$T/bin/llm-wiki" "$W" standup "${SP[@]}" --save 2>&1)"
+  case "$out" in *"Totals: "*"saved: "*) ok "--save still saves what the helper printed" ;; *) bad "--save still saves what the helper printed" "$out" ;; esac
+  rm -f "$WIKIS_DIR/journal/"*-activity.md
+  # A file grep would call binary: the helper refuses it, and the Bash answers.
+  printf -- '- [plain] bin\000ary\n' >> "$J"
+  if "$T/bin/llm-wiki" standup-activity --wikis "$WIKIS_DIR" --journal "$WIKIS_DIR/journal" --start-date 2026-01-15 --end-date 2026-01-15 --start-utc 20260115000000 --end-utc 20260116000000 --max 0 >/dev/null 2>&1; then
+    bad "the helper leaves a binary journal to the Bash"
+  else
+    ok "the helper leaves a binary journal to the Bash"
+  fi
+  ssame "a binary journal" "${SP[@]}"
+  rm -f "$J"; rm -rf "$Z" "$WIKIS_DIR/notawiki" "$WIKIS_DIR/.hidden"
+  "$W" journal set code_dirs "$T/code" >/dev/null
+else
+  skipped "the Go helper against the Bash for the standup (go isn't installed)"
+fi
 
 section "Commit distance"
 R="$T/code/demo"
