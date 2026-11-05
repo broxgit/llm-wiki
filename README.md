@@ -66,6 +66,7 @@ Joining a team that already shares a collection? Read [Teams](docs/teams.md#join
 
 ## Then
 
+- **Take the tour.** Ask your agent: "Give me the llm-wiki tour". It walks you through the features hands-on, on a made-up project, so your wikis aren't touched. About 10 minutes for the short version.
 - [Using it](docs/using.md): what the agent does on its own, what to say, and every feature above in detail.
 - [Teams](docs/teams.md): one shared collection for everyone.
 - [Troubleshooting](docs/troubleshooting.md)

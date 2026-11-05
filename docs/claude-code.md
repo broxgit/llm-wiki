@@ -51,6 +51,8 @@ It syncs your collection, installs gitleaks and the plugin, turns on auto-update
 2. Tell Claude a decision and its reason. For example: "We're using Postgres, not SQLite, because we need concurrent writers." The reply should end by naming a new file under `raw/`.
 3. Open a fresh session in the same repository and ask about the decision. It should answer and cite a page under `wiki/`.
 
+To see the rest of what it can do, run `/llm-wiki:tour`. It uses a made-up project, so your wikis aren't touched.
+
 ## What the plugin does
 
 - **Points every session at the right wiki.** At session start, and again after `/clear` or compaction, it finds the wiki for the repository you're in and tells Claude to read its handbook first. Outside a repository, or in one with no wiki yet, it uses the shared wiki. The repository's own wiki appears the first time Claude has something to file there.
@@ -63,6 +65,7 @@ It syncs your collection, installs gitleaks and the plugin, turns on auto-update
   | `/llm-wiki:save [focus]` | Save what this session established, then compile |
   | `/llm-wiki:compile [wiki]` | Turn waiting notes into pages now |
   | `/llm-wiki:standup [options]` | Your standup, from commits, journal and notes |
+  | `/llm-wiki:tour [topic]` | A hands-on tour of the features, on a made-up project |
 
 - **Links team skills.** Skills your team keeps in the wikis show up in Claude Code without anyone installing them. See [Team skills](using.md#team-skills).
 - **Offers to start an empty wiki from the repository's own docs**, with [`wiki seed`](using.md#start-a-wiki-from-a-repositorys-docs).

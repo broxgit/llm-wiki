@@ -19,6 +19,7 @@ Commands are written as `wiki <command>`. From a clone without the link, that's 
 | "Seed a wiki from this repo's docs" | Starts the repository's wiki from its README, `docs/` and decision records, so it isn't empty on day one. See [Start a wiki from a repository's docs](#start-a-wiki-from-a-repositorys-docs). |
 | "Backfill my journal" | Fills in past days from earlier sessions. See [Fill in past days](#fill-in-past-days). |
 | "That belongs in the billing-api wiki" | Moves knowledge to the wiki that owns it, after asking. |
+| "Give me the llm-wiki tour" | A hands-on walk through the features, on a made-up project. See [The tour](#the-tour). Plugin: `/llm-wiki:tour`; Antigravity, Codex and Cursor: the `wiki-tour` skill. |
 
 ## What the agent does on its own
 
@@ -30,6 +31,20 @@ Commands are written as `wiki <command>`. From a clone without the link, that's 
 It tells you briefly what it wrote. It asks before resolving a contradiction or merging, deleting, or restructuring pages. If it doubts a fact you gave it, it files the fact, marks it with a `Check` line, and says so.
 
 **Stale knowledge.** Each page records when its claims were last confirmed and, for claims about code, the commit. Before the agent writes code or publishes something that depends on a page, it checks the page against the code or the cited source, when that's at hand, and files a correction if the page is wrong. When it answers from a page more than 90 days old that it couldn't check, it says when the page was last verified. `wiki stale` lists those pages.
+
+## The tour
+
+Ask your agent for the tour and it teaches you llm-wiki by doing it: you ask a made-up project's wiki a question, save a decision, watch notes become pages, rule on a contradiction, and see a wrong page get caught against the code. The short version takes about 10 minutes. Say "skip", "next" or "stop" whenever you like, or ask for one topic.
+
+Any agent that can run commands can do it. If it doesn't know the tour, say:
+
+```
+Run `wiki tour` and follow what it prints.
+```
+
+It all happens in a sandbox in your temp folder, with its own wikis, code and settings, so your wikis and tips aren't touched. Only the last chapter looks at your real setup, it only reads, and it ends with what would help you most. The sandbox stays between sessions, so you can pick up later. `wiki tour --clean` removes it, and `--dir` puts it somewhere else if your agent can't write to the temp folder.
+
+The desktop app's Chat tab can't take the tour, because it can't run commands.
 
 ## Where things live
 

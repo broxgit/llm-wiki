@@ -57,6 +57,8 @@ Don't wait to be asked. The handbook's "Act without being asked" section is the 
 
 Direct requests still work: "save this", "save this session", "ingest", "lint". "Save this session" works mid-conversation in a session that started before the skill was loaded.
 
+If the user asks for a tour or a demo of llm-wiki, or how to use it, run `wiki.sh tour` and follow what it prints. It works on a made-up project in a sandbox, not their wikis. Without a shell, answer from the template repo's `docs/using.md` instead.
+
 Tell the user what you wrote, briefly, at the end of the reply. For a capture, the file path. For compile work, pages created, pages updated, corrections applied, conflicts found.
 
 Leave the wikis alone for questions clearly outside the subject of this wiki and the others. Reading an index costs tokens.
