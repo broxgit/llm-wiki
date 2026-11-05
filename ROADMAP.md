@@ -73,6 +73,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### Fixes from a second review by Gemini (2026-11-05)
+
+- **Why:** Gemini reviewed the code again. All seven of its bugs were real, though many details weren't, and three of its other ideas were already done.
+- **What changed:** `relay` and MCP `wiki_start` route by the repository, so they find a wiki in any collection. `wiki.sh` flags with no value give an error instead of a silent exit. Callouts in code fences don't count as open. The token tables follow the journal's `exclude`. `setup --list` and completion cover every section and relay's flags. The 12 process-substitution loops in `relay.sh` became heredocs, and the smoke test now scans it and `runlib.sh`. `relay.sh` runs `set -u` only, so that was for the rule, not a live abort.
+
 ### The report counts wiki use it can see (2026-11-02)
 
 - **Why:** the report said "17 lookups, 100% answered" for a week of about 67 sessions. Sessions mostly skip logging by hand, so that number looked meaningful and wasn't.
