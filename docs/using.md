@@ -367,7 +367,7 @@ Run `wiki` with no arguments for the full list. The ones you're likely to use:
 | `wiki mcp` | A local MCP server over your wikis, for sessions with no file access, such as the desktop app's Chat tab. `wiki setup chat` adds it there. |
 | `wiki news` | What's new in llm-wiki since you last looked. `wiki update` prints it too, and `wiki status` says when there's something new. `--all` prints everything. |
 | `wiki setup microsoft-copilot` | A Microsoft 365 Copilot agent that reads a wiki repository on GitHub. [Set up with another agent](other-agents.md) has what it needs. |
-| `wiki helper`, `wiki helper fetch` | Which compiled helper `report` and `standup` are using, and download the one released for your version. `wiki update` does that too. Nothing needs it: without one they run slower. |
+| `wiki helper`, `wiki helper fetch`, `wiki helper auto on\|off` | Which compiled helper `report` and `standup` are using, and download the one released for your version. `wiki update` does that too, and so does session start, in the background, unless you turn `auto` off. Nothing needs it: without one they run slower. |
 | `wiki compile <wiki>`, `on`, `off` | An experiment: a headless agent compiles a wiki's waiting notes, so your session doesn't start with them. `on` makes session start do it in the background. Off by default. `wiki compile` alone shows the last runs. |
 | `wiki lock`, `wiki log`, `wiki sync` | The compile lock, a log entry, and commit-pull-push for one wiki. With no wiki named, `sync` uses this repository's. Mostly for agents. |
 | `wiki index <wiki>` | Bring `index.md` in step with the pages' titles and summaries, keeping its order and headings. |

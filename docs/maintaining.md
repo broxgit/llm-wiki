@@ -71,6 +71,8 @@ That depends on the build being reproducible: the same source, compiler and flag
 - **To move to a newer compiler,** change the `toolchain` line in `helper.lock` and run `scripts/helper.sh lock`.
 - **A pull request from a fork** can't publish. Push its branch to this repository to release it.
 
+Session start fetches too, in the background, when the release a checkout names isn't on the machine: the Claude Code hook and `wiki start` both call `helper_auto`. It is quiet, tries once in six hours, and `wiki helper auto off` turns it off. `wiki setup` asks about it once.
+
 `wiki helper` says which helper a checkout is using. `wiki.sh` looks for one built in the checkout, then the release its lock names, then any older release on the machine that speaks the same protocol. Downloads go under `~/.local/share/llm-wiki/helper/`, outside the plugin's folder, so a plugin update doesn't remove them. Old ones aren't cleaned up yet.
 
 Ported so far: both token tables in `wiki report` (`report_tokens` and `report_tokens_gemini`), and the body of `wiki standup` (`standup_activity`, in `internal/standup`). The Gemini table's Python stops at the first step it can't read, so its port doesn't copy each way of failing. It returns an error on anything it isn't sure of, and the Python decides. `cmd_standup` keeps the options, the dates and `--save`, runs under `LC_ALL=C` so order and matching don't depend on the locale, and passes its repositories and comma lists in final form. Anything that port isn't sure of, such as a pattern with a bracket or a file grep would call binary, is an error, and the Bash answers. `internal/pyjson` holds the Python behaviours a port has to copy, such as the length of `json.dumps`.

@@ -42,6 +42,9 @@ emit() {
 # A background compile's own session gets its instructions in its prompt. Starting
 # another run from it would never end.
 [ -z "${LLM_WIKI_BACKGROUND:-}" ] || exit 0
+# The compiled helper for this version, fetched in the background if it isn't here: a
+# plugin updates without anyone running `wiki update`. wiki.sh decides and stays quiet.
+"$WIKI_SH" __helper-auto >/dev/null 2>&1 || true
 
 # t <path>: the path with ~ for the home folder. Shorter, and a shell expands it in a
 # command as long as it isn't quoted.
