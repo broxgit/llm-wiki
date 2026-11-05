@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: shellcheck
-        run: shellcheck -S warning wiki.sh hooks/session-start.sh hooks/pre-commit scripts/migrate-to-plugin.sh scripts/relay.sh cowork/remote-pair-run/runlib.sh tests/smoke.sh
+        run: shellcheck -S warning wiki.sh hooks/session-start.sh hooks/pre-tool-use.sh hooks/pre-commit scripts/migrate-to-plugin.sh scripts/relay.sh cowork/remote-pair-run/runlib.sh tests/smoke.sh
       - uses: actions/setup-node@v4
         with:
           node-version: 20

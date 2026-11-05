@@ -43,6 +43,7 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - `wiki.sh journal backfill` on transcripts from Claude Code versions other than the one it was written against. It needs `python3`.
 - Git sync between two people or two machines. Pull, commit, and push from one machine worked in real use on 2026-10-01.
 - Two sessions taking the compile lock in the same second.
+- Reminders in real use. A headless session on a throwaway wiki was stopped once by a `before` reminder, retried, and got an `on` reminder as context. Unknown: whether real sessions act on them or route around them, how many a wiki can hold before they turn into noise, whether one refusal per rule per session annoys more than it helps, and what the hook costs across a long session. No agent but Claude Code runs it.
 - Background compile in real use. One real run so far. Unknown: whether a cheaper model's pages are as good as a session's, whether a run started from the session hook survives the hook ending in every agent, how it behaves inside Codex's and Cursor's sandboxes, and any agent other than `claude`. After a week, read `wiki compile` and some of the pages it wrote. If it holds, the handbook can stop telling sessions to compile, which is the larger gain.
 - A wiki with two shared wikis listed in `links.md`.
 - Real scale: hundreds of wikis, hundreds of pages. Real use so far is 10 wikis and 53 pages.
@@ -74,6 +75,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Reminders at the point of use (handbook version 28, 2026-11-05)
+
+- **Why:** a rule shown at session start isn't in mind when it applies. On 2026-11-05 a session started a sub-session on the most expensive model, against a rule in the shared wiki whose index line it had read that morning.
+- **What changed:** `## Reminders` lines in `wiki/conventions.md` say when a rule applies: `before` or `on`, then `bash`, `edit` or `tool` with a pattern. The session hook writes each session's reminders, and a new PreToolUse hook (`hooks/pre-tool-use.sh`, `hooks/reminders.py`) matches each tool call against them. `before` refuses the call once with the rule as the reason, because context added to a call arrives with its result, too late for a rule about what to do first. Each is given once a session and again after a compaction. `wiki lint` reports lines it can't read. The read tools aren't matched, to keep the hook off the busiest calls.
 
 ### Background compile, as an experiment (2026-11-05)
 

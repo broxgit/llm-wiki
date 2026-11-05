@@ -577,6 +577,89 @@ expect "compile off turns it off" "compile: off" "$W" compile off
 expect "off, start leaves the notes to the session" "Compile them before the user's request" "$W" start bg
 refuse "compile rejects an unknown option" "$W" compile bg --nope
 rm -f "$BGC"
+
+section "Reminders"
+"$W" new rem >/dev/null
+RM="$WIKIS_DIR/rem"
+RD="$HOME/.local/state/llm-wiki/reminders"
+mkdir -p "$T/projects/rem" && git -C "$T/projects/rem" init -q
+cat > "$RM/wiki/conventions.md" <<'REM'
+---
+title: Conventions for rem
+summary: How to work in rem.
+updated: 2026-11-05
+verified: 2026-11-05
+---
+
+## For agents
+
+- Check CI after a push.
+
+## Reminders
+
+- before bash `git push`: Before a push, make sure the hooks ran. [raw/2026-01-01-000000-x.md]
+- on edit `payments/*`: Money is in cents.
+- on tool `Agent`: Set the model.
+- sometimes bash `x`: not a reminder
+
+```
+- before bash `git tag`: an example inside a fence
+```
+
+## Tools
+
+- ls (cli): listing
+REM
+printf '\n## Reminders\n\n- on bash `npm publish`: Ask first.\n' >> "$WIKIS_DIR/global/wiki/conventions.md"
+TAB="$(printf '\t')"
+out="$("$W" __reminders "$RM" 2>&1)"
+case "$out" in *"before${TAB}bash${TAB}git push${TAB}Before a push, make sure the hooks ran.${TAB}rem"*) ok "a reminder line is read, without its citation" ;; *) bad "a reminder line is read, without its citation" "$out" ;; esac
+case "$out" in "on${TAB}bash${TAB}npm publish${TAB}Ask first.${TAB}global"*) ok "the shared wiki's reminders come first" ;; *) bad "the shared wiki's reminders come first" "$out" ;; esac
+check "four are read: one shared, three of its own" test "$(printf '%s\n' "$out" | grep -c .)" = 4
+case "$out" in *"not a reminder"* | *"inside a fence"*) bad "a line that isn't a reminder, or sits in a code fence, is left out" "$out" ;; *) ok "a line that isn't a reminder, or sits in a code fence, is left out" ;; esac
+out="$("$W" lint rem 2>&1)"
+case "$out" in *"reminder line not understood: 1"*"sometimes bash"*) ok "lint names the line it couldn't read" ;; *) bad "lint names the line it couldn't read" "$out" ;; esac
+lacks "and not the one in the fence" "inside a fence" "$W" lint rem
+
+# tool_call <json>: what the tool-call hook replies.
+tool_call() { printf '%s' "$1" | CLAUDE_PLUGIN_ROOT="$REPO" sh "$REPO/hooks/pre-tool-use.sh"; }
+check "the plugin registers the tool-call hook" grep -q '"PreToolUse"' "$REPO/hooks/hooks.json"
+check "its Python parses" python3 -c "import ast, sys; ast.parse(open(sys.argv[1]).read())" "$REPO/hooks/reminders.py"
+out="$(tool_call '{"session_id":"s-1","tool_name":"Bash","tool_input":{"command":"git push"}}')"
+[ -z "$out" ] && ok "with no session started, a tool call gets nothing" || bad "with no session started, a tool call gets nothing" "$out"
+hook "$T/projects/rem" '{"session_id":"s-1","source":"startup"}' >/dev/null
+check "session start writes the session's reminders" test "$(grep -c . "$RD/s-1.tsv")" = 4
+push='{"session_id":"s-1","cwd":"'"$T/projects/rem"'","tool_name":"Bash","tool_input":{"command":"cd x && git push origin main"}}'
+out="$(tool_call "$push")"
+case "$out" in *'"permissionDecision": "deny"'*"make sure the hooks ran"*"from the wiki rem"*) ok "a before reminder stops the call once, with the rule" ;; *) bad "a before reminder stops the call once, with the rule" "$out" ;; esac
+if printf '%s' "$out" | python3 -c 'import json, sys; json.load(sys.stdin)' 2>/dev/null; then ok "and its reply is JSON"; else bad "and its reply is JSON" "$out"; fi
+out="$(tool_call "$push")"
+[ -z "$out" ] && ok "the same call made again goes through" || bad "the same call made again goes through" "$out"
+edit='{"session_id":"s-1","cwd":"'"$T/projects/rem"'","tool_name":"Edit","tool_input":{"file_path":"'"$T/projects/rem"'/payments/charge.go"}}'
+out="$(tool_call "$edit")"
+case "$out" in *'"additionalContext"'*"Money is in cents"*) ok "an on reminder comes as context for a matching file" ;; *) bad "an on reminder comes as context for a matching file" "$out" ;; esac
+case "$out" in *permissionDecision*) bad "and doesn't stop the call" "$out" ;; *) ok "and doesn't stop the call" ;; esac
+out="$(tool_call "$edit")"
+[ -z "$out" ] && ok "each reminder is given once a session" || bad "each reminder is given once a session" "$out"
+out="$(tool_call '{"session_id":"s-1","cwd":"'"$T/projects/rem"'","tool_name":"Read","tool_input":{"file_path":"'"$T/projects/rem"'/payments/x.go"}}')"
+[ -z "$out" ] && ok "a file reminder is for edits, not reads" || bad "a file reminder is for edits, not reads" "$out"
+expect "a tool reminder matches the tool's name" "Set the model" tool_call '{"session_id":"s-1","tool_name":"Agent","tool_input":{"prompt":"x"}}'
+expect "the shared wiki's reminder applies too" "Ask first. (from the wiki global" tool_call '{"session_id":"s-1","tool_name":"Bash","tool_input":{"command":"npm publish"}}'
+out="$(tool_call '{"session_id":"s-1","tool_name":"Bash","tool_input":{"command":"ls"}}')"
+[ -z "$out" ] && ok "a call no reminder covers gets nothing" || bad "a call no reminder covers gets nothing" "$out"
+out="$(tool_call 'not json'; echo "rc=$?")"
+[ "$out" = "rc=0" ] && ok "input it can't read is ignored, and the hook still exits 0" || bad "input it can't read is ignored, and the hook still exits 0" "$out"
+out="$(tool_call '{"session_id":"../s-1","tool_name":"Bash","tool_input":{"command":"git push"}}')"
+[ -z "$out" ] && ok "a session id that isn't a plain name is ignored" || bad "a session id that isn't a plain name is ignored" "$out"
+hook "$T/projects/rem" '{"session_id":"s-1","source":"compact"}' >/dev/null
+expect "after a compaction the reminders are given again" "make sure the hooks ran" tool_call "$push"
+hook "$T/projects/rem" '{"session_id":"s-1","source":"resume"}' >/dev/null
+out="$(printf '%s' "$push" | LLM_WIKI_BACKGROUND=1 CLAUDE_PLUGIN_ROOT="$REPO" sh "$REPO/hooks/pre-tool-use.sh")"
+[ -z "$out" ] && ok "a background compile's session gets no reminders" || bad "a background compile's session gets no reminders" "$out"
+touch -t 202001010000 "$RD/old-session.tsv"
+hook "$T/projects/rem" '{"session_id":"s-2","source":"startup"}' >/dev/null
+check "session start sweeps reminder files over a week old" test ! -f "$RD/old-session.tsv"
+check "and keeps the others" test -f "$RD/s-1.tsv"
 expect "log prints the counts" "2 created, 1 updated" "$W" log demo ingest "Note: smoke" --created wiki/sources/a.md --created wiki/x.md --updated wiki/y.md
 check "log writes the handbook's format" bash -c "tail -n 5 '$WIKIS_DIR/demo/log.md' | grep -q '^- conflicts: 0' && grep -q '^## 20[0-9-]* ingest: Note: smoke' '$WIKIS_DIR/demo/log.md'"
 refuse "log needs a title for an ingest" "$W" log demo ingest
