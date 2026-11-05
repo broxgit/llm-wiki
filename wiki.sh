@@ -175,6 +175,8 @@ Usage: $WIKI_CMD <command> [options]
   feedback [show|send|dismiss <id>]
                        Notes agents kept about llm-wiki itself, and filing one as an
                        issue after you read it. Off until: setup feedback.
+  helper [fetch]       Which compiled helper report and standup use, and download the
+                       one released for this version. wiki update does that too.
   mcp [--print]        A local MCP server over the wikis, for sessions with no file
                        access. An MCP client starts it. --print gives its config entry.
   news [--all]         What's new in llm-wiki since you last looked.
@@ -222,20 +224,129 @@ die() { echo "error: $*" >&2; exit 1; }
 # need_value "$@", in a flag's arm: without it, shift fails and set -e ends the script with no message.
 need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 
-# The compiled helper, bin/llm-wiki, built from cmd/llm-wiki with
-#   go build -o bin/llm-wiki ./cmd/llm-wiki
-# It is optional. Where it hasn't been built, or was built from an older checkout,
-# wiki.sh does the work itself with the code it has always had, so the two must print
-# the same thing: a smoke test compares them. go_helper prints the helper's path when
-# it can be trusted. Raise GO_PROTOCOL, with the constant in cmd/llm-wiki/main.go,
-# whenever a ported command's arguments or output change.
+# The compiled helper, llm-wiki, built from cmd/llm-wiki. It is optional: where there
+# is none that can be trusted, wiki.sh does the work itself with the code it has always
+# had, so the two must print the same thing, and a smoke test compares them.
+# A helper comes from one of three places:
+#   - built in this checkout:  go build -o bin/llm-wiki ./cmd/llm-wiki
+#   - the release this checkout names in helper.lock, which `wiki update` and
+#     `wiki helper fetch` download and keep only if its SHA-256 is the one in the lock
+#   - an older release still on this machine that speaks the same protocol
+# Raise GO_PROTOCOL, with the constant in cmd/llm-wiki/main.go, whenever a ported
+# command's arguments or output change. scripts/helper.sh builds releases and writes
+# helper.lock.
 GO_PROTOCOL=3
+HELPER_LOCK="$REPO/helper.lock"
+HELPER_DIR="${LLM_WIKI_HELPER_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/llm-wiki/helper}"
+
+# helper_ok <path>: whether it runs here and speaks this wiki.sh's protocol.
+helper_ok() { [ -x "$1" ] && [ "$("$1" protocol 2>/dev/null)" = "$GO_PROTOCOL" ]; }
+
+# helper_source: which release belongs to this checkout: the lock's source hash.
+helper_source() { sed -n 's/^source //p' "$HELPER_LOCK" 2>/dev/null | head -n 1; }
+
+# helper_platform: this machine as helper.lock names platforms, or nothing.
+helper_platform() {
+  local os arch
+  case "$(uname -s)" in Darwin) os=darwin ;; Linux) os=linux ;; *) return 0 ;; esac
+  case "$(uname -m)" in arm64 | aarch64) arch=arm64 ;; x86_64 | amd64) arch=amd64 ;; *) return 0 ;; esac
+  printf '%s-%s' "$os" "$arch"
+}
+
+# go_helper: the path of the helper to use, or failure when there is none.
 go_helper() {
-  local b="${LLM_WIKI_GO:-$REPO/bin/llm-wiki}"
+  local src d
   [ -z "${LLM_WIKI_NO_GO:-}" ] || return 1
-  [ -x "$b" ] || return 1
-  [ "$("$b" protocol 2>/dev/null)" = "$GO_PROTOCOL" ] || return 1
-  printf '%s' "$b"
+  # LLM_WIKI_GO names one outright: that one or none.
+  if [ -n "${LLM_WIKI_GO:-}" ]; then
+    helper_ok "$LLM_WIKI_GO" || return 1
+    printf '%s' "$LLM_WIKI_GO"
+    return 0
+  fi
+  if helper_ok "$REPO/bin/llm-wiki"; then printf '%s' "$REPO/bin/llm-wiki"; return 0; fi
+  src="$(helper_source)"
+  if [ -n "$src" ] && helper_ok "$HELPER_DIR/$src/llm-wiki"; then printf '%s' "$HELPER_DIR/$src/llm-wiki"; return 0; fi
+  # An older release beats none, as long as it speaks the protocol.
+  for d in "$HELPER_DIR"/*/; do
+    [ -d "$d" ] || continue
+    if helper_ok "${d}llm-wiki"; then printf '%s' "${d}llm-wiki"; return 0; fi
+  done
+  return 1
+}
+
+sha256_of() {
+  if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d ' ' -f 1; else sha256sum "$1" | cut -d ' ' -f 1; fi
+}
+
+# helper_base: where releases are downloaded from: this copy's repository on GitHub.
+# LLM_WIKI_HELPER_BASE names another place, such as a mirror.
+helper_base() {
+  local r
+  r="$(sed -n 's#.*"repository": *"\(https://github.com/[^"]*\)".*#\1#p' "$REPO/.claude-plugin/plugin.json" 2>/dev/null | head -n 1)"
+  printf '%s' "${LLM_WIKI_HELPER_BASE:-${r:-https://github.com/broxgit/llm-wiki}/releases/download}"
+}
+
+# helper_fetch: download the release this checkout names, and keep it only if its
+# SHA-256 is the one in helper.lock. That lock came with the code already running, so
+# a download is trusted no further than the code is. Prints one line, and fails when
+# nothing was installed.
+helper_fetch() {
+  local src plat want url dir tmp got
+  src="$(helper_source)"
+  plat="$(helper_platform)"
+  [ -n "$src" ] || { echo "there is no helper.lock in $(tilde "$REPO"), so no released helper to fetch"; return 1; }
+  [ -n "$plat" ] || { echo "there is no released helper for $(uname -sm). With go installed, build one: go build -o bin/llm-wiki ./cmd/llm-wiki"; return 1; }
+  want="$(sed -n "s/^$plat //p" "$HELPER_LOCK" | head -n 1)"
+  [ -n "$want" ] || { echo "helper.lock lists no build for $plat"; return 1; }
+  dir="$HELPER_DIR/$src"
+  if [ -x "$dir/llm-wiki" ] && [ "$(sha256_of "$dir/llm-wiki")" = "$want" ]; then
+    echo "helper $src is already here"
+    return 0
+  fi
+  command -v curl >/dev/null 2>&1 || { echo "downloading the helper needs curl"; return 1; }
+  url="$(helper_base)/helper-$src/llm-wiki-$plat"
+  mkdir -p "$dir" 2>/dev/null || { cant_write "$dir"; echo; return 1; }
+  tmp="$dir/.download.$$"
+  if ! curl -fsSL --retry 2 --connect-timeout 10 --max-time 120 -o "$tmp" "$url" 2>/dev/null; then
+    rm -f "$tmp"
+    echo "the helper couldn't be downloaded from $url"
+    return 1
+  fi
+  got="$(sha256_of "$tmp")"
+  if [ "$got" != "$want" ]; then
+    rm -f "$tmp"
+    echo "the download from $url doesn't match helper.lock, so it was thrown away (its SHA-256 is $got)"
+    return 1
+  fi
+  if ! chmod +x "$tmp" || ! mv -f "$tmp" "$dir/llm-wiki"; then
+    rm -f "$tmp"
+    cant_write "$dir/llm-wiki"; echo
+    return 1
+  fi
+  echo "helper $src installed for $plat"
+}
+
+# helper [fetch]: which helper this checkout uses, and downloading its release.
+cmd_helper() {
+  local b src
+  case "${1:-}" in
+    fetch) helper_fetch || exit 1; return 0 ;;
+    '') ;;
+    *) die "helper takes: fetch" ;;
+  esac
+  src="$(helper_source)"
+  if [ -n "${LLM_WIKI_NO_GO:-}" ]; then
+    echo "helper: off, because LLM_WIKI_NO_GO is set"
+  elif b="$(go_helper)"; then
+    if [ -n "${LLM_WIKI_GO:-}" ]; then echo "helper: $(tilde "$b"), named by LLM_WIKI_GO"
+    elif [ "$b" = "$REPO/bin/llm-wiki" ]; then echo "helper: built in this checkout, $(tilde "$b")"
+    elif [ "$b" = "$HELPER_DIR/$src/llm-wiki" ]; then echo "helper: release $src, $(tilde "$b")"
+    else echo "helper: $(tilde "$b"), an older release that still speaks protocol $GO_PROTOCOL. For this checkout's own: $WIKI_CMD helper fetch"
+    fi
+  else
+    echo "helper: none, so the ported commands (report, standup) run their slower built-in code. Run: $WIKI_CMD helper fetch"
+  fi
+  echo "This checkout names release ${src:-none}, protocol $GO_PROTOCOL, for $(helper_platform)."
 }
 
 # Show a path with ~ in place of the home folder. The tilde is meant literally.
@@ -3704,6 +3815,13 @@ except Exception:
 # update_wikis: pull, upgrade and push each collection, then new settings and next steps.
 update_wikis() {
   local n f r ahead track k
+  # The helper that goes with this version of the code. Skipped where one is built in
+  # the checkout, which is newer than any release.
+  if [ -z "${LLM_WIKI_NO_GO:-}" ] && [ -f "$HELPER_LOCK" ] && ! helper_ok "$REPO/bin/llm-wiki"; then
+    echo
+    echo "== Helper"
+    k="$(helper_fetch)" && echo "- $k" || echo "- $k. Nothing is lost: wiki report and standup run their built-in code, only slower."
+  fi
   while IFS="$TAB" read -r n f r; do
     [ -d "$f" ] || continue
     echo
@@ -4954,7 +5072,7 @@ EOF
 # Tab completion. `completion zsh|bash` prints a small script for the shell, which
 # asks `__complete` for candidates on every Tab. The candidates live here, so a
 # plugin update can't leave completion stale.
-COMMANDS="setup init new update start collections deps permissions seed harvest capture lock compile log sync index lint pending cover which status find stale patterns skills tips report stats feedback news tour mcp delegation upgrade unlock claude link journal standup completion"
+COMMANDS="setup init new update start collections deps permissions seed harvest capture lock compile helper log sync index lint pending cover which status find stale patterns skills tips report stats feedback news tour mcp delegation upgrade unlock claude link journal standup completion"
 RANGES="lastworkday yesterday today week lastweek 7d 14d 30d"
 
 wiki_names() {
@@ -4994,6 +5112,7 @@ cmd_complete() {
     capture) [ "$i" -eq 2 ] && wiki_names; printf -- '--file\n--copy\n' ;;
     lock) [ "$i" -eq 2 ] && wiki_names; printf -- '--release\n--renew\n' ;;
     compile) [ "$i" -eq 2 ] && { wiki_names; printf 'on\noff\n'; }; echo --background ;;
+    helper) [ "$i" -eq 2 ] && echo fetch ;;
     sync) [ "$i" -eq 2 ] && wiki_names; echo -m ;;
     index) [ "$i" -eq 2 ] && wiki_names; echo --check ;;
     lint) wiki_names; echo --all ;;
@@ -6379,6 +6498,7 @@ setup_list() {
   case "$pending" in *" feedback "*) printf '  <- new' ;; esac
   printf '\n'
   printf '%-19s %s\n' "compile" "$(compile_auto_on && echo "in the background at session start" || echo "by sessions (background compile is off)")"
+  printf '%-19s %s\n' "helper" "$(cmd_helper | head -n 1 | sed 's/^helper: //')"
   [ "$(chat_state)" = none ] || echo "chat                server $(chat_state)"
 
   for k in $JOURNAL_KEYS; do
@@ -6858,6 +6978,7 @@ case "$cmd" in
   mcp) cmd_mcp "$@"; exit 0 ;;
   lock) cmd_lock "$@"; exit 0 ;;
   compile) cmd_compile "$@"; exit 0 ;;
+  helper) cmd_helper "$@"; exit 0 ;;
   log) cmd_log "$@"; exit 0 ;;
   sync) cmd_sync "$@"; exit 0 ;;
   index) cmd_index "$@"; exit 0 ;;

@@ -4,6 +4,16 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. A short paragraph, then lines starting `- ` for what changed and `- Do:` for what to do about it. Add an entry for anything a user would notice, and none for fixes they wouldn't.
 
+## 2026-11-05: wiki report and standup get several times faster
+
+Parts of `wiki report` and `wiki standup` now run in a small compiled helper. On one machine a week's report went from 11 seconds to under 4, and a week's standup from 6 seconds to under 1. They print exactly what they printed before.
+
+- `wiki update` downloads the helper for your Mac or Linux machine, about 3 MB, from this project's GitHub releases. It is kept only if it matches a checksum that came with the code you already run.
+- `wiki helper` says which helper is in use, and `wiki helper fetch` downloads it without updating anything else.
+- Nothing needs it. Without one, the same commands run their built-in code, only slower. `LLM_WIKI_NO_GO=1` turns it off.
+- If you have Go, you can build it instead: `go build -o bin/llm-wiki ./cmd/llm-wiki` in a clone.
+- Do: run `wiki update`. Nothing else.
+
 ## 2026-11-05: The tour says what it's for
 
 The tour used to start with a made-up service's queue and left you to work out why it mattered. It now opens with what llm-wiki does for you, names each chapter by what you get, and ends each with what changes for you.

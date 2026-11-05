@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: shellcheck
-        run: shellcheck -S warning wiki.sh hooks/session-start.sh hooks/pre-tool-use.sh hooks/pre-commit scripts/migrate-to-plugin.sh tests/smoke.sh
+        run: shellcheck -S warning wiki.sh hooks/session-start.sh hooks/pre-tool-use.sh hooks/pre-commit scripts/migrate-to-plugin.sh scripts/helper.sh tests/smoke.sh
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -33,6 +33,46 @@ jobs:
         run: go vet ./cmd/... ./internal/...
       - name: go test
         run: go test ./cmd/... ./internal/...
+
+  # The released helper must be exactly what helper.lock says, on a machine that isn't
+  # the one that wrote the lock. The lock names the compiler, and go fetches it.
+  helper:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build every platform and compare with helper.lock
+        run: scripts/helper.sh check dist
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: helper
+          path: dist/
+      # Published from the pull request, before the merge, so the release is there by
+      # the time anyone's wiki.sh names it. It is named by the hash of its source, and
+      # wiki.sh checks what it downloads against helper.lock, so publishing early can't
+      # hand anyone the wrong bytes. A pull request from a fork can't publish.
+      - name: Publish the release, if it isn't there yet
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          src="$(sed -n 's/^source //p' helper.lock)"
+          tag="helper-$src"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "$tag is already published"
+            exit 0
+          fi
+          # A push and a pull request can run this at once. Whichever loses finds it there.
+          gh release create "$tag" dist/llm-wiki-* --target "$TARGET" --latest=false \
+            --title "Helper $src" \
+            --notes "The llm-wiki helper built from source $src. wiki update downloads it and keeps it only if it matches helper.lock. There is nothing to install by hand." \
+            || gh release view "$tag" >/dev/null
 
   smoke:
     strategy:
