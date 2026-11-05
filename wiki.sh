@@ -26,7 +26,8 @@ SHARED="global"
 # its remote URL. Globs; the first collection with a matching rule wins. WIKIS_DIR,
 # when set, overrides all of it, and --collection NAME picks one by name.
 COLLECTIONS_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/llm-wiki/collections"
-DEFAULT_WIKIS="$HOME/wikis"
+# LLM_WIKI_DEFAULT_DIR is for the tour's sandbox, so its command has no way to the real collection.
+DEFAULT_WIKIS="${LLM_WIKI_DEFAULT_DIR:-$HOME/wikis}"
 
 # collections: "name<TAB>folder<TAB>rules" per collection, the default first.
 collections() {
@@ -228,7 +229,7 @@ need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 # the same thing: a smoke test compares them. go_helper prints the helper's path when
 # it can be trusted. Raise GO_PROTOCOL, with the constant in cmd/llm-wiki/main.go,
 # whenever a ported command's arguments or output change.
-GO_PROTOCOL=2
+GO_PROTOCOL=3
 go_helper() {
   local b="${LLM_WIKI_GO:-$REPO/bin/llm-wiki}"
   [ -z "${LLM_WIKI_NO_GO:-}" ] || return 1
@@ -439,7 +440,8 @@ EOF2
 # reminders_of <wiki root> [bad]: the lines under "## Reminders" in the wiki's
 # conventions page, as "when<TAB>kind<TAB>pattern<TAB>rule<TAB>wiki". A line reads
 #   - before bash `git push`: the rule, in one line
-# with before or on, then bash, edit or tool. With "bad", it prints the lines there
+# with before or on, then bash, edit or tool. A citation after the rule, [raw/...] or
+# (raw/...), is left out. With "bad", it prints the lines there
 # that don't read that way, for lint: one that's skipped silently would never be seen.
 reminders_of() {
   local f="$1/wiki/conventions.md"
@@ -458,7 +460,8 @@ reminders_of() {
       pat = substr(t, 1, b - 1)
       rule = substr(t, b + 1)
       sub(/^: +/, "", rule)
-      gsub(/ *\[raw\/[^]]*\]/, "", rule)
+      # A citation is for people reading the page, in either bracket: pages use both.
+      gsub(/ *[[(]raw\/[^])]*[])]/, "", rule)
       gsub(/\t/, " ", rule)
       gsub(/\t/, " ", pat)
       print w[1] "\t" w[2] "\t" pat "\t" rule "\t" name
@@ -3443,7 +3446,7 @@ tour_build() {
   w="$dir/wiki"
   {
     printf '#!/usr/bin/env bash\n# The tour sandbox'"'"'s command. Everything it does stays in this folder.\n'
-    printf 'export WIKIS_DIR=%q XDG_CONFIG_HOME=%q XDG_STATE_HOME=%q LLM_WIKI_CMD=%q\n' "$wikis" "$dir/.config" "$dir/.state" "$w"
+    printf 'export WIKIS_DIR=%q LLM_WIKI_DEFAULT_DIR=%q XDG_CONFIG_HOME=%q XDG_STATE_HOME=%q LLM_WIKI_CMD=%q\n' "$wikis" "$wikis" "$dir/.config" "$dir/.state" "$w"
     printf 'exec %q "$@"\n' "$REPO/wiki.sh"
   } > "$w"
   chmod +x "$w"
@@ -5111,7 +5114,12 @@ setup_completion() {
 # differently and are priced differently, so one total would mislead. A conversation
 # counts toward the project its file paths and `git -C` folders point at most.
 report_tokens_gemini() {
-  local from="$AGY_HOME/antigravity/brain"
+  local from="$AGY_HOME/antigravity/brain" bin
+  # As in report_tokens, the helper prints nothing when it fails and the Python answers.
+  if [ -d "$from" ] && bin="$(go_helper)" \
+    && "$bin" report-tokens-gemini "$from" "$1" "$2" "$(journal_get day_starts)" "$WIKIS_DIR" "$(journal_get exclude)" 2>/dev/null; then
+    return 0
+  fi
   [ -d "$from" ] && command -v python3 >/dev/null 2>&1 || return 1
   python3 - "$from" "$1" "$2" "$(journal_get day_starts)" "$WIKIS_DIR" "$(journal_get exclude)" <<'PY'
 import fnmatch, json, os, re, subprocess, sys
@@ -5125,7 +5133,7 @@ dh, dm = (int(x) for x in day_starts.split(":"))
 wikis_real = os.path.realpath(wikis)
 
 cover = {}
-for rp in Path(wikis).glob("*/repos.md"):
+for rp in sorted(Path(wikis).glob("*/repos.md")):  # sorted, as the Go version reads them
     for line in rp.read_text(errors="replace").splitlines():
         if line.startswith("- "):
             cover[line[2:].strip()] = rp.parent.name
@@ -5164,7 +5172,7 @@ usage = set()  # (wiki, conversation)
 
 cutoff = datetime.combine(start - timedelta(days=1), datetime.min.time()).timestamp()
 rows = {}
-for f in Path(brain).glob("*/.system_generated/logs/transcript_full.jsonl"):
+for f in sorted(Path(brain).glob("*/.system_generated/logs/transcript_full.jsonl")):  # a tie in the table goes to the project met first
     if f.stat().st_mtime < cutoff: continue
     steps = []
     for line in open(f, errors="replace"):

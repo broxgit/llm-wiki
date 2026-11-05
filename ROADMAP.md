@@ -9,7 +9,7 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 ### Port wiki.sh to Go, one command at a time
 
 - **Why:** see the first step under Done. The aim is one binary that needs no Bash 3.2 workarounds and no Python.
-- **Sketch:** next the Gemini token table, then `journal backfill`, which share the transcript reading. Then routing as one package, `find` with ranked section results, and the MCP server in-process. Each port prints what the old code prints, checked by the smoke tests, and adds nothing.
+- **Sketch:** next `journal backfill`, which reads transcripts too. Then routing as one package, `find` with ranked section results, and the MCP server in-process. Each port prints what the old code prints, checked by the smoke tests, and adds nothing.
 - **Open:** how people who don't build it get the binary: release order, checksums, and what `wiki.sh` does when it's missing or stale. Nothing depends on it yet, which is why it's optional. Whether a cache of what was read is still worth having, now that the slow part turned out to be git and not parsing.
 
 ### Know whether sessions capture and compile
@@ -80,6 +80,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 - **Why:** `wiki standup` took about 6 seconds for a week and 20 for the full history on the maintainer's Mac. It held no Python, so the time was forks: 416 git calls run one after another, a sed and a grep per note, and a `date` per day of the range.
 - **What changed:** the helper's `standup-activity` prints everything from `# Activity` to `Totals:`. `wiki.sh` keeps the options, the dates and `--save`. A week now takes about 0.7 seconds, and the full history about 0.75. It makes the same git calls, side by side. Output matched byte for byte for 20 option sets on frozen copies of the code and the wikis. `cmd_standup` now runs under `LC_ALL=C` and sorts callouts by file, so the order doesn't depend on the locale or the file system. Patterns with brackets or backslashes, and files that aren't plain text, stay with the Bash.
+
+### The Go port: the Gemini token table (2026-11-05)
+
+- **Why:** after the Claude table, the Gemini table was the slowest part of `wiki report`, about 2.3 of its 4.6 seconds on the maintainer's Mac.
+- **What changed:** the helper's `report-tokens-gemini` prints the table `report_tokens_gemini` prints. Timing the Python on 27 conversations (28 MB) showed about 2.3 of 2.5 seconds under a profiler went to 308 git calls, again not parsing. The table now takes about 0.35 seconds, not 2.05, and printed the same bytes for every range compared on a frozen copy, from one day to the full history, with and without excludes. The Python stops at the first step it can't read, so the port returns an error on anything it isn't sure of and leaves those to the Python. Both now read files in sorted order.
 
 ### The Go port starts: the token table (2026-11-05)
 
