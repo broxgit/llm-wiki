@@ -9,7 +9,7 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 ### Port wiki.sh to Go, one command at a time
 
 - **Why:** see the first step under Done. The aim is one binary that needs no Bash 3.2 workarounds and no Python.
-- **Sketch:** next the Gemini token table and `standup`, then `journal backfill`, which share the transcript reading. Then routing as one package, `find` with ranked section results, and the MCP server in-process. Each port prints what the old code prints, checked by the smoke tests, and adds nothing.
+- **Sketch:** next the Gemini token table, then `journal backfill`, which share the transcript reading. Then routing as one package, `find` with ranked section results, and the MCP server in-process. Each port prints what the old code prints, checked by the smoke tests, and adds nothing.
 - **Open:** how people who don't build it get the binary: release order, checksums, and what `wiki.sh` does when it's missing or stale. Nothing depends on it yet, which is why it's optional. Whether a cache of what was read is still worth having, now that the slow part turned out to be git and not parsing.
 
 ### Know whether sessions capture and compile
@@ -75,6 +75,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 - **Why:** one repository per tool. The relay is about Copilot Cowork and OneDrive, not wikis, and every plugin user was getting it.
 - **What changed:** `scripts/relay.sh`, `cowork/` and their tests and docs moved to [llm-relay](https://github.com/broxgit/llm-relay), with their history. What was planned and untested for them moved to its roadmap. `wiki relay` and `wiki setup copilot-cowork` print where they went and exit non-zero, for one release. Remove those two stubs and their smoke tests after that.
+
+### The Go port: the standup's body (2026-11-05)
+
+- **Why:** `wiki standup` took about 6 seconds for a week and 20 for the full history on the maintainer's Mac. It held no Python, so the time was forks: 416 git calls run one after another, a sed and a grep per note, and a `date` per day of the range.
+- **What changed:** the helper's `standup-activity` prints everything from `# Activity` to `Totals:`. `wiki.sh` keeps the options, the dates and `--save`. A week now takes about 0.7 seconds, and the full history about 0.75. It makes the same git calls, side by side. Output matched byte for byte for 20 option sets on frozen copies of the code and the wikis. `cmd_standup` now runs under `LC_ALL=C` and sorts callouts by file, so the order doesn't depend on the locale or the file system. Patterns with brackets or backslashes, and files that aren't plain text, stay with the Bash.
 
 ### The Go port starts: the token table (2026-11-05)
 

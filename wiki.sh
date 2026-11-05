@@ -228,7 +228,7 @@ need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 # the same thing: a smoke test compares them. go_helper prints the helper's path when
 # it can be trusted. Raise GO_PROTOCOL, with the constant in cmd/llm-wiki/main.go,
 # whenever a ported command's arguments or output change.
-GO_PROTOCOL=1
+GO_PROTOCOL=2
 go_helper() {
   local b="${LLM_WIKI_GO:-$REPO/bin/llm-wiki}"
   [ -z "${LLM_WIKI_NO_GO:-}" ] || return 1
@@ -4264,22 +4264,37 @@ repo_name() {
   if [ -n "$url" ]; then url="${url%/}"; url="${url##*/}"; url="${url##*:}"; printf '%s' "${url%.git}"; else printf '%s' "${1##*/}"; fi
 }
 
-excluded() {
-  local name="$1" pats p
+# comma_list <text>: one item a line, spaces around each taken off, empty ones dropped.
+# Left unquoted on purpose: an item that matches files in this folder expands to them.
+comma_list() {
+  local IFS=, x
+  # shellcheck disable=SC2086
+  for x in $1; do
+    x="$(printf '%s' "$x" | sed 's/^ *//; s/ *$//')"
+    [ -z "$x" ] || printf '%s\n' "$x"
+  done
+}
+
+# exclude_patterns: what excluded leaves out, one pattern a line.
+exclude_patterns() {
+  local pats
   pats="$(journal_get exclude)"
   pats="${pats:+$pats,}${STANDUP_EXCLUDE:-}"
-  pats="${pats%,}"
+  comma_list "${pats%,}"
+}
+
+excluded() {
+  local name="$1" p
   # --only is a glob on purpose.
   # shellcheck disable=SC2254
   [ -n "${STANDUP_ONLY:-}" ] && { case "$name" in $STANDUP_ONLY) ;; *) return 0 ;; esac; }
-  [ -n "$pats" ] || return 1
-  local IFS=,
-  for p in $pats; do
-    p="$(printf '%s' "$p" | sed 's/^ *//; s/ *$//')"
+  while IFS= read -r p; do
     [ -n "$p" ] || continue
     # shellcheck disable=SC2254
     case "$name" in $p) return 0 ;; esac
-  done
+  done <<EOF2
+$(exclude_patterns)
+EOF2
   return 1
 }
 
@@ -4293,7 +4308,7 @@ find_repos() {
     case "$d" in "~/"*) d="$HOME/${d:2}" ;; "~") d="$HOME" ;; esac
     [ -d "$d" ] || continue
     find "$d" -maxdepth "$depth" -name .git -prune -print 2>/dev/null
-  done | sed 's#/\.git$##' | sort -u
+  done | sed 's#/\.git$##' | LC_ALL=C sort -u
 }
 
 cmd_standup() {
@@ -4321,6 +4336,9 @@ cmd_standup() {
   case "$max" in '' | *[!0-9]*) die "--max takes a number" ;; esac
   [ "${fmt:-$(journal_get format)}" != detailed ] || max=0
 
+  # Byte order and byte matching, so glob order and --only and --exclude don't change
+  # with the locale, and the compiled helper can do the same.
+  local LC_ALL=C
   local today ds start_date end_date start_local end_local s_utc e_utc end_label
   today="$(journal_today)"
   ds="$(journal_get day_starts)"
@@ -4344,8 +4362,40 @@ cmd_standup() {
   s_utc="$(epoch_to_utc_stamp "$(to_epoch "$start_local")")"
   e_utc="$(epoch_to_utc_stamp "$(to_epoch "$end_local")")"
 
-  local out r name authors a lines n_repos=0 n_commits=0 skipped=0 me
+  local out bin repos f authors since_flag=--since gv
   out="$(mktemp)"
+  authors="$(journal_get authors)"
+  gv="$(git version 2>/dev/null | sed -n 's/^git version \([0-9]*\)\.\([0-9]*\).*/\1 \2/p' || true)"
+  if [ -n "$gv" ] && { [ "${gv% *}" -gt 2 ] || { [ "${gv% *}" -eq 2 ] && [ "${gv#* }" -ge 37 ]; }; }; then
+    since_flag=--since-as-filter
+  fi
+  # The compiled helper reads the repositories side by side. It prints nothing when it
+  # fails, and standup_activity answers.
+  if bin="$(go_helper)" && repos="$(find_repos || true)" \
+    && "$bin" standup-activity --wikis "$WIKIS_DIR" --journal "$JOURNAL_DIR" --code-dirs "$(journal_get code_dirs)" \
+      --wiki-cmd "$WIKI_CMD" --since-flag "$since_flag" --format "${fmt:-$(journal_get format)}" \
+      --start-date "$start_date" --end-date "$end_date" --start-local "$start_local" --end-local "$end_local" \
+      --end-label "$end_label" --start-utc "$s_utc" --end-utc "$e_utc" --max "$max" --only "${STANDUP_ONLY:-}" \
+      --repos "$repos" --authors "$(comma_list "$authors")" --exclude "$(exclude_patterns)" > "$out" 2>/dev/null; then
+    :
+  else
+    standup_activity
+  fi
+  cat "$out"
+  if [ "$save" = yes ] || [ "$(journal_get save)" = yes ]; then
+    mkdir -p "$JOURNAL_DIR"
+    f="$JOURNAL_DIR/$today-activity.md"
+    cp "$out" "$f"
+    echo
+    echo "saved: $(tilde "$f")"
+  fi
+  rm -f "$out"
+}
+
+# standup_activity: the report's body, from cmd_standup's locals, written to $out. The
+# compiled helper's standup-activity prints the same thing.
+standup_activity() {
+  local r name a lines n_repos=0 n_commits=0 skipped=0 me
   {
     echo "# Activity: $start_local to $end_label (local time)"
     echo
@@ -4353,12 +4403,6 @@ cmd_standup() {
     echo
     echo "## Commits"
   } > "$out"
-  authors="$(journal_get authors)"
-  local since_flag=--since gv
-  gv="$(git version 2>/dev/null | sed -n 's/^git version \([0-9]*\)\.\([0-9]*\).*/\1 \2/p' || true)"
-  if [ -n "$gv" ] && { [ "${gv% *}" -gt 2 ] || { [ "${gv% *}" -eq 2 ] && [ "${gv#* }" -ge 37 ]; }; }; then
-    since_flag=--since-as-filter
-  fi
   local inprog unreadable=0 found=0 gerr="" err
   inprog="$(mktemp)"
   err="$(mktemp)"
@@ -4378,11 +4422,11 @@ cmd_standup() {
     me="$(git -C "$r" config user.email 2>/dev/null || true)"
     set -- 
     [ -n "$me" ] && set -- "--author=$me"
-    if [ -n "$authors" ]; then
-      local IFS_SAVE="$IFS"; IFS=,
-      for a in $authors; do a="$(printf '%s' "$a" | sed 's/^ *//; s/ *$//')"; [ -n "$a" ] && set -- "$@" "--author=$a"; done
-      IFS="$IFS_SAVE"
-    fi
+    while IFS= read -r a; do
+      [ -z "$a" ] || set -- "$@" "--author=$a"
+    done <<EOF3
+$(comma_list "$authors")
+EOF3
     if [ $# -eq 0 ]; then skipped=$((skipped + 1)); continue; fi
     # --since stops walking history at the first older commit, which hides newer work
     # under an old branch tip. --since-as-filter (git 2.37) checks every commit.
@@ -4483,21 +4527,13 @@ EOF2
     w="${w%/}"; is_wiki "$w" || continue
     excluded "${w##*/}" && continue
     [ -d "$w/wiki" ] || continue
-    lines="$(open_callouts "$w/wiki" | sed 's/^[^:]*://' | head -n 5 | sed "s/^> /- ${w##*/}: /" || true)"
+    # By file, in a fixed order: find's own order decides which five are listed.
+    lines="$(open_callouts "$w/wiki" | LC_ALL=C sort -t: -s -k1,1 | sed 's/^[^:]*://' | head -n 5 | sed "s/^> /- ${w##*/}: /" || true)"
     if [ -n "$lines" ]; then any=1; printf '%s\n' "$lines" >> "$out"; fi
   done
   [ "$any" = 1 ] || { echo; echo "None."; } >> "$out"
 
   { echo; echo "Totals: $n_commits commit(s) in $n_repos repo(s)."; } >> "$out"
-  cat "$out"
-  if [ "$save" = yes ] || [ "$(journal_get save)" = yes ]; then
-    mkdir -p "$JOURNAL_DIR"
-    f="$JOURNAL_DIR/$today-activity.md"
-    cp "$out" "$f"
-    echo
-    echo "saved: $(tilde "$f")"
-  fi
-  rm -f "$out"
 }
 
 # ---- patterns ---------------------------------------------------------------

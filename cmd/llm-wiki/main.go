@@ -6,20 +6,24 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 
+	"github.com/broxgit/llm-wiki/internal/standup"
 	"github.com/broxgit/llm-wiki/internal/tokens"
 )
 
 // protocol is what wiki.sh checks before it trusts this program: the commands, their
 // arguments and what they print. Raise it, and GO_PROTOCOL in wiki.sh with it, whenever
 // one of those changes, so a binary left over from an older checkout is passed over.
-const protocol = "1"
+const protocol = "2"
 
 func main() {
 	if len(os.Args) < 2 {
-		fail("usage: llm-wiki protocol | report-tokens <transcripts> <start> <end> <day-starts> <wikis> <exclude>")
+		fail("usage: llm-wiki protocol | report-tokens <transcripts> <start> <end> <day-starts> <wikis> <exclude> | standup-activity <options>")
 	}
 	switch os.Args[1] {
 	case "protocol":
@@ -38,9 +42,44 @@ func main() {
 			fail(err.Error())
 		}
 		fmt.Print(out)
+	case "standup-activity":
+		out, err := runStandup(os.Args[2:])
+		if err != nil {
+			fail(err.Error())
+		}
+		fmt.Print(out)
 	default:
 		fail("unknown command: " + os.Args[1])
 	}
+}
+
+// runStandup reads standup-activity's options. Each list is one item a line.
+func runStandup(args []string) (string, error) {
+	var o standup.Options
+	var repos, authors, exclude, max string
+	fs := flag.NewFlagSet("standup-activity", flag.ContinueOnError)
+	for name, to := range map[string]*string{
+		"wikis": &o.Wikis, "journal": &o.Journal, "code-dirs": &o.CodeDirs, "wiki-cmd": &o.WikiCmd,
+		"since-flag": &o.SinceFlag, "format": &o.Format, "start-date": &o.StartDate, "end-date": &o.EndDate,
+		"start-local": &o.StartLocal, "end-local": &o.EndLocal, "end-label": &o.EndLabel,
+		"start-utc": &o.StartUTC, "end-utc": &o.EndUTC, "only": &o.Only, "max": &max,
+		"repos": &repos, "authors": &authors, "exclude": &exclude,
+	} {
+		fs.StringVar(to, name, "", "")
+	}
+	if err := fs.Parse(args); err != nil {
+		return "", err
+	}
+	var err error
+	if o.Max, err = strconv.Atoi(max); err != nil {
+		return "", err
+	}
+	o.Repos, o.Authors, o.Exclude = lines(repos), lines(authors), lines(exclude)
+	return standup.Run(o)
+}
+
+func lines(s string) []string {
+	return strings.FieldsFunc(s, func(r rune) bool { return r == '\n' })
 }
 
 func fail(msg string) {
