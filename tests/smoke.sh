@@ -621,7 +621,7 @@ verified: 2026-11-05
 ## Reminders
 
 - before bash `git push`: Before a push, make sure the hooks ran. [raw/2026-01-01-000000-x.md]
-- on edit `payments/*`: Money is in cents.
+- on edit `payments/*`: Money is in cents. (raw/2026-01-01-000000-y.md)
 - on tool `Agent`: Set the model.
 - sometimes bash `x`: not a reminder
 
@@ -637,6 +637,7 @@ printf '\n## Reminders\n\n- on bash `npm publish`: Ask first.\n' >> "$WIKIS_DIR/
 TAB="$(printf '\t')"
 out="$("$W" __reminders "$RM" 2>&1)"
 case "$out" in *"before${TAB}bash${TAB}git push${TAB}Before a push, make sure the hooks ran.${TAB}rem"*) ok "a reminder line is read, without its citation" ;; *) bad "a reminder line is read, without its citation" "$out" ;; esac
+case "$out" in *"on${TAB}edit${TAB}payments/*${TAB}Money is in cents.${TAB}rem"*) ok "or its citation in round brackets, which pages also use" ;; *) bad "or its citation in round brackets, which pages also use" "$out" ;; esac
 case "$out" in "on${TAB}bash${TAB}npm publish${TAB}Ask first.${TAB}global"*) ok "the shared wiki's reminders come first" ;; *) bad "the shared wiki's reminders come first" "$out" ;; esac
 check "four are read: one shared, three of its own" test "$(printf '%s\n' "$out" | grep -c .)" = 4
 case "$out" in *"not a reminder"* | *"inside a fence"*) bad "a line that isn't a reminder, or sits in a code fence, is left out" "$out" ;; *) ok "a line that isn't a reminder, or sits in a code fence, is left out" ;; esac
