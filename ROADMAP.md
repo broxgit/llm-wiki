@@ -6,6 +6,12 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 
 ## Next
 
+### Port wiki.sh to Go, one command at a time
+
+- **Why:** see the first step under Done. The aim is one binary that needs no Bash 3.2 workarounds and no Python.
+- **Sketch:** next the Gemini token table and `standup`, then `journal backfill`, which share the transcript reading. Then routing as one package, `find` with ranked section results, and the MCP server in-process. Each port prints what the old code prints, checked by the smoke tests, and adds nothing.
+- **Open:** how people who don't build it get the binary: release order, checksums, and what `wiki.sh` does when it's missing or stale. Nothing depends on it yet, which is why it's optional. Whether a cache of what was read is still worth having, now that the slow part turned out to be git and not parsing.
+
 ### Know whether sessions capture and compile
 
 - **Why:** `wiki stats` measures lookups only. Saving and compiling are the parts that failed in the first week (50 of 109 notes never compiled), and nothing measures them now.
@@ -69,6 +75,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 - **Why:** one repository per tool. The relay is about Copilot Cowork and OneDrive, not wikis, and every plugin user was getting it.
 - **What changed:** `scripts/relay.sh`, `cowork/` and their tests and docs moved to [llm-relay](https://github.com/broxgit/llm-relay), with their history. What was planned and untested for them moved to its roadmap. `wiki relay` and `wiki setup copilot-cowork` print where they went and exit non-zero, for one release. Remove those two stubs and their smoke tests after that.
+
+### The Go port starts: the token table (2026-11-05)
+
+- **Why:** `wiki.sh` passed the ~2,500 lines the pre-rollout decision set for considering a rewrite long ago, and leans on 29 inline Python blocks. A port also needs a first step small enough to check.
+- **What changed:** `cmd/llm-wiki` and `internal/` hold an optional helper, standard library only, that `wiki.sh` uses when it's built and falls back from when it isn't. Its first command is the Claude Code token table of `wiki report`. Most of the old time went to asking git, twice per folder, for each session's project, so the helper reads transcripts and asks git several at a time. On a week of real transcripts (228 files, 1.1 GB) the table took 7.4 seconds in Python and 1.5 in Go, and printed the same bytes as the Python for every range compared on a frozen copy of the transcripts, from one day to the full history. Compared on live transcripts, two ranges differed until rerun on the copy, because a running session wrote between the two runs. A smoke test compares the two on every run where `go` is installed. `docs/maintaining.md` has the rules for a port.
 
 ### Reminders at the point of use (handbook version 28, 2026-11-05)
 
