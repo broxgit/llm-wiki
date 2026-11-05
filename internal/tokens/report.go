@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/broxgit/llm-wiki/internal/pyos"
 )
 
 // Options are report_tokens' arguments.
@@ -42,7 +44,7 @@ func Run(o Options) (string, error) {
 	if _, err := time.ParseInLocation("2006-01-02", o.End, time.Local); err != nil {
 		return "", fmt.Errorf("end day: %w", err)
 	}
-	shift, err := dayShift(o.DayStarts)
+	shift, err := pyos.DayShift(o.DayStarts)
 	if err != nil {
 		return "", err
 	}
@@ -69,7 +71,7 @@ func Run(o Options) (string, error) {
 		return "", err
 	}
 	// In a fixed order: a reply recorded in two files is counted where it is met first.
-	sort.Slice(files, func(i, j int) bool { return lessByParts(files[i], files[j]) })
+	sort.Slice(files, func(i, j int) bool { return pyos.LessByParts(files[i], files[j]) })
 
 	sc := newScanner(o.Start, o.End, shift, o.Wikis)
 	results := make([]scanned, len(files))
@@ -181,17 +183,6 @@ func Run(o Options) (string, error) {
 	}), nil
 }
 
-// dayShift reads the HH:MM a day starts as the time to take off a moment to get its day.
-func dayShift(dayStarts string) (time.Duration, error) {
-	hh, mm, ok := strings.Cut(dayStarts, ":")
-	h, errH := strconv.Atoi(hh)
-	m, errM := strconv.Atoi(mm)
-	if !ok || errH != nil || errM != nil {
-		return 0, fmt.Errorf("day start %q is not HH:MM", dayStarts)
-	}
-	return time.Duration(h)*time.Hour + time.Duration(m)*time.Minute, nil
-}
-
 func writeUsage(path, wikis string, usage map[[2]string]bool) error {
 	keys := make([][2]string, 0, len(usage))
 	for k := range usage {
@@ -230,7 +221,7 @@ func table(rows map[string]*row, order []string, exclude string, words tableWord
 	var globs []interface{ MatchString(string) bool }
 	for _, g := range strings.Split(exclude, ",") {
 		if g != "" {
-			globs = append(globs, globToRegexp(g))
+			globs = append(globs, pyos.Glob(g))
 		}
 	}
 	var kept []string

@@ -4,6 +4,12 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. A short paragraph, then lines starting `- ` for what changed and `- Do:` for what to do about it. Add an entry for anything a user would notice, and none for fixes they wouldn't.
 
+## 2026-11-05: wiki journal backfill gets faster too
+
+`wiki journal backfill` now writes its digest with the same compiled helper as `wiki report` and `wiki standup`. On one machine the default 14 days went from 14 seconds to under 3. The digest is the same.
+
+- Do: run `wiki update`. Nothing else.
+
 ## 2026-11-05: wiki report and standup get several times faster
 
 Parts of `wiki report` and `wiki standup` now run in a small compiled helper. On one machine a week's report went from 11 seconds to under 4, and a week's standup from 6 seconds to under 1. They print exactly what they printed before.

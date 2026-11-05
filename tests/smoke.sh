@@ -472,6 +472,92 @@ if command -v go >/dev/null 2>&1; then
       bad "the report on an odd step matches the Python: $godd"
     fi
   done
+  # journal backfill: the helper writes the digest the Python writes. The fixture holds
+  # what the Python's digest turns on: noise and machine prompts, a side-session brief,
+  # long prompts, ties, more than 14 prompts and 12 files, branches, commits, a session
+  # in a stray folder, records the Python skips, and Gemini conversations.
+  rm -rf "$HOME/.gemini/antigravity/brain/conv-odd"
+  BF="$T/bf-projects"; mkdir -p "$BF/web" "$BF/stray" "$T/bf-stray/demo/sweeps"
+  bts() { printf '2026-01-15T15:%02d:00.000Z' "$1"; }
+  brec() { printf '{"type":"%s","timestamp":"%s","cwd":"%s","sessionId":"%s","gitBranch":"%s","message":%s}\n' "$1" "$(bts "$2")" "$3" "$4" "$5" "$6"; }
+  {
+    brec user 1 "$T/projects/web" s1 main '{"role":"user","content":"<system-reminder>ignore\nme</system-reminder>  Fix   the\n\tlogin <command-name>/x</command-name>bug  "}'
+    brec user 1 "$T/projects/web" s1 main '{"role":"user","content":[{"type":"text","text":"first part"},{"type":"tool_result","content":"x"},{"type":"text","text":"second part"}]}'
+    brec user 2 "$T/projects/web" s1 main '{"role":"user","content":"<task-notification>done</task-notification>"}'
+    brec user 2 "$T/projects/web" s1 main '{"role":"user","content":"Caveat: local command"}'
+    brec user 3 "$T/projects/web" s1 HEAD '{"role":"user","content":"Background (from the session that started this one): build the thing\nTask: and more"}'
+    brec user 4 "$T/projects/web" s1 main "{\"role\":\"user\",\"content\":\"$(i=0; while [ $i -lt 130 ]; do printf 'é '; i=$((i + 1)); done)\"}"
+    brec user 5 "$T/projects/web" s1 main '{"role":"user","content":"<command-name>/clear</command-name>"}'
+    printf '{"type":"user","timestamp":"%s","cwd":"%s","isSidechain":true,"message":{"content":"a side chain"}}\n' "$(bts 5)" "$T/projects/web"
+    printf '{"type":"user","timestamp":"%s","cwd":"%s","isMeta":true,"message":{"content":"meta"}}\n' "$(bts 5)" "$T/projects/web"
+    printf '{"type":"summary","timestamp":"%s","cwd":"%s","message":{"content":"a summary"}}\n' "$(bts 5)" "$T/projects/web"
+    printf 'not json\n\n{"type":"user","cwd":"%s","message":{"content":"no time"}}\n' "$T/projects/web"
+    i=0; while [ $i -lt 16 ]; do brec user $((20 - i % 7)) "$T/projects/web" s2 feature/x "{\"role\":\"user\",\"content\":\"prompt $i\"}"; i=$((i + 1)); done
+    brec assistant 6 "$T/projects/web" s1 main '{"role":"assistant","content":[{"type":"text","text":"Working on it."},{"type":"tool_use","name":"Edit","input":{"file_path":"/a/login.ts"}},{"type":"tool_use","name":"Write","input":{"file_path":"/b/login.ts"}},{"type":"tool_use","name":"NotebookEdit","input":{"notebook_path":"/n/nb.ipynb"}},{"type":"tool_use","name":"Read","input":{"file_path":"/r/read.ts"}},{"type":"tool_use","name":"Bash","input":{"command":["git commit -m x"]}}]}'
+    brec assistant 7 "$T/projects/web" s1 main '{"role":"assistant","content":[{"type":"text","text":"<system-reminder>only noise</system-reminder>"}]}'
+    i=0; while [ $i -lt 14 ]; do brec assistant 8 "$T/projects/web" s2 feature/x "{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"name\":\"MultiEdit\",\"input\":{\"file_path\":\"/m/f$i.go\"}}]}"; i=$((i + 1)); done
+    brec assistant 9 "$T/projects/web" s2 feature/x '{"role":"assistant","content":"a string, which has no parts"}'
+    brec assistant 9 "$T/projects/web" s2 feature/x 'null'
+    printf '{"type":"user","timestamp":"%s","message":{"content":"from no folder"}}\n' "$(bts 10)"
+    printf '{"type":"user","timestamp":"2020-01-01T12:00:00.000Z","cwd":"%s","sessionId":"old","message":{"content":"long ago"}}\n' "$T/projects/web"
+  } > "$BF/web/a.jsonl"
+  {
+    # A session in a stray folder belongs to the known project most of its records ran in.
+    brec user 11 /tmp/bf-scratch s3 "" '{"content":"from a stray folder"}'
+    brec user 12 "$T/projects/web" s3 "" '{"content":"from the project"}'
+    brec user 12 "$T/bf-stray/demo/sweeps" s3 "" '{"content":"from a scratch folder inside demo"}'
+    printf '{"type":"user","timestamp":"%s","cwd":"%s","message":{"content":"with no session id"}}\n' "$(bts 13)" "$T/projects/web"
+    brec assistant 14 "$T/projects/web" s3 "" '{"content":[{"type":"text","text":"Done, and committed."},{"type":"tool_use","name":"Bash","input":{"command":"git add -A && git commit -m done"}}]}'
+  } > "$BF/stray/b.jsonl"
+  gconv conv-bf
+  {
+    printf '{"type":"USER_INPUT","created_at":"%s","content":"<USER_REQUEST>\\nAdd   a\\ncardio screen\\n</USER_REQUEST>\\n<ADDITIONAL_METADATA>x</ADDITIONAL_METADATA>"}\n' "$(bts 16)"
+    printf '{"type":"PLANNER_RESPONSE","created_at":"%s","tool_calls":[{"name":"write_file","args":{"Path":"%s/projects/web/cardio.ts"}},{"name":"run_command","args":{"CommandLine":"bash wiki.sh sync demo"}}]}\n' "$(bts 17)" "$T"
+    printf '{"type":"PLANNER_RESPONSE","created_at":"%s","content":"Added the cardio screen."}\n' "$(bts 18)"
+  } >> "$GF"
+  # In UTC, so the digest's local times are the same on every machine.
+  bf() { TZ=UTC "$W" journal backfill --from "$BF" "$@" 2>&1; cat "$WIKIS_DIR/journal/backfill.md" 2>/dev/null; }
+  bpy="$(LLM_WIKI_NO_GO=1 bf --since 2026-01-14 --until 2026-01-17)"
+  # What the Python wrote for the fixture: proof it covers the cases.
+  # What the Python wrote for the fixture, in UTC: proof it covers the cases. Records
+  # with no folder or in a stray one go to the session's project.
+  for want in "### [demo] 15:01-15:20, 6 session(s), 1 in Gemini, branch feature/x, ran git commit"$'\n'"- 15:01 Fix the login bug"$'\n'"- 15:01 first part"$'\n'"- 15:01 second part"$'\n'"- 15:03 (side session brief) build the thing Task: and more" "- 15:04 é é é" "é é..."$'\n'"- 15:10 from no folder"$'\n'"- 15:11 from a stray folder" "- 15:12 from a scratch folder inside demo"$'\n'"- ... 13 more prompts ..."$'\n'"- 15:19 prompt 8" "- 15:20 prompt 14"$'\n'"- files changed: login.ts, nb.ipynb, f0.go, f1.go, f2.go, f3.go, f4.go, f5.go, f6.go, f7.go, f8.go, f9.go ..."$'\n'"- last reply: Added the cardio screen."; do
+    case "$bpy" in *"$want"*) ok "the Python's digest has: ${want%%$'\n'*}" ;; *) bad "the Python's digest has: ${want%%$'\n'*}" "$bpy" ;; esac
+  done
+  case "$bpy" in *"a side chain"* | *"long ago"* | *"Caveat"* | *"only noise"* | *"read.ts"*) bad "and leaves out what it skips" "$bpy" ;; *) ok "and leaves out what it skips" ;; esac
+  for bs in "--since 2026-01-14 --until 2026-01-17" "--since 2019-12-25" "--since 7d" ""; do
+    # shellcheck disable=SC2086
+    [ "$(LLM_WIKI_NO_GO=1 bf $bs)" = "$(LLM_WIKI_GO="$T/bin/llm-wiki" bf $bs)" ] && ok "the helper writes the same digest as the Python: ${bs:-14d}" || bad "the helper writes the same digest as the Python: ${bs:-14d}" "$(diff <(LLM_WIKI_NO_GO=1 bf $bs) <(LLM_WIKI_GO="$T/bin/llm-wiki" bf $bs))"
+  done
+  for bx in "de*" "unknown,gemini" "*o*, d?mo"; do
+    "$W" journal set exclude "$bx" >/dev/null
+    [ "$(LLM_WIKI_NO_GO=1 bf --since 2019-12-25)" = "$(LLM_WIKI_GO="$T/bin/llm-wiki" bf --since 2019-12-25)" ] && ok "and with $bx excluded" || bad "and with $bx excluded"
+  done
+  "$W" journal set exclude "" >/dev/null
+  : > "$T/helper-ran"
+  printf '#!/bin/sh\n[ "$1" = protocol ] || echo "$1" >> "%s"\nexec "%s" "$@"\n' "$T/helper-ran" "$T/bin/llm-wiki" > "$T/bin/bf-spy-helper"
+  chmod +x "$T/bin/bf-spy-helper"
+  LLM_WIKI_NO_GO="" LLM_WIKI_GO="$T/bin/bf-spy-helper" bf >/dev/null
+  [ "$(grep -c '^journal-backfill$' "$T/helper-ran")" = 1 ] && ok "wiki.sh runs the helper for backfill" || bad "wiki.sh runs the helper for backfill" "$(cat "$T/helper-ran")"
+  [ "$(LLM_WIKI_GO="$T/bin/broken-helper" bf --since 2019-12-25)" = "$(LLM_WIKI_NO_GO=1 bf --since 2019-12-25)" ] && ok "a helper that fails falls back to the Python for backfill" || bad "a helper that fails falls back to the Python for backfill"
+  # Records the Python must judge: the helper refuses them and leaves the old digest as
+  # it was, and wiki.sh's digest is what the Python makes of them.
+  bnow="$(bts 30)"
+  for bodd in '[1]' '{"type":"user","timestamp":5}' '{"type":"user","timestamp":"2026-01-15T15:30:00"}' '{"type":"user","timestamp":"'"$bnow"'","cwd":["x"]}' '{"type":"user","timestamp":"'"$bnow"'","x":NaN}' '{"type":"user","timestamp":"'"$bnow"'","message":{"content":"\\ud800"}}' '{"type":"user","timestamp":"'"$bnow"'","message":{"content":"\xff"}}' '{"type":"user","timestamp":"'"$bnow"'","sessionId":5}' '{"type":"user","timestamp":"'"$bnow"'","message":"x"}' '{"type":"user","timestamp":"'"$bnow"'","message":{"content":5}}' '{"type":"assistant","timestamp":"'"$bnow"'","message":{"content":[{"type":"text","text":null}]}}' '{"type":"assistant","timestamp":"'"$bnow"'","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":3}}]}}'; do
+    # shellcheck disable=SC2059
+    printf "$(printf '%s' "$bodd" | sed 's/%/%%/g')\n" > "$BF/stray/odd.jsonl"
+    printf 'old digest\n' > "$WIKIS_DIR/journal/backfill.md"
+    if "$T/bin/llm-wiki" journal-backfill "$BF" 2026-01-14 2026-01-17 04:00 "$WIKIS_DIR" "" "$WIKIS_DIR/journal/backfill.md" "$HOME/.gemini/antigravity/brain" >/dev/null 2>&1; then
+      bad "the helper leaves an odd record to the Python: $bodd"
+    elif [ "$(cat "$WIKIS_DIR/journal/backfill.md")" != "old digest" ] || compgen -G "$WIKIS_DIR/journal/.backfill.md.tmp-*" >/dev/null; then
+      bad "and leaves the old digest alone: $bodd" "$(ls -a "$WIKIS_DIR/journal")"
+    elif [ "$(LLM_WIKI_NO_GO=1 bf --since 2026-01-14 --until 2026-01-17)" = "$(LLM_WIKI_GO="$T/bin/llm-wiki" bf --since 2026-01-14 --until 2026-01-17)" ]; then
+      ok "the helper leaves an odd record to the Python, and the old digest alone: $bodd"
+    else
+      bad "the digest on an odd record matches the Python: $bodd"
+    fi
+  done
+  rm -rf "$BF" "$T/bf-stray" "$WIKIS_DIR/journal/backfill.md"
   rm -rf "$HOME/.gemini"
 else
   skipped "the Go helper against the Python (go isn't installed)"
@@ -1833,6 +1919,9 @@ expect "clean with no sandbox says so" "No tour sandbox" tour --clean
 expect "unknown options are refused" "tour options" tour --nope
 
 section "The released helper"
+# This section is about the helper itself, so it runs with the helper allowed
+# even when the whole suite was started with LLM_WIKI_NO_GO=1.
+unset LLM_WIKI_NO_GO
 HSRC="$(sed -n 's/^source //p' "$REPO/helper.lock")"
 HDIR="$HOME/.local/share/llm-wiki/helper"
 sha() { if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d ' ' -f 1; else sha256sum "$1" | cut -d ' ' -f 1; fi; }

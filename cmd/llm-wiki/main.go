@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/broxgit/llm-wiki/internal/backfill"
 	"github.com/broxgit/llm-wiki/internal/standup"
 	"github.com/broxgit/llm-wiki/internal/tokens"
 )
@@ -19,11 +20,11 @@ import (
 // protocol is what wiki.sh checks before it trusts this program: the commands, their
 // arguments and what they print. Raise it, and GO_PROTOCOL in wiki.sh with it, whenever
 // one of those changes, so a binary left over from an older checkout is passed over.
-const protocol = "3"
+const protocol = "4"
 
 func main() {
 	if len(os.Args) < 2 {
-		fail("usage: llm-wiki protocol | report-tokens|report-tokens-gemini <transcripts> <start> <end> <day-starts> <wikis> <exclude> | standup-activity <options>")
+		fail("usage: llm-wiki protocol | report-tokens|report-tokens-gemini <transcripts> <start> <end> <day-starts> <wikis> <exclude> | standup-activity <options> | journal-backfill <transcripts> <start> <end> <day-starts> <wikis> <exclude> <out> <brain>")
 	}
 	switch os.Args[1] {
 	case "protocol":
@@ -34,6 +35,19 @@ func main() {
 		runTable(tokens.RunGemini)
 	case "standup-activity":
 		out, err := runStandup(os.Args[2:])
+		if err != nil {
+			fail(err.Error())
+		}
+		fmt.Print(out)
+	case "journal-backfill":
+		// The digest is written whole or not at all, and the line about it printed after.
+		if len(os.Args) != 10 {
+			fail("journal-backfill takes: <transcripts> <start> <end> <day-starts> <wikis> <exclude> <out> <brain>")
+		}
+		a := os.Args[2:]
+		out, err := backfill.Run(backfill.Options{
+			Transcripts: a[0], Start: a[1], End: a[2], DayStarts: a[3], Wikis: a[4], Exclude: a[5], Out: a[6], Brain: a[7],
+		})
 		if err != nil {
 			fail(err.Error())
 		}

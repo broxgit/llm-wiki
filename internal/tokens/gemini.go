@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/broxgit/llm-wiki/internal/pyos"
 )
 
 // RunGemini is the Gemini token table of `wiki report`, from Antigravity's transcripts
@@ -32,7 +34,7 @@ func RunGemini(o Options) (string, error) {
 	if _, err := time.ParseInLocation("2006-01-02", o.End, time.Local); err != nil {
 		return "", fmt.Errorf("end day: %w", err)
 	}
-	shift, err := dayShift(o.DayStarts)
+	shift, err := pyos.DayShift(o.DayStarts)
 	if err != nil {
 		return "", err
 	}
@@ -189,12 +191,8 @@ type geminiCall struct {
 	dirs                []string // the folders it points at
 }
 
-// The Python's -C\s+(\S+).
-var gitDirFlag = regexp.MustCompile(`-C[` + pySpace + `]+([^` + pySpace + `]+)`)
-
 // Times as Antigravity writes them. Python reads more forms, and older Pythons fewer
 // fraction lengths, so anything else goes to the Python.
-var geminiTime = regexp.MustCompile(`\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3}|\.\d{6})?(Z|[+-]\d{2}:\d{2})\z`)
 
 var geminiInt = regexp.MustCompile(`\A-?\d+\z`)
 
@@ -292,9 +290,9 @@ func geminiCalls(raw json.RawMessage) ([]geminiCall, error) {
 			if err != nil {
 				return nil, err
 			}
-			tc.dirs = append(tc.dirs, pyDirname(p))
+			tc.dirs = append(tc.dirs, pyos.Dirname(p))
 		}
-		for _, m := range gitDirFlag.FindAllStringSubmatch(tc.command, -1) {
+		for _, m := range pyos.GitDirFlag.FindAllStringSubmatch(tc.command, -1) {
 			d, err := geminiExpand(m[1])
 			if err != nil {
 				return nil, err
@@ -312,22 +310,16 @@ func geminiExpand(p string) (string, error) {
 	if strings.ContainsRune(p, 0) || (strings.HasPrefix(p, "~") && p != "~" && !strings.HasPrefix(p, "~/")) {
 		return "", oddStep("path " + p)
 	}
-	return expandUser(p), nil
+	return pyos.ExpandUser(p), nil
 }
 
-// geminiDay is the Python's day_of. astimezone gives a fixed offset, the one in force
-// at that moment, so the day's start is taken off in that offset even across a clock
-// change.
+// geminiDay is the Python's day_of.
 func geminiDay(ts string, shift time.Duration) (string, error) {
-	if !geminiTime.MatchString(ts) {
+	day, _, ok := pyos.Local(ts, shift)
+	if !ok {
 		return "", oddStep("time " + ts)
 	}
-	t, err := time.Parse(time.RFC3339Nano, ts)
-	if err != nil {
-		return "", oddStep("time " + ts)
-	}
-	_, offset := t.In(time.Local).Zone()
-	return t.Add(-shift).In(time.FixedZone("", offset)).Format("2006-01-02"), nil
+	return day, nil
 }
 
 func geminiCount(raw json.RawMessage) (int64, error) {
