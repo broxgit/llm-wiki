@@ -174,6 +174,9 @@ Usage: $WIKI_CMD <command> [options]
   mcp [--print]        A local MCP server over the wikis, for sessions with no file
                        access. An MCP client starts it. --print gives its config entry.
   news [--all]         What's new in llm-wiki since you last looked.
+  tour [--clean] [--dir DIR]
+                       A hands-on tour for your agent, on a made-up project in a sandbox.
+                       Ask your agent to run it and follow what it prints.
   relay run|scan|mr|review|apply
                        Run Microsoft Copilot Cowork's deliverables on this machine, and share code with it. relay --help has more.
   report [--since R]   Weekly look: tokens per project, what the wikis gained, hit
@@ -3093,6 +3096,129 @@ cmd_news() {
   news_mark_seen
 }
 
+# ---- Tour --------------------------------------------------------------------
+# wiki tour builds a throwaway collection from tour/ and prints the guide an agent
+# follows through it. The sandbox's own `wiki` command fixes the collection and the
+# per-machine state to the sandbox, so a tour can't touch real wikis, retire a real
+# tip or mark news as read. Only a folder carrying the marker is ever deleted.
+TOUR_MARK=".llm-wiki-tour"
+
+tour_ours() { [ -f "$1/$TOUR_MARK" ]; }
+tour_ready() { [ "$(cat "$1/$TOUR_MARK" 2>/dev/null)" = "ready $REPO" ] && [ -x "$1/wiki" ]; }
+
+# tour_clean <folder>: remove a sandbox. Refuses anything else.
+tour_clean() {
+  tour_ours "$1" || die "$(tilde "$1") isn't a tour's sandbox, so it stays"
+  rm -rf "$1"
+}
+
+# tour_copy <from> <to> <commit>: copy fixtures, filling in the dates and the commit.
+tour_copy() {
+  local f today
+  today="$(date -u +%Y-%m-%d)"
+  mkdir -p "$2"
+  cp -R "$1/." "$2/"
+  while IFS= read -r f; do
+    sed "s/@TODAY@/$today/g; s/@COMMIT@/$3/g" "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  done <<EOF2
+$(find "$2/wiki" -name '*.md' 2>/dev/null)
+EOF2
+}
+
+tour_build() {
+  local dir="$1" src="$REPO/tour" wikis="$1/wikis" w code first n
+  if tour_ours "$dir"; then tour_clean "$dir"
+  elif [ -e "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
+    die "$(tilde "$dir") already holds other files. Name another folder: $WIKI_CMD tour --dir <folder>"
+  fi
+  mkdir -p "$dir" 2>/dev/null || die "can't write to $(tilde "$dir"). Name another folder: $WIKI_CMD tour --dir <folder>"
+  printf 'building\n' > "$dir/$TOUR_MARK" 2>/dev/null || die "can't write to $(tilde "$dir"). Name another folder: $WIKI_CMD tour --dir <folder>"
+  w="$dir/wiki"
+  {
+    printf '#!/usr/bin/env bash\n# The tour sandbox'"'"'s command. Everything it does stays in this folder.\n'
+    printf 'export WIKIS_DIR=%q XDG_CONFIG_HOME=%q XDG_STATE_HOME=%q LLM_WIKI_CMD=%q\n' "$wikis" "$dir/.config" "$dir/.state" "$w"
+    printf 'exec %q "$@"\n' "$REPO/wiki.sh"
+  } > "$w"
+  chmod +x "$w"
+
+  # The sandbox's commits are the tour's, whoever runs it.
+  export GIT_AUTHOR_NAME="llm-wiki tour" GIT_AUTHOR_EMAIL="tour@example.invalid"
+  export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME" GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
+
+  # The code first, beside the wikis since standup skips repositories inside a collection.
+  # The retries page cites the commit from before the cap changed.
+  code="$dir/code/harbor-api"
+  mkdir -p "$code"
+  cp -R "$src/code/harbor-api/." "$code/"
+  sed 's/maxAttempts = 8/maxAttempts = 6/' "$code/delivery/retry.go" > "$code/retry.tmp"
+  git -C "$code" init -q
+  git -C "$code" config user.name "$GIT_AUTHOR_NAME"
+  git -C "$code" config user.email "$GIT_AUTHOR_EMAIL"
+  mv "$code/delivery/retry.go" "$code/retry.real"
+  mv "$code/retry.tmp" "$code/delivery/retry.go"
+  git -C "$code" add README.md delivery
+  git -C "$code" commit -q -m "Retry failed deliveries with backoff"
+  first="$(git -C "$code" rev-parse --short HEAD)"
+  mv "$code/retry.real" "$code/delivery/retry.go"
+  git -C "$code" add delivery
+  git -C "$code" commit -q -m "Raise the retry cap to 8: big customers' outages outlast 6 attempts"
+
+  "$w" init --git >/dev/null || die "couldn't set up the sandbox at $(tilde "$dir")"
+  git -C "$wikis" config user.name "$GIT_AUTHOR_NAME"
+  git -C "$wikis" config user.email "$GIT_AUTHOR_EMAIL"
+  for n in harbor-api billing; do "$w" new "$n" >/dev/null; done
+  for n in harbor-api billing global; do
+    tour_copy "$src/wikis/$n" "$wikis/$n" "$first"
+    "$w" index "$n" >/dev/null
+  done
+  "$w" log harbor-api ingest "Review of merge request 31" --source raw/2025-10-14-120000-mr-31-review.md >/dev/null
+  "$w" journal set code_dirs "$dir/code" >/dev/null
+  "$w" news >/dev/null
+  git -C "$wikis" add -A >/dev/null
+  git -C "$wikis" commit -q --no-verify -m "The tour's starting point"
+  printf 'ready %s\n' "$REPO" > "$dir/$TOUR_MARK"
+}
+
+cmd_tour() {
+  local dir="" mode=start guide=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --clean) mode=clean; shift ;;
+      --guide) guide=1; shift ;;
+      --dir) need_value "$@"; dir="$2"; shift 2 ;;
+      -h | --help)
+        echo "Usage: $WIKI_CMD tour [--clean] [--dir DIR]"
+        echo "  Builds a sandbox on a made-up project and prints the guide an agent follows through it,"
+        echo "  or a short hint at a terminal (--guide prints the guide there too). Your wikis aren't touched."
+        echo "  It stays between sessions. --clean removes it. --dir keeps it somewhere other than the temp folder."
+        return 0
+        ;;
+      *) die "tour options: --clean, --dir DIR" ;;
+    esac
+  done
+  [ -n "$dir" ] || { dir="${TMPDIR:-/tmp}"; dir="${dir%/}/llm-wiki-tour"; }
+  case "$dir" in /*) ;; *) dir="$PWD/$dir" ;; esac
+  if [ "$mode" = clean ]; then
+    if [ ! -e "$dir" ]; then echo "No tour sandbox at $(tilde "$dir")."; return 0; fi
+    tour_clean "$dir"
+    echo "Removed the tour's sandbox at $(tilde "$dir")."
+    return 0
+  fi
+  command -v git >/dev/null 2>&1 || die "the tour needs git"
+  # Reused while it's whole, so a tour can stop and pick up in a later session.
+  tour_ready "$dir" || ( tour_build "$dir" ) || exit 1
+  if [ -t 1 ] && [ "$guide" = 0 ]; then
+    echo "The tour's sandbox is ready at $(tilde "$dir"). Your wikis aren't touched."
+    echo
+    echo "The tour runs through your agent. Say this to it:"
+    echo "  Run \`$WIKI_CMD tour\` and follow what it prints."
+    echo
+    echo "With the Claude Code plugin: /llm-wiki:tour"
+    return 0
+  fi
+  sed "s#@DIR@#$dir#g; s#@W@#$dir/wiki#g; s#@REAL@#$WIKI_CMD#g" "$REPO/tour/guide.md"
+}
+
 cmd_mcp() {
   case "${1:-}" in
     --print)
@@ -4482,7 +4608,7 @@ EOF
 # Tab completion. `completion zsh|bash` prints a small script for the shell, which
 # asks `__complete` for candidates on every Tab. The candidates live here, so a
 # plugin update can't leave completion stale.
-COMMANDS="setup init new update start collections deps permissions seed harvest capture lock log sync index lint pending cover which status find stale patterns skills tips report stats feedback news mcp relay delegation upgrade unlock claude link journal standup completion"
+COMMANDS="setup init new update start collections deps permissions seed harvest capture lock log sync index lint pending cover which status find stale patterns skills tips report stats feedback news tour mcp relay delegation upgrade unlock claude link journal standup completion"
 RANGES="lastworkday yesterday today week lastweek 7d 14d 30d"
 
 wiki_names() {
@@ -4576,6 +4702,7 @@ cmd_complete() {
       esac
       ;;
     standup) printf -- '--since\n--until\n--day\n--format\n--only\n--exclude\n--max\n--save\n' ;;
+    tour) printf -- '--clean\n--dir\n--guide\n' ;;
   esac
   return 0
 }
@@ -6397,6 +6524,7 @@ EOF
   else
     echo "Done. After you pull template updates, $WIKI_CMD setup --new shows what's new."
   fi
+  echo "To see what it can do, ask your agent for the llm-wiki tour. It runs on a made-up project."
 }
 
 # Names of wikis behind the template handbook, space separated.
@@ -6486,6 +6614,7 @@ case "$cmd" in
   capture) cmd_capture "$@"; exit 0 ;;
   feedback) cmd_feedback "$@"; exit 0 ;;
   news) cmd_news "$@"; exit 0 ;;
+  tour) cmd_tour "$@"; exit 0 ;;
   relay) cmd_relay "$@"; exit $? ;;
   mcp) cmd_mcp "$@"; exit 0 ;;
   lock) cmd_lock "$@"; exit 0 ;;
