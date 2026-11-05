@@ -42,11 +42,9 @@ func Run(o Options) (string, error) {
 	if _, err := time.ParseInLocation("2006-01-02", o.End, time.Local); err != nil {
 		return "", fmt.Errorf("end day: %w", err)
 	}
-	hh, mm, ok := strings.Cut(o.DayStarts, ":")
-	h, errH := strconv.Atoi(hh)
-	m, errM := strconv.Atoi(mm)
-	if !ok || errH != nil || errM != nil {
-		return "", fmt.Errorf("day start %q is not HH:MM", o.DayStarts)
+	shift, err := dayShift(o.DayStarts)
+	if err != nil {
+		return "", err
 	}
 	proj, err := newProjects(o.Wikis)
 	if err != nil {
@@ -73,7 +71,7 @@ func Run(o Options) (string, error) {
 	// In a fixed order: a reply recorded in two files is counted where it is met first.
 	sort.Slice(files, func(i, j int) bool { return lessByParts(files[i], files[j]) })
 
-	sc := newScanner(o.Start, o.End, time.Duration(h)*time.Hour+time.Duration(m)*time.Minute, o.Wikis)
+	sc := newScanner(o.Start, o.End, shift, o.Wikis)
 	results := make([]scanned, len(files))
 	var wg sync.WaitGroup
 	slots := make(chan struct{}, runtime.NumCPU())
@@ -170,7 +168,28 @@ func Run(o Options) (string, error) {
 			return "", err
 		}
 	}
-	return table(rows, order, o.Exclude), nil
+	return table(rows, order, o.Exclude, tableWords{
+		none: "No Claude Code sessions in this range.",
+		unit: "Sessions",
+		foot: func(newIn, wiki int64) string {
+			share := 0.0
+			if newIn != 0 {
+				share = 100 * float64(wiki) / float64(newIn)
+			}
+			return fmt.Sprintf("\nWiki reads are about %.1f%% of new input. New input is what entered a session's context for the first time; cache reads are that context read again on later turns.\n", share)
+		},
+	}), nil
+}
+
+// dayShift reads the HH:MM a day starts as the time to take off a moment to get its day.
+func dayShift(dayStarts string) (time.Duration, error) {
+	hh, mm, ok := strings.Cut(dayStarts, ":")
+	h, errH := strconv.Atoi(hh)
+	m, errM := strconv.Atoi(mm)
+	if !ok || errH != nil || errM != nil {
+		return 0, fmt.Errorf("day start %q is not HH:MM", dayStarts)
+	}
+	return time.Duration(h)*time.Hour + time.Duration(m)*time.Minute, nil
 }
 
 func writeUsage(path, wikis string, usage map[[2]string]bool) error {
@@ -200,7 +219,14 @@ func writeUsage(path, wikis string, usage map[[2]string]bool) error {
 	return err
 }
 
-func table(rows map[string]*row, order []string, exclude string) string {
+// What the two token tables say differently.
+type tableWords struct {
+	none string // when no project has anything to show
+	unit string // the second column's heading
+	foot func(newIn, wiki int64) string
+}
+
+func table(rows map[string]*row, order []string, exclude string, words tableWords) string {
 	var globs []interface{ MatchString(string) bool }
 	for _, g := range strings.Split(exclude, ",") {
 		if g != "" {
@@ -224,14 +250,14 @@ func table(rows map[string]*row, order []string, exclude string) string {
 		}
 	}
 	if len(kept) == 0 {
-		return "No Claude Code sessions in this range.\n"
+		return words.none + "\n"
 	}
 	sort.SliceStable(kept, func(i, j int) bool {
 		a, b := rows[kept[i]], rows[kept[j]]
 		return a.newIn+a.cached > b.newIn+b.cached
 	})
 	var b strings.Builder
-	b.WriteString("| Project | Sessions | New input | Cache reads | Output | Wiki reads (est.) |\n")
+	fmt.Fprintf(&b, "| Project | %s | New input | Cache reads | Output | Wiki reads (est.) |\n", words.unit)
 	b.WriteString("|---|---|---|---|---|---|\n")
 	var sessions int
 	var newIn, cached, out, wiki int64
@@ -245,11 +271,7 @@ func table(rows map[string]*row, order []string, exclude string) string {
 		wiki += r.wiki
 	}
 	fmt.Fprintf(&b, "| all | %d | %s | %s | %s | %s |\n", sessions, short(newIn), short(cached), short(out), short(wiki))
-	share := 0.0
-	if newIn != 0 {
-		share = 100 * float64(wiki) / float64(newIn)
-	}
-	fmt.Fprintf(&b, "\nWiki reads are about %.1f%% of new input. New input is what entered a session's context for the first time; cache reads are that context read again on later turns.\n", share)
+	b.WriteString(words.foot(newIn, wiki))
 	return b.String()
 }
 

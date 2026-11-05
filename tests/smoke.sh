@@ -399,6 +399,78 @@ if command -v go >/dev/null 2>&1; then
   lacks "a helper built for another protocol is passed over" "STALE TABLE" env LLM_WIKI_GO="$T/bin/stale-helper" "$W" report
   expect "and the Python answers" "| demo | 2 | 3k | 3.0M | 2k | 3k |" env LLM_WIKI_GO="$T/bin/stale-helper" "$W" report
   expect "a helper that fails falls back to the Python" "| demo | 2 | 3k | 3.0M | 2k | 3k |" env LLM_WIKI_GO="$T/bin/broken-helper" "$W" report
+  # The Gemini table, on conversations with its edge cases. Each folder is one conversation.
+  gconv() { GF="$HOME/.gemini/antigravity/brain/$1/.system_generated/logs/transcript_full.jsonl"; mkdir -p "${GF%/*}"; : > "$GF"; }
+  gday="$(date -u +%Y-%m-%dT12:00:00Z)"
+  gconv conv-b
+  {
+    # A step with a time and counts, pointing at the project by file path and by git -C.
+    printf '{"created_at":"%s","input_tokens":1500,"cache_read_tokens":20000,"output_tokens":300,"tool_calls":[{"name":"read_file","args":{"Path":"%s/projects/web/x.ts"}},{"name":"run_command","args":{"CommandLine":"git -C %s/projects/web log"}}]}\n' "$gday" "$T" "$T"
+    # A read inside a wiki, then the step whose content it pulled in: 4000 characters is 1k.
+    printf '{"created_at":"%s","input_tokens":10,"tool_calls":[{"name":"read_file","args":{"Path":"%s/demo/wiki/x.md"}}]}\n' "$gday" "$WIKIS_DIR"
+    printf '{"created_at":"%s","content":"%s"}\n' "$gday" "$(head -c 4000 /dev/zero | tr '\0' x)"
+    # Not JSON, a blank line, and a step with no time: skipped, and not a step between others.
+    printf 'not json\n\n{"input_tokens":999999}\n'
+    # Written to a wiki page: not a page opened. A glob in a path: no wiki of that name.
+    printf '{"created_at":"%s","tool_calls":[{"name":"write_file","args":{"Path":"%s/global/wiki/y.md"}},{"name":"list_dir","args":{"Path":"%s/*/wiki/"}}]}\n' "$gday" "$WIKIS_DIR" "$WIKIS_DIR"
+    # Outside the range: not counted, though its folder still counts toward the project.
+    printf '{"created_at":"2020-01-01T12:00:00Z","input_tokens":777777,"tool_calls":[{"args":{"Path":"%s/projects/web/old.ts"}}]}\n' "$T"
+    # A time with a fraction and an offset, and null counts.
+    printf '{"created_at":"%s.123+00:00","input_tokens":null,"output_tokens":5,"content":null}\n' "${gday%Z}"
+  } >> "$GF"
+  gconv conv-c
+  {
+    # No project: the bare name, a missing folder, the collection itself, and a page opened in global.
+    printf '{"created_at":"%s","input_tokens":2000,"cache_read_tokens":100,"tool_calls":[{"args":{"Path":"bare.txt"}},{"args":{"Path":"/no/such/folder/x"}},{"args":{"Path":"%s/z"}},{"name":"run_command","args":{"CommandLine":"cat %s/global/wiki/a.md; bash wiki.sh status"}}]}\n' "$gday" "$WIKIS_DIR" "$WIKIS_DIR"
+    # Characters, not bytes: a two-byte letter and an emoji as a surrogate pair, 400 of each.
+    printf '{"content":"%s"}\n' "$(i=0; while [ $i -lt 400 ]; do printf '\303\251\\ud83d\\ude00'; i=$((i + 1)); done)"
+  } >> "$GF"
+  # The same totals as conv-c, in a project of its own: the tie goes to the one met first.
+  gconv conv-a
+  printf '{"created_at":"%s","input_tokens":2000,"cache_read_tokens":100,"tool_calls":[{"args":{"Path":"%s/global/raw/x"}},{"args":{"Path":"%s/global/raw/y"}}]}\n' "$gday" "$WIKIS_DIR" "$WIKIS_DIR" >> "$GF"
+  # Tokens of output only, none of input; and none at all, which leaves its project out.
+  gconv conv-d
+  printf '{"created_at":"%s","output_tokens":40,"tool_calls":[{"args":{"Path":"%s/demo/wiki/z.md"}}]}\n' "$gday" "$WIKIS_DIR" >> "$GF"
+  gconv conv-e
+  printf '{"created_at":"%s","tool_calls":[{"args":{"Path":"%s/global/z.md"}}]}\n' "$gday" "$WIKIS_DIR" >> "$GF"
+  # A file not touched since before the range isn't read, whatever it holds.
+  gconv conv-f
+  printf '{"created_at":"%s","input_tokens":888888}\n' "$gday" >> "$GF"
+  touch -t 201901010000 "$GF"
+  py="$(LLM_WIKI_NO_GO=1 "$W" report 2>&1)"
+  go="$(LLM_WIKI_GO="$T/bin/llm-wiki" "$W" report 2>&1)"
+  gemini="$(printf '%s\n' "$py" | sed -n '/^## Tokens (Gemini/,/^## What the wikis/p')"
+  # What the Python printed for this fixture. global and other folders tie: global's conversation is met first.
+  case "$gemini" in *"| demo | 2 | 2k | 20k | 345 | 1k |"$'\n'"| global | 2 | 2k | 100 | 0 | 0 |"$'\n'"| other folders | 1 | 2k | 100 | 0 | 400 |"$'\n'"| all | 5 | 6k | 20k | 345 | 1k |"*) ok "the Python counts the Gemini fixture's cases" ;; *) bad "the Python counts the Gemini fixture's cases" "$gemini" ;; esac
+  [ "$py" = "$go" ] && ok "the Go helper prints the same Gemini table as the Python" || bad "the Go helper prints the same Gemini table as the Python" "$(diff <(printf '%s\n' "$py") <(printf '%s\n' "$go"))"
+  for gs in "--since 2019-12-25" "--since 7d"; do
+    # shellcheck disable=SC2086
+    [ "$(LLM_WIKI_NO_GO=1 "$W" report $gs 2>&1)" = "$(LLM_WIKI_GO="$T/bin/llm-wiki" "$W" report $gs 2>&1)" ] && ok "and with $gs" || bad "and with $gs"
+  done
+  "$W" journal set exclude 'oth*, de*,de*' >/dev/null
+  [ "$(LLM_WIKI_NO_GO=1 "$W" report 2>&1)" = "$(LLM_WIKI_GO="$T/bin/llm-wiki" "$W" report 2>&1)" ] && ok "and with projects excluded" || bad "and with projects excluded"
+  "$W" journal set exclude '*' >/dev/null
+  expect "excluding them all says so" "No Gemini conversations in this range." env LLM_WIKI_GO="$T/bin/llm-wiki" "$W" report
+  "$W" journal set exclude "" >/dev/null
+  expect "a helper that fails falls back to the Python for Gemini too" "| demo | 2 |" env LLM_WIKI_GO="$T/bin/broken-helper" "$W" report
+  # A helper that stops halfway leaves nothing behind.
+  printf '#!/bin/sh\n[ "$1" = protocol ] && { sed -n "s/^GO_PROTOCOL=//p" "%s"; exit 0; }\n[ "$1" = report-tokens-gemini ] && exit 3\nexec "%s" "$@"\n' "$W" "$T/bin/llm-wiki" > "$T/bin/gemini-broken-helper"
+  chmod +x "$T/bin/gemini-broken-helper"
+  [ "$(LLM_WIKI_GO="$T/bin/gemini-broken-helper" "$W" report 2>&1)" = "$py" ] && ok "and only the failed table falls back" || bad "and only the failed table falls back"
+  # Steps the Python must judge: the helper refuses them, and the report is what the Python makes of them.
+  gconv conv-odd
+  for godd in '[1]' 'null' '{"created_at":5}' '{"created_at":"yesterday"}' '{"created_at":"2026-11-05T12:00:00"}' '{"input_tokens":1.5}' '{"input_tokens":"3"}' '{"input_tokens":NaN}' '{"content":["a"]}' '{"tool_calls":{"a":1}}' '{"tool_calls":[{"args":{"Path":3}}]}' '{"tool_calls":[{"args":{"Path":"~nobody/x"}}]}' '{"created_at":"'"$gday"'","content":"\xff"}'; do
+    # shellcheck disable=SC2059
+    printf "$(printf '%s' "$godd" | sed 's/%/%%/g')\n" > "$GF"
+    if "$T/bin/llm-wiki" report-tokens-gemini "$HOME/.gemini/antigravity/brain" 2019-01-01 2030-01-01 04:00 "$WIKIS_DIR" "" >/dev/null 2>&1; then
+      bad "the helper leaves an odd step to the Python: $godd"
+    elif [ "$(LLM_WIKI_NO_GO=1 "$W" report 2>&1 | sed -n '/^## Tokens (Gemini/,/^## What the wikis/p')" = "$(LLM_WIKI_GO="$T/bin/llm-wiki" "$W" report 2>&1 | sed -n '/^## Tokens (Gemini/,/^## What the wikis/p')" ]; then
+      ok "the helper leaves an odd step to the Python: $godd"
+    else
+      bad "the report on an odd step matches the Python: $godd"
+    fi
+  done
+  rm -rf "$HOME/.gemini"
 else
   skipped "the Go helper against the Python (go isn't installed)"
 fi

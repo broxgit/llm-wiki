@@ -17,6 +17,16 @@ func expandUser(p string) string {
 	return p
 }
 
+// pyDirname is os.path.dirname, which unlike filepath.Dir gives "" for a bare name and
+// cleans nothing but the slashes at the end.
+func pyDirname(p string) string {
+	head := p[:strings.LastIndex(p, "/")+1]
+	if head != "" && strings.Trim(head, "/") != "" {
+		return strings.TrimRight(head, "/")
+	}
+	return head
+}
+
 // realPath is os.path.realpath as Python does it when the path may not exist: each
 // part that is a symlink is followed, a part that doesn't exist is kept as written,
 // and ".." drops the last part of what has been resolved so far.

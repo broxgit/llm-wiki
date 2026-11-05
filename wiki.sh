@@ -228,7 +228,7 @@ need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 # the same thing: a smoke test compares them. go_helper prints the helper's path when
 # it can be trusted. Raise GO_PROTOCOL, with the constant in cmd/llm-wiki/main.go,
 # whenever a ported command's arguments or output change.
-GO_PROTOCOL=1
+GO_PROTOCOL=2
 go_helper() {
   local b="${LLM_WIKI_GO:-$REPO/bin/llm-wiki}"
   [ -z "${LLM_WIKI_NO_GO:-}" ] || return 1
@@ -5075,7 +5075,12 @@ setup_completion() {
 # differently and are priced differently, so one total would mislead. A conversation
 # counts toward the project its file paths and `git -C` folders point at most.
 report_tokens_gemini() {
-  local from="$AGY_HOME/antigravity/brain"
+  local from="$AGY_HOME/antigravity/brain" bin
+  # As in report_tokens, the helper prints nothing when it fails and the Python answers.
+  if [ -d "$from" ] && bin="$(go_helper)" \
+    && "$bin" report-tokens-gemini "$from" "$1" "$2" "$(journal_get day_starts)" "$WIKIS_DIR" "$(journal_get exclude)" 2>/dev/null; then
+    return 0
+  fi
   [ -d "$from" ] && command -v python3 >/dev/null 2>&1 || return 1
   python3 - "$from" "$1" "$2" "$(journal_get day_starts)" "$WIKIS_DIR" "$(journal_get exclude)" <<'PY'
 import fnmatch, json, os, re, subprocess, sys
@@ -5089,7 +5094,7 @@ dh, dm = (int(x) for x in day_starts.split(":"))
 wikis_real = os.path.realpath(wikis)
 
 cover = {}
-for rp in Path(wikis).glob("*/repos.md"):
+for rp in sorted(Path(wikis).glob("*/repos.md")):  # sorted, as the Go version reads them
     for line in rp.read_text(errors="replace").splitlines():
         if line.startswith("- "):
             cover[line[2:].strip()] = rp.parent.name
@@ -5128,7 +5133,7 @@ usage = set()  # (wiki, conversation)
 
 cutoff = datetime.combine(start - timedelta(days=1), datetime.min.time()).timestamp()
 rows = {}
-for f in Path(brain).glob("*/.system_generated/logs/transcript_full.jsonl"):
+for f in sorted(Path(brain).glob("*/.system_generated/logs/transcript_full.jsonl")):  # a tie in the table goes to the project met first
     if f.stat().st_mtime < cutoff: continue
     steps = []
     for line in open(f, errors="replace"):
