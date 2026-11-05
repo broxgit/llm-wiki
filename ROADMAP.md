@@ -10,7 +10,7 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 
 - **Why:** see the first step under Done. The aim is one binary that needs no Bash 3.2 workarounds and no Python.
 - **Sketch:** next `journal backfill`, which reads transcripts too. Then routing as one package, `find` with ranked section results, and the MCP server in-process. Each port prints what the old code prints, checked by the smoke tests, and adds nothing.
-- **Open:** how people who don't build it get the binary: release order, checksums, and what `wiki.sh` does when it's missing or stale. Nothing depends on it yet, which is why it's optional. Whether a cache of what was read is still worth having, now that the slow part turned out to be git and not parsing.
+- **Open:** when the ported commands may drop their old Bash and Python. The helper now reaches people through `wiki update`, but that has to prove itself first, and a plugin that updates by itself still leaves the helper a step behind until `wiki update` runs. Fetching in the background at session start would close that gap. The core commands (`start`, `capture`, `lock`, `sync`, `index`) stay in Bash until then, so a session can never break over a missing binary.
 
 ### Know whether sessions capture and compile
 
@@ -38,6 +38,7 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - `wiki.sh journal backfill` on transcripts from Claude Code versions other than the one it was written against. It needs `python3`.
 - Git sync between two people or two machines. Pull, commit, and push from one machine worked in real use on 2026-10-01.
 - Two sessions taking the compile lock in the same second.
+- The released helper in real use. The fetch has run against a folder standing in for GitHub, and the build matched the lock from two folders on one Mac. Unknown until CI and a real download: whether Linux builds the same bytes as the Mac that wrote the lock, whether a work Mac's security tooling lets a downloaded, linker-signed binary run, and what a sandboxed agent sees.
 - Reminders in real use. A headless session on a throwaway wiki was stopped once by a `before` reminder, retried, and got an `on` reminder as context. Unknown: whether real sessions act on them or route around them, how many a wiki can hold before they turn into noise, whether one refusal per rule per session annoys more than it helps, and what the hook costs across a long session. No agent but Claude Code runs it.
 - Background compile in real use. One real run so far. Unknown: whether a cheaper model's pages are as good as a session's, whether a run started from the session hook survives the hook ending in every agent, how it behaves inside Codex's and Cursor's sandboxes, and any agent other than `claude`. After a week, read `wiki compile` and some of the pages it wrote. If it holds, the handbook can stop telling sessions to compile, which is the larger gain.
 - A wiki with two shared wikis listed in `links.md`.
@@ -70,6 +71,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### The helper reaches people who don't build it (2026-11-05)
+
+- **Why:** each port added a second copy of a command, and its speed reached only whoever built the helper. Deleting the old copies needs the helper to be something everyone has.
+- **What changed:** `helper.lock` holds, in the same commit as the source, the SHA-256 of the helper for four platforms. `scripts/helper.sh` builds them reproducibly with a pinned compiler, CI checks the lock on Linux and publishes the binaries as a release named by the source's hash, from the pull request, so it exists before the merge. `wiki update` and `wiki helper fetch` download the one for this machine and keep it only if it matches the lock. `wiki.sh` uses a helper built in the checkout, then the release its lock names, then an older release that speaks the protocol. Nothing is deleted yet.
 
 ### The relay moved to its own repository (2026-11-05)
 

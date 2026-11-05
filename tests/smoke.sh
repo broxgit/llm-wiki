@@ -16,6 +16,8 @@ trap 'rm -rf "$T"' EXIT
 
 export HOME="$T/home"
 export WIKIS_DIR="$T/wikis"
+# Released helpers come from a folder here, never the network.
+export LLM_WIKI_HELPER_BASE="file://$T/release"
 mkdir -p "$HOME" "$T/bin"
 git config --global user.email smoke@example.com
 git config --global user.name "Smoke Test"
@@ -1829,6 +1831,54 @@ expect "clean removes the sandbox" "Removed" tour --clean
 check "and it's gone" test ! -e "$TD"
 expect "clean with no sandbox says so" "No tour sandbox" tour --clean
 expect "unknown options are refused" "tour options" tour --nope
+
+section "The released helper"
+HSRC="$(sed -n 's/^source //p' "$REPO/helper.lock")"
+HDIR="$HOME/.local/share/llm-wiki/helper"
+sha() { if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d ' ' -f 1; else sha256sum "$1" | cut -d ' ' -f 1; fi; }
+check "helper.lock is in step with the helper's source (if not: scripts/helper.sh lock)" test "$("$REPO/scripts/helper.sh" hash)" = "$HSRC"
+# The repository as a release holds it: tracked and new files, and no bin/, so no
+# helper built in the checkout stands in the way.
+HR="$T/hrepo"
+mkdir -p "$HR"
+(cd "$REPO" && git ls-files -co --exclude-standard -z | tar --null -T - -cf - 2>/dev/null) | tar -xf - -C "$HR"
+HW="$HR/wiki.sh"
+HPLAT="$("$HW" helper | sed -n 's/.* for \([a-z0-9-]*\)\.$/\1/p')"
+check "wiki.sh names this machine's platform" test -n "$HPLAT"
+expect "with no helper anywhere, it says how to get one" "helper: none" "$HW" helper
+out="$("$HW" helper fetch 2>&1)" && bad "fetch fails when the release isn't published" "$out" || case "$out" in *"couldn't be downloaded"*) ok "fetch fails when the release isn't published" ;; *) bad "fetch fails when the release isn't published" "$out" ;; esac
+check "and installs nothing" test ! -e "$HDIR/$HSRC/llm-wiki"
+if command -v go >/dev/null 2>&1 && [ -n "$HPLAT" ]; then
+  REL="$T/release/helper-$HSRC"
+  check "the release build for this platform builds" "$REPO/scripts/helper.sh" build "$REL" "$HPLAT"
+  check "and is byte for byte the one helper.lock names" test "$(sha "$REL/llm-wiki-$HPLAT")" = "$(sed -n "s/^$HPLAT //p" "$REPO/helper.lock")"
+  expect "fetch installs a release that matches the lock" "helper $HSRC installed for $HPLAT" "$HW" helper fetch
+  expect "and wiki.sh uses it" "helper: release $HSRC" "$HW" helper
+  expect "setup --list shows it" "release $HSRC" "$HW" setup --list
+  expect "a second fetch has nothing to do" "is already here" "$HW" helper fetch
+  expect "LLM_WIKI_NO_GO still turns it off" "helper: off" env LLM_WIKI_NO_GO=1 "$HW" helper
+  rm -f "$HDIR/$HSRC/llm-wiki"
+  cp "$REL/llm-wiki-$HPLAT" "$T/release-good"
+  printf 'tampered' >> "$REL/llm-wiki-$HPLAT"
+  out="$("$HW" helper fetch 2>&1)" && bad "a download that doesn't match the lock is refused" "$out" || case "$out" in *"doesn't match helper.lock"*) ok "a download that doesn't match the lock is refused" ;; *) bad "a download that doesn't match the lock is refused" "$out" ;; esac
+  check "and thrown away" test ! -e "$HDIR/$HSRC/llm-wiki"
+  check "leaving no partial file" test -z "$(ls -A "$HDIR/$HSRC" 2>/dev/null)"
+  # An older release that speaks the protocol is better than none.
+  mkdir -p "$HDIR/0000older"
+  cp "$T/release-good" "$HDIR/0000older/llm-wiki"
+  expect "an older release that speaks the protocol is used meanwhile" "an older release that still speaks protocol" "$HW" helper
+  printf '#!/bin/sh\necho 0\n' > "$HDIR/0000older/llm-wiki"
+  expect "but not one that speaks another" "helper: none" "$HW" helper
+  cp "$T/release-good" "$REL/llm-wiki-$HPLAT"
+  out="$("$HW" update --wikis-only 2>&1)"
+  case "$out" in *"== Helper"*"- helper $HSRC installed for $HPLAT"*) ok "wiki update fetches the helper for its version" ;; *) bad "wiki update fetches the helper for its version" "$out" ;; esac
+  expect "and then uses it" "helper: release $HSRC" "$HW" helper
+  rm -f "$REL/llm-wiki-$HPLAT" "$HDIR/$HSRC/llm-wiki"
+  out="$("$HW" update --wikis-only 2>&1)"
+  case "$out" in *"== Helper"*"couldn't be downloaded"*"Nothing is lost"*) ok "an update that can't fetch says so and carries on" ;; *) bad "an update that can't fetch says so and carries on" "$out" ;; esac
+else
+  skipped "fetching and verifying a release (go isn't installed)"
+fi
 
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ]

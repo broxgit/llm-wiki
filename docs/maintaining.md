@@ -30,7 +30,9 @@ mcp/server.py      A local MCP server for sessions with no file access. wiki mcp
 commands/          The plugin's slash commands. wiki.sh also makes skills from them for Antigravity, Codex and Cursor.
 tests/smoke.sh     Smoke tests for wiki.sh, the hook and the secret scan. CI runs them.
 .github/workflows/ CI: shellcheck, plugin validation, and the smoke tests on Linux and macOS.
+helper.lock        The released helper for this commit: its compiler, source hash and a SHA-256 per platform.
 scripts/
+  helper.sh        Builds the helper for release and writes helper.lock. CI checks it and publishes.
   migrate-to-plugin.sh  Moves a machine from the clone-and-line setup to the plugin.
   microsoft_copilot_setup.py  wiki setup microsoft-copilot: a read-only GitHub App and a Microsoft 365 Copilot agent. Pins Microsoft's toolkit version.
 hooks/
@@ -57,6 +59,19 @@ Nobody needs it. `wiki.sh` uses it when it's there and prints the protocol numbe
 - **Checks.** `gofmt -l cmd internal`, `go vet ./cmd/... ./internal/...` and `go test ./cmd/... ./internal/...`. Name the packages: `tour/` holds Go too, as sample code for the tour.
 
 `LLM_WIKI_NO_GO=1` makes `wiki.sh` ignore the helper, and `LLM_WIKI_GO=<path>` points it at another build.
+
+### Releasing the helper
+
+People who don't build the helper get it from a GitHub release. `wiki update` and `wiki helper fetch` download the one for their platform and keep it only if its SHA-256 is the one in `helper.lock`, which came with the code they already run. So a download is trusted no further than the code is, and no binary lives in git.
+
+That depends on the build being reproducible: the same source, compiler and flags give the same bytes on any machine. `scripts/helper.sh` builds that way, with the compiler `helper.lock` names.
+
+- **After changing anything under `cmd/` or `internal/`** (tests aside), run `scripts/helper.sh lock` and commit `helper.lock`. A smoke test fails when the lock is behind the source.
+- **CI's `helper` job** builds every platform on Linux, fails unless the result is what the lock says, and publishes it as the release `helper-<source hash>`. It does this on the pull request, so the release exists before the merge.
+- **To move to a newer compiler,** change the `toolchain` line in `helper.lock` and run `scripts/helper.sh lock`.
+- **A pull request from a fork** can't publish. Push its branch to this repository to release it.
+
+`wiki helper` says which helper a checkout is using. `wiki.sh` looks for one built in the checkout, then the release its lock names, then any older release on the machine that speaks the same protocol. Downloads go under `~/.local/share/llm-wiki/helper/`, outside the plugin's folder, so a plugin update doesn't remove them. Old ones aren't cleaned up yet.
 
 Ported so far: both token tables in `wiki report` (`report_tokens` and `report_tokens_gemini`), and the body of `wiki standup` (`standup_activity`, in `internal/standup`). The Gemini table's Python stops at the first step it can't read, so its port doesn't copy each way of failing. It returns an error on anything it isn't sure of, and the Python decides. `cmd_standup` keeps the options, the dates and `--save`, runs under `LC_ALL=C` so order and matching don't depend on the locale, and passes its repositories and comma lists in final form. Anything that port isn't sure of, such as a pattern with a bracket or a file grep would call binary, is an error, and the Bash answers. `internal/pyjson` holds the Python behaviours a port has to copy, such as the length of `json.dumps`.
 
