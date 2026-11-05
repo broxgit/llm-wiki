@@ -39,6 +39,9 @@ emit() {
 }
 
 [ -x "$WIKI_SH" ] || exit 0
+# A background compile's own session gets its instructions in its prompt. Starting
+# another run from it would never end.
+[ -z "${LLM_WIKI_BACKGROUND:-}" ] || exit 0
 
 # t <path>: the path with ~ for the home folder. Shorter, and a shell expands it in a
 # command as long as it isn't quoted.
@@ -205,7 +208,12 @@ if [ "$compacted" = 1 ]; then
 
 This session was just compacted. Before you answer anything, even the user's message, capture whatever in the summary the wiki doesn't hold yet, as the handbook's Capture section says. It can't wait for a stopping point: the summary is all that's left."
 fi
-if [ "$waiting" -gt 0 ]; then
+# With background compile on, a headless run takes them, and this session leaves them.
+if [ "$waiting" -gt 0 ] && "$WIKI_SH" compile --auto "$wiki" >/dev/null 2>&1; then
+  ctx="$ctx
+
+$waiting note(s) in raw/ are being compiled in the background now, by a run that holds the compile lock. Don't compile them. Carry on with the user's request."
+elif [ "$waiting" -gt 0 ]; then
   ctx="$ctx
 
 $waiting note(s) in raw/ are waiting to be compiled$([ "$waiting" -gt 10 ] && echo ". That's more than ten, so do the user's request first and compile at the next pause" || echo ", before the user's request"), as one batch if there are five or more: see the handbook's session start and rules/compile.md."
