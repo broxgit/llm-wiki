@@ -439,7 +439,8 @@ EOF2
 # reminders_of <wiki root> [bad]: the lines under "## Reminders" in the wiki's
 # conventions page, as "when<TAB>kind<TAB>pattern<TAB>rule<TAB>wiki". A line reads
 #   - before bash `git push`: the rule, in one line
-# with before or on, then bash, edit or tool. With "bad", it prints the lines there
+# with before or on, then bash, edit or tool. A citation after the rule, [raw/...] or
+# (raw/...), is left out. With "bad", it prints the lines there
 # that don't read that way, for lint: one that's skipped silently would never be seen.
 reminders_of() {
   local f="$1/wiki/conventions.md"
@@ -458,7 +459,8 @@ reminders_of() {
       pat = substr(t, 1, b - 1)
       rule = substr(t, b + 1)
       sub(/^: +/, "", rule)
-      gsub(/ *\[raw\/[^]]*\]/, "", rule)
+      # A citation is for people reading the page, in either bracket: pages use both.
+      gsub(/ *[[(]raw\/[^])]*[])]/, "", rule)
       gsub(/\t/, " ", rule)
       gsub(/\t/, " ", pat)
       print w[1] "\t" w[2] "\t" pat "\t" rule "\t" name
