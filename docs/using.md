@@ -117,6 +117,24 @@ Each project can say how work there gets done and what it needs, in its wiki's `
 
 `wiki setup tools` then offers, one tool at a time, to let Claude Code and Antigravity run the listed command-line tools without asking.
 
+## Reminders
+
+A rule your agent read at session start can be out of mind by the time it applies. For a rule that keeps getting missed, say when it applies, under `## Reminders` in a wiki's `wiki/conventions.md`:
+
+```
+## Reminders
+
+- before bash `git push`: Check that the pre-commit hooks ran, and check CI after.
+- on edit `payments/*`: Money is in cents, never floats.
+- before tool `Agent`: Set the model explicitly, and say why in a line.
+```
+
+- `before` stops the first matching call once and shows the rule, so the agent reads it before acting. The same call made again goes through.
+- `on` hands the rule over with the call's result, for things worth knowing but not worth a stop.
+- `bash` matches text a command contains, `edit` a file being edited, and `tool` a tool's name. `*` matches anything.
+
+The shared wiki's reminders apply in every project. Each is given once a session, and again after a compaction. They run through the Claude Code plugin, so keep the rule in `For agents` too, where every agent reads it. `wiki lint` tells you about a line it couldn't read.
+
 ## Work and personal collections
 
 One collection, `~/wikis`, is enough for most people. To keep work wikis apart from personal ones, each with its own git remote and its own shared wiki, add a second collection:

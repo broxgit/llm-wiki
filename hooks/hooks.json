@@ -1,5 +1,5 @@
 {
-  "description": "Load this session's wiki: its handbook and index, found from the repository the session works in.",
+  "description": "Load this session's wiki: its handbook and index, found from the repository the session works in. Then hand over the wiki's reminders at the tool calls they apply to.",
   "hooks": {
     "SessionStart": [
       {
@@ -8,6 +8,18 @@
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh\"",
             "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Edit|Write|NotebookEdit|MultiEdit|Agent|Task|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/pre-tool-use.sh\"",
+            "timeout": 5
           }
         ]
       }

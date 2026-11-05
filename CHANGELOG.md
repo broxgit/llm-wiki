@@ -4,6 +4,18 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v28 (2026-11-05)
+
+Reminders: a rule reaches the agent at the moment it applies. A rule read at session start is often out of mind two hours later, and a session missed one that way on the day this was written.
+
+- A wiki's `wiki/conventions.md` takes a `## Reminders` section, one line per reminder: `` - before bash `git push`: Check that the hooks ran. `` or `` - on edit `payments/*`: Money is in cents. ``
+- `before` stops the first matching call once and gives the rule as the reason, so the agent reads it before acting. The same call made again goes through. `on` adds the rule as context, which arrives with the call's result.
+- `bash` matches text a command contains, `edit` a file being edited (by its path in the project), and `tool` a tool's name. `*` matches anything.
+- The shared wiki's reminders apply in every project, and a project wiki's in its own. Each is given once a session, and again after a compaction.
+- It runs through the Claude Code plugin's hooks. Other agents don't get reminders yet, so keep each rule in `For agents` as well.
+- `rules/compile.md` says when to add one: for a rule that was missed, not for every rule. `wiki lint` reports a line under `## Reminders` it can't read.
+- Do: nothing is needed. To try it, add a `## Reminders` section to a wiki's `wiki/conventions.md` and start a new session.
+
 ## v27 (2026-10-30)
 
 Agents can tell you, and llm-wiki's maintainer, what got in their way. It's off until you turn it on.

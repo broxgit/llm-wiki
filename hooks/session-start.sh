@@ -138,6 +138,25 @@ if [ -z "$wiki" ]; then
 fi
 [ -f "$wiki/AGENTS.md" ] || exit 0
 
+# Reminders: the lines under "## Reminders" in the wikis' conventions pages, which
+# pre-tool-use.sh hands to the session at the tool call each applies to. They're
+# written per session, here, because this hook already knows the session's wiki.
+# A fresh file also forgets which ones were shown, so they come back after a
+# compaction, when the session no longer remembers them.
+sid="$(printf '%s' "$input" | sed -n 's/.*"session_id" *: *"\([A-Za-z0-9_-]*\)".*/\1/p' | head -n 1)"
+if [ -n "$sid" ]; then
+  rdir="${XDG_STATE_HOME:-$HOME/.local/state}/llm-wiki/reminders"
+  rows="$("$WIKI_SH" __reminders "$wiki" 2>/dev/null || true)"
+  if [ -n "$rows" ]; then
+    mkdir -p "$rdir" 2>/dev/null && printf '%s\n' "$rows" > "$rdir/$sid.tsv" 2>/dev/null
+  else
+    rm -f "$rdir/$sid.tsv" 2>/dev/null
+  fi
+  rm -f "$rdir/$sid.seen" 2>/dev/null
+  # Sessions end without telling anyone, so old files are swept here.
+  find "$rdir" -type f -mtime +7 -exec rm -f {} + 2>/dev/null
+fi
+
 # What needs doing at session start, so the agent doesn't have to look.
 # wiki.sh decides what counts as compiled, so the two never disagree.
 waiting="$("$WIKI_SH" pending "$wiki" 2>/dev/null | grep -c '^raw/' || true)"

@@ -4,6 +4,16 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. A short paragraph, then lines starting `- ` for what changed and `- Do:` for what to do about it. Add an entry for anything a user would notice, and none for fixes they wouldn't.
 
+## 2026-11-05: Reminders at the moment a rule applies
+
+A rule your agent read at session start is easy to lose two hours in. Now a wiki can say when a rule applies, and Claude Code puts it in front of the agent then.
+
+- Add lines under `## Reminders` in a wiki's `wiki/conventions.md`, such as `` - before bash `git push`: Check that the hooks ran. `` or `` - on edit `payments/*`: Money is in cents. ``
+- `before` stops the first matching call once, with the rule as the reason, and lets the same call through the second time. `on` hands the rule over with the call's result.
+- The shared wiki's reminders apply everywhere, and each one is given once a session.
+- It needs the Claude Code plugin and `python3`. Other agents don't get reminders yet.
+- Do: `wiki update` brings it in, and the changelog for handbook v28 has the details. Sessions already open need a restart to load the new hook.
+
 ## 2026-11-05: Notes can be compiled in the background, as an experiment
 
 Sessions spend their first minutes compiling notes that earlier sessions left, and in the first week half the notes never got compiled at all. A background run can take that over. It is off unless you turn it on.

@@ -422,6 +422,54 @@ $sec
 EOF2
 }
 
+# reminders_of <wiki root> [bad]: the lines under "## Reminders" in the wiki's
+# conventions page, as "when<TAB>kind<TAB>pattern<TAB>rule<TAB>wiki". A line reads
+#   - before bash `git push`: the rule, in one line
+# with before or on, then bash, edit or tool. With "bad", it prints the lines there
+# that don't read that way, for lint: one that's skipped silently would never be seen.
+reminders_of() {
+  local f="$1/wiki/conventions.md"
+  [ -f "$f" ] || return 0
+  awk -v name="${1##*/}" -v mode="${2:-}" '
+    /^## Reminders/ { on = 1; next }
+    on && /^## / { exit }
+    on && /^```/ { fence = !fence; next }
+    on && !fence && /^- / {
+      s = substr($0, 3)
+      if (s !~ /^(before|on) (bash|edit|tool) `[^`]+`: +[^ ]/) { if (mode == "bad") print; next }
+      if (mode == "bad") next
+      split(s, w, " ")
+      t = substr(s, index(s, "`") + 1)
+      b = index(t, "`")
+      pat = substr(t, 1, b - 1)
+      rule = substr(t, b + 1)
+      sub(/^: +/, "", rule)
+      gsub(/ *\[raw\/[^]]*\]/, "", rule)
+      gsub(/\t/, " ", rule)
+      gsub(/\t/, " ", pat)
+      print w[1] "\t" w[2] "\t" pat "\t" rule "\t" name
+    }' "$f"
+}
+
+# session_reminders <wiki root>: the reminders a session in that wiki works under: its
+# shared wikis' first, then its own.
+session_reminders() {
+  local wiki="$1" line spath
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    spath="${line#*: }"; spath="${spath%% |*}"
+    # links.md writes ~ for the home folder. The tilde is meant literally.
+    # shellcheck disable=SC2088
+    case "$spath" in "~/"*) spath="$HOME/${spath:2}" ;; esac
+    is_wiki "$spath" || continue
+    [ "$spath" -ef "$wiki" ] && continue
+    reminders_of "$spath"
+  done <<EOF2
+$(grep '^- [^:]*: ' "$wiki/links.md" 2>/dev/null || true)
+EOF2
+  reminders_of "$wiki"
+}
+
 # start [<repo or folder>]: everything session start needs, in one call. Finds the
 # wiki, pulls the collection, and prints what the handbook says to read first: the
 # wiki's index, each shared wiki's index and For agents section, and what waits.
@@ -1226,7 +1274,7 @@ open_callouts() {
 
 # lint <wiki>... [--all]
 cmd_lint() {
-  local all=0 roots=() w d lag map
+  local all=0 roots=() w d lag map bad
   while [ $# -gt 0 ]; do
     case "$1" in
       --all) all=1; shift ;;
@@ -1244,10 +1292,16 @@ cmd_lint() {
   if [ -n "$map" ]; then
     for d in "${roots[@]}"; do commit_lag "$d" "$map" | sed "s#^#$d$TAB#"; done > "$lag"
   fi
-  python3 - "$WIKIS_DIR" "$SHARED" "$(days_ago 180)" "$lag" "${roots[@]}" <<'PY'
+  bad="$(mktemp)"
+  for d in "${roots[@]}"; do reminders_of "$d" bad | sed "s#^#$d$TAB#"; done > "$bad"
+  python3 - "$WIKIS_DIR" "$SHARED" "$(days_ago 180)" "$lag" "$bad" "${roots[@]}" <<'PY'
 import os, re, sys
-wikis, shared, stale_cut, lagfile = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-roots = sys.argv[5:]
+wikis, shared, stale_cut, lagfile, badfile = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+roots = sys.argv[6:]
+bad_reminders = {}
+for line in open(badfile, errors="replace").read().splitlines():
+    root, _, text = line.partition("\t")
+    bad_reminders.setdefault(root, []).append(text)
 lag = {}
 for line in open(lagfile).read().splitlines():
     root, page, what = line.split("\t", 2)
@@ -1351,6 +1405,9 @@ for root in roots:
             add("commit not found in its repository", f"{page} ({w[1]} in {w[2]})")
         elif w[0] == "bare":
             add("commit without repo@ in a wiki over several repositories", f"{page} ({w[1]})")
+    # Reminder lines the tool-call hook would skip without a word.
+    for text in bad_reminders.get(root, []):
+        add("reminder line not understood", f"wiki/conventions.md: {text[:80]}")
     # Waiting notes.
     raw = os.path.join(root, "raw")
     # Compiled: named in a log entry's `- source:` line, listed in a page's
@@ -1381,7 +1438,7 @@ for root in roots:
 if total:
     print("\nFix the mechanical ones without asking: links, index lines (wiki index), frontmatter. Ask before merging, deleting or moving pages.")
 PY
-  rm -f "$lag"
+  rm -f "$lag" "$bad"
 }
 
 # ---- pending ----------------------------------------------------------------
@@ -6823,6 +6880,8 @@ fi
 case "$cmd" in
   update) cmd_update "$@"; exit 0 ;;
   __collection) printf '%s\n' "$WIKIS_DIR"; exit 0 ;;
+  # The session hook asks for a wiki's reminders, to hand out at tool calls.
+  __reminders) session_reminders "$(wiki_root "${1:-}")"; exit 0 ;;
   collections)
     collections | while IFS="$TAB" read -r n f r; do
       printf '%-10s %s%s%s\n' "$n" "$(tilde "$f")" "${r:+  matches: }$r" "$([ "$f" = "$WIKIS_DIR" ] && echo '  <- here')"
