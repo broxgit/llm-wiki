@@ -10,6 +10,7 @@ Parts of `wiki report` and `wiki standup` now run in a small compiled helper. On
 
 - `wiki update` downloads the helper for your Mac or Linux machine, about 3 MB, from this project's GitHub releases. It is kept only if it matches a checksum that came with the code you already run.
 - `wiki helper` says which helper is in use, and `wiki helper fetch` downloads it without updating anything else.
+- A plugin can update without you running `wiki update`, so session start also fetches the helper, in the background, when it is missing or out of date. It tries once in six hours at most and says nothing. `wiki helper auto off` stops it, and `wiki setup --new` asks.
 - Nothing needs it. Without one, the same commands run their built-in code, only slower. `LLM_WIKI_NO_GO=1` turns it off.
 - If you have Go, you can build it instead: `go build -o bin/llm-wiki ./cmd/llm-wiki` in a clone.
 - Do: run `wiki update`. Nothing else.

@@ -1862,7 +1862,7 @@ if command -v go >/dev/null 2>&1 && [ -n "$HPLAT" ]; then
   printf 'tampered' >> "$REL/llm-wiki-$HPLAT"
   out="$("$HW" helper fetch 2>&1)" && bad "a download that doesn't match the lock is refused" "$out" || case "$out" in *"doesn't match helper.lock"*) ok "a download that doesn't match the lock is refused" ;; *) bad "a download that doesn't match the lock is refused" "$out" ;; esac
   check "and thrown away" test ! -e "$HDIR/$HSRC/llm-wiki"
-  check "leaving no partial file" test -z "$(ls -A "$HDIR/$HSRC" 2>/dev/null)"
+  check "leaving no partial file" test -z "$(find "$HDIR/$HSRC" -name '.download*' 2>/dev/null)"
   # An older release that speaks the protocol is better than none.
   mkdir -p "$HDIR/0000older"
   cp "$T/release-good" "$HDIR/0000older/llm-wiki"
@@ -1876,6 +1876,45 @@ if command -v go >/dev/null 2>&1 && [ -n "$HPLAT" ]; then
   rm -f "$REL/llm-wiki-$HPLAT" "$HDIR/$HSRC/llm-wiki"
   out="$("$HW" update --wikis-only 2>&1)"
   case "$out" in *"== Helper"*"couldn't be downloaded"*"Nothing is lost"*) ok "an update that can't fetch says so and carries on" ;; *) bad "an update that can't fetch says so and carries on" "$out" ;; esac
+  # Session start fetches a missing helper by itself, in the background.
+  hwait() { local i=0; while [ "$i" -lt 100 ]; do [ -x "$HDIR/$HSRC/llm-wiki" ] && return 0; sleep 0.1; i=$((i + 1)); done; return 1; }
+  hgone() { rm -f "$HDIR/$HSRC/llm-wiki"; [ -z "${1:-}" ] || rm -f "$HDIR/$HSRC/.tried"; }
+  hhook() { printf '%s' '{"source":"startup"}' | CLAUDE_PLUGIN_ROOT="$HR" CLAUDE_PLUGIN_DATA="$T/hdata" CLAUDE_PROJECT_DIR="$T/projects/web" bash "$HR/hooks/session-start.sh"; }
+  cp "$T/release-good" "$REL/llm-wiki-$HPLAT"
+  hgone again
+  expect "fetching at session start is on unless turned off" "Fetched automatically at session start: on" "$HW" helper
+  "$HW" __helper-auto
+  check "session start fetches a missing helper in the background" hwait
+  expect "and wiki.sh then uses it" "helper: release $HSRC" "$HW" helper
+  hgone
+  "$HW" __helper-auto
+  sleep 1
+  check "it tries once in six hours, not at every session" test ! -e "$HDIR/$HSRC/llm-wiki"
+  touch -t 202001010000 "$HDIR/$HSRC/.tried"
+  "$HW" __helper-auto
+  check "and tries again after that" hwait
+  hgone again
+  hhook >/dev/null
+  check "the session hook starts the fetch" hwait
+  hgone again
+  LLM_WIKI_BACKGROUND=1 hhook >/dev/null
+  sleep 1
+  check "a background compile's own session fetches nothing" test ! -e "$HDIR/$HSRC/llm-wiki"
+  "$HW" start web >/dev/null 2>&1
+  check "wiki start fetches too, for agents with no hook" hwait
+  hgone again
+  expect "helper auto off turns it off" "helper auto: off" "$HW" helper auto off
+  "$HW" __helper-auto
+  sleep 1
+  check "off, session start fetches nothing" test ! -e "$HDIR/$HSRC/llm-wiki"
+  expect "and wiki helper fetch still works" "helper $HSRC installed" "$HW" helper fetch
+  expect "helper auto on turns it back on" "helper auto: on" "$HW" helper auto on
+  refuse "helper auto needs on or off" "$HW" helper auto maybe
+  expect "setup --list marks the question as new" "fetched at session start: on  <- new" "$HW" setup --list
+  out="$(printf 'n\n' | in_tty "$HW" setup helper 2>&1)"
+  case "$out" in *"Fetch it automatically at session start?"*"helper auto: off"*) ok "setup helper asks, and a no turns it off" ;; *) bad "setup helper asks, and a no turns it off" "$out" ;; esac
+  lacks "and the question isn't new any more" "<- new" bash -c "'$HW' setup --list | grep '^helper'"
+  "$HW" helper auto on >/dev/null
 else
   skipped "fetching and verifying a release (go isn't installed)"
 fi

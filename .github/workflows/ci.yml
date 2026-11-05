@@ -56,6 +56,7 @@ jobs:
       # the time anyone's wiki.sh names it. It is named by the hash of its source, and
       # wiki.sh checks what it downloads against helper.lock, so publishing early can't
       # hand anyone the wrong bytes. A pull request from a fork can't publish.
+      # A prerelease, so GitHub doesn't show a helper as the project's latest release.
       - name: Publish the release, if it isn't there yet
         if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         env:
@@ -69,7 +70,7 @@ jobs:
             exit 0
           fi
           # A push and a pull request can run this at once. Whichever loses finds it there.
-          gh release create "$tag" dist/llm-wiki-* --target "$TARGET" --latest=false \
+          gh release create "$tag" dist/llm-wiki-* --target "$TARGET" --prerelease \
             --title "Helper $src" \
             --notes "The llm-wiki helper built from source $src. wiki update downloads it and keeps it only if it matches helper.lock. There is nothing to install by hand." \
             || gh release view "$tag" >/dev/null

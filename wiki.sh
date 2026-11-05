@@ -175,8 +175,10 @@ Usage: $WIKI_CMD <command> [options]
   feedback [show|send|dismiss <id>]
                        Notes agents kept about llm-wiki itself, and filing one as an
                        issue after you read it. Off until: setup feedback.
-  helper [fetch]       Which compiled helper report and standup use, and download the
-                       one released for this version. wiki update does that too.
+  helper [fetch | auto on|off]
+                       Which compiled helper report and standup use, and download the
+                       one released for this version. wiki update does that too, and
+                       so does session start, in the background, unless auto is off.
   mcp [--print]        A local MCP server over the wikis, for sessions with no file
                        access. An MCP client starts it. --print gives its config entry.
   news [--all]         What's new in llm-wiki since you last looked.
@@ -326,13 +328,53 @@ helper_fetch() {
   echo "helper $src installed for $plat"
 }
 
-# helper [fetch]: which helper this checkout uses, and downloading its release.
+# Whether session start fetches a missing or outdated helper by itself. On unless the
+# user turned it off: a plugin updates without anyone running `wiki update`, and the
+# helper would otherwise stay a step behind.
+HELPER_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/llm-wiki/helper"
+helper_auto_on() { [ "$(sed -n 's/^auto=//p' "$HELPER_FILE" 2>/dev/null | head -n 1)" != off ]; }
+helper_auto_set() {
+  mkdir -p "$(dirname "$HELPER_FILE")" || return 1
+  printf '# Whether session start downloads the llm-wiki helper when it is missing or out of date: on or off.\n# Written by %s helper auto.\nauto=%s\n' "$WIKI_CMD" "$1" > "$HELPER_FILE"
+}
+
+# helper_auto: at session start, fetch this checkout's release in the background when
+# it isn't on this machine. It says nothing and never fails a session. It tries once
+# every six hours at most, because offline or inside a sandbox every try fails, and
+# every session would try again.
+helper_auto() {
+  local src dir
+  [ -z "${LLM_WIKI_NO_GO:-}" ] && [ -z "${LLM_WIKI_GO:-}" ] && [ -z "${LLM_WIKI_BACKGROUND:-}" ] || return 0
+  helper_auto_on || return 0
+  src="$(helper_source)"
+  [ -n "$src" ] && [ -n "$(helper_platform)" ] || return 0
+  if helper_ok "$REPO/bin/llm-wiki"; then return 0; fi
+  dir="$HELPER_DIR/$src"
+  [ ! -x "$dir/llm-wiki" ] || return 0
+  mkdir -p "$dir" 2>/dev/null || return 0
+  [ -z "$(find "$dir/.tried" -mmin -360 2>/dev/null)" ] || return 0
+  : 2>/dev/null > "$dir/.tried" || return 0
+  nohup "$REPO/wiki.sh" helper fetch </dev/null > "$dir/.fetch.log" 2>&1 &
+}
+
+# helper [fetch | auto on|off]: which helper this checkout uses, downloading its
+# release, and whether session start does that by itself.
 cmd_helper() {
   local b src
   case "${1:-}" in
     fetch) helper_fetch || exit 1; return 0 ;;
+    auto)
+      case "${2:-}" in
+        on | off) helper_auto_set "$2" || die "can't write $(tilde "$HELPER_FILE")" ;;
+        *) die "helper auto takes: on, off" ;;
+      esac
+      if [ "$2" = on ]; then echo "helper auto: on. Session start fetches the helper in the background when it is missing or out of date."
+      else echo "helper auto: off. $WIKI_CMD update and $WIKI_CMD helper fetch still download it."
+      fi
+      return 0
+      ;;
     '') ;;
-    *) die "helper takes: fetch" ;;
+    *) die "helper takes: fetch, auto on, auto off" ;;
   esac
   src="$(helper_source)"
   if [ -n "${LLM_WIKI_NO_GO:-}" ]; then
@@ -347,6 +389,7 @@ cmd_helper() {
     echo "helper: none, so the ported commands (report, standup) run their slower built-in code. Run: $WIKI_CMD helper fetch"
   fi
   echo "This checkout names release ${src:-none}, protocol $GO_PROTOCOL, for $(helper_platform)."
+  echo "Fetched automatically at session start: $(helper_auto_on && echo on || echo "off. Turn it on with: $WIKI_CMD helper auto on")"
 }
 
 # Show a path with ~ in place of the home folder. The tilde is meant literally.
@@ -613,6 +656,7 @@ cmd_start() {
   # A folder named on the command line decides the collection, as $PWD would.
   if [ -d "$arg" ] && [ -z "${pick:-}" ] && [ -z "${LLM_WIKI_FIXED_DIR:-}" ]; then set_collection "$(collection_for "$arg")"; fi
   [ -d "$WIKIS_DIR" ] || die "no wikis at $(tilde "$WIKIS_DIR"). Run: $WIKI_CMD setup"
+  helper_auto >/dev/null 2>&1 || true
   if [ -n "$repo" ]; then w="$(which_wiki "$repo")"; [ -z "$w" ] || wiki="$WIKIS_DIR/$w"; fi
   if [ -z "$wiki" ]; then
     wiki="$WIKIS_DIR/$SHARED"
@@ -3455,6 +3499,22 @@ setup_feedback() {
   setup_mark feedback
 }
 
+setup_helper() {
+  setup_due helper || return 0
+  if [ ! -f "$HELPER_LOCK" ] || [ -z "$(helper_platform)" ]; then setup_mark helper; return 0; fi
+  section "The helper"
+  echo "wiki report and wiki standup run several times faster through a small compiled helper, about 3 MB."
+  echo "$WIKI_CMD update downloads it from this project's GitHub releases, and keeps it only if it matches a"
+  echo "checksum that came with the code you already run. It can also be fetched at session start, in the"
+  echo "background, whenever it is missing or out of date, so a plugin update doesn't leave it behind."
+  if ask_yn "Fetch it automatically at session start?" "$(helper_auto_on && echo y || echo n)"; then
+    helper_auto_set on && echo "  helper auto: on"
+  else
+    helper_auto_set off && echo "  helper auto: off"
+  fi
+  setup_mark helper
+}
+
 # ---- MCP ---------------------------------------------------------------------
 # mcp/server.py is a small MCP server over the collections, for sessions with no
 # file access, such as the Claude desktop app's Chat tab. It runs this script for
@@ -5112,7 +5172,7 @@ cmd_complete() {
     capture) [ "$i" -eq 2 ] && wiki_names; printf -- '--file\n--copy\n' ;;
     lock) [ "$i" -eq 2 ] && wiki_names; printf -- '--release\n--renew\n' ;;
     compile) [ "$i" -eq 2 ] && { wiki_names; printf 'on\noff\n'; }; echo --background ;;
-    helper) [ "$i" -eq 2 ] && echo fetch ;;
+    helper) [ "$i" -eq 2 ] && printf 'fetch\nauto\n'; [ "$i" -eq 3 ] && printf 'on\noff\n' ;;
     sync) [ "$i" -eq 2 ] && wiki_names; echo -m ;;
     index) [ "$i" -eq 2 ] && wiki_names; echo --check ;;
     lint) wiki_names; echo --all ;;
@@ -5139,7 +5199,7 @@ cmd_complete() {
     init) echo --git ;;
     completion) printf 'zsh\nbash\n' ;;
     setup)
-      printf -- '--new\n--list\ncollection\ngit\ngit.identity\nclaude\nplugin\npermissions\ncollections\ntools\nantigravity\ncodex\ncursor\nfeedback\nchat\nupgrade\nskills\ncompletion\ndelegation\njournal\nmicrosoft-copilot\n'
+      printf -- '--new\n--list\ncollection\ngit\ngit.identity\nclaude\nplugin\npermissions\ncollections\ntools\nantigravity\ncodex\ncursor\nfeedback\nhelper\nchat\nupgrade\nskills\ncompletion\ndelegation\njournal\nmicrosoft-copilot\n'
       for k in $JOURNAL_KEYS; do printf 'journal.%s\n' "$k"; done
       ;;
     journal)
@@ -6091,6 +6151,7 @@ setup_pending() {
   if in_git_repo "$WIKIS_DIR"; then setup_done git.identity || echo git.identity; fi
   setup_done delegation.mode || echo delegation.mode
   setup_done feedback || echo feedback
+  if [ -f "$HELPER_LOCK" ] && [ -n "$(helper_platform)" ]; then setup_done helper || echo helper; fi
   case "$(chat_state)" in
     old) echo chat ;;
     missing) setup_done chat || echo chat ;;
@@ -6498,7 +6559,9 @@ setup_list() {
   case "$pending" in *" feedback "*) printf '  <- new' ;; esac
   printf '\n'
   printf '%-19s %s\n' "compile" "$(compile_auto_on && echo "in the background at session start" || echo "by sessions (background compile is off)")"
-  printf '%-19s %s\n' "helper" "$(cmd_helper | head -n 1 | sed 's/^helper: //')"
+  printf '%-19s %s' "helper" "$(cmd_helper | head -n 1 | sed 's/^helper: //'), fetched at session start: $(helper_auto_on && echo on || echo off)"
+  case "$pending" in *" helper "*) printf '  <- new' ;; esac
+  printf '\n'
   [ "$(chat_state)" = none ] || echo "chat                server $(chat_state)"
 
   for k in $JOURNAL_KEYS; do
@@ -6515,7 +6578,7 @@ setup_list() {
   [ "$(agy_state)" = none ] || tools="$tools | antigravity"
   [ "$(codex_state)" = none ] || tools="$tools | codex"
   [ "$(cursor_state)" = none ] || tools="$tools | cursor"
-  echo "Or a section:  $WIKI_CMD setup collection | collections | tools | git | claude | plugin | permissions$tools | upgrade | skills | completion | delegation | feedback | chat | journal | microsoft-copilot"
+  echo "Or a section:  $WIKI_CMD setup collection | collections | tools | git | claude | plugin | permissions$tools | upgrade | skills | completion | delegation | feedback | helper | chat | journal | microsoft-copilot"
 }
 
 # Antigravity's grants: what lets Gemini read and write the wikis and run wiki.sh
@@ -6806,7 +6869,7 @@ Usage: $WIKI_CMD setup [--new | --list | <section> | <setting>]
 EOF
         return 0
         ;;
-      collection | collections | tools | git | claude | plugin | permissions | antigravity | codex | cursor | upgrade | skills | completion | journal | delegation | feedback | chat | git.identity) what="$a" ;;
+      collection | collections | tools | git | claude | plugin | permissions | antigravity | codex | cursor | upgrade | skills | completion | journal | delegation | feedback | helper | chat | git.identity) what="$a" ;;
       journal.*)
         [ -n "$(journal_field "${a#journal.}" 2)" ] || die "no journal setting called ${a#journal.}. Settings: $JOURNAL_KEYS"
         what="$a"
@@ -6835,6 +6898,7 @@ EOF
     journal) SETUP_MODE=all; setup_journal ;;
     delegation) SETUP_MODE=all; setup_delegation ;;
     feedback) SETUP_MODE=all; setup_feedback ;;
+    helper) SETUP_MODE=all; setup_helper ;;
     chat) SETUP_MODE=all; setup_chat ;;
     git.identity)
       in_git_repo "$WIKIS_DIR" || die "$(tilde "$WIKIS_DIR") isn't a git repo yet. Run: $WIKI_CMD setup git"
@@ -6870,6 +6934,7 @@ EOF
       setup_skills
       setup_completion
       setup_journal
+      setup_helper
       ;;
   esac
   case "$what" in
@@ -6942,6 +7007,8 @@ fi
 case "$cmd" in
   update) cmd_update "$@"; exit 0 ;;
   __collection) printf '%s\n' "$WIKIS_DIR"; exit 0 ;;
+  # The session hook asks for the helper to be fetched if it's missing.
+  __helper-auto) helper_auto >/dev/null 2>&1 || true; exit 0 ;;
   # The session hook asks for a wiki's reminders, to hand out at tool calls.
   __reminders) session_reminders "$(wiki_root "${1:-}")"; exit 0 ;;
   collections)

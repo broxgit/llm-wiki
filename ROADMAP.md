@@ -10,7 +10,7 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 
 - **Why:** see the first step under Done. The aim is one binary that needs no Bash 3.2 workarounds and no Python.
 - **Sketch:** next `journal backfill`, which reads transcripts too. Then routing as one package, `find` with ranked section results, and the MCP server in-process. Each port prints what the old code prints, checked by the smoke tests, and adds nothing.
-- **Open:** when the ported commands may drop their old Bash and Python. The helper now reaches people through `wiki update`, but that has to prove itself first, and a plugin that updates by itself still leaves the helper a step behind until `wiki update` runs. Fetching in the background at session start would close that gap. The core commands (`start`, `capture`, `lock`, `sync`, `index`) stay in Bash until then, so a session can never break over a missing binary.
+- **Open:** when the ported commands may drop their old Bash and Python. The helper now reaches people through `wiki update`, but that has to prove itself first. The core commands (`start`, `capture`, `lock`, `sync`, `index`) stay in Bash until then, so a session can never break over a missing binary.
 
 ### Know whether sessions capture and compile
 
@@ -71,6 +71,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Session start fetches the helper (2026-11-05)
+
+- **Why:** a plugin updates without anyone running `wiki update`, which left the helper a step behind and the ported commands on their slower code.
+- **What changed:** the Claude Code hook and `wiki start` start a background fetch when the release a checkout names isn't on the machine. It is verified against `helper.lock` like any fetch, says nothing, and tries once in six hours, so a machine that is offline or in a sandbox doesn't try at every session. `wiki helper auto off` turns it off, and `wiki setup` asks about it once. Helper releases are now published as prereleases, so GitHub doesn't show one as the project's latest release.
 
 ### The helper reaches people who don't build it (2026-11-05)
 
