@@ -366,8 +366,6 @@ Run `wiki` with no arguments for the full list. The ones you're likely to use:
 | `wiki capture <wiki> <slug>` | Save a note piped in, named from the clock. Mostly for agents. |
 | `wiki mcp` | A local MCP server over your wikis, for sessions with no file access, such as the desktop app's Chat tab. `wiki setup chat` adds it there. |
 | `wiki news` | What's new in llm-wiki since you last looked. `wiki update` prints it too, and `wiki status` says when there's something new. `--all` prints everything. |
-| `wiki setup copilot-cowork` | Puts a skill in your OneDrive that lets Microsoft Copilot Cowork change code through runs on your machine. [Set up with another agent](other-agents.md) has how it works. |
-| `wiki relay run`, `scan`, `mr`, `review`, `apply` | Run Copilot Cowork's deliverables on your machine from a checked local copy, share a repository or a merge request with it through OneDrive, save its reviews, and keep a proven patch. [Set up with another agent](other-agents.md) has how it works. |
 | `wiki setup microsoft-copilot` | A Microsoft 365 Copilot agent that reads a wiki repository on GitHub. [Set up with another agent](other-agents.md) has what it needs. |
 | `wiki compile <wiki>`, `on`, `off` | An experiment: a headless agent compiles a wiki's waiting notes, so your session doesn't start with them. `on` makes session start do it in the background. Off by default. `wiki compile` alone shows the last runs. |
 | `wiki lock`, `wiki log`, `wiki sync` | The compile lock, a log entry, and commit-pull-push for one wiki. With no wiki named, `sync` uses this repository's. Mostly for agents. |

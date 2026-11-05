@@ -180,8 +180,6 @@ Usage: $WIKI_CMD <command> [options]
   tour [--clean] [--dir DIR]
                        A hands-on tour for your agent, on a made-up project in a sandbox.
                        Ask your agent to run it and follow what it prints.
-  relay run|scan|mr|review|apply
-                       Run Microsoft Copilot Cowork's deliverables on this machine, and share code with it. relay --help has more.
   report [--since R]   Weekly look: tokens per project, what the wikis gained, hit
                        rate, and what needs you. An agent writes it up.
   stats [range]        How often wikis answered the questions sessions checked them for (default 30d).
@@ -4901,7 +4899,7 @@ EOF
 # Tab completion. `completion zsh|bash` prints a small script for the shell, which
 # asks `__complete` for candidates on every Tab. The candidates live here, so a
 # plugin update can't leave completion stale.
-COMMANDS="setup init new update start collections deps permissions seed harvest capture lock compile log sync index lint pending cover which status find stale patterns skills tips report stats feedback news tour mcp relay delegation upgrade unlock claude link journal standup completion"
+COMMANDS="setup init new update start collections deps permissions seed harvest capture lock compile log sync index lint pending cover which status find stale patterns skills tips report stats feedback news tour mcp delegation upgrade unlock claude link journal standup completion"
 RANGES="lastworkday yesterday today week lastweek 7d 14d 30d"
 
 wiki_names() {
@@ -4933,7 +4931,7 @@ cmd_complete() {
     --format) printf 'standup\nsummary\ndetailed\n'; return 0 ;;
     --mute | --unmute) printf '%s\n' $TIPS_ORDER; return 0 ;;
     --wiki) wiki_names; return 0 ;;
-    --repo | --from | --dir | --also | --clones | --reviews) echo __dirs__; return 0 ;;
+    --repo | --from | --dir) echo __dirs__; return 0 ;;
   esac
   case "$cmd" in
     new | unlock | pending | find) [ "$i" -eq 2 ] && wiki_names; [ "$cmd" = pending ] && echo --show ;;
@@ -4957,23 +4955,6 @@ cmd_complete() {
     tips) printf -- '--mute\n--unmute\n' ;;
     report) printf -- '--since\n' ;;
     news) printf -- '--all\n' ;;
-    relay)
-      # --dir FOLDER can come first.
-      local sub="${2:-}" at=2
-      if [ "$i" -gt 2 ] && [ "$sub" = --dir ]; then sub="${4:-}"; at=4; fi
-      if [ "$i" -le "$at" ]; then
-        printf 'run\nscan\nmr\nreview\napply\n'
-        [ "$at" -eq 4 ] || echo --dir
-      else
-        case "$sub" in
-          run) printf -- '--expect\n--no-install\n' ;;
-          scan) printf -- '--branch\n--no-wiki\n' ;;
-          mr) printf -- '--repo\n--also\n--go-prefix\n--checks\n--no-checks\n--no-wiki\n' ;;
-          review) echo --expect ;;
-          apply) printf -- '--repo\n--expect\n' ;;
-        esac
-      fi
-      ;;
     stats) printf '%s\n' $RANGES ;;
     delegation)
       if [ "$i" -eq 2 ]; then printf 'off\nask\nauto\nlog\n'
@@ -4984,7 +4965,7 @@ cmd_complete() {
     init) echo --git ;;
     completion) printf 'zsh\nbash\n' ;;
     setup)
-      printf -- '--new\n--list\ncollection\ngit\ngit.identity\nclaude\nplugin\npermissions\ncollections\ntools\nantigravity\ncodex\ncursor\nfeedback\nchat\nupgrade\nskills\ncompletion\ndelegation\njournal\nmicrosoft-copilot\ncopilot-cowork\n'
+      printf -- '--new\n--list\ncollection\ngit\ngit.identity\nclaude\nplugin\npermissions\ncollections\ntools\nantigravity\ncodex\ncursor\nfeedback\nchat\nupgrade\nskills\ncompletion\ndelegation\njournal\nmicrosoft-copilot\n'
       for k in $JOURNAL_KEYS; do printf 'journal.%s\n' "$k"; done
       ;;
     journal)
@@ -6348,7 +6329,7 @@ setup_list() {
   [ "$(agy_state)" = none ] || tools="$tools | antigravity"
   [ "$(codex_state)" = none ] || tools="$tools | codex"
   [ "$(cursor_state)" = none ] || tools="$tools | cursor"
-  echo "Or a section:  $WIKI_CMD setup collection | collections | tools | git | claude | plugin | permissions$tools | upgrade | skills | completion | delegation | feedback | chat | journal | microsoft-copilot | copilot-cowork"
+  echo "Or a section:  $WIKI_CMD setup collection | collections | tools | git | claude | plugin | permissions$tools | upgrade | skills | completion | delegation | feedback | chat | journal | microsoft-copilot"
 }
 
 # Antigravity's grants: what lets Gemini read and write the wikis and run wiki.sh
@@ -6599,114 +6580,15 @@ setup_cursor() {
   esac
 }
 
-# Prints the work OneDrive folder, or stops if there's none or several.
-onedrive_folder() {
-  local a found="" dir="" n=0
-  for a in "$HOME"/Library/CloudStorage/OneDrive-*; do
-    [ -d "$a" ] || continue
-    # Cowork needs a work or school account.
-    [ "$(basename "$a")" != OneDrive-Personal ] || continue
-    found="$found
-  $a"
-    dir="$a"
-    n=$((n + 1))
-  done
-  [ "$n" -gt 0 ] || die "no work OneDrive folder in ~/Library/CloudStorage. Sign in to OneDrive, or name the folder with --dir"
-  [ "$n" -eq 1 ] || die "several OneDrive folders. Name one with --dir:$found"
-  printf '%s' "$dir"
-}
-
+# Stubs for one release, for what moved to its own repository. Remove them after that.
 cmd_relay() {
-  local dir=""
-  if [ "${1:-}" = --dir ]; then
-    [ -n "${2:-}" ] || die "--dir needs your OneDrive folder"
-    dir="$2"
-    shift 2
-  fi
-  command -v git >/dev/null 2>&1 || die "relay needs git"
-  case "${1:-}" in
-    run | scan | mr | review | apply)
-      [ -n "$dir" ] || dir="$(onedrive_folder)" || exit 1
-      [ -d "$dir" ] || die "no such folder: $dir"
-      ;;
-  esac
-  # A collection someone chose goes along. Otherwise relay's own wiki.sh calls route by the
-  # repository they're about, not the folder this ran from.
-  if [ -z "$pick" ] && [ -z "${LLM_WIKI_FIXED_DIR:-}" ]; then
-    unset WIKIS_DIR
-  else
-    export WIKIS_DIR
-  fi
-  LLM_WIKI_ONEDRIVE="$dir" WIKI_CMD="$WIKI_CMD" bash "$REPO/scripts/relay.sh" "$@"
-}
-
-# Copies the remote pair-run skill into the OneDrive folder Copilot Cowork reads skills from.
-# One relay setting: its value now, the one you passed, or an answer at a terminal.
-relay_setting() {
-  local file="$1" key="$2" passed="$3" default="$4" question="$5" old answer
-  old="$(sed -n "s/^$key=//p" "$file" 2>/dev/null | tail -n 1)" || old=""
-  answer="$passed"
-  if [ -z "$answer" ] && [ -z "$old" ] && { [ -t 0 ] || [ -n "${LLM_WIKI_TEST_TTY:-}" ]; }; then
-    printf '%s [%s]: ' "$question" "$default" >&2
-    IFS= read -r answer || answer=""
-    answer="${answer:-$default}"
-  fi
-  [ -n "$answer" ] || return 0
-  # shellcheck disable=SC2088
-  case "$answer" in "~/"*) answer="$HOME/${answer#"~/"}" ;; esac
-  mkdir -p "$(dirname "$file")" || die "can't create $(dirname "$file")"
-  { grep -v "^$key=" "$file" 2>/dev/null; echo "$key=$answer"; } >"$file.new" && mv "$file.new" "$file"
+  echo "error: wiki relay is now its own command, relay, from https://github.com/broxgit/llm-relay. Install it as its README says, and run: relay setup. Then use: relay ${*:-run}" >&2
+  exit 1
 }
 
 setup_copilot_cowork() {
-  local dir="" target reviews="" clones="" settings
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --dir)
-        [ -n "${2:-}" ] || die "--dir needs your OneDrive folder"
-        dir="$2"
-        shift 2
-        ;;
-      --reviews)
-        [ -n "${2:-}" ] || die "--reviews needs a folder"
-        reviews="$2"
-        shift 2
-        ;;
-      --clones)
-        [ -n "${2:-}" ] || die "--clones needs a folder"
-        clones="$2"
-        shift 2
-        ;;
-      -h | --help)
-        cat <<EOF
-Usage: $WIKI_CMD setup copilot-cowork [--dir ONEDRIVE_FOLDER] [--reviews FOLDER] [--clones FOLDERS]
-
-Copies the remote-pair-run skill to Documents/Cowork/skills in your work OneDrive, for
-Microsoft Copilot Cowork. It finds OneDrive under ~/Library/CloudStorage. --dir names the
-folder if there are several, or it syncs elsewhere. Run it again to update the skill.
-
---reviews is where $WIKI_CMD relay review saves merge request reviews. --clones is where
-$WIKI_CMD relay mr looks for your clones, with several folders separated by colons. At a
-terminal, it asks for each the first time.
-EOF
-        return 0
-        ;;
-      *) die "setup copilot-cowork: unknown option $1. Try $WIKI_CMD setup copilot-cowork --help" ;;
-    esac
-  done
-  [ -n "$dir" ] || dir="$(onedrive_folder)" || exit 1
-  [ -d "$dir" ] || die "no such folder: $dir"
-  target="$dir/Documents/Cowork/skills/remote-pair-run"
-  mkdir -p "$target" || die "can't create $target"
-  cp "$REPO/cowork/remote-pair-run/SKILL.md" "$REPO/cowork/remote-pair-run/runlib.sh" "$target/" || die "can't copy the skill to $target"
-  echo "installed: $target"
-  settings="${XDG_CONFIG_HOME:-$HOME/.config}/llm-wiki/relay"
-  relay_setting "$settings" reviews "$reviews" "$HOME/mr-reviews" "Where should merge request reviews go?"
-  relay_setting "$settings" clones "$clones" "$HOME/dev" "Where are your clones?"
-  if [ -f "$settings" ]; then
-    sed 's/^/relay setting: /' "$settings"
-  fi
-  echo "Cowork finds it when a new session starts, but its copy can lag OneDrive by several minutes, so give it 10. Ask it to change code in a repository, and it will give you a $WIKI_CMD relay run command. Run that in Apple's Terminal: macOS can refuse other terminal apps."
+  echo "error: wiki setup copilot-cowork is now relay setup, from https://github.com/broxgit/llm-relay. Install it as its README says, and run: relay setup" >&2
+  exit 1
 }
 
 cmd_setup() {
@@ -6716,11 +6598,7 @@ cmd_setup() {
     command -v python3 >/dev/null 2>&1 || die "setup microsoft-copilot needs python3"
     exec python3 "$REPO/scripts/microsoft_copilot_setup.py" "$@"
   fi
-  if [ "${1:-}" = copilot-cowork ]; then
-    shift
-    setup_copilot_cowork "$@"
-    return $?
-  fi
+  [ "${1:-}" != copilot-cowork ] || setup_copilot_cowork
   for a in "$@"; do
     case "$a" in
       --new) SETUP_MODE=new ;;
@@ -6737,8 +6615,6 @@ Usage: $WIKI_CMD setup [--new | --list | <section> | <setting>]
   setup chat --yes Add the Chat tab's server without asking, for an agent the user told to. The app must be closed.
   setup microsoft-copilot --repo OWNER/REPO
                    Set up a Microsoft 365 Copilot agent that reads a wiki repository on GitHub. --help for its options.
-  setup copilot-cowork
-                   Put the remote-pair-run skill in your OneDrive, so Copilot Cowork can change code through runs on this machine.
   setup <setting>  Just one setting: git.identity, or journal.<key> such as journal.format.
                    A bare journal key works too: setup format.
 EOF
