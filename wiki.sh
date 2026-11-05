@@ -26,7 +26,8 @@ SHARED="global"
 # its remote URL. Globs; the first collection with a matching rule wins. WIKIS_DIR,
 # when set, overrides all of it, and --collection NAME picks one by name.
 COLLECTIONS_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/llm-wiki/collections"
-DEFAULT_WIKIS="$HOME/wikis"
+# LLM_WIKI_DEFAULT_DIR is for the tour's sandbox, so its command has no way to the real collection.
+DEFAULT_WIKIS="${LLM_WIKI_DEFAULT_DIR:-$HOME/wikis}"
 
 # collections: "name<TAB>folder<TAB>rules" per collection, the default first.
 collections() {
@@ -3445,7 +3446,7 @@ tour_build() {
   w="$dir/wiki"
   {
     printf '#!/usr/bin/env bash\n# The tour sandbox'"'"'s command. Everything it does stays in this folder.\n'
-    printf 'export WIKIS_DIR=%q XDG_CONFIG_HOME=%q XDG_STATE_HOME=%q LLM_WIKI_CMD=%q\n' "$wikis" "$dir/.config" "$dir/.state" "$w"
+    printf 'export WIKIS_DIR=%q LLM_WIKI_DEFAULT_DIR=%q XDG_CONFIG_HOME=%q XDG_STATE_HOME=%q LLM_WIKI_CMD=%q\n' "$wikis" "$wikis" "$dir/.config" "$dir/.state" "$w"
     printf 'exec %q "$@"\n' "$REPO/wiki.sh"
   } > "$w"
   chmod +x "$w"

@@ -34,7 +34,7 @@ It tells you briefly what it wrote. It asks before resolving a contradiction or 
 
 ## The tour
 
-Ask your agent for the tour and it teaches you llm-wiki by doing it: you ask a made-up project's wiki a question, save a decision, watch notes become pages, rule on a contradiction, and see a wrong page get caught against the code. The short version takes about 10 minutes. Say "skip", "next" or "stop" whenever you like, or ask for one topic.
+Ask your agent for the tour and it shows you what llm-wiki does for you, on a made-up project: a new session that already knows why, a stale fact caught against the code, a decision kept without you writing it down, and a repeated correction turned into a rule. Those four take about 10 minutes. The rest covers your other projects, your standup and your real setup. Say "skip", "next" or "stop" whenever you like, or ask for one topic.
 
 Any agent that can run commands can do it. If it doesn't know the tour, say:
 

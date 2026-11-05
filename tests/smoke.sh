@@ -1619,10 +1619,20 @@ cp "$TP" "$T/tour-patterns"
 echo "- seen: 2026-01-20 harbor-api raw/2026-01-20-153000-rate-limit-decision.md" >> "$TP"
 expect "and the compile's sighting makes it ready, as the guide says" "READY" tw patterns
 cp "$T/tour-patterns" "$TP"
+case "$out" in *"Your coding agent forgets everything"*"1. A new session already knows why"*) ok "the guide opens with what llm-wiki is for, and what you get" ;; *) bad "the guide opens with what llm-wiki is for, and what you get" "$out" ;; esac
 check "a capture works" tw capture harbor-api tour-note --file "$TD/code/harbor-api/README.md"
+n="$(find "$TD/wikis/harbor-api/raw" -name '*tour-note*' -exec basename {} \;)"
+tw log harbor-api ingest "Tour note" --source "raw/$n" >/dev/null
+n="$(tw pending harbor-api | grep -c '^raw/')"
+if [ "$n" = 2 ]; then ok "compiling one note leaves the planted ones waiting, as chapter 2 needs"; else bad "compiling one note leaves the planted ones waiting, as chapter 2 needs ($n)"; fi
 expect "and a sync commits it, with no remote" "no remote" tw sync harbor-api -m "harbor-api: tour"
 check "nothing is left uncommitted in the sandbox" test -z "$(git -C "$TD/wikis" status --porcelain)"
 check "nothing lands in the home folder" test -z "$(find "$TH" -type f ! -path "$TD/*")"
+mkdir -p "$TH/wikis" && cp -R "$TD/wikis/billing" "$TH/wikis/real-one"
+expect "a real collection is there to find" "real-one" env -u WIKIS_DIR -u XDG_CONFIG_HOME -u XDG_STATE_HOME HOME="$TH" "$W" status
+lacks "the sandbox's status doesn't see it" "real-one\|also:" tw status
+lacks "and --collection can't reach it" "real-one" tw status --collection default
+rm -rf "$TH/wikis"
 check "a repeat keeps the sandbox, so a tour can pick up later" tour_again
 mkdir -p "$T/not-a-tour" && echo keep > "$T/not-a-tour/keep"
 expect "clean refuses a folder that isn't a sandbox" "isn't a tour's sandbox" tour --dir "$T/not-a-tour" --clean
