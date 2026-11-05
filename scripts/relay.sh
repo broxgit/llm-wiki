@@ -10,6 +10,7 @@
 # Run through wiki.sh, which finds the OneDrive folder and sets LLM_WIKI_ONEDRIVE.
 # shellcheck disable=SC2034  # RUNLIB_DIR and RUNLIB_EXPECT are read by runlib.sh.
 set -u
+# Feed a loop with a heredoc holding $(...), as wiki.sh's header explains. Empty output gives one blank line.
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUNLIB="$REPO/cowork/remote-pair-run/runlib.sh"
@@ -111,10 +112,13 @@ manifest_paths() {
 check_manifest_paths() {
   local p
   while IFS= read -r p; do
+    [ -n "$p" ] || continue
     case "/$p/" in
       */../* | //*) die "the manifest names a path outside its folder: $p" ;;
     esac
-  done < <(manifest_paths "$1")
+  done <<EOF
+$(manifest_paths "$1")
+EOF
 }
 
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -189,9 +193,12 @@ try_copy() {
   fi
   check_manifest_paths "$dst"
   while IFS= read -r p; do
+    [ -n "$p" ] || continue
     mkdir -p "$dst/$(dirname "$p")" || { echo "can't write to $dst"; return 1; }
     read_file "$src/$p" "$dst/$p" "$p" || bad=1
-  done < <(manifest_paths "$dst")
+  done <<EOF
+$(manifest_paths "$dst")
+EOF
   [ -z "$bad" ] || return 1
   RUNLIB_DIR="$dst"
   _runlib_sync_problems
@@ -267,12 +274,15 @@ show_deliverable() {
   echo "Version:     $version"
   echo "Files:"
   while IFS= read -r p; do
+    [ -n "$p" ] || continue
     size="$(wc -c <"$copy/$p" | tr -d ' ')"
     case "$p" in
       runlib.sh) echo "  $p ($size bytes, $same)" ;;
       *) echo "  $p ($size bytes)" ;;
     esac
-  done < <(manifest_paths "$copy")
+  done <<EOF
+$(manifest_paths "$copy")
+EOF
   echo
 }
 
@@ -280,6 +290,7 @@ view_deliverable() {
   local copy="$1" p
   {
     while IFS= read -r p; do
+      [ -n "$p" ] || continue
       # A runlib.sh that differs from this machine's is the one to read, so only a match is skipped.
       if [ "$p" = runlib.sh ] && cmp -s "$copy/$p" "$RUNLIB"; then
         printf "\n===== %s: same as this machine's copy, not shown =====\n" "$p"
@@ -287,7 +298,9 @@ view_deliverable() {
       fi
       printf '\n===== %s =====\n' "$p"
       cat "$copy/$p"
-    done < <(manifest_paths "$copy")
+    done <<EOF
+$(manifest_paths "$copy")
+EOF
   } | ${PAGER:-less}
 }
 
@@ -427,7 +440,7 @@ find_branch() {
   SCAN_SOURCE="your local $want, not on origin"
 }
 
-# collect_wiki <repository> <no-wiki flag>: copies the wiki that covers a repository into the
+# collect_wiki <folder> <repository name, or empty for the folder's own> <no-wiki flag>: copies the wiki that covers a repository into the
 # scratch folder, and sets WIKI_LINE, WIKI_NAME, WIKI_PAGES and WIKI_PART for the caller.
 # Only that wiki. The shared wiki can hold personal rules, so it stays out.
 collect_wiki() {
@@ -436,11 +449,12 @@ collect_wiki() {
   WIKI_NAME=""
   WIKI_PAGES=0
   WIKI_PART=""
-  if [ -n "$2" ]; then
+  if [ -n "$3" ]; then
     WIKI_LINE="left out with --no-wiki"
     return 0
   fi
-  wiki="$("$REPO/wiki.sh" which "$1" 2>/dev/null)" || wiki=""
+  # From the repository's folder, so wiki.sh picks the collection that holds its wiki.
+  wiki="$(cd "$1" && "$REPO/wiki.sh" which ${2:+"$2"} 2>/dev/null)" || wiki=""
   # wiki which shortens the path to a literal ~/.
   # shellcheck disable=SC2088
   case "$wiki" in "~/"*) wiki="$HOME/${wiki#"~/"}" ;; esac
@@ -541,7 +555,7 @@ cmd_scan() {
     [ -s "$WORK/uncommitted.patch" ] && dirty=yes
   fi
 
-  collect_wiki "$(basename "$root")" "$no_wiki"
+  collect_wiki "$root" "" "$no_wiki"
   {
     echo "LLM-WIKI RELAY SCAN"
     echo "repository: $name"
@@ -741,12 +755,17 @@ find_clone() {
   while IFS= read -r root; do
     [ -d "$root" ] || continue
     while IFS= read -r d; do
+      [ -n "$d" ] || continue
       if is_clone_of "${d%/.git}"; then
         printf '%s' "${d%/.git}"
         return 0
       fi
-    done < <(find "$root" -maxdepth 7 \( -name node_modules -o -name vendor -o -name .terraform \) -prune -o -type d -name .git -print -prune 2>/dev/null)
-  done < <(printf '%s\n' "$CLONES_DIRS" | tr ':' '\n')
+    done <<EOF
+$(find "$root" -maxdepth 7 \( -name node_modules -o -name vendor -o -name .terraform \) -prune -o -type d -name .git -print -prune 2>/dev/null)
+EOF
+  done <<EOF
+$(printf '%s\n' "$CLONES_DIRS" | tr ':' '\n')
+EOF
   return 1
 }
 
@@ -767,6 +786,7 @@ collect_modules() {
   wanted="$WORK/modules.wanted"
   : >"$wanted"
   while IFS= read -r f; do
+    [ -n "$f" ] || continue
     git -C "$clone" show "$commit:$f" >"$WORK/go.mod.one" 2>/dev/null || continue
     MODULES_LINE=""
     own="$prefixes"
@@ -780,7 +800,9 @@ collect_modules() {
           case "$mod" in "$p" | "$p"/*) echo "$mod $ver" >>"$wanted" ;; esac
         done
       done
-  done < <(git -C "$clone" ls-tree -r --name-only "$commit" | grep -E '(^|/)go\.mod$' | grep -vE '(^|/)vendor/')
+  done <<EOF
+$(git -C "$clone" ls-tree -r --name-only "$commit" | grep -E '(^|/)go\.mod$' | grep -vE '(^|/)vendor/')
+EOF
   [ -n "$MODULES_LINE" ] || MODULES_LINE="none of its dependencies are yours"
   [ -s "$wanted" ] || return 0
   if ! command -v go >/dev/null 2>&1; then
@@ -800,7 +822,9 @@ collect_modules() {
       echo "$mod $ver: couldn't be downloaded here" >>"$WORK/go-modules/index.txt"
       bad=$((bad + 1))
     fi
-  done < <(LC_ALL=C sort -u "$wanted")
+  done <<EOF
+$(LC_ALL=C sort -u "$wanted")
+EOF
   # The module cache is read-only, and the scratch folder has to be removable.
   chmod -R u+w "$WORK/go-modules"
   MODULES_LINE="$got included, $bad couldn't be downloaded, listed in go-modules/index.txt"
@@ -904,6 +928,7 @@ run_checks() {
     echo "ran on: $(uname -sm), $(go version 2>&1 | head -n 1)"
   } >"$WORK/mr/checks/summary.txt"
   while IFS= read -r f; do
+    [ -n "$f" ] || continue
     d="$(dirname "$f")"
     slug="$(printf '%s' "$d" | tr -c 'A-Za-z0-9._-' '-')"
     [ "$d" != . ] || slug=root
@@ -913,7 +938,9 @@ run_checks() {
     run_check "$tree/$d" "${label}go vet" "$WORK/mr/checks/$slug-go-vet.txt" go vet ./...
     run_check "$tree/$d" "${label}go test" "$WORK/mr/checks/$slug-go-test.txt" go test ./...
     run_check "$tree/$d" "${label}go mod tidy -diff" "$WORK/mr/checks/$slug-go-mod-tidy.txt" go mod tidy -diff
-  done < <(git -C "$tree" ls-files | grep -E '(^|/)go\.mod$' | grep -vE '(^|/)(vendor|testdata)/')
+  done <<EOF
+$(git -C "$tree" ls-files | grep -E '(^|/)go\.mod$' | grep -vE '(^|/)(vendor|testdata)/')
+EOF
   changed="$(git -C "$tree" status --porcelain --untracked-files=no)"
   if [ -n "$changed" ]; then
     CHECKS_BAD=$((CHECKS_BAD + 1))
@@ -994,7 +1021,9 @@ pack_mr() {
     [ -n "$n" ] || continue
     glab_call api "projects/:fullpath/merge_requests/$n/discussions?per_page=100" --repo "$MR_PROJECT" >"$WORK/mr/related-$n-discussions.json" 2>/dev/null ||
       rm -f "$WORK/mr/related-$n-discussions.json"
-  done < <(related_iids "$WORK/mr/view.json" "$MR_IID")
+  done <<EOF
+$(related_iids "$WORK/mr/view.json" "$MR_IID")
+EOF
 
   source="$(json_get "$WORK/mr/view.json" source_branch)"
   target="$(json_get "$WORK/mr/view.json" target_branch)"
@@ -1034,7 +1063,7 @@ pack_mr() {
     existing="yes, in mr/existing-review.md. Keep the user's edits to it"
   fi
   collect_modules "$clone" "$commit" "$prefixes"
-  collect_wiki "$repo" "$no_wiki"
+  collect_wiki "$clone" "$repo" "$no_wiki"
   if want_checks "$checks_mode" "$clone" "$commit" "$(json_get "$WORK/mr/view.json" author.name)"; then
     run_checks "$commit"
   fi
@@ -1191,7 +1220,9 @@ review_files() {
         echo "$t/$f"
         ;;
     esac
-  done < <(manifest_paths "$1")
+  done <<EOF
+$(manifest_paths "$1")
+EOF
 }
 
 # A review of an old head can still be worth keeping, so this warns and goes on.
@@ -1328,7 +1359,9 @@ cmd_apply() {
   while IFS= read -r p; do
     case "$p" in *.patch) patches="$patches$p
 " ;; esac
-  done < <(manifest_paths "$copy")
+  done <<EOF
+$(manifest_paths "$copy")
+EOF
   [ -n "$patches" ] || die "that deliverable has no patches"
   echo
   echo "Deliverable: $task/$(basename "$SRC")"

@@ -155,7 +155,7 @@ Usage: $WIKI_CMD <command> [options]
   permissions          Print the Claude Code allow rules for the wiki commands that
                        write, and Antigravity's grants when it's installed. wiki setup
                        permissions and wiki setup antigravity add them.
-  which <repo>         Print the wiki that covers a repository.
+  which [repo]         Print the wiki that covers a repository, by default the one you're in.
   status               List wikis: handbook version, notes waiting, lock state.
   find <word>          Search every wiki's index, then page text, for a word.
   deps [--all] [--write]
@@ -214,6 +214,8 @@ EOF
 }
 
 die() { echo "error: $*" >&2; exit 1; }
+# need_value "$@", in a flag's arm: without it, shift fails and set -e ends the script with no message.
+need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 
 # Show a path with ~ in place of the home folder. The tilde is meant literally.
 # shellcheck disable=SC2088
@@ -565,8 +567,8 @@ cmd_capture() {
   local wiki="" slug="" copy="" file="" root stamp name ext stem n=2 tmp
   while [ $# -gt 0 ]; do
     case "$1" in
-      --copy) copy="${2:-}"; shift 2 ;;
-      --file) file="${2:-}"; shift 2 ;;
+      --copy) need_value "$@"; copy="${2:-}"; shift 2 ;;
+      --file) need_value "$@"; file="${2:-}"; shift 2 ;;
       -*) die "capture options: --file NOTE, --copy FILE" ;;
       *) if [ -z "$wiki" ]; then wiki="$1"; elif [ -z "$slug" ]; then slug="$1"; else die "capture takes a wiki and a slug"; fi; shift ;;
     esac
@@ -678,10 +680,10 @@ cmd_log() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --source) v="${2:-}"; v="${v#raw/}"; [ -n "$v" ] || die "--source takes raw/<file>"; lines="$lines- source: raw/$v"$'\n'; shift 2 ;;
-      --created) lines="$lines- created: ${2:-}"$'\n'; nc=$((nc + 1)); shift 2 ;;
-      --updated) lines="$lines- updated: ${2:-}"$'\n'; nu=$((nu + 1)); shift 2 ;;
-      --fixed) lines="$lines- fixed: ${2:-}"$'\n'; nf=$((nf + 1)); shift 2 ;;
-      --reported) lines="$lines- reported: ${2:-}"$'\n'; nr=$((nr + 1)); shift 2 ;;
+      --created) need_value "$@"; lines="$lines- created: ${2:-}"$'\n'; nc=$((nc + 1)); shift 2 ;;
+      --updated) need_value "$@"; lines="$lines- updated: ${2:-}"$'\n'; nu=$((nu + 1)); shift 2 ;;
+      --fixed) need_value "$@"; lines="$lines- fixed: ${2:-}"$'\n'; nf=$((nf + 1)); shift 2 ;;
+      --reported) need_value "$@"; lines="$lines- reported: ${2:-}"$'\n'; nr=$((nr + 1)); shift 2 ;;
       --corrections | --conflicts | --patterns)
         v="${2:-}"
         case "$v" in '' | *[!0-9]*) die "$1 takes a number" ;; esac
@@ -776,7 +778,7 @@ cmd_sync() {
   local wiki="" msg="" root repo path top err
   while [ $# -gt 0 ]; do
     case "$1" in
-      -m) msg="${2:-}"; shift 2 ;;
+      -m) need_value "$@"; msg="${2:-}"; shift 2 ;;
       -*) die "sync options: -m MESSAGE" ;;
       *) wiki="$1"; shift ;;
     esac
@@ -977,6 +979,12 @@ elif changed and check:
 PY
 }
 
+# open_callouts <folder>: file:line for each open Check or Conflict, as grep -r would print them.
+# An example in a code fence isn't open.
+open_callouts() {
+  find "$1" -type f -name '*.md' -exec awk 'FNR == 1 { fence = 0 } /^```/ { fence = !fence; next } !fence && /^> \*\*(Check|Conflict):\*\*/ { print FILENAME ":" $0 }' {} + 2>/dev/null
+}
+
 # lint <wiki>... [--all]
 cmd_lint() {
   local all=0 roots=() w d lag map
@@ -1068,9 +1076,12 @@ for root in roots:
                 add("broken citation", f"{rel} -> {w}:{path}")
             elif name == shared and w != shared and not source:
                 add("shared page cites a project page: check it stands on its own", f"{rel} -> {w}:{path}")
+        fence = False
         for line in body.splitlines():
+            if line.startswith("```"):
+                fence = not fence
             m = re.match(r"^> \*\*(Check|Conflict):\*\*", line)
-            if m and not source:
+            if m and not source and not fence:
                 add("open " + m.group(1), rel)
     # The index against the pages.
     ipath = os.path.join(root, "index.md")
@@ -1270,7 +1281,7 @@ cmd_harvest() {
   local from="$HOME/.claude/projects" dry=0 dir f type wiki slug stamp dest n=0 same=0 g d man
   while [ $# -gt 0 ]; do
     case "$1" in
-      --from) from="${2:-}"; shift 2 ;;
+      --from) need_value "$@"; from="${2:-}"; shift 2 ;;
       --dry-run) dry=1; shift ;;
       *) die "harvest options: --from DIR, --dry-run" ;;
     esac
@@ -1367,8 +1378,8 @@ cmd_seed() {
   local n=0 more=0 already=0 big="" list=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --wiki) wiki="${2:-}"; shift 2 ;;
-      --max) max="${2:-}"; shift 2 ;;
+      --wiki) need_value "$@"; wiki="${2:-}"; shift 2 ;;
+      --max) need_value "$@"; max="${2:-}"; shift 2 ;;
       --dry-run) dry=1; shift ;;
       -*) die "seed options: --wiki NAME, --max N, --dry-run" ;;
       *) [ -z "$src" ] || die "seed takes one repository"; src="$1"; shift ;;
@@ -2934,8 +2945,8 @@ feedback_add() {
   [ $# -lt 2 ] || shift 2
   while [ $# -gt 0 ]; do
     case "$1" in
-      --agent) agent="${2:-}"; shift 2 ;;
-      --file) file="${2:-}"; shift 2 ;;
+      --agent) need_value "$@"; agent="${2:-}"; shift 2 ;;
+      --file) need_value "$@"; file="${2:-}"; shift 2 ;;
       *) die "feedback add <kind> \"<summary>\" [--agent \"<agent, model>\"] [--file NOTE]" ;;
     esac
   done
@@ -3563,8 +3574,8 @@ cmd_journal_note() {
   local day="" at=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --day) day="${2:-}"; shift 2 ;;
-      --at) at="${2:-}"; shift 2 ;;
+      --day) need_value "$@"; day="${2:-}"; shift 2 ;;
+      --at) need_value "$@"; at="${2:-}"; shift 2 ;;
       *) break ;;
     esac
   done
@@ -3582,9 +3593,9 @@ journal_backfill() {
   local since="14d" until="" from="$HOME/.claude/projects" today start out
   while [ $# -gt 0 ]; do
     case "$1" in
-      --since) since="${2:-}"; shift 2 ;;
-      --until) until="${2:-}"; shift 2 ;;
-      --from) from="${2:-}"; shift 2 ;;
+      --since) need_value "$@"; since="${2:-}"; shift 2 ;;
+      --until) need_value "$@"; until="${2:-}"; shift 2 ;;
+      --from) need_value "$@"; from="${2:-}"; shift 2 ;;
       --done)
         # The agent has written the entries. Removing the digest here, not with an
         # agent's rm, keeps a safety check from refusing it as destructive.
@@ -3856,14 +3867,14 @@ cmd_standup() {
   local since="" until="" day="" fmt="" save="" only="" max="" arg
   while [ $# -gt 0 ]; do
     case "$1" in
-      --since) since="${2:-}"; shift ;;
-      --until) until="${2:-}"; shift ;;
-      --day) day="${2:-}"; shift ;;
-      --format) fmt="${2:-}"; shift ;;
-      --only) only="${2:-}"; shift ;;
-      --exclude) STANDUP_EXCLUDE="${STANDUP_EXCLUDE:+$STANDUP_EXCLUDE,}${2:-}"; shift ;;
+      --since) need_value "$@"; since="${2:-}"; shift ;;
+      --until) need_value "$@"; until="${2:-}"; shift ;;
+      --day) need_value "$@"; day="${2:-}"; shift ;;
+      --format) need_value "$@"; fmt="${2:-}"; shift ;;
+      --only) need_value "$@"; only="${2:-}"; shift ;;
+      --exclude) need_value "$@"; STANDUP_EXCLUDE="${STANDUP_EXCLUDE:+$STANDUP_EXCLUDE,}${2:-}"; shift ;;
       --save) save=yes ;;
-      --max) max="${2:-}"; shift ;;
+      --max) need_value "$@"; max="${2:-}"; shift ;;
       *) die "standup options: --since X, --until DATE, --day DATE, --format standup|summary|detailed, --only GLOB, --exclude GLOB, --max N, --save" ;;
     esac
     shift
@@ -4039,7 +4050,7 @@ EOF2
     w="${w%/}"; is_wiki "$w" || continue
     excluded "${w##*/}" && continue
     [ -d "$w/wiki" ] || continue
-    lines="$(grep -rhE '^> \*\*(Check|Conflict):\*\*' "$w/wiki" 2>/dev/null | head -n 5 | sed "s/^> /- ${w##*/}: /" || true)"
+    lines="$(open_callouts "$w/wiki" | sed 's/^[^:]*://' | head -n 5 | sed "s/^> /- ${w##*/}: /" || true)"
     if [ -n "$lines" ]; then any=1; printf '%s\n' "$lines" >> "$out"; fi
   done
   [ "$any" = 1 ] || { echo; echo "None."; } >> "$out"
@@ -4429,9 +4440,9 @@ cmd_tips() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --next) mode=next; shift ;;
-      --mute) mode=mute; id="${2:-}"; shift 2 ;;
-      --unmute) mode=unmute; id="${2:-}"; shift 2 ;;
-      --repo) TIP_REPO="${2:-}"; shift 2 ;;
+      --mute) need_value "$@"; mode=mute; id="${2:-}"; shift 2 ;;
+      --unmute) need_value "$@"; mode=unmute; id="${2:-}"; shift 2 ;;
+      --repo) need_value "$@"; TIP_REPO="${2:-}"; shift 2 ;;
       *) die "tips options: --next, --mute ID, --unmute ID, --repo DIR" ;;
     esac
   done
@@ -4503,7 +4514,7 @@ cmd_complete() {
     --format) printf 'standup\nsummary\ndetailed\n'; return 0 ;;
     --mute | --unmute) printf '%s\n' $TIPS_ORDER; return 0 ;;
     --wiki) wiki_names; return 0 ;;
-    --repo | --from) echo __dirs__; return 0 ;;
+    --repo | --from | --dir | --also | --clones | --reviews) echo __dirs__; return 0 ;;
   esac
   case "$cmd" in
     new | unlock | pending | find) [ "$i" -eq 2 ] && wiki_names; [ "$cmd" = pending ] && echo --show ;;
@@ -4526,7 +4537,23 @@ cmd_complete() {
     tips) printf -- '--mute\n--unmute\n' ;;
     report) printf -- '--since\n' ;;
     news) printf -- '--all\n' ;;
-    relay) printf 'run\nscan\nmr\nreview\napply\n--dir\n' ;;
+    relay)
+      # --dir FOLDER can come first.
+      local sub="${2:-}" at=2
+      if [ "$i" -gt 2 ] && [ "$sub" = --dir ]; then sub="${4:-}"; at=4; fi
+      if [ "$i" -le "$at" ]; then
+        printf 'run\nscan\nmr\nreview\napply\n'
+        [ "$at" -eq 4 ] || echo --dir
+      else
+        case "$sub" in
+          run) printf -- '--expect\n--no-install\n' ;;
+          scan) printf -- '--branch\n--no-wiki\n' ;;
+          mr) printf -- '--repo\n--also\n--go-prefix\n--checks\n--no-checks\n--no-wiki\n' ;;
+          review) echo --expect ;;
+          apply) printf -- '--repo\n--expect\n' ;;
+        esac
+      fi
+      ;;
     stats) printf '%s\n' $RANGES ;;
     delegation)
       if [ "$i" -eq 2 ]; then printf 'off\nask\nauto\nlog\n'
@@ -4537,7 +4564,7 @@ cmd_complete() {
     init) echo --git ;;
     completion) printf 'zsh\nbash\n' ;;
     setup)
-      printf -- '--new\n--list\ncollection\ngit\ngit.identity\nclaude\nplugin\npermissions\ncollections\ntools\nantigravity\ncodex\ncursor\nfeedback\nchat\nupgrade\nskills\ndelegation\njournal\n'
+      printf -- '--new\n--list\ncollection\ngit\ngit.identity\nclaude\nplugin\npermissions\ncollections\ntools\nantigravity\ncodex\ncursor\nfeedback\nchat\nupgrade\nskills\ncompletion\ndelegation\njournal\nmicrosoft-copilot\ncopilot-cowork\n'
       for k in $JOURNAL_KEYS; do printf 'journal.%s\n' "$k"; done
       ;;
     journal)
@@ -4632,12 +4659,13 @@ setup_completion() {
 report_tokens_gemini() {
   local from="$AGY_HOME/antigravity/brain"
   [ -d "$from" ] && command -v python3 >/dev/null 2>&1 || return 1
-  python3 - "$from" "$1" "$2" "$(journal_get day_starts)" "$WIKIS_DIR" <<'PY'
-import json, os, re, subprocess, sys
+  python3 - "$from" "$1" "$2" "$(journal_get day_starts)" "$WIKIS_DIR" "$(journal_get exclude)" <<'PY'
+import fnmatch, json, os, re, subprocess, sys
 from datetime import datetime, timedelta, date
 from pathlib import Path
 
-brain, start, end, day_starts, wikis = sys.argv[1:6]
+brain, start, end, day_starts, wikis, exclude = sys.argv[1:7]
+excl = [g for g in exclude.split(",") if g]
 start = date.fromisoformat(start); end = date.fromisoformat(end)
 dh, dm = (int(x) for x in day_starts.split(":"))
 wikis_real = os.path.realpath(wikis)
@@ -4722,7 +4750,7 @@ if os.environ.get("REPORT_USAGE_FILE"):
             # A path can hold a glob or a variable, such as ~/wikis/*/wiki/.
             if (Path(wikis) / w / "AGENTS.md").is_file():
                 uf.write("%s\t%s\n" % (w, s))
-rows = {p: r for p, r in rows.items() if r["new"] or r["out"]}
+rows = {p: r for p, r in rows.items() if (r["new"] or r["out"]) and not any(fnmatch.fnmatch(p, g) for g in excl)}
 if not rows:
     print("No Gemini conversations in this range."); sys.exit()
 def k(n): return f"{n / 1e6:.1f}M" if n >= 1e6 else (f"{n / 1e3:.0f}k" if n >= 1e3 else str(n))
@@ -4744,12 +4772,13 @@ report_tokens() {
     echo "No Claude Code transcripts on this machine${from:+ (or no python3)}, so no token counts."
     return 0
   fi
-  python3 - "$from" "$1" "$2" "$(journal_get day_starts)" "$WIKIS_DIR" "$REPO" <<'PY'
-import json, os, re, subprocess, sys
+  python3 - "$from" "$1" "$2" "$(journal_get day_starts)" "$WIKIS_DIR" "$REPO" "$(journal_get exclude)" <<'PY'
+import fnmatch, json, os, re, subprocess, sys
 from datetime import datetime, timedelta, date
 from pathlib import Path
 
-sess_dir, start, end, day_starts, wikis, repo = sys.argv[1:7]
+sess_dir, start, end, day_starts, wikis, repo, exclude = sys.argv[1:8]
+excl = [g for g in exclude.split(",") if g]
 start = date.fromisoformat(start); end = date.fromisoformat(end)
 dh, dm = (int(x) for x in day_starts.split(":"))
 wikis_real = os.path.realpath(wikis)
@@ -4857,7 +4886,7 @@ if os.environ.get("REPORT_USAGE_FILE"):
             # A path can hold a glob or a variable, such as ~/wikis/*/wiki/.
             if (Path(wikis) / w / "AGENTS.md").is_file():
                 uf.write("%s\t%s\n" % (w, s))
-rows = {p: r for p, r in rows.items() if r["new"] or r["out"]}
+rows = {p: r for p, r in rows.items() if (r["new"] or r["out"]) and not any(fnmatch.fnmatch(p, g) for g in excl)}
 if not rows:
     print("No Claude Code sessions in this range."); sys.exit()
 def k(n): return f"{n / 1e6:.1f}M" if n >= 1e6 else (f"{n / 1e3:.0f}k" if n >= 1e3 else str(n))
@@ -4940,7 +4969,7 @@ report_needs_you() {
     excluded "${d##*/}" && continue
     w="${d##*/}"
     # Each line ends with its fix, as status's To do list does: Run, Ask an agent, or Do.
-    lines="$(grep -rE '^> \*\*(Check|Conflict):\*\*' "$d/wiki" 2>/dev/null | head -n 3 || true)"
+    lines="$(open_callouts "$d/wiki" | head -n 3 || true)"
     if [ -n "$lines" ]; then
       any=1
       while IFS= read -r line; do
@@ -4995,7 +5024,7 @@ cmd_report() {
   local since=7d today start due=0 w
   while [ $# -gt 0 ]; do
     case "$1" in
-      --since) since="${2:-}"; shift 2 ;;
+      --since) need_value "$@"; since="${2:-}"; shift 2 ;;
       --due) due=1; shift ;;
       *) die "report options: --since lastworkday|week|lastweek|7d|DATE, --due" ;;
     esac
@@ -5893,7 +5922,11 @@ setup_list() {
   case "$pending" in *" git "* | *" git.identity "*) echo "(git questions not yet answered on this machine)" ;; esac
   echo
   echo "Change one:    $WIKI_CMD setup journal.<key>   or   $WIKI_CMD setup git.identity"
-  echo "Or a section:  $WIKI_CMD setup git | plugin | claude | upgrade | skills | completion | delegation | journal"
+  local tools=""
+  [ "$(agy_state)" = none ] || tools="$tools | antigravity"
+  [ "$(codex_state)" = none ] || tools="$tools | codex"
+  [ "$(cursor_state)" = none ] || tools="$tools | cursor"
+  echo "Or a section:  $WIKI_CMD setup collection | collections | tools | git | claude | plugin | permissions$tools | upgrade | skills | completion | delegation | feedback | chat | journal | microsoft-copilot | copilot-cowork"
 }
 
 # Antigravity's grants: what lets Gemini read and write the wikis and run wiki.sh
@@ -6175,7 +6208,14 @@ cmd_relay() {
       [ -d "$dir" ] || die "no such folder: $dir"
       ;;
   esac
-  LLM_WIKI_ONEDRIVE="$dir" WIKIS_DIR="$WIKIS_DIR" WIKI_CMD="$WIKI_CMD" bash "$REPO/scripts/relay.sh" "$@"
+  # A collection someone chose goes along. Otherwise relay's own wiki.sh calls route by the
+  # repository they're about, not the folder this ran from.
+  if [ -z "$pick" ] && [ -z "${LLM_WIKI_FIXED_DIR:-}" ]; then
+    unset WIKIS_DIR
+  else
+    export WIKIS_DIR
+  fi
+  LLM_WIKI_ONEDRIVE="$dir" WIKI_CMD="$WIKI_CMD" bash "$REPO/scripts/relay.sh" "$@"
 }
 
 # Copies the remote pair-run skill into the OneDrive folder Copilot Cowork reads skills from.
@@ -6509,7 +6549,13 @@ case "$cmd" in
     ;;
   status) cmd_status ;;
   find) [ -n "$target" ] || die "find needs a word"; cmd_find "$target" ;;
-  which) [ -n "$target" ] || die "which needs a repository name"; cmd_which "$target" ;;
+  which)
+    if [ -z "$target" ]; then
+      target="$(git rev-parse --show-toplevel 2>/dev/null)" || die "which needs a repository name, or to run inside a repository"
+      target="$(repo_name "$target")"
+    fi
+    cmd_which "$target"
+    ;;
   stale) cmd_stale "${target:-90}" ;;
   start) cmd_start ${target:+"$target"} ;;
   upgrade)

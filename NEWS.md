@@ -4,6 +4,19 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. A short paragraph, then lines starting `- ` for what changed and `- Do:` for what to do about it. Add an entry for anything a user would notice, and none for fixes they wouldn't.
 
+## 2026-11-05: Wikis in a second collection get found from anywhere
+
+A second review of the code by Gemini found these, and each one was checked against the code first.
+
+- `wiki relay scan` and `wiki relay mr` send the wiki of the repository they're about, whichever folder you run them from. Run from outside it, with the repository in a second collection, they used to send no wiki and say nothing. A checkout in a renamed folder now finds its wiki too.
+- The Chat tab's `wiki_start` looks through every collection for the repository's wiki, unless you name one.
+- A flag with no value, such as `wiki standup --since`, says so. It used to exit with no message.
+- An example of a `> **Conflict:**` line inside a code fence no longer counts as open in `lint`, `standup` or `report`.
+- `wiki report`'s token tables leave out what your journal's `exclude` setting names.
+- `wiki setup --list` names every section you can use, and tab completion knows `setup copilot-cowork`, `setup microsoft-copilot` and the flags of each `relay` command.
+- `wiki which` with no name covers the repository you're in.
+- Do: `wiki update` brings these in. Nothing else.
+
 ## 2026-11-04: Cowork reviews can see test results and say what they skipped
 
 The first real Cowork review worked with almost no effort, but every finding came from reading code, and its gaps only came out when asked. These changes address both.

@@ -333,6 +333,25 @@ expect "the first word completes to commands" "standup" "$W" __complete 1 st
 expect "journal set completes setting names" "max_commits" "$W" __complete 3 journal set ""
 expect "setup completes the newer sections" "feedback" "$W" __complete 2 setup ""
 expect "and chat" "chat" "$W" __complete 2 setup ""
+for t in collection collections tools git claude plugin permissions antigravity codex cursor upgrade skills completion delegation feedback chat journal microsoft-copilot copilot-cowork; do
+  expect "setup completes $t" "$t" "$W" __complete 2 setup ""
+  case "$t" in
+    antigravity | codex | cursor) ;; # Named only once installed, tested below.
+    *) expect "and setup --list names it" " $t " bash -c "'$W' setup --list | grep '^Or a section:' | sed 's/\$/ /'" ;;
+  esac
+done
+expect "relay completes its subcommands" "review" "$W" __complete 2 relay ""
+expect "and --dir first" "--dir" "$W" __complete 2 relay ""
+expect "relay --dir completes a folder" "__dirs__" "$W" __complete 3 relay --dir ""
+expect "then the subcommands" "scan" "$W" __complete 4 relay --dir /x ""
+expect "relay mr completes its flags" "--no-checks" "$W" __complete 3 relay mr ""
+expect "and after --dir too" "--no-checks" "$W" __complete 5 relay --dir /x mr ""
+expect "relay scan completes its flags" "--branch" "$W" __complete 3 relay scan ""
+lacks "and not another subcommand's" "--no-checks" "$W" __complete 3 relay scan ""
+expect "relay apply completes its flags" "--repo" "$W" __complete 3 relay apply ""
+expect "relay run completes its flags" "--no-install" "$W" __complete 3 relay run ""
+expect "relay review completes its flags" "--expect" "$W" __complete 3 relay review ""
+expect "--also completes a folder" "__dirs__" "$W" __complete 4 relay mr --also ""
 expect "a choice setting completes its values" "summary" "$W" __complete 4 journal set format ""
 expect "tips --mute completes tip names" "share-skill" "$W" __complete 3 tips --mute ""
 expect "upgrade completes wiki names" "demo" "$W" __complete 2 upgrade ""
@@ -372,12 +391,26 @@ now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 } > "$G/transcript_full.jsonl"
 out="$("$W" report 2>&1)"
 case "$out" in *"## Tokens (Gemini in Antigravity)"*"| demo | 1 | 2k | 20k | 400 |"*"don't add to Claude's"*) ok "report adds a separate Gemini token table, by project" ;; *) bad "report adds a separate Gemini token table, by project" "$out" ;; esac
+"$W" journal set exclude demo >/dev/null
+out="$("$W" report 2>&1)"
+case "$out" in *"| demo | 1 |"*) bad "journal exclude leaves a project out of both token tables" "$out" ;; *) ok "journal exclude leaves a project out of both token tables" ;; esac
+"$W" journal set exclude "" >/dev/null
 rm -rf "$HOME/.gemini"
 for i in 01 02 03 04 05 06 07 08 09 10; do printf 'Captured: %s\n\nA note.\n' "$(date -u +%Y-%m-%d)" > "$WIKIS_DIR/global/raw/$(date -u +%Y-%m-%d)-1200$i-busy-$i.md"; done
 expect "a busy week with no corrections becomes a Needs you item" "may have gone to its own memory" "$W" report
 printf 'Captured: %s\n\nFeedback: correction | everywhere | Ask before pushing.\n' "$(date -u +%Y-%m-%d)" > "$WIKIS_DIR/global/raw/$(date -u +%Y-%m-%d)-120099-feedback.md"
 lacks "and goes away once one is recorded" "may have gone to its own memory" "$W" report
 rm -f "$WIKIS_DIR"/global/raw/*-busy-*.md "$WIKIS_DIR"/global/raw/*-120099-feedback.md
+# An example of a callout, in a code fence, isn't an open one.
+printf 'An example:\n\n```markdown\n> **Conflict:** only an example.\n```\n' > "$WIKIS_DIR/demo/wiki/fenced.md"
+lacks "a fenced callout stays out of the report" "only an example" "$W" report
+lacks "and the standup" "only an example" "$W" standup --since 7d
+lacks "and lint" "open Conflict" "$W" lint demo
+printf '\n> **Check:** a real one after the fence.\n' >> "$WIKIS_DIR/demo/wiki/fenced.md"
+expect "one after the fence still counts in the report" "a real one after the fence" "$W" report
+expect "and the standup" "a real one after the fence" "$W" standup --since 7d
+expect "and lint" "open Check" "$W" lint demo
+rm -f "$WIKIS_DIR/demo/wiki/fenced.md"
 printf '> **Conflict:** raw/a.md says X. raw/b.md says Y. Unresolved.\n' >> "$WIKIS_DIR/demo/wiki/conflict-test.md"
 printf '\n## Wrap errors\n- kind: review\n- rule: Wrap errors.\n- status: proposed 2026-10-20\n' >> "$WIKIS_DIR/demo/patterns.md"
 out="$("$W" report 2>&1)"
@@ -770,6 +803,7 @@ section "Antigravity plugin"
 lacks "without Antigravity, setup --list says nothing about it" "antigravity" "$W" setup --list
 mkdir -p "$HOME/.gemini"
 expect "with Antigravity, setup --list shows the plugin missing" "plugin missing" "$W" setup --list
+expect "and names the section" "| antigravity |" "$W" setup --list
 expect "and setup --new would ask about it" "antigravity" bash -c "'$W' setup --list; true"
 out="$(printf '{"workspacePaths":["%s"],"conversationId":"c1"}' "$T/projects/web" | "$W" __agy-start)"
 msg="$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["injectSteps"][0]["systemMessage"]["systemMessage"])' 2>&1)"
@@ -821,6 +855,7 @@ section "Codex plugin"
 lacks "without Codex, setup --list says nothing about it" "codex" "$W" setup --list
 mkdir -p "$HOME/.codex"
 expect "with Codex, setup --list shows the plugin missing" "codex               plugin missing" "$W" setup --list
+expect "and names the section" "| codex |" "$W" setup --list
 codex_reply() { python3 -c 'import json,sys; d=json.load(sys.stdin)["hookSpecificOutput"]; print(d["hookEventName"]); print(d["additionalContext"])' 2>&1; }
 msg="$(printf '{"cwd":"%s","hook_event_name":"SessionStart","source":"startup"}' "$T/projects/web" | "$W" __codex-start | codex_reply)"
 case "$msg" in "SessionStart"*"wiki: "*"/demo, for the repository web"*"===== Waiting to be compiled"*) ok "the hook runs start for the session's folder and replies with additionalContext" ;; *) bad "the hook runs start for the session's folder and replies with additionalContext" "$msg" ;; esac
@@ -874,6 +909,7 @@ section "Cursor"
 lacks "without Cursor, setup --list says nothing about it" "cursor" "$W" setup --list
 mkdir -p "$HOME/.cursor"
 expect "with Cursor and no Claude Code plugin, setup --list shows the hook missing" "cursor              hook missing" "$W" setup --list
+expect "and names the section" "| cursor |" "$W" setup --list
 msg="$(printf '{"workspace_roots":["%s"],"hook_event_name":"sessionStart"}' "$T/projects/web" | "$W" __cursor-start | python3 -c 'import json,sys; print(json.load(sys.stdin)["additional_context"])' 2>&1)"
 case "$msg" in *"Do not run start again"*"wiki: "*"/demo, for the repository web"*) ok "the hook runs start for the first workspace and replies with additional_context" ;; *) bad "the hook runs start for the first workspace and replies with additional_context" "$msg" ;; esac
 expect "bad input still gets a reply" "additional_context" bash -c "cd '$HOME' && printf 'not json' | '$W' __cursor-start"
@@ -1101,10 +1137,67 @@ refuse "--collection with an unknown name fails" nw "$RC" status --collection no
 expect "the Claude Code hook routes the session to its collection" "/jobapp, for the repository jobapp" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; unset WIKIS_DIR; hook '$RA' | context"
 expect "WIKIS_DIR in the environment still wins" "$WIKIS_DIR" bash -c "cd '$RA' && WIKIS_DIR='$WIKIS_DIR' '$W' __collection"
 check "status in the default mentions the other collection" bash -c "cd '$RC' && env -u WIKIS_DIR WIKIS_DIR='$WIKIS_DIR' '$W' status | grep -q 'also:    collection work'"
+
+# which with no name: the repository here, from its remote or its folder.
+expect "which with no name covers the repository here" "/jobapp" nw "$RA" which
+RN="$T/elsewhere/renamed-checkout"; mkdir -p "$RN"; git -C "$RN" init -q
+git -C "$RN" remote add origin git@gitlab.example.com:acme/jobapp.git
+expect "and goes by the remote, not the folder" "/jobapp" nw "$RN" which
+expect "outside a repository it asks for a name" "which needs a repository name" nw "$T" which
+
+# relay and wiki_start find a wiki in any collection, wherever they run from.
+mkdir -p "$CW/jobapp/wiki"; printf -- '---\ntitle: P\n---\nA page.\n' > "$CW/jobapp/wiki/job-page.md"
+git -C "$RA" commit -q --allow-empty -m one; git -C "$RN" commit -q --allow-empty -m one
+ROD="$T/route-onedrive"; mkdir -p "$ROD"
+expect "relay scan from elsewhere finds the wiki in the repository's collection" "Included the jobapp wiki" nw "$T" relay --dir "$ROD" scan "$RA"
+expect "and for a renamed checkout" "Included the jobapp wiki" nw "$T" relay --dir "$ROD" scan "$RN"
+lacks "a collection you pick still wins" "Included the jobapp wiki" nw "$T" relay --dir "$ROD" --collection default scan "$RA"
+lacks "and so does WIKIS_DIR" "Included the jobapp wiki" bash -c "cd '$T' && WIKIS_DIR='$HOME/wikis' '$W' relay --dir '$ROD' scan '$RA'"
+[ -d "$HOME/wikis/global" ] || WIKIS_DIR="$HOME/wikis" "$W" init >/dev/null 2>&1
+# mcp_any <wiki.sh args for one call's arguments>: like mcp_call, with every collection in reach.
+mcp_any() {
+  local a="${2:-}"
+  [ -n "$a" ] || a='{}'
+  printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"%s","arguments":%s}}\n' "$1" "$a" | (cd "$T" && env -u WIKIS_DIR "$W" mcp) \
+    | python3 -c 'import json,sys; r=json.loads(sys.stdin.readline())["result"]; print(("ERROR: " if r.get("isError") else "")+r["content"][0]["text"])'
+}
+expect "wiki_start finds a repository's wiki in any collection" "/jobapp, for the repository jobapp" mcp_any wiki_start '{"repository":"jobapp"}'
+expect "a repository nobody covers gets the default's shared wiki" "$(printf '%s' "$HOME/wikis/global" | sed "s#^$HOME#~#"), for the repository nosuchrepo" mcp_any wiki_start '{"repository":"nosuchrepo"}'
+expect "a named collection still wins" "No wiki covers jobapp" mcp_any wiki_start '{"repository":"jobapp","collection":"default"}'
+# A hit in one collection doesn't hide a hit in another with the same wiki name.
+printf 'x\n' > "$HOME/wikis/global/wiki/hit.md"; printf 'x\n' > "$CW/global/wiki/hit.md"; rm -f "$HOME/wikis/stats.csv" "$CW/stats.csv"
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"wiki_read","arguments":{"wiki":"global","path":"wiki/hit.md","collection":"default"}}}' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"wiki_read","arguments":{"wiki":"global","path":"wiki/hit.md","collection":"work"}}}' | (cd "$T" && env -u WIKIS_DIR "$W" mcp) >/dev/null
+check "lookups count per collection" bash -c "grep -q ',global,hit$' '$HOME/wikis/stats.csv' && grep -q ',global,hit$' '$CW/stats.csv'"
+rm -f "$HOME/wikis/global/wiki/hit.md" "$CW/global/wiki/hit.md" "$HOME/wikis/stats.csv"
 rm -f "$HOME/.config/llm-wiki/collections"
 
 section "Bash 3.2 safety"
-lacks "no loop is fed by process substitution, which can end the script on bash 3.2" "done < <(" grep -n "done < <(" "$REPO/wiki.sh" "$REPO/hooks/session-start.sh" "$REPO/hooks/pre-commit" "$REPO/scripts/migrate-to-plugin.sh"
+lacks "no loop is fed by process substitution, which can end the script on bash 3.2" "done < <(" grep -n "done < <(" "$REPO/wiki.sh" "$REPO/hooks/session-start.sh" "$REPO/hooks/pre-commit" "$REPO/scripts/migrate-to-plugin.sh" "$REPO/scripts/relay.sh" "$REPO/cowork/remote-pair-run/runlib.sh"
+
+section "Missing flag values"
+while IFS= read -r args; do
+  # A flag at the end of the line, with its value missing.
+  # shellcheck disable=SC2086
+  expect "wiki $args says what's missing" "${args##* } needs a value" "$W" $args
+done <<EOF
+standup --since
+standup --save --max
+capture demo a-slug --file
+capture demo a-slug --copy
+log demo ingest --created
+log demo ingest --reported
+sync demo -m
+seed . --wiki
+seed . --max
+harvest --from
+feedback add idea a-summary --agent
+journal backfill --since
+journal note --day
+report --since
+tips --repo
+tips --mute
+EOF
+lacks "and every flag's arm in wiki.sh is guarded" "shift" bash -c "grep -E '^ +-[^ )]*\) .*\\\$\{2:-\}.*shift' '$REPO/wiki.sh' | grep -v 'need_value\|die \|needs a name'"
 
 section "Update"
 lacks "collections keeps its hint off stdout, for scripts" "Only the default" bash -c "'$W' collections 2>/dev/null"

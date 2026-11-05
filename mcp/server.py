@@ -110,9 +110,9 @@ def log_lookup(folder, wiki, result):
     append to a file, so the server does it. It must never fail a lookup."""
     now = time.time()
     # Several reads for one question count once.
-    if result == "hit" and now - LOOKUPS.get(wiki, 0) < LOOKUP_WINDOW:
+    if result == "hit" and now - LOOKUPS.get((folder, wiki), 0) < LOOKUP_WINDOW:
         return
-    LOOKUPS[wiki] = now
+    LOOKUPS[(folder, wiki)] = now
     path = os.path.join(folder, "stats.csv")
     try:
         new = not os.path.exists(path)
@@ -142,11 +142,22 @@ def wiki_list(_):
     return "\n".join(lines) or "No wikis yet. Run: wiki setup"
 
 
+def collection_covering(repo):
+    """The first collection with a wiki for this repository, or the default."""
+    for _, folder in collections():
+        if run(folder, "which", repo)[0]:
+            return folder
+    return pick_collection(None)[1]
+
+
 def wiki_start(args):
-    _, folder = pick_collection(args.get("collection"))
     repo = args.get("repository") or ""
     if repo and not NAME.match(repo):
         raise ToolError("that isn't a repository name.")
+    if repo and not args.get("collection"):
+        folder = collection_covering(repo)
+    else:
+        _, folder = pick_collection(args.get("collection"))
     return must(folder, "start", *([repo] if repo else []))
 
 
