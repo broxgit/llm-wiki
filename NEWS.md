@@ -4,6 +4,13 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. A short paragraph, then lines starting `- ` for what changed and `- Do:` for what to do about it. Add an entry for anything a user would notice, and none for fixes they wouldn't.
 
+## 2026-11-05: The tour says what it's for
+
+The tour used to start with a made-up service's queue and left you to work out why it mattered. It now opens with what llm-wiki does for you, names each chapter by what you get, and ends each with what changes for you.
+
+- The first four chapters are now the strongest: a new session that already knows why, a stale fact caught against the code, a decision kept, and a repeated correction turned into a rule.
+- Do: if you stopped partway, run `wiki tour --clean`, then ask for the tour again.
+
 ## 2026-11-05: wiki relay is now its own tool
 
 The Copilot Cowork relay moved to its own repository, [llm-relay](https://github.com/broxgit/llm-relay), since it has little to do with wikis. Nothing else in llm-wiki changes, including `wiki setup microsoft-copilot`.
