@@ -203,18 +203,18 @@ func excerpt(lines [][]byte, word []byte) string {
 			if len(line) > excerptLen {
 				line = line[:excerptLen]
 			}
-			return string(whole(line))
+			return string(Whole(line))
 		}
 	}
 	return ""
 }
 
-// whole is the sed of FIND_CUT in wiki.sh: the text without the start of a UTF-8
+// Whole is the sed of FIND_CUT in wiki.sh: the text without the start of a UTF-8
 // character at its end, which is what a cut at a byte leaves of one. It goes by byte,
 // as that sed does under LC_ALL=C: a first byte of a character of two, three or four
 // bytes, followed to the end by fewer bytes than it needs. Text that isn't UTF-8 gets
 // the same, so a Latin-1 letter at the end of a line goes too.
-func whole(text []byte) []byte {
+func Whole(text []byte) []byte {
 	// At most one end fits: a longer one would need the shorter one's first byte to
 	// continue a character, and it starts one.
 	for n := 3; n >= 1; n-- {

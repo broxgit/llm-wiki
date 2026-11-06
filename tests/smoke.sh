@@ -183,13 +183,15 @@ print(d["additionalContext"])'
 mkskill() { mkdir -p "$1" && printf -- '---\nname: %s\ndescription: %s\n---\n\nSteps.\n' "${1##*/}" "$2" > "$1/SKILL.md"; }
 # setup wants a terminal for its questions. The tests answer through a pipe.
 in_tty() { LLM_WIKI_TEST_TTY=1 "$@"; }
-# build_helper: the compiled helper, in $T/bin/llm-wiki, and two stand-ins for a helper
-# gone wrong: one built for another protocol, and one that fails.
+# build_helper: the compiled helper, in $T/bin/llm-wiki, two stand-ins for a helper
+# gone wrong, one built for another protocol and one that fails, and a spy on a good one.
 build_helper() {
   (cd "$REPO" && go build -o "$T/bin/llm-wiki" ./cmd/llm-wiki) || return 1
   printf '#!/bin/sh\n[ "$1" = protocol ] && { echo 0; exit 0; }\necho "STALE TABLE"\n' > "$T/bin/stale-helper"
   printf '#!/bin/sh\n[ "$1" = protocol ] && { sed -n "s/^GO_PROTOCOL=//p" "%s"; exit 0; }\nexit 1\n' "$W" > "$T/bin/broken-helper"
-  chmod +x "$T/bin/stale-helper" "$T/bin/broken-helper"
+  # And one that works, and notes each command it was run for in $T/helper-ran.
+  printf '#!/bin/sh\necho "$1" >> "%s"\nexec "%s" "$@"\n' "$T/helper-ran" "$T/bin/llm-wiki" > "$T/bin/spy-helper"
+  chmod +x "$T/bin/stale-helper" "$T/bin/broken-helper" "$T/bin/spy-helper"
 }
 
 if section "Collection"; then
@@ -1813,48 +1815,86 @@ rm -rf "$FB" "$HOME/.config/llm-wiki/feedback" "$T/bin/gh" "$T/gh.log" "$T/gh.bo
 fi
 
 if section "MCP server"; then
+[ -x "$T/bin/llm-wiki" ] || ! command -v go >/dev/null 2>&1 || build_helper >/dev/null 2>&1
+# Two servers answer `wiki mcp`: the compiled helper's when there is one, and
+# mcp/server.py. MCP_GO names the helper to serve, and with none the Python does.
+MCP_GO=""
+mcp_serve() { if [ -n "$MCP_GO" ]; then LLM_WIKI_NO_GO="" LLM_WIKI_GO="$MCP_GO" "$W" mcp; else LLM_WIKI_NO_GO=1 "$W" mcp; fi; }
 # mcp_call <tool> <json arguments>: the tool's text, with ERROR: in front if it failed.
 mcp_call() {
   local a="${2:-}"
   [ -n "$a" ] || a='{}'
-  printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"%s","arguments":%s}}\n' "$1" "$a" | "$W" mcp \
+  printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"%s","arguments":%s}}\n' "$1" "$a" | mcp_serve \
     | python3 -c 'import json,sys; r=json.loads(sys.stdin.readline())["result"]; print(("ERROR: " if r.get("isError") else "")+r["content"][0]["text"])'
 }
-out="$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}' '{"jsonrpc":"2.0","method":"notifications/initialized"}' 'not json' '{"jsonrpc":"2.0","id":2,"method":"ping"}' '{"jsonrpc":"2.0","id":3,"method":"nope"}' '{"jsonrpc":"2.0","id":4,"method":"tools/list"}' | "$W" mcp)"
-check "initialize answers in the client's protocol version, with instructions" python3 -c "import json,sys; r=json.loads(sys.argv[1].splitlines()[0])['result']; assert r['protocolVersion']=='2025-03-26' and 'wiki_start' in r['instructions'] and 'tools' in r['capabilities']" "$out"
-check "a notification gets no reply, bad JSON a parse error, and the server carries on" python3 -c "import json,sys; l=[json.loads(x) for x in sys.argv[1].splitlines()]; assert len(l)==5 and l[1]['error']['code']==-32700 and l[2]['id']==2 and l[3]['error']['code']==-32601" "$out"
-check "it lists its tools, each with a schema" python3 -c "import json,sys; t=json.loads(sys.argv[1].splitlines()[4])['result']['tools']; assert [x['name'] for x in t]==['wiki_list','wiki_start','wiki_search','wiki_read','wiki_status','wiki_capture','wiki_feedback'] and all(x['inputSchema']['type']=='object' for x in t)" "$out"
-check "it tells chat agents the wikis come before memory and past chats" python3 -c "import json,sys; l=sys.argv[1].splitlines(); r=json.loads(l[0])['result']['instructions']; t={x['name']:x['description'] for x in json.loads(l[4])['result']['tools']}; assert 'before memory' in r and 'before memory' in t['wiki_start'] and 'before memory' in t['wiki_search']" "$out"
-expect "wiki_list lists the wikis and what they cover" "covers: api web" mcp_call wiki_list
-expect "wiki_start finds the project's wiki" "/demo, for the repository web" mcp_call wiki_start '{"repository":"web"}'
-expect "with no project, the shared wiki" "Not in a repository" mcp_call wiki_start
-expect "wiki_search searches" "Deploy flow" mcp_call wiki_search '{"word":"canary"}'
-expect "wiki_read defaults to the index" "# Index" mcp_call wiki_read '{"wiki":"demo"}'
-expect "and reads a page" "blue-green" mcp_call wiki_read '{"wiki":"demo","path":"index.md"}'
-expect "wiki_status shows what's due" "HANDBOOK" mcp_call wiki_status
-expect "a path out of the wiki is refused" "ERROR: that path is outside the wiki" mcp_call wiki_read '{"wiki":"demo","path":"../global/index.md"}'
-expect "so is an absolute one" "ERROR: give a path inside the wiki" mcp_call wiki_read "{\"wiki\":\"demo\",\"path\":\"$HOME/.gitconfig\"}"
-ln -s "$T/secret.md" "$WIKIS_DIR/demo/wiki/link.md"; echo "very secret" > "$T/secret.md"
-expect "and a link that leads out" "ERROR: that path is outside the wiki" mcp_call wiki_read '{"wiki":"demo","path":"wiki/link.md"}'
-rm -f "$WIKIS_DIR/demo/wiki/link.md" "$T/secret.md"
-expect "hidden folders aren't readable" "ERROR: that path is outside the wiki" mcp_call wiki_read '{"wiki":"demo","path":".compile-lock.md"}'
-expect "only text files are" "ERROR: only .md, .csv and .txt" mcp_call wiki_read '{"wiki":"demo","path":"data/x.sqlite"}'
-expect "a wiki name can't be a path" "ERROR: that isn't a wiki name" mcp_call wiki_read '{"wiki":"../demo"}'
-expect "wiki_capture refuses a bad slug" "ERROR: the slug" mcp_call wiki_capture '{"wiki":"demo","slug":"../x","note":"n"}'
-expect "and an empty note" "ERROR: the note is empty" mcp_call wiki_capture '{"wiki":"demo","slug":"x","note":" "}'
-expect "wiki_capture saves and pushes" "Pushed." mcp_call wiki_capture '{"wiki":"demo","slug":"from-chat","note":"We chose Postgres, in a chat."}'
-# Chat can't append to stats.csv, so the server logs its lookups.
-printf 'one\n' > "$WIKIS_DIR/demo/wiki/mcp-one.md"; printf 'two\n' > "$WIKIS_DIR/demo/wiki/mcp-two.md"
-SC="$WIKIS_DIR/stats.csv"; cp "$SC" "$T/stats.bak" 2>/dev/null || true; rm -f "$SC"
-printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"wiki_read","arguments":{"wiki":"demo"}}}' | "$W" mcp >/dev/null
-check "reading the index isn't a lookup that answered anything" test ! -e "$SC"
-printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"wiki_read","arguments":{"wiki":"demo","path":"wiki/mcp-one.md"}}}' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"wiki_read","arguments":{"wiki":"demo","path":"wiki/mcp-two.md"}}}' | "$W" mcp >/dev/null
-check "reading pages logs one hit, however many pages" bash -c "[ \"\$(grep -c ',demo,hit$' '$SC')\" = 1 ] && head -n 1 '$SC' | grep -qx 'date,wiki,result'"
-expect "a search that finds nothing is logged" ",global,search-none,zzzabsent" bash -c "printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"wiki_search\",\"arguments\":{\"word\":\"zzzabsent\"}}}' | '$W' mcp >/dev/null; tail -n 1 '$SC'"
-rm -f "$SC" "$WIKIS_DIR/demo/wiki/mcp-one.md" "$WIKIS_DIR/demo/wiki/mcp-two.md"; [ ! -f "$T/stats.bak" ] || mv "$T/stats.bak" "$SC"
-check "the note is a normal capture" bash -c "grep -q '^Captured: ' '$WIKIS_DIR'/demo/raw/*-from-chat.md && grep -q 'We chose Postgres' '$WIKIS_DIR'/demo/raw/*-from-chat.md"
-check "and it reached the remote" bash -c "git --git-dir='$T/remote.git' log -1 --format=%s | grep -q 'capture from-chat'"
-expect "wiki_feedback follows the setting" "feedback is off" mcp_call wiki_feedback '{"kind":"idea","summary":"s","details":"d"}'
+# mcp_tools <who> <slug>: the protocol and every tool, from the server MCP_GO chose.
+mcp_tools() {
+  local who="$1" slug="$2" out SC
+  out="$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}' '{"jsonrpc":"2.0","method":"notifications/initialized"}' 'not json' '{"jsonrpc":"2.0","id":2,"method":"ping"}' '{"jsonrpc":"2.0","id":3,"method":"nope"}' '{"jsonrpc":"2.0","id":4,"method":"tools/list"}' | mcp_serve)"
+  check "$who: initialize answers in the client's protocol version, with instructions" python3 -c "import json,sys; r=json.loads(sys.argv[1].splitlines()[0])['result']; assert r['protocolVersion']=='2025-03-26' and 'wiki_start' in r['instructions'] and 'tools' in r['capabilities']" "$out"
+  check "$who: a notification gets no reply, bad JSON a parse error, and the server carries on" python3 -c "import json,sys; l=[json.loads(x) for x in sys.argv[1].splitlines()]; assert len(l)==5 and l[1]['error']['code']==-32700 and l[2]['id']==2 and l[3]['error']['code']==-32601" "$out"
+  check "$who: it lists its tools, each with a schema" python3 -c "import json,sys; t=json.loads(sys.argv[1].splitlines()[4])['result']['tools']; assert [x['name'] for x in t]==['wiki_list','wiki_start','wiki_search','wiki_read','wiki_status','wiki_capture','wiki_feedback'] and all(x['inputSchema']['type']=='object' for x in t)" "$out"
+  check "$who: it tells chat agents the wikis come before memory and past chats" python3 -c "import json,sys; l=sys.argv[1].splitlines(); r=json.loads(l[0])['result']['instructions']; t={x['name']:x['description'] for x in json.loads(l[4])['result']['tools']}; assert 'before memory' in r and 'before memory' in t['wiki_start'] and 'before memory' in t['wiki_search']" "$out"
+  expect "$who: wiki_list lists the wikis and what they cover" "covers: api web" mcp_call wiki_list
+  expect "$who: wiki_start finds the project's wiki" "/demo, for the repository web" mcp_call wiki_start '{"repository":"web"}'
+  expect "$who: with no project, the shared wiki" "Not in a repository" mcp_call wiki_start
+  expect "$who: wiki_search searches" "Deploy flow" mcp_call wiki_search '{"word":"canary"}'
+  expect "$who: wiki_read defaults to the index" "# Index" mcp_call wiki_read '{"wiki":"demo"}'
+  expect "$who: and reads a page" "blue-green" mcp_call wiki_read '{"wiki":"demo","path":"index.md"}'
+  expect "$who: wiki_status shows what's due" "HANDBOOK" mcp_call wiki_status
+  expect "$who: a path out of the wiki is refused" "ERROR: that path is outside the wiki" mcp_call wiki_read '{"wiki":"demo","path":"../global/index.md"}'
+  expect "$who: so is an absolute one" "ERROR: give a path inside the wiki" mcp_call wiki_read "{\"wiki\":\"demo\",\"path\":\"$HOME/.gitconfig\"}"
+  ln -s "$T/secret.md" "$WIKIS_DIR/demo/wiki/link.md"; echo "very secret" > "$T/secret.md"
+  expect "$who: and a link that leads out" "ERROR: that path is outside the wiki" mcp_call wiki_read '{"wiki":"demo","path":"wiki/link.md"}'
+  rm -f "$WIKIS_DIR/demo/wiki/link.md" "$T/secret.md"
+  expect "$who: hidden folders aren't readable" "ERROR: that path is outside the wiki" mcp_call wiki_read '{"wiki":"demo","path":".compile-lock.md"}'
+  expect "$who: only text files are" "ERROR: only .md, .csv and .txt" mcp_call wiki_read '{"wiki":"demo","path":"data/x.sqlite"}'
+  expect "$who: a wiki name can't be a path" "ERROR: that isn't a wiki name" mcp_call wiki_read '{"wiki":"../demo"}'
+  expect "$who: wiki_capture refuses a bad slug" "ERROR: the slug" mcp_call wiki_capture '{"wiki":"demo","slug":"../x","note":"n"}'
+  expect "$who: and an empty note" "ERROR: the note is empty" mcp_call wiki_capture '{"wiki":"demo","slug":"x","note":" "}'
+  expect "$who: wiki_capture saves and pushes" "Pushed." mcp_call wiki_capture "{\"wiki\":\"demo\",\"slug\":\"$slug\",\"note\":\"We chose Postgres, in a chat.\"}"
+  # Chat can't append to stats.csv, so the server logs its lookups.
+  printf 'one\n' > "$WIKIS_DIR/demo/wiki/mcp-one.md"; printf 'two\n' > "$WIKIS_DIR/demo/wiki/mcp-two.md"
+  SC="$WIKIS_DIR/stats.csv"; cp "$SC" "$T/stats.bak" 2>/dev/null || true; rm -f "$SC"
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"wiki_read","arguments":{"wiki":"demo"}}}' | mcp_serve >/dev/null
+  check "$who: reading the index isn't a lookup that answered anything" test ! -e "$SC"
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"wiki_read","arguments":{"wiki":"demo","path":"wiki/mcp-one.md"}}}' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"wiki_read","arguments":{"wiki":"demo","path":"wiki/mcp-two.md"}}}' | mcp_serve >/dev/null
+  check "$who: reading pages logs one hit, however many pages" bash -c "[ \"\$(grep -c ',demo,hit$' '$SC')\" = 1 ] && head -n 1 '$SC' | grep -qx 'date,wiki,result'"
+  mcp_call wiki_search '{"word":"zzzabsent"}' >/dev/null
+  check "$who: a search that finds nothing is logged, once" bash -c "[ \"\$(grep -c ',global,search-none,zzzabsent$' '$SC')\" = 1 ] && [ \"\$(grep -c search- '$SC')\" = 1 ]"
+  rm -f "$SC" "$WIKIS_DIR/demo/wiki/mcp-one.md" "$WIKIS_DIR/demo/wiki/mcp-two.md"; [ ! -f "$T/stats.bak" ] || mv "$T/stats.bak" "$SC"
+  check "$who: the note is a normal capture" bash -c "grep -q '^Captured: ' '$WIKIS_DIR'/demo/raw/*-$slug.md && grep -q 'We chose Postgres' '$WIKIS_DIR'/demo/raw/*-$slug.md"
+  check "$who: and it reached the remote" bash -c "git --git-dir='$T/remote.git' log -1 --format=%s | grep -q 'capture $slug'"
+  expect "$who: wiki_feedback follows the setting" "feedback is off" mcp_call wiki_feedback '{"kind":"idea","summary":"s","details":"d"}'
+}
+mcp_tools "the Python" from-chat
+if [ -x "$T/bin/llm-wiki" ]; then
+  # Which server answered can't be told from a reply, so the spy notes what it was run for.
+  : > "$T/helper-ran"; MCP_GO="$T/bin/spy-helper"
+  mcp_tools "the helper" from-chat-again
+  check "wiki mcp is served by the compiled helper when there is one" grep -qx mcp "$T/helper-ran"
+  : > "$T/helper-ran"
+  mcp_call wiki_search '{"word":"canary"}' >/dev/null; mcp_call wiki_start '{"repository":"web"}' >/dev/null
+  check "and the helper's server searches and routes itself, with no wiki.sh find or which" bash -c "! grep -q -x -e find -e which '$T/helper-ran'"
+  # The helper's server stays up whatever a line holds. Python reads a line that isn't
+  # UTF-8 in the C locale and stops at one in a UTF-8 locale.
+  U8="$(locale -a 2>/dev/null | grep -i -E '^(en_US|C)\.utf-?8$' | head -n 1)"
+  out="$(printf '{"jsonrpc":"2.0","id":1,"method":"ping","x":"\377"}\n{"jsonrpc":"2.0","id":2,"method":"ping"}\n' | LC_ALL="${U8:-C}" mcp_serve 2>&1)"
+  check "a line that isn't UTF-8 is a parse error to the helper's server, and it carries on" python3 -c "import json,sys; l=[json.loads(x) for x in sys.argv[1].splitlines()]; assert len(l)==2 and l[0]['error']['code']==-32700 and l[0]['id'] is None and l[1]=={'jsonrpc':'2.0','id':2,'result':{}}, l" "$out"
+  # Listing, reading and searching need no Python at all with the helper.
+  mkdir -p "$T/nopy"; printf '#!/bin/sh\necho "$*" >> "%s"\nexit 127\n' "$T/python-ran" > "$T/nopy/python3"; chmod +x "$T/nopy/python3"; rm -f "$T/python-ran"
+  out="$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"wiki_list"}}' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"wiki_read","arguments":{"wiki":"demo"}}}' '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"wiki_search","arguments":{"word":"canary"}}}' | PATH="$T/nopy:$PATH" mcp_serve 2>&1)"
+  case "$out" in *'"id":5,'*'Deploy flow'*) [ ! -e "$T/python-ran" ] && ok "the helper's server lists, reads and searches without running python3" || bad "the helper's server lists, reads and searches without running python3" "python3 was run: $(cat "$T/python-ran")" ;; *) bad "the helper's server lists, reads and searches without running python3" "$out" ;; esac
+  rm -rf "$T/nopy" "$T/python-ran"
+  # A helper is chosen once, when the server starts, and only one that speaks the protocol.
+  : > "$T/helper-ran"; MCP_GO="$T/bin/stale-helper"
+  expect "a helper built for another protocol is passed over, and the Python serves" "covers: api web" mcp_call wiki_list
+  MCP_GO=""
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"ping"}' | LLM_WIKI_NO_GO=1 LLM_WIKI_GO="$T/bin/spy-helper" "$W" mcp >/dev/null
+  check "and LLM_WIKI_NO_GO leaves a good helper out of it" test ! -s "$T/helper-ran"
+else
+  skipped "the MCP server from the compiled helper (go isn't installed)"
+fi
 expect "mcp --print gives the config entry" '"args"' "$W" mcp --print
 D="$T/desktop"
 lacks "without the desktop app, setup --list says nothing about Chat" "chat   " env LLM_WIKI_DESKTOP_DIR="$D" "$W" setup --list
@@ -2290,6 +2330,392 @@ goes"
   printf '#!/bin/sh\n[ "$1" = protocol ] && { sed -n "s/^GO_PROTOCOL=//p" "%s"; exit 0; }\nprintf "alpha:\\n  - wrong\\n"\n' "$W" > "$T/bin/odd-helper"
   chmod +x "$T/bin/odd-helper"
   [ "$(frun "$T/bin/odd-helper" "$RC" canary)" = "$want" ] && ok "and an answer with no first line saying found or none is passed over" || bad "and an answer with no first line saying found or none is passed over" "$(frun "$T/bin/odd-helper" "$RC" canary)"
+
+  # The MCP server, from the compiled helper and from mcp/server.py: the same replies to
+  # the same requests, and the same files left behind. Replies are compared as JSON:
+  # the helper writes no space after a colon or a comma, sorts an object's keys, and
+  # writes text as UTF-8 where Python writes \u escapes.
+  cat > "$T/mcp-same.py" <<'PY'
+"""For the smoke test: lines for both MCP servers, and what came back.
+  requests <batch>         a batch's request lines, to stdout
+  same <a> <b>             two servers' replies are the same, compared as JSON
+  client <requests> <out>  the replies are what a client needs: one line each of UTF-8
+                           and JSON, in order, with the id each request sent
+  text <out> <id>          the text of the reply with that id, ERROR: in front if it failed
+  codes <out>              each reply's error code, or ok or tool-error, on one line
+  files <folder>...        what is in the folders, for comparing two runs
+"""
+import hashlib
+import json
+import os
+import re
+import sys
+
+# A note's name holds the second it was saved, as 2026-01-31-235959 for a capture and
+# 20260131-235959 for feedback, and a feedback note the minute. Two runs share neither.
+CLOCK = re.compile(r"\d{4}-?\d{2}-?\d{2}-\d{6}")
+CLOCK_BYTES = re.compile(rb"\d{4}-?\d{2}-?\d{2}-\d{6}")
+MINUTE = re.compile(rb"\d{4}-\d{2}-\d{2} \d{2}:\d{2}")
+
+
+def strict(line):
+    """One line as JSON, or ValueError: UTF-8, and no NaN or Infinity."""
+    def bad(word):
+        raise ValueError("not JSON: " + word)
+    return json.loads(line.decode("utf-8"), parse_constant=bad)
+
+
+def replies(path, blank_clock=False):
+    data = open(path, "rb").read()
+    if data and not data.endswith(b"\n"):
+        sys.exit("%s doesn't end with a line feed" % path)
+    out = []
+    for n, line in enumerate(data.split(b"\n")[:-1], 1):
+        if blank_clock:
+            line = CLOCK_BYTES.sub(b"TIME", line)
+        try:
+            out.append(strict(line))
+        except ValueError as e:
+            sys.exit("%s line %d isn't one line of UTF-8 JSON: %s: %r" % (path, n, e, line[:200]))
+    return out
+
+
+def requests(batch):
+    lines = []
+    count = [0]
+
+    def req(method, params=None, id=None):
+        count[0] += 1
+        m = {"jsonrpc": "2.0", "id": id or count[0], "method": method}
+        if params is not None:
+            m["params"] = params
+        lines.append(json.dumps(m).encode())
+
+    def call(tool, arguments=None, id=None):
+        params = {"name": tool}
+        if arguments is not None:
+            params["arguments"] = arguments
+        req("tools/call", params, id)
+
+    arrow = b"\xe2\x86\x92".decode()
+    ecole = b"\xc3\x89cole".decode()
+    # 81 bytes: the 60th is the first of a character's two.
+    long = "x" + b"\xc3\xa9".decode() * 40
+    upper, lower = b"\xc3\x89cole".decode(), b"\xc3\xa9cole".decode()
+    if batch == "same":
+        req("initialize", {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "smoke", "version": "0"}})
+        lines.append(b'{"jsonrpc":"2.0","method":"notifications/initialized"}')
+        req("initialize")
+        req("initialize", {"protocolVersion": ""})
+        req("initialize", {"protocolVersion": 5})
+        req("initialize", [])
+        req("ping")
+        req("ping", "ignored")
+        req("nope")
+        req("tools/list")
+        req("tools/list", {"cursor": "x"})
+        lines.extend([
+            b"not json", b"", b"   \t ", b"[1,2]", b'"str"', b"null", b"5",
+            b'{"jsonrpc":"2.0","id":"abc","method":"ping"}',
+            b'{"jsonrpc":"2.0","id":null,"method":"ping"}',
+            b'{"jsonrpc":"2.0","id":1.5,"method":"ping"}',
+            b'{"jsonrpc":"2.0","id":{"a":[1,"\\u2028"]},"method":"ping"}',
+            b'{"id":77}',
+            b'{"jsonrpc":"2.0","id":78,"method":5}',
+            b'{"jsonrpc":"2.0","id":79,"method":"ping"} trailing',
+            b'{"jsonrpc":"2.0","id":80,"method":"ping",}',
+            b'  {"jsonrpc":"2.0","id":81,"method":"ping"}  ',
+            b'{"jsonrpc":"2.0","id":82,"id":83,"method":"ping"}',
+        ])
+        req("tools/call")
+        req("tools/call", {})
+        req("tools/call", {"name": "nope"})
+        req("tools/call", {"name": 5})
+        req("tools/call", {"name": "wiki_list", "arguments": "ignored"})
+        call("wiki_list", id="list")
+        for a in [
+            {"wiki": "alpha"}, {"wiki": "alpha", "path": ""}, {"wiki": "alpha", "path": None},
+            {"wiki": "alpha", "path": "wiki/howto/deploy.md"}, {"wiki": "alpha", "path": "./wiki/../wiki/howto/deploy.md"},
+            {"wiki": "alpha", "path": "wiki/long.md"}, {"wiki": "alpha", "path": "wiki/cut-four.md"},
+            {"wiki": "alpha", "path": "wiki/big.md"}, {"wiki": "alpha", "path": "wiki/fits.md"},
+            {"wiki": "alpha", "path": "wiki/.hid/h.md"}, {"wiki": "alpha", "path": "../Beta/index.md"},
+            {"wiki": "alpha", "path": "/etc/hosts"}, {"wiki": "alpha", "path": "~/x.md"}, {"wiki": "alpha", "path": "."},
+            {"wiki": "alpha", "path": "wiki"}, {"wiki": "alpha", "path": "wiki/nope.md"}, {"wiki": "alpha", "path": "wiki/upper.MD"},
+            {"wiki": "alpha", "path": "wiki/a/x.md/y.md"}, {"wiki": "Beta"}, {"wiki": "notes"}, {"wiki": "../alpha"}, {"wiki": ""}, {},
+            {"wiki": "alpha\n"}, {"wiki": "jobapp"}, {"wiki": "jobapp", "collection": "default"},
+            {"wiki": "global", "collection": "work"}, {"wiki": "alpha", "collection": "nope"},
+        ]:
+            call("wiki_read", a)
+        call("wiki_read", {"wiki": "alpha", "path": "wiki/zz-crlf.md"}, id="read-crlf")
+        call("wiki_read", {"wiki": "alpha", "path": "wiki/school.md"}, id="read-latin")
+        call("wiki_read", {"wiki": "alpha", "path": "wiki/zz-broken.md"}, id="read-broken")
+        call("wiki_search", {"word": "canary"}, id="search-canary")
+        call("wiki_search", {"word": "in Latin-1"}, id="search-latin")
+        for a in [
+            {"word": "CANARY", "collection": "work"}, {"word": "canary", "collection": "default"}, {"word": "canary", "collection": "nope"},
+            {"word": "  twobyte  "}, {"word": "fourbyte"}, {"word": "wholechar"}, {"word": "latinend"}, {"word": "zzznothing"},
+            {"word": "carriage"}, {"word": arrow}, {"word": ecole}, {"word": "first, then"}, {"word": "a.c"}, {"word": "x" * 70},
+            {"word": long}, {"word": "brokenarrow"}, {"word": ""}, {"word": "   "}, {"word": "-x"}, {}, {"word": None}, {"word": 0},
+        ]:
+            call("wiki_search", a)
+        for a in [
+            {"repository": "jobapp"}, {"repository": "jobapp-api"}, {"repository": "alpha"}, {"repository": "nosuchrepo"},
+            {"repository": "jobapp", "collection": "default"}, {"repository": "../x"},
+            {}, {"collection": "work"}, {"collection": "nope"}, None,
+        ]:
+            call("wiki_start", a)
+        for a in [None, {"collection": "work"}, {"collection": "nope"}]:
+            call("wiki_status", a)
+        for a in [
+            {"wiki": "alpha", "slug": "../x", "note": "n"}, {"wiki": "alpha", "slug": "x", "note": " \n "},
+            {"wiki": "alpha", "slug": "x", "note": "n" * 200001}, {"wiki": "nosuch", "slug": "x", "note": "n"}, {"wiki": "alpha"}, {},
+        ]:
+            call("wiki_capture", a)
+        call("wiki_feedback", {"kind": "nope", "summary": "s", "details": "d"})
+        call("wiki_feedback", {})
+    elif batch == "fallback":
+        # A link under wiki/, a word with a backslash or a line break, and a repos.md that
+        # isn't UTF-8: the helper's server leaves each to wiki.sh, as the Python always does.
+        call("wiki_list", id="list")
+        call("wiki_read", {"wiki": "alpha", "path": "wiki/a/link.md"}, id="read-link")
+        call("wiki_read", {"wiki": "alpha", "path": "wiki/out.md"})
+        call("wiki_search", {"word": "canary"})
+        call("wiki_search", {"word": "back\\slash"})
+        call("wiki_search", {"word": long + "\\"})
+        call("wiki_search", {"word": "two\nlines"})
+        call("wiki_start", {"repository": "jobapp-api"}, id="start")
+        call("wiki_start", {"repository": "nosuchrepo"})
+        call("wiki_start", {"repository": "alpha\n"})
+    elif batch == "write":
+        # The tools that write. Only ever in the test's own folders.
+        call("wiki_capture", {"wiki": "alpha", "slug": "from-chat", "note": "We chose Postgres, in a chat.\nWith an arrow " + arrow + ".\n"}, id="capture")
+        call("wiki_capture", {"wiki": "jobapp", "slug": "work-note", "note": "A work note."})
+        call("wiki_capture", {"wiki": "global", "slug": "g", "note": "x", "collection": "work"})
+        call("wiki_feedback", {"kind": "idea", "summary": "s", "details": "d"})
+        call("wiki_feedback", {"kind": "bug", "summary": "It broke, with a comma", "details": "What I ran.\nWhat came back.", "agent": "Smoke, test model"}, id="feedback")
+        call("wiki_feedback", {"kind": "oops", "summary": "s", "details": "d"})
+        # Whether these two are one note depends on LC_CTYPE where tr knows accented
+        # letters, as on macOS, so they tell a server whose wiki.sh has another locale.
+        call("wiki_feedback", {"kind": "docs", "summary": upper + " is misspelled", "details": "d"})
+        call("wiki_feedback", {"kind": "docs", "summary": lower + " is misspelled", "details": "d"})
+    elif batch == "differ":
+        # Where the helper's server answers differently from the Python, on purpose.
+        lines.append(b'{"jsonrpc":"2.0","id":1,"method":"ping","x":"\xff"}')
+        lines.append(b'{"jsonrpc":"2.0","id":NaN,"method":"ping"}')
+        req("tools/call", "x")
+        req("initialize", "x")
+        call("wiki_read", "x")
+        call("wiki_read", {"wiki": "alpha", "path": 5})
+        call("wiki_read", {"wiki": 5})
+        call("wiki_read", {"wiki": "alpha", "collection": 5})
+        call("wiki_search", {"word": 5})
+        call("wiki_start", {"repository": ["a"]})
+        call("wiki_capture", {"wiki": "alpha", "slug": "x", "note": 5})
+        call("wiki_feedback", {"kind": 5})
+        lines.append(b'{"jsonrpc":"2.0","id":"nul","method":"tools/call","params":{"name":"wiki_read","arguments":{"wiki":"alpha","path":"a\\u0000b.md"}}}')
+        lines.append(b'{"jsonrpc":"2.0","id":"surrogate","method":"tools/call","params":{"name":"wiki_search","arguments":{"word":"\\ud800"}}}')
+        lines.append(b'{"jsonrpc":"2.0","id":"nul-word","method":"tools/call","params":{"name":"wiki_search","arguments":{"word":"nul\\u0000byte"}}}')
+        lines.append(b"[" * 20000 + b"]" * 20000)
+    else:
+        sys.exit("no batch " + batch)
+    req("ping", id="last")
+    sys.stdout.buffer.write(b"\n".join(lines) + b"\n")
+
+
+def same(a, b):
+    x, y = replies(a, True), replies(b, True)
+    bad = 0
+    if len(x) != len(y):
+        print("%d replies and %d" % (len(x), len(y)))
+        bad = 1
+    for n, (p, q) in enumerate(zip(x, y), 1):
+        if p != q:
+            bad += 1
+            print("reply %d differs:\n  %s\n  %s" % (n, json.dumps(p)[:600], json.dumps(q)[:600]))
+    sys.exit(1 if bad else 0)
+
+
+def client(reqs, out):
+    want = []
+    for line in open(reqs, "rb").read().split(b"\n"):
+        if not line.strip():
+            continue
+        try:
+            # Go reads JSON 10,000 levels deep and no deeper. Python's limit varies.
+            if line.count(b"[") + line.count(b"{") > 10000:
+                raise ValueError("too deep")
+            m = strict(line)
+        except (ValueError, RecursionError):  # Not UTF-8, or not JSON: a parse error, which has no id.
+            want.append((None, -32700))
+            continue
+        if isinstance(m, dict) and "id" in m:
+            want.append((m["id"], None))
+    got = replies(out)
+    if len(got) != len(want):
+        sys.exit("%d replies to %d requests" % (len(got), len(want)))
+    for n, (r, (id, code)) in enumerate(zip(got, want), 1):
+        ok = isinstance(r, dict) and r.get("jsonrpc") == "2.0" and "id" in r and r["id"] == id and ("result" in r) != ("error" in r)
+        if ok and code:
+            ok = r.get("error", {}).get("code") == code
+        if ok and "error" in r:
+            ok = isinstance(r["error"].get("code"), int) and isinstance(r["error"].get("message"), str)
+        if ok and "content" in r.get("result", {}):
+            c = r["result"]["content"]
+            ok = len(c) == 1 and c[0]["type"] == "text" and isinstance(c[0]["text"], str) and r["result"].get("isError", True) is True
+        if not ok:
+            sys.exit("reply %d isn't what request %d needs (id %r): %s" % (n, n, id, json.dumps(r)[:400]))
+
+
+def text(out, id):
+    for r in replies(out):
+        if r.get("id") == id:
+            if "error" in r:
+                sys.exit("RPC error: %s" % json.dumps(r["error"]))
+            sys.stdout.buffer.write((("ERROR: " if r["result"].get("isError") else "") + r["result"]["content"][0]["text"] + "\n").encode())
+            return
+    sys.exit("no reply with id " + id)
+
+
+def codes(out):
+    print(" ".join(str(r["error"]["code"]) if "error" in r else "tool-error" if r["result"].get("isError") else "ok" for r in replies(out)))
+
+
+def files(folders):
+    lines = []
+    for root in folders:
+        for base, dirs, names in os.walk(root):
+            dirs[:] = [d for d in dirs if d != ".git"]
+            for name in names:
+                full = os.path.join(base, name)
+                shown = CLOCK.sub("TIME", full)
+                if os.path.islink(full):
+                    lines.append("%s -> %s" % (shown, os.readlink(full)))
+                    continue
+                try:
+                    with open(full, "rb") as f:
+                        lines.append("%s %s" % (shown, hashlib.sha256(MINUTE.sub(b"TIME", CLOCK_BYTES.sub(b"TIME", f.read()))).hexdigest()))
+                except OSError:
+                    lines.append("%s unreadable" % shown)
+    # Sorted once the clock is out of the names, or two runs a second apart differ.
+    print("\n".join(sorted(lines)))
+
+
+cmd, args = sys.argv[1], sys.argv[2:]
+if cmd == "requests":
+    requests(args[0])
+elif cmd == "same":
+    same(*args)
+elif cmd == "client":
+    client(*args)
+elif cmd == "text":
+    text(*args)
+elif cmd == "codes":
+    codes(*args)
+elif cmd == "files":
+    files(args)
+else:
+    sys.exit(__doc__)
+PY
+  MS="$T/mcp-same.py"
+  # Both servers start from the same files: the two collections, and what wiki.sh
+  # keeps about this machine.
+  MKEPT="$FD|$CW|$HOME/.config/llm-wiki|$HOME/.local/state/llm-wiki"
+  mcp_keep() {
+    local i=0 d IFS='|'
+    rm -rf "$T/mcp-kept"; mkdir -p "$T/mcp-kept"
+    for d in $MKEPT; do i=$((i + 1)); [ ! -e "$d" ] || cp -Rp "$d" "$T/mcp-kept/$i"; done
+  }
+  mcp_back() {
+    local i=0 d IFS='|'
+    for d in $MKEPT; do i=$((i + 1)); rm -rf "$d"; [ ! -e "$T/mcp-kept/$i" ] || cp -Rp "$T/mcp-kept/$i" "$d"; done
+  }
+  # mcp_run <py|go> <batch>: one server's replies to a batch, in $T/mcp.<who>.out, its
+  # stderr beside them, and what it left behind in $T/mcp.<who>.files. No locale is set,
+  # as in the desktop app. The helper's is the spy, so $T/helper-ran says what else ran.
+  mcp_run() {
+    local who="$1" no=1 go="" d IFS='|'
+    [ "$who" = py ] || { no=""; go="$T/bin/spy-helper"; }
+    mcp_back
+    : > "$T/helper-ran"
+    python3 "$MS" requests "$2" > "$T/mcp.req"
+    (cd "$T" && env -u WIKIS_DIR -u LC_ALL -u LC_CTYPE -u LANG LLM_WIKI_NO_GO="$no" LLM_WIKI_GO="$go" "$W" mcp < "$T/mcp.req" > "$T/mcp.$who.out" 2> "$T/mcp.$who.err")
+    # shellcheck disable=SC2086
+    python3 "$MS" files $MKEPT > "$T/mcp.$who.files"
+  }
+  # mcp_same <check> <batch>: both servers answer a batch the same, and leave the same.
+  mcp_same() {
+    mcp_run py "$2"
+    mcp_run go "$2"
+    check "$1" python3 "$MS" same "$T/mcp.py.out" "$T/mcp.go.out"
+    check "and every reply of the helper's is one line of UTF-8 JSON with the id it was sent, and nothing else" python3 "$MS" client "$T/mcp.req" "$T/mcp.go.out"
+    if cmp -s "$T/mcp.py.files" "$T/mcp.go.files" && [ ! -s "$T/mcp.go.err" ]; then ok "and both leave the same files: $2"; else bad "and both leave the same files: $2" "$(diff "$T/mcp.py.files" "$T/mcp.go.files"; cat "$T/mcp.go.err")"; fi
+  }
+  printf 'carriage, with a return\r\nand a second line\rand a third\n' > "$FD/alpha/wiki/zz-crlf.md"
+  # A character cut short in the middle of a line: one U+FFFD to Python, two to Go.
+  printf 'brokenarrow: half an arrow \342\206 and on\n' > "$FD/alpha/wiki/zz-broken.md"
+  python3 -c 'import sys; e = b"\xc3\xa9".decode(); open(sys.argv[1] + "/fits.md", "w", encoding="utf-8").write(e * 200000); open(sys.argv[1] + "/big.md", "w", encoding="utf-8").write(e * 200000 + "x and more")' "$FD/alpha/wiki"
+  # The searches above have recorded that find was used. Not for these runs: each
+  # server has to record it.
+  MTIPS="$HOME/.config/llm-wiki/tips"
+  cp "$MTIPS" "$T/mcp-tips" 2>/dev/null || true; grep -v '^used:find ' "$T/mcp-tips" > "$MTIPS" 2>/dev/null || true
+  mcp_keep
+  cp -Rp "$T/mcp-kept" "$T/mcp-first"
+  # mcp_first: back to the files as they were before the first batch.
+  mcp_first() { rm -rf "$T/mcp-kept"; cp -Rp "$T/mcp-first" "$T/mcp-kept"; mcp_back; }
+  mcp_same "MCP, helper and Python: the same replies to every request and every tool" same
+  check "and the helper's server answered them itself: no wiki.sh find or which" bash -c "grep -qx mcp '$T/helper-ran' && ! grep -q -x -e find -e which '$T/helper-ran'"
+  check "a long word is logged cut at 60 bytes and not inside a character, by the helper's server" grep -E -q ",global,search-none,x($(printf '\303\251')){29}\$" "$FD/stats.csv"
+  check "and each search is logged once" bash -c "[ \"\$(grep -c ',search-found,twobyte$' '$FD/stats.csv')\" = 1 ] && [ \"\$(grep -c ',search-none,twobyte$' '$CW/stats.csv')\" = 1 ] && grep -qx \"used:find $(date -u +%Y-%m-%d)\" '$MTIPS'"
+  # What a client is owed, whatever the two servers agree on.
+  expect "the helper's search cuts a line before a character the 120th byte falls in" "    wiki/long.md: $(printf '%0111d' 0) canary:
+notes:" python3 "$MS" text "$T/mcp.go.out" search-canary
+  expect "and names each collection" "Collection work:
+jobapp:
+  also in pages:
+    wiki/canary.md: The work canary." python3 "$MS" text "$T/mcp.go.out" search-canary
+  expect "bytes that aren't UTF-8 reach a client as U+FFFD, in a search" "- [School](wiki/school.md): $(printf '\303\211cole normale, and caf\357\277\275 in Latin-1')" python3 "$MS" text "$T/mcp.go.out" search-latin
+  expect "and in a page" "$(printf 'caf\357\277\275 au lait, in Latin-1')" python3 "$MS" text "$T/mcp.go.out" read-latin
+  expect "a character cut short is one U+FFFD, as Python reads it, not one for each byte" "$(printf 'half an arrow \357\277\275 and on')" python3 "$MS" text "$T/mcp.go.out" read-broken
+  [ "$(python3 "$MS" text "$T/mcp.go.out" read-crlf)" = "carriage, with a return
+and a second line
+and a third" ] && ok "a page's line ends reach a client as line feeds" || bad "a page's line ends reach a client as line feeds" "$(python3 "$MS" text "$T/mcp.go.out" read-crlf | od -c | head -n 5)"
+  expect "wiki_list counts pages and names collections" "alpha (collection default): 19 page(s)" python3 "$MS" text "$T/mcp.go.out" list
+
+  ln -s ../zlast.md "$FD/alpha/wiki/a/link.md"; echo "very secret" > "$T/secret.md"; ln -s "$T/secret.md" "$FD/alpha/wiki/out.md"
+  ln -s "$FD/alpha/wiki/howto" "$FD/alpha/wiki/folder.md"; ln -s nowhere "$FD/alpha/wiki/broken.md"
+  printf -- '- caf\351\n' >> "$CW/jobapp/repos.md"
+  mcp_keep
+  mcp_same "MCP, helper and Python: the same where the helper's server leaves it to wiki.sh" fallback
+  check "and there wiki.sh did the search and the routing" bash -c "grep -qx find '$T/helper-ran' && grep -qx which '$T/helper-ran'"
+  expect "a link inside the wiki is read" "canary, the sixth page, so never shown" python3 "$MS" text "$T/mcp.go.out" read-link
+  expect "a link to a file counts as a page, and one to a folder doesn't" "alpha (collection default): 22 page(s)" python3 "$MS" text "$T/mcp.go.out" list
+  expect "and a repos.md that isn't UTF-8 is read" "jobapp (collection work): 2 page(s), covers: jobapp-web jobapp-api $(printf 'caf\357\277\275')" python3 "$MS" text "$T/mcp.go.out" list
+  expect "wiki_start still finds the collection" "/jobapp, for the repository jobapp-api" python3 "$MS" text "$T/mcp.go.out" start
+  check "and wiki.sh logs a long word as the helper's server does" grep -E -q ",global,search-none,x($(printf '\303\251')){29}\$" "$CW/stats.csv"
+  rm -f "$T/secret.md" "$T/jobapp-repos"
+
+  mcp_first
+  printf 'mode=notes\n' > "$HOME/.config/llm-wiki/feedback"
+  # Not as git repositories: a push by the first server would reach the second through
+  # its pull. The MCP section has both servers push.
+  find "$FD" "$CW" -maxdepth 2 -name .git -prune -exec rm -rf {} +
+  mcp_keep
+  mcp_same "MCP, helper and Python: the same from the tools that write, and the same notes saved" write
+  expect "the helper's wiki_capture saves a note" "-from-chat.md in ~/wikis/alpha" python3 "$MS" text "$T/mcp.go.out" capture
+  check "and the note has what was sent" bash -c "grep -q 'With an arrow $(printf '\342\206\222').' '$FD'/alpha/raw/*-from-chat.md"
+  expect "the helper's wiki_feedback saves a note" "feedback: saved" python3 "$MS" text "$T/mcp.go.out" feedback
+  check "with the agent it was given" bash -c "grep -q '^Agent: Smoke, test model' '$HOME'/.local/state/llm-wiki/feedback/*.md"
+
+  # Where the helper's server answers differently on purpose. Python stops at none of
+  # these in the C locale, and answers them with its own exceptions' words.
+  mcp_first
+  mcp_run go differ
+  check "what Python trips over, the helper's server answers as a client needs" python3 "$MS" client "$T/mcp.req" "$T/mcp.go.out"
+  [ "$(python3 "$MS" codes "$T/mcp.go.out")" = "-32700 -32700 -32603 -32603 -32603 -32603 -32603 -32603 -32603 -32603 -32603 -32603 tool-error ok -32603 -32700 ok" ] && ok "a parse error for a line that isn't UTF-8 or JSON, an error for a wrong type, and the next request answered" || bad "a parse error for a line that isn't UTF-8 or JSON, an error for a wrong type, and the next request answered" "$(python3 "$MS" codes "$T/mcp.go.out")"
+  check "and nothing on stderr" test ! -s "$T/mcp.go.err"
+  mcp_first
+  [ ! -f "$T/mcp-tips" ] || mv "$T/mcp-tips" "$MTIPS"
+  rm -f "$FD/alpha/wiki/fits.md" "$FD/alpha/wiki/big.md" "$FD/alpha/wiki/zz-crlf.md" "$FD/alpha/wiki/zz-broken.md" "$T"/mcp.*.out "$T"/mcp.*.err "$T"/mcp.*.files "$T/mcp.req"; rm -rf "$T/mcp-kept" "$T/mcp-first"
   rm -rf "${FD:?}/alpha" "$FD/Beta" "$FD/notes" "$FD/stray"
   rm -f "$CW/jobapp/wiki/canary.md" "$FD/stats.csv" "$CW/stats.csv"
 else
