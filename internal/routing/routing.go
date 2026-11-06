@@ -70,7 +70,7 @@ func listedIn(root, name string, wikis []string) (string, error) {
 	var found []string
 	for _, w := range wikis {
 		repos := root + "/" + w + "/repos.md"
-		if ok, err := isFile(repos); err != nil {
+		if ok, err := IsFile(repos); err != nil {
 			return "", err
 		} else if !ok {
 			continue
@@ -122,7 +122,7 @@ func miss(o Options, name string, wikis []string) (string, error) {
 				return "", err
 			}
 			// grep -i -F under LC_ALL=C: letters of ASCII only, whatever the case.
-			hit = bytes.Contains(lower(index), lower([]byte(name)))
+			hit = bytes.Contains(Lower(index), Lower([]byte(name)))
 		}
 		if hit {
 			// The Bash leaves its list unquoted, so the shell splits and expands a name.
@@ -148,11 +148,10 @@ func miss(o Options, name string, wikis []string) (string, error) {
 }
 
 // wikiNames is the wikis of a collection, as the shell's "$WIKIS_DIR"/*/ and is_wiki
-// find them: folders, or links to folders, whose names don't start with a dot. They
-// come sorted by byte, which is the shell's order only under LC_ALL=C, so nothing here
-// may depend on the order.
+// find them. They come sorted by byte, which is the shell's order only under LC_ALL=C,
+// so nothing here may depend on the order.
 func wikiNames(root string) ([]string, error) {
-	entries, err := os.ReadDir(root)
+	dirs, err := Folders(root)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
@@ -160,16 +159,36 @@ func wikiNames(root string) ([]string, error) {
 		return nil, err
 	}
 	var names []string
+	for _, name := range dirs {
+		ok, err := isWiki(root + "/" + name)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			names = append(names, name)
+		}
+	}
+	return names, nil
+}
+
+// Folders is what the shell's "$WIKIS_DIR"/*/ matches: the folders of a collection, or
+// links to folders, whose names don't start with a dot. They come sorted by byte, which
+// is the shell's order under LC_ALL=C.
+func Folders(root string) ([]string, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
 	for _, e := range entries {
 		if strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
-		dir := root + "/" + e.Name()
 		if !e.IsDir() {
 			if e.Type()&fs.ModeSymlink == 0 {
 				continue
 			}
-			st, err := os.Stat(dir)
+			st, err := os.Stat(root + "/" + e.Name())
 			if notThere(err) || err == nil && !st.IsDir() {
 				continue
 			}
@@ -177,28 +196,22 @@ func wikiNames(root string) ([]string, error) {
 				return nil, err
 			}
 		}
-		ok, err := isWiki(dir)
-		if err != nil {
-			return nil, err
-		}
-		if ok {
-			names = append(names, e.Name())
-		}
+		names = append(names, e.Name())
 	}
 	return names, nil
 }
 
 // isWiki is wiki.sh's is_wiki.
 func isWiki(dir string) (bool, error) {
-	if ok, err := isFile(dir + "/AGENTS.md"); err != nil || !ok {
+	if ok, err := IsFile(dir + "/AGENTS.md"); err != nil || !ok {
 		return false, err
 	}
-	return isFile(dir + "/index.md")
+	return IsFile(dir + "/index.md")
 }
 
-// isFile is the shell's [ -f path ], except that the shell calls a file it isn't
+// IsFile is the shell's [ -f path ], except that the shell calls a file it isn't
 // allowed to look at missing. Here that is an error, so the Bash says what it says.
-func isFile(path string) (bool, error) {
+func IsFile(path string) (bool, error) {
 	st, err := os.Stat(path)
 	if notThere(err) {
 		return false, nil
@@ -208,6 +221,10 @@ func isFile(path string) (bool, error) {
 	}
 	return st.Mode().IsRegular(), nil
 }
+
+// NotThere is whether an error says a path doesn't exist, as opposed to one that
+// can't be looked at.
+func NotThere(err error) bool { return notThere(err) }
 
 func notThere(err error) bool {
 	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
@@ -224,8 +241,9 @@ func validName(s string) bool {
 	return s != ""
 }
 
-// lower lowers the letters of ASCII and leaves every other byte alone.
-func lower(b []byte) []byte {
+// Lower lowers the letters of ASCII and leaves every other byte alone, as grep -i and
+// awk's tolower do under LC_ALL=C.
+func Lower(b []byte) []byte {
 	out := make([]byte, len(b))
 	for i, c := range b {
 		if c >= 'A' && c <= 'Z' {

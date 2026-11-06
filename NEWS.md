@@ -4,6 +4,11 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-11-06: `wiki find` gets faster
+
+- `wiki find` is three to six times faster: about 40 ms where it took 120 to 250. So is the MCP server's search.
+- It prints the same in any locale: a page's line is cut at 120 bytes and never inside a character, and an accented letter matches only in its own case.
+
 ## 2026-11-06: `wiki which` says when it can't read
 
 - `wiki which` says it can't read a wiki folder or the collection, where it said no wiki covers the repository.

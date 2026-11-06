@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/broxgit/llm-wiki/internal/backfill"
+	"github.com/broxgit/llm-wiki/internal/find"
 	"github.com/broxgit/llm-wiki/internal/routing"
 	"github.com/broxgit/llm-wiki/internal/standup"
 	"github.com/broxgit/llm-wiki/internal/tokens"
@@ -22,11 +23,11 @@ import (
 // protocol is what wiki.sh checks before it trusts this program: the commands, their
 // arguments and what they print. Raise it, and GO_PROTOCOL in wiki.sh with it, whenever
 // one of those changes, so a binary left over from an older checkout is passed over.
-const protocol = "6"
+const protocol = "7"
 
 func main() {
 	if len(os.Args) < 2 {
-		fail("usage: llm-wiki protocol | report-tokens|report-tokens-gemini <transcripts> <start> <end> <day-starts> <wikis> <exclude> | standup-activity <options> | journal-backfill <transcripts> <start> <end> <day-starts> <wikis> <exclude> <out> <brain> | which <options>")
+		fail("usage: llm-wiki protocol | report-tokens|report-tokens-gemini <transcripts> <start> <end> <day-starts> <wikis> <exclude> | standup-activity <options> | journal-backfill <transcripts> <start> <end> <day-starts> <wikis> <exclude> <out> <brain> | which <options> | find <options>")
 	}
 	switch os.Args[1] {
 	case "protocol":
@@ -56,6 +57,12 @@ func main() {
 		fmt.Print(out)
 	case "which":
 		out, err := runWhich(os.Args[2:])
+		if err != nil {
+			fail(err.Error())
+		}
+		fmt.Print(out)
+	case "find":
+		out, err := runFind(os.Args[2:])
 		if err != nil {
 			fail(err.Error())
 		}
@@ -113,6 +120,30 @@ func runWhich(args []string) (string, error) {
 		return "covered\n" + text, nil
 	}
 	return "uncovered\n" + text, nil
+}
+
+// runFind answers `wiki find`. A first line says how the search went, for wiki.sh to
+// log: "found <wiki>", with the first wiki that had a result, or "none". wiki.sh prints
+// the rest.
+func runFind(args []string) (string, error) {
+	var o find.Options
+	fs := flag.NewFlagSet("find", flag.ContinueOnError)
+	fs.StringVar(&o.Wikis, "wikis", "", "")
+	fs.StringVar(&o.Word, "word", "", "")
+	if err := fs.Parse(args); err != nil {
+		return "", err
+	}
+	if fs.NArg() > 0 || o.Wikis == "" {
+		return "", errors.New("find takes: --wikis <folder> --word <word>")
+	}
+	text, first, err := find.Search(o)
+	if err != nil {
+		return "", err
+	}
+	if first == "" {
+		return "none\n" + text, nil
+	}
+	return "found " + first + "\n" + text, nil
 }
 
 func lines(s string) []string {

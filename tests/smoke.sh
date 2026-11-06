@@ -2086,6 +2086,215 @@ lines"
 else
   skipped "the Go helper against the Bash for which (go isn't installed)"
 fi
+
+# find, from the compiled helper and from the Bash: the same stdout, stderr and exit
+# code, and the same line in stats.csv.
+if [ -x "$T/bin/llm-wiki" ]; then
+  # A wrapper notes how the helper's find ended, so a check can tell who answered.
+  printf '#!/bin/sh\n[ "$1" = find ] || exec "%s" "$@"\n"%s" "$@"\nrc=$?\necho "$rc" >> "%s"\nexit $rc\n' "$T/bin/llm-wiki" "$T/bin/llm-wiki" "$T/find-ran" > "$T/bin/find-spy"
+  chmod +x "$T/bin/find-spy"
+  FD="$HOME/wikis"
+  # frun <helper> <folder> <find's arguments>: find there with that helper, or with the
+  # Bash alone when none is named. Prints stdout, the exit code, and what stats.csv
+  # got. stderr goes to $T/find.err.
+  frun() {
+    local go="$1" dir="$2" no=1
+    shift 2
+    [ -z "$go" ] || no=""
+    rm -f "$FD/stats.csv" "$CW/stats.csv" 2>/dev/null
+    (cd "$dir" && env -u WIKIS_DIR LLM_WIKI_NO_GO="$no" LLM_WIKI_GO="$go" "$W" find "$@" 2>"$T/find.err"; echo "exit $?")
+    echo "stats:"
+    cat "$FD/stats.csv" "$CW/stats.csv" 2>/dev/null
+  }
+  # fsame <check> <helper|bash> <find's arguments>: both print and log the same, and
+  # with the helper on, the answer came from the one named.
+  fsame() {
+    local name="$1" who="$2" a b ran
+    shift 2
+    : > "$T/find-ran"
+    a="$(frun "" "$RC" "$@")"
+    cp "$T/find.err" "$T/find.a"
+    b="$(frun "$T/bin/find-spy" "$RC" "$@")"
+    ran="$(cat "$T/find-ran")"
+    case "$who:$ran" in helper:0) ran=helper ;; helper:* | bash: | bash:0) ran="not the $who (the helper's find ended: ${ran:-never ran})" ;; *) ran=bash ;; esac
+    if [ "$a" = "$b" ] && cmp -s "$T/find.a" "$T/find.err" && [ "$ran" = "$who" ]; then
+      ok "$name"
+    else
+      bad "$name" "$(printf 'answered by: %s\nBash: %s\n%s\nhelper: %s\n%s' "$ran" "$a" "$(cat "$T/find.a")" "$b" "$(cat "$T/find.err")")"
+    fi
+  }
+  # Beta sorts before alpha by byte and after it in most other orders. notes has an
+  # index and no handbook, and stray has neither.
+  mkdir -p "$FD/Beta" "$FD/notes" "$FD/stray" "$FD/alpha/wiki/howto" "$FD/alpha/wiki/a-b" "$FD/alpha/wiki/a" "$FD/alpha/wiki/.hid" "$FD/alpha/wiki/sources" "$FD/alpha/wiki/sub/sources"
+  printf '# Handbook\n' > "$FD/Beta/AGENTS.md"
+  printf '# Index\n- [Canary](wiki/c.md): the canary of Beta\n' > "$FD/Beta/index.md"
+  printf -- '- canary, in a folder with an index and no handbook\n' > "$FD/notes/index.md"
+  printf 'canary, in a folder with no index\n' > "$FD/stray/readme.md"
+  printf '# Handbook\n' > "$FD/alpha/AGENTS.md"
+  printf '# Index\n\n## Canary pages\n- [Deploy flow](wiki/howto/deploy.md): canary first, then the rest\n- [Costs](wiki/costs.md): a.c is not abc, and $5 (.*) [x] ^# is no pattern\n- [School](wiki/school.md): \303\211cole normale, and caf\351 in Latin-1' > "$FD/alpha/index.md"
+  printf -- '---\ntitle: Deploy\n---\nThe canary goes first.\n' > "$FD/alpha/wiki/howto/deploy.md"
+  printf 'canary in a-b\n' > "$FD/alpha/wiki/a-b/x.md"
+  printf 'canary in a\n' > "$FD/alpha/wiki/a/x.md"
+  printf 'canary in a hidden folder\n' > "$FD/alpha/wiki/.hid/h.md"
+  printf 'canary with a carriage return\r\n' > "$FD/alpha/wiki/crlf.md"
+  printf -- '---\ntitle: canary only up here\n---\nNothing below.\n' > "$FD/alpha/wiki/front.md"
+  # The 120th byte of its line is the first of an arrow's three.
+  printf -- '---\ntitle: Long\n---\n \t  %s canary:\342\206\222 and on it goes\n' "$(printf '%0111d' 0)" > "$FD/alpha/wiki/long.md"
+  # More lines that a cut at 120 bytes ends inside a character, or just after one: the
+  # first byte of two, three of four, and an arrow whose last byte is the 120th.
+  printf '%s twobyte:\303\251 and on\n' "$(printf '%0110d' 0)" > "$FD/alpha/wiki/cut-two.md"
+  printf '%s fourbyte:\360\237\230\200 and on\n' "$(printf '%0107d' 0)" > "$FD/alpha/wiki/cut-four.md"
+  printf '%s wholechar:\342\206\222 and on\n' "$(printf '%0106d' 0)" > "$FD/alpha/wiki/cut-whole.md"
+  printf 'latinend, a line that ends in Latin-1: caf\351\n' > "$FD/alpha/wiki/end-latin.md"
+  printf 'canary, the sixth page, so never shown\n' > "$FD/alpha/wiki/zlast.md"
+  printf 'canary under sources\n' > "$FD/alpha/wiki/sources/s.md"
+  printf 'canary under a deeper sources\n' > "$FD/alpha/wiki/sub/sources/t.md"
+  printf 'canary in a file that is not .md\n' > "$FD/alpha/wiki/upper.MD"
+  printf 'At the \303\211cole.\ncaf\351 au lait, in Latin-1\n' > "$FD/alpha/wiki/school.md"
+  printf 'The work canary.\n' > "$CW/jobapp/wiki/canary.md"
+
+  fsame "find, helper and Bash: a word in several wikis, whatever its case" helper CANARY
+  out="$(frun "$T/bin/llm-wiki" "$RC" CANARY)"
+  cr=$'\r'
+  want="Beta:
+  - [Canary](wiki/c.md): the canary of Beta
+alpha:
+  - [Deploy flow](wiki/howto/deploy.md): canary first, then the rest
+  also in pages:
+    wiki/.hid/h.md: canary in a hidden folder
+    wiki/a-b/x.md: canary in a-b
+    wiki/a/x.md: canary in a
+    wiki/crlf.md: canary with a carriage return$cr
+    wiki/long.md: $(printf '%0111d' 0) canary:
+notes:
+  - canary, in a folder with an index and no handbook
+exit 0
+stats:
+date,wiki,result,word
+$(date -u +%Y-%m-%d),Beta,search-found,CANARY"
+  [ "$out" = "$want" ] && ok "and the helper prints index lines, then five pages by path, and logs the first wiki" || bad "and the helper prints index lines, then five pages by path, and logs the first wiki" "$out"
+  fsame "find, helper and Bash: an index line in another case than the word's" helper "DEPLOY flow"
+  fsame "find, helper and Bash: a page's line in another case than the word's" helper "the CANARY goes"
+  expect "and the helper shows the line as it is written" "wiki/howto/deploy.md: The canary goes first." frun "$T/bin/llm-wiki" "$RC" "the CANARY goes"
+  # A line is cut at 120 bytes and never inside a character, so what find prints of
+  # pages that are UTF-8 is UTF-8.
+  fsame "find, helper and Bash: a line cut inside a character of two bytes" helper twobyte
+  expect "and the helper stops before the character" "wiki/cut-two.md: $(printf '%0110d' 0) twobyte:
+exit 0" frun "$T/bin/llm-wiki" "$RC" twobyte
+  fsame "find, helper and Bash: a line cut inside a character of four bytes" helper fourbyte
+  expect "and the helper stops before that one too" "wiki/cut-four.md: $(printf '%0107d' 0) fourbyte:
+exit 0" frun "$T/bin/llm-wiki" "$RC" fourbyte
+  fsame "find, helper and Bash: a line cut just after a character" helper wholechar
+  expect "and the helper keeps the character" "wiki/cut-whole.md: $(printf '%0106d' 0) wholechar:$(printf '\342\206\222')
+exit 0" frun "$T/bin/llm-wiki" "$RC" wholechar
+  for w in canary twobyte fourbyte wholechar; do
+    frun "" "$RC" "$w" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 || break
+    frun "$T/bin/llm-wiki" "$RC" "$w" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 || break
+    w=""
+  done
+  [ -z "$w" ] && ok "what find prints of UTF-8 pages is UTF-8, from the helper and the Bash" || bad "what find prints of UTF-8 pages is UTF-8, from the helper and the Bash" "not UTF-8: find $w"
+  # The MCP server reads find through Python as text, in whatever locale it was started.
+  aspy() { (cd "$RC" && env -u WIKIS_DIR -u LC_ALL -u LC_CTYPE -u LANG "$@" python3 -c 'import subprocess, sys; print(subprocess.run([sys.argv[1], "find", sys.argv[2]], capture_output=True, text=True).stdout)' "$W" canary 2>&1); }
+  expect "Python reads the helper's find as text with no locale set" "wiki/long.md: $(printf '%0111d' 0) canary:
+notes:" aspy LLM_WIKI_NO_GO= LLM_WIKI_GO="$T/bin/llm-wiki"
+  expect "and the Bash's" "wiki/long.md: $(printf '%0111d' 0) canary:
+notes:" aspy LLM_WIKI_NO_GO=1
+  fsame "find, helper and Bash: a line that ends in a Latin-1 letter loses it" helper latinend
+  expect "and the helper shows the rest" "wiki/end-latin.md: latinend, a line that ends in Latin-1: caf
+exit 0" frun "$T/bin/llm-wiki" "$RC" latinend
+  # No output of wiki.sh can end a call to the MCP server: bytes that aren't UTF-8 come back as U+FFFD.
+  expect "wiki_search answers when an index line isn't UTF-8" "- [School](wiki/school.md): " mcp_any wiki_search '{"word":"in Latin-1"}'
+  lacks "and doesn't fail" "ERROR" mcp_any wiki_search '{"word":"in Latin-1"}'
+  fsame "find, helper and Bash: a word that matches nothing" helper zzznothing
+  expect "and the helper says so, and logs it against the shared wiki" "no mentions in any index or page: zzznothing
+exit 0
+stats:
+date,wiki,result,word
+$(date -u +%Y-%m-%d),global,search-none,zzznothing" frun "$T/bin/llm-wiki" "$RC" zzznothing
+  fsame "find, helper and Bash: a heading of an index is no entry" helper "Canary pages"
+  fsame "find, helper and Bash: a dot is a dot" helper a.c
+  lacks "and stands for no other character" "a-b" frun "$T/bin/llm-wiki" "$RC" a.b
+  fsame "find, helper and Bash: a star, a bracket, a caret and a dollar are themselves" helper '.*) [x] ^#'
+  fsame "find, helper and Bash: a word with a comma, logged without it" helper 'first, then'
+  expect "and the helper's log has the word without the comma" ",alpha,search-found,first then" frun "$T/bin/llm-wiki" "$RC" 'first, then'
+  fsame "find, helper and Bash: a space" helper ' '
+  fsame "find, helper and Bash: a word with an accent" helper "$(printf '\303\211cole')"
+  expect "and the helper finds it" "- [School](wiki/school.md): " frun "$T/bin/llm-wiki" "$RC" "$(printf '\303\211cole')"
+  fsame "find, helper and Bash: an accented letter in the other case is another letter" helper "$(printf '\303\251cole')"
+  expect "and the helper finds nothing for it" "no mentions" frun "$T/bin/llm-wiki" "$RC" "$(printf '\303\251cole')"
+  fsame "find, helper and Bash: a word and a page that aren't UTF-8" helper "$(printf 'CAF\351')"
+  expect "and the helper finds them" "wiki/school.md: caf" frun "$T/bin/llm-wiki" "$RC" "$(printf 'CAF\351 au')"
+  fsame "find, helper and Bash: a second collection" helper canary --collection work
+  expect "and the helper searches that one alone" "jobapp:
+  also in pages:
+    wiki/canary.md: The work canary.
+exit 0
+stats:
+date,wiki,result,word
+$(date -u +%Y-%m-%d),jobapp,search-found,canary" frun "$T/bin/llm-wiki" "$RC" canary --collection work
+  # The Bash is pinned to LC_ALL=C, so a locale changes nothing: not the order of the
+  # wikis, not which letters match, not where a line is cut.
+  U8="$(locale -a 2>/dev/null | grep -i -E '^(en_US|C)\.utf-?8$' | head -n 1)"
+  if [ -n "$U8" ]; then
+    [ "$(LC_ALL="$U8" frun "" "$RC" CANARY)" = "$want" ] && ok "find with the Bash prints the same in a UTF-8 locale" || bad "find with the Bash prints the same in a UTF-8 locale" "$(LC_ALL="$U8" frun "" "$RC" CANARY)"
+    [ "$(LC_ALL="$U8" frun "$T/bin/llm-wiki" "$RC" CANARY)" = "$want" ] && ok "and so does the helper" || bad "and so does the helper" "$(LC_ALL="$U8" frun "$T/bin/llm-wiki" "$RC" CANARY)"
+    expect "and an accented letter in the other case still isn't found there" "no mentions" env LC_ALL="$U8" LLM_WIKI_NO_GO=1 "$W" find "$(printf '\303\251cole')"
+  else
+    skipped "find in a UTF-8 locale (none is installed)"
+  fi
+  # The helper reads no page after the fifth it shows, and the Bash takes no line from one.
+  printf 'canary\0\n' > "$FD/alpha/wiki/zz-nul.md"
+  fsame "find, helper and Bash: a page with a NUL byte past the five shown" helper canary
+  rm -f "$FD/alpha/wiki/zz-nul.md"
+  # What the helper isn't sure of, it leaves to the Bash.
+  fsame "find, helper and Bash: a word with a backslash" bash 'can\ary'
+  fsame "find, helper and Bash: a word with a line break" bash "canary
+goes"
+  printf 'canary\0\n' > "$FD/alpha/wiki/a/nul.md"
+  fsame "find, helper and Bash: a page with a NUL byte" bash canary
+  rm -f "$FD/alpha/wiki/a/nul.md"
+  cp "$FD/Beta/index.md" "$T/beta-index"
+  printf -- '- canary\0\n' >> "$FD/Beta/index.md"
+  fsame "find, helper and Bash: an index with a NUL byte" bash canary
+  cp "$T/beta-index" "$FD/Beta/index.md"
+  ln -s ../zlast.md "$FD/alpha/wiki/a/link.md"
+  fsame "find, helper and Bash: a page that is a link" bash canary
+  rm -f "$FD/alpha/wiki/a/link.md"
+  ln -s "$FD/alpha/wiki" "$FD/notes/wiki"
+  fsame "find, helper and Bash: a wiki/ folder that is a link" bash canary
+  rm -f "$FD/notes/wiki"
+  if [ "$(id -u)" != 0 ]; then
+    chmod 000 "$FD/alpha/wiki/a/x.md"
+    fsame "find, helper and Bash: a page that can't be read" bash canary
+    lacks "which the Bash leaves out" "wiki/a/x.md" frun "$T/bin/llm-wiki" "$RC" canary
+    chmod 644 "$FD/alpha/wiki/a/x.md"
+    chmod 000 "$FD/alpha/index.md"
+    fsame "find, helper and Bash: an index that can't be read" bash canary
+    chmod 644 "$FD/alpha/index.md"
+    chmod 000 "$FD/alpha/wiki"
+    fsame "find, helper and Bash: a folder of pages that can't be read" bash canary
+    chmod 755 "$FD/alpha/wiki"
+    chmod 000 "$FD/alpha"
+    fsame "find, helper and Bash: a wiki's folder that can't be read" bash canary
+    chmod 755 "$FD/alpha"
+    chmod 000 "$FD"
+    fsame "find, helper and Bash: a collection that can't be read" bash canary
+    chmod 755 "$FD"
+  else
+    skipped "find with folders that can't be read (root can read anything)"
+  fi
+  want="$(frun "" "$RC" canary)"
+  [ "$(frun "$T/bin/broken-helper" "$RC" canary)" = "$want" ] && ok "a helper that fails falls back to the Bash for find, and the search is logged once" || bad "a helper that fails falls back to the Bash for find, and the search is logged once" "$(frun "$T/bin/broken-helper" "$RC" canary)"
+  [ "$(frun "$T/bin/stale-helper" "$RC" canary)" = "$want" ] && ok "and one built for another protocol is passed over" || bad "and one built for another protocol is passed over"
+  # A helper that speaks the protocol but doesn't say how the search went isn't believed.
+  printf '#!/bin/sh\n[ "$1" = protocol ] && { sed -n "s/^GO_PROTOCOL=//p" "%s"; exit 0; }\nprintf "alpha:\\n  - wrong\\n"\n' "$W" > "$T/bin/odd-helper"
+  chmod +x "$T/bin/odd-helper"
+  [ "$(frun "$T/bin/odd-helper" "$RC" canary)" = "$want" ] && ok "and an answer with no first line saying found or none is passed over" || bad "and an answer with no first line saying found or none is passed over" "$(frun "$T/bin/odd-helper" "$RC" canary)"
+  rm -rf "${FD:?}/alpha" "$FD/Beta" "$FD/notes" "$FD/stray"
+  rm -f "$CW/jobapp/wiki/canary.md" "$FD/stats.csv" "$CW/stats.csv"
+else
+  skipped "the Go helper against the Bash for find (go isn't installed)"
+fi
 rm -f "$HOME/.config/llm-wiki/collections"
 fi
 
