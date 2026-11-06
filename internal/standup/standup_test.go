@@ -77,25 +77,6 @@ func TestExcluded(t *testing.T) {
 	}
 }
 
-// Printed by the expansions in wiki.sh's repo_name, on Apple's bash 3.2.
-func TestRepoNameLikeBash(t *testing.T) {
-	for url, want := range map[string]string{
-		"git@github.com:a/b.git": "b",
-		"https://x/y/z.git/":     "z",
-		"https://x/y/z/":         "z",
-		"foo":                    "foo",
-		"host:foo.git":           "foo",
-		"a.git.git":              "a.git",
-	} {
-		if got := repoName("/d/dir", url); got != want {
-			t.Errorf("repoName(%q) = %q, Bash gives %q", url, got, want)
-		}
-	}
-	if got := repoName("/d/dir", ""); got != "dir" {
-		t.Errorf("with no remote: %q", got)
-	}
-}
-
 // Printed by the expansions in cmd_standup: ${line#*[} then ${proj%%]*}.
 func TestJournalProjectLikeBash(t *testing.T) {
 	for line, want := range map[string]string{

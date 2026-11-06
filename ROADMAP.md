@@ -9,7 +9,7 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 ### Port wiki.sh to Go, one command at a time
 
 - **Why:** see the first step under Done. The aim is one binary that needs no Bash 3.2 workarounds and no Python.
-- **Sketch:** next routing as one package, `find` with ranked section results, and the MCP server in-process. Each port prints what the old code prints, checked by the smoke tests, and adds nothing.
+- **Sketch:** next `find` with ranked section results, then the MCP server in-process. Routing has its package, `internal/routing`, which answers `wiki which` so far. Still Bash in routing: choosing the collection (`collection_for`, which runs at the top of every command, the core ones included), `wiki_root`, `repo_map` and the `links.md` lookups. Each port prints what the old code prints, checked by the smoke tests, and adds nothing.
 - **Open:** when the ported commands may drop their old Bash and Python. The helper now reaches people through `wiki update`, but that has to prove itself first. The core commands (`start`, `capture`, `lock`, `sync`, `index`) stay in Bash until then, so a session can never break over a missing binary.
 
 ### Know whether sessions capture and compile
@@ -71,6 +71,11 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### The Go port: wiki which (2026-11-06)
+
+- **Why:** routing, working out which wiki covers a repository, is what `find` and the MCP server build on, and none of it was in Go. Speed was not the reason: `wiki which` took 35 to 110 ms on the maintainer's Mac with 19 wikis, and about 35 of that is Bash starting up and choosing the collection.
+- **What changed:** `internal/routing` and the helper's `which` answer `wiki which`, for a name or for the repository the command runs in: the wiki named after it, the one whose `repos.md` lists it, or the advice with its close matches. `wiki.sh` still chooses the collection, and `which_wiki` stays for `start`, `sync`, `new` and `cover`. A repository no wiki covers now takes about 44 ms, not 105, and one found through `repos.md` 41, not 48. One found by its own name takes 40, not 35, because asking the helper costs two processes and the Bash needed none. Both ways print the same for every case the smoke test compares: a second collection, a renamed folder matched by its remote, a wiki that lists several repositories, and folders and files that can't be read. What the helper isn't sure of stays with the Bash: anything it can't read, two wikis that list one repository, and a name with a backslash or a line break. `which_miss` now runs its `tr`, `grep` and `sort` under `LC_ALL=C`, so the order of close matches no longer depends on the locale.
 
 ### The Go port: journal backfill (2026-11-05)
 

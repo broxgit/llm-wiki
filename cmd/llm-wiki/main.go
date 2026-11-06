@@ -6,6 +6,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/broxgit/llm-wiki/internal/backfill"
+	"github.com/broxgit/llm-wiki/internal/routing"
 	"github.com/broxgit/llm-wiki/internal/standup"
 	"github.com/broxgit/llm-wiki/internal/tokens"
 )
@@ -20,11 +22,11 @@ import (
 // protocol is what wiki.sh checks before it trusts this program: the commands, their
 // arguments and what they print. Raise it, and GO_PROTOCOL in wiki.sh with it, whenever
 // one of those changes, so a binary left over from an older checkout is passed over.
-const protocol = "5"
+const protocol = "6"
 
 func main() {
 	if len(os.Args) < 2 {
-		fail("usage: llm-wiki protocol | report-tokens|report-tokens-gemini <transcripts> <start> <end> <day-starts> <wikis> <exclude> | standup-activity <options> | journal-backfill <transcripts> <start> <end> <day-starts> <wikis> <exclude> <out> <brain>")
+		fail("usage: llm-wiki protocol | report-tokens|report-tokens-gemini <transcripts> <start> <end> <day-starts> <wikis> <exclude> | standup-activity <options> | journal-backfill <transcripts> <start> <end> <day-starts> <wikis> <exclude> <out> <brain> | which <options>")
 	}
 	switch os.Args[1] {
 	case "protocol":
@@ -48,6 +50,12 @@ func main() {
 		out, err := backfill.Run(backfill.Options{
 			Transcripts: a[0], Start: a[1], End: a[2], DayStarts: a[3], Wikis: a[4], Exclude: a[5], Out: a[6], Brain: a[7],
 		})
+		if err != nil {
+			fail(err.Error())
+		}
+		fmt.Print(out)
+	case "which":
+		out, err := runWhich(os.Args[2:])
 		if err != nil {
 			fail(err.Error())
 		}
@@ -80,6 +88,31 @@ func runStandup(args []string) (string, error) {
 	}
 	o.Repos, o.Authors, o.Exclude = lines(repos), lines(authors), lines(exclude)
 	return standup.Run(o)
+}
+
+// runWhich answers `wiki which`. Both answers leave by stdout, since anything else
+// would look like a failure: a first line says which it is, covered or uncovered, and
+// wiki.sh prints the rest, to stdout or to stderr.
+func runWhich(args []string) (string, error) {
+	var o routing.Options
+	fs := flag.NewFlagSet("which", flag.ContinueOnError)
+	for name, to := range map[string]*string{"wikis": &o.Wikis, "home": &o.Home, "wiki-cmd": &o.WikiCmd, "name": &o.Name} {
+		fs.StringVar(to, name, "", "")
+	}
+	if err := fs.Parse(args); err != nil {
+		return "", err
+	}
+	if fs.NArg() > 0 || o.Wikis == "" {
+		return "", errors.New("which takes: --wikis <folder> --home <folder> --wiki-cmd <command> [--name <repository>]")
+	}
+	text, covered, err := routing.Which(o)
+	if err != nil {
+		return "", err
+	}
+	if covered {
+		return "covered\n" + text, nil
+	}
+	return "uncovered\n" + text, nil
 }
 
 func lines(s string) []string {

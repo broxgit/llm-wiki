@@ -1985,6 +1985,97 @@ printf 'x\n' > "$HOME/wikis/global/wiki/hit.md"; printf 'x\n' > "$CW/global/wiki
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"wiki_read","arguments":{"wiki":"global","path":"wiki/hit.md","collection":"default"}}}' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"wiki_read","arguments":{"wiki":"global","path":"wiki/hit.md","collection":"work"}}}' | (cd "$T" && env -u WIKIS_DIR "$W" mcp) >/dev/null
 check "lookups count per collection" bash -c "grep -q ',global,hit$' '$HOME/wikis/stats.csv' && grep -q ',global,hit$' '$CW/stats.csv'"
 rm -f "$HOME/wikis/global/wiki/hit.md" "$CW/global/wiki/hit.md" "$HOME/wikis/stats.csv"
+
+# which, from the compiled helper and from the Bash: the same stdout, stderr and exit
+# code. The weekly report's section builds the helper; a part without it builds it here.
+[ -x "$T/bin/llm-wiki" ] || ! command -v go >/dev/null 2>&1 || build_helper >/dev/null 2>&1
+if [ -x "$T/bin/llm-wiki" ]; then
+  # A wrapper notes how the helper's which ended, so a check can tell who answered.
+  printf '#!/bin/sh\n[ "$1" = which ] || exec "%s" "$@"\n"%s" "$@"\nrc=$?\necho "$rc" >> "%s"\nexit $rc\n' "$T/bin/llm-wiki" "$T/bin/llm-wiki" "$T/which-ran" > "$T/bin/which-spy"
+  chmod +x "$T/bin/which-spy"
+  # wsame <check> <helper|bash> <folder> [which's arguments]: both print the same there,
+  # and with the helper on, the answer came from the one named.
+  wsame() {
+    local name="$1" who="$2" dir="$3" a b ran
+    shift 3
+    : > "$T/which-ran"
+    a="$(cd "$dir" && env -u WIKIS_DIR LLM_WIKI_NO_GO=1 "$W" which ${1+"$@"} 2>"$T/which.a"; echo "exit $?")"
+    b="$(cd "$dir" && env -u WIKIS_DIR LLM_WIKI_NO_GO= LLM_WIKI_GO="$T/bin/which-spy" "$W" which ${1+"$@"} 2>"$T/which.b"; echo "exit $?")"
+    ran="$(cat "$T/which-ran")"
+    case "$who:$ran" in helper:0) ran=helper ;; helper:* | bash: | bash:0) ran="not the $who (the helper's which ended: ${ran:-never ran})" ;; *) ran=bash ;; esac
+    if [ "$a" = "$b" ] && cmp -s "$T/which.a" "$T/which.b" && [ "$ran" = "$who" ]; then
+      ok "$name"
+    else
+      bad "$name" "$(printf 'answered by: %s\nBash: %s\n%s\nhelper: %s\n%s' "$ran" "$a" "$(cat "$T/which.a")" "$b" "$(cat "$T/which.b")")"
+    fi
+  }
+  # wgo <folder> [which's arguments]: which with the helper, both streams.
+  wgo() { (cd "$1" && shift && env -u WIKIS_DIR LLM_WIKI_NO_GO= LLM_WIKI_GO="$T/bin/llm-wiki" "$W" which ${1+"$@"} 2>&1); }
+  # fake_wiki <folder> [index line]: the two files that make a folder a wiki.
+  fake_wiki() { mkdir -p "$1" && printf '# Handbook\n' > "$1/AGENTS.md" && printf '# Index\n%s\n' "${2:-}" > "$1/index.md"; }
+  CWT="$(printf '%s' "$CW" | sed "s#^$HOME#~#")"
+  WIKIS_DIR="$CW" "$W" cover jobapp jobapp-web jobapp-api >/dev/null 2>&1
+  fake_wiki "$CW/payroll"
+  RW="$T/code/workrepos/jobapp-web"; mkdir -p "$RW/src"; git -C "$RW" init -q
+  for w in shop shop-web shop-api shop-admin shop-docs; do fake_wiki "$HOME/wikis/$w"; done
+  fake_wiki "$HOME/wikis/billing" "- [Ledger](wiki/ledger.md): talks to Ledger-Core nightly"
+
+  wsame "which, helper and Bash: a wiki named after the repository" helper "$RC" jobapp --collection work
+  expect "and the helper prints its folder" "$CWT/jobapp" wgo "$RC" jobapp --collection work
+  wsame "which, helper and Bash: a repository one wiki's repos.md lists among several" helper "$RC" jobapp-api --collection work
+  expect "and the helper prints that wiki" "$CWT/jobapp" wgo "$RC" jobapp-api --collection work
+  wsame "which, helper and Bash: no name, in a subfolder of a listed repository in a second collection" helper "$RW/src"
+  expect "and the helper finds the second collection's wiki" "$CWT/jobapp" wgo "$RW/src"
+  wsame "which, helper and Bash: no name, in a renamed folder, matched by its remote URL" helper "$RN"
+  expect "and the helper goes by the remote" "$CWT/jobapp" wgo "$RN"
+  wsame "which, helper and Bash: no name, in a repository no wiki covers" helper "$RC"
+  expect "and the helper says so" "no wiki covers hobby" wgo "$RC"
+  wsame "which, helper and Bash: no name, routed by remote to a collection with no wiki for it" helper "$RB"
+  wsame "which, helper and Bash: a name no wiki covers or comes close to" helper "$RC" zzz-unknown
+  wsame "which, helper and Bash: close matches by a shared word" helper "$RC" shop-mobile
+  out="$(wgo "$RC" shop-mobile)"
+  case "$out" in *"Close matches: shop shop-admin shop-api shop-docs"$'\n'"If shop-mobile belongs to one of them: "*" cover <wiki> shop-mobile"*) ok "and the helper lists four of the five, sorted" ;; *) bad "and the helper lists four of the five, sorted" "$out" ;; esac
+  wsame "which, helper and Bash: a close match by a mention in an index, whatever the case" helper "$RC" LEDGER-core
+  expect "and the helper names the wiki whose index has it" "Close matches: billing" wgo "$RC" LEDGER-core
+  refuse "and the helper's miss still exits 1" wgo "$RC" zzz-unknown
+  [ -z "$(cd "$RC" && env -u WIKIS_DIR LLM_WIKI_NO_GO= LLM_WIKI_GO="$T/bin/llm-wiki" "$W" which zzz-unknown 2>/dev/null)" ] && ok "with the advice on stderr, not stdout" || bad "with the advice on stderr, not stdout"
+  # What the helper isn't sure of, it leaves to the Bash.
+  wsame "which, helper and Bash: no name, outside a repository" bash "$T"
+  wsame "which, helper and Bash: a name with a backslash" bash "$RC" 'odd\name'
+  wsame "which, helper and Bash: a name with a line break" bash "$RC" "two
+lines"
+  printf -- '- jobapp-api\n' > "$CW/payroll/repos.md"
+  wsame "which, helper and Bash: a repository two wikis list" bash "$RC" jobapp-api --collection work
+  rm -f "$CW/payroll/repos.md"
+  if [ "$(id -u)" != 0 ]; then
+    chmod 000 "$CW/jobapp/repos.md"
+    wsame "which, helper and Bash: a repos.md that can't be read" bash "$RC" jobapp-api --collection work
+    chmod 644 "$CW/jobapp/repos.md"
+    chmod 000 "$CW/jobapp"
+    wsame "which, helper and Bash: a wiki's folder that can't be read" bash "$RC" jobapp-api --collection work
+    wsame "which, helper and Bash: a wiki found by name beside one that can't be read" helper "$RC" payroll --collection work
+    chmod 755 "$CW/jobapp"
+    chmod 000 "$HOME/wikis/billing/index.md"
+    wsame "which, helper and Bash: an index that can't be read" bash "$RC" LEDGER-core
+    chmod 644 "$HOME/wikis/billing/index.md"
+    chmod 000 "$CW"
+    wsame "which, helper and Bash: a collection that can't be read" bash "$RC" jobapp --collection work
+    chmod 755 "$CW"
+  else
+    skipped "which with folders that can't be read (root can read anything)"
+  fi
+  want="$(cd "$RC" && env -u WIKIS_DIR LLM_WIKI_NO_GO=1 "$W" which jobapp-api --collection work 2>&1)"
+  [ "$(cd "$RC" && env -u WIKIS_DIR LLM_WIKI_NO_GO= LLM_WIKI_GO="$T/bin/broken-helper" "$W" which jobapp-api --collection work 2>&1)" = "$want" ] && ok "a helper that fails falls back to the Bash for which" || bad "a helper that fails falls back to the Bash for which"
+  [ "$(cd "$RC" && env -u WIKIS_DIR LLM_WIKI_NO_GO= LLM_WIKI_GO="$T/bin/stale-helper" "$W" which jobapp-api --collection work 2>&1)" = "$want" ] && ok "and one built for another protocol is passed over" || bad "and one built for another protocol is passed over"
+  # A helper that speaks the protocol but answers with neither first line isn't believed.
+  printf '#!/bin/sh\n[ "$1" = protocol ] && { sed -n "s/^GO_PROTOCOL=//p" "%s"; exit 0; }\necho "~/wikis/wrong"\n' "$W" > "$T/bin/odd-helper"
+  chmod +x "$T/bin/odd-helper"
+  [ "$(cd "$RC" && env -u WIKIS_DIR LLM_WIKI_NO_GO= LLM_WIKI_GO="$T/bin/odd-helper" "$W" which jobapp-api --collection work 2>&1)" = "$want" ] && ok "and an answer that is neither a wiki nor the advice is passed over" || bad "and an answer that is neither a wiki nor the advice is passed over"
+  for w in shop shop-web shop-api shop-admin shop-docs billing; do rm -rf "${HOME:?}/wikis/$w"; done
+  rm -rf "$CW/payroll" "$RW"
+else
+  skipped "the Go helper against the Bash for which (go isn't installed)"
+fi
 rm -f "$HOME/.config/llm-wiki/collections"
 fi
 
