@@ -39,6 +39,6 @@ The repo is also a Claude Code plugin: `.claude-plugin/` holds the manifest and 
 
 `wiki.sh` is being ported to Go one command at a time, as an optional helper that `wiki.sh` falls back from. A ported command exists twice until the port is done, and both must print the same thing. "The compiled helper" in `docs/maintaining.md` has the rules. Read it before changing a ported command or porting another. After changing anything under `cmd/` or `internal/`, run `scripts/helper.sh lock` and commit `helper.lock`: it pins the helper people download.
 
-A change a user would notice, outside the handbook, gets an entry at the top of `NEWS.md`, written for them, with a `- Do:` line. Fixes they wouldn't notice don't. `wiki update` and `wiki news` print the ones they haven't seen.
+A change a user would notice, outside the handbook, gets an entry at the top of `NEWS.md`, written for them: one line for each thing they would notice, four at most, and a `- Do:` line only when there is something for them to do. Fixes they wouldn't notice get no entry and no line: the pull request has those. `wiki update` and `wiki news` print the entries they haven't seen as they are, so a long entry is a long update. The smoke test fails on an entry that runs long.
 
 `ROADMAP.md` lists planned improvements and what is still untested. When you finish an item, move it to Done and say what changed.
