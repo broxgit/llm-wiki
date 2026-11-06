@@ -1852,6 +1852,21 @@ expect "setup --list counts the missing rules" "allow rule(s) missing" "$W" setu
 "$W" permissions 2>/dev/null | sed 's/,$//' | python3 -c 'import json,sys; p=sys.argv[1]; s=json.load(open(p)); s["permissions"]["allow"]+= [json.loads(l) for l in sys.stdin.read().splitlines()]; json.dump(s,open(p,"w"))' "$HOME/.claude/settings.json"
 expect "once present, setup --list says the commands are allowed" "wiki commands allowed" "$W" setup --list
 check "and other settings were kept" python3 -c "import json,sys; s=json.load(open(sys.argv[1])); assert s['theme']=='dark' and 'Bash(ls *)' in s['permissions']['allow']" "$HOME/.claude/settings.json"
+# Settings this shell can't read, as in an agent's sandbox, used to count as every rule
+# missing, and as a new setting to ask about.
+if [ "$(id -u)" != 0 ]; then
+  todo_was="$("$W" status 2>&1 | grep 'new setting' || true)"
+  chmod 000 "$HOME/.claude/settings.json"
+  out="$("$W" setup --list 2>&1)"
+  case "$out" in *"permissions  "*"unknown, can't read ~/.claude/settings.json"*) ok "setup --list says when it can't read the settings" ;; *) bad "setup --list says when it can't read the settings" "$out" ;; esac
+  case "$out" in *"allow rule(s) missing"*) bad "instead of calling every rule missing" "$out" ;; *) ok "instead of calling every rule missing" ;; esac
+  expect "permissions says it can't tell" "no telling which of these it has" "$W" permissions
+  now="$("$W" status 2>&1 | grep 'new setting' || true)"
+  [ "$now" = "$todo_was" ] && ok "and status doesn't count them as a new setting" || bad "and status doesn't count them as a new setting" "was: $todo_was now: $now"
+  chmod 644 "$HOME/.claude/settings.json"
+else
+  skipped "settings that can't be read (root can read anything)"
+fi
 rm -f "$HOME/.claude/settings.json"
 fi
 

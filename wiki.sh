@@ -6117,6 +6117,10 @@ for r in sys.stdin.read().splitlines():
         print(r)' "$f"
 }
 
+# perm_unreadable: the settings file is there and this shell can't read it, so there's
+# no telling which rules it holds. perm_missing would call every one of them missing.
+perm_unreadable() { [ -f "$HOME/.claude/settings.json" ] && ! can_read "$HOME/.claude/settings.json"; }
+
 # perm_add: add the missing rules, keeping everything else. A backup goes beside it.
 perm_add() { perm_missing | claude_allow; }
 
@@ -6144,6 +6148,12 @@ setup_permissions() {
   local n
   [ -d "$HOME/.claude" ] || return 0
   command -v python3 >/dev/null 2>&1 || return 0
+  if perm_unreadable; then
+    [ "$SETUP_MODE" != new ] || return 0
+    section "Claude Code permissions"
+    echo "Can't read ~/.claude/settings.json from this shell, so there's no telling which wiki commands Claude Code may run."
+    return 0
+  fi
   n="$(perm_missing | wc -l | tr -d ' ')"
   if [ "$SETUP_MODE" = new ] && { [ "$n" -eq 0 ] || setup_done claude.permissions; }; then return 0; fi
   section "Claude Code permissions"
@@ -6241,7 +6251,7 @@ setup_pending() {
     old) echo chat ;;
     missing) setup_done chat || echo chat ;;
   esac
-  if [ -d "$HOME/.claude" ] && [ -n "$(perm_missing)" ]; then setup_done claude.permissions || echo claude.permissions; fi
+  if [ -d "$HOME/.claude" ] && ! perm_unreadable && [ -n "$(perm_missing)" ]; then setup_done claude.permissions || echo claude.permissions; fi
   case "$(agy_state)" in
     old) echo antigravity ;;
     missing) setup_done antigravity || echo antigravity ;;
@@ -6629,7 +6639,9 @@ setup_list() {
     echo "git                 not a repo"
   fi
   echo "claude              $(s="$(claude_state)"; [ "$s" != unreadable ] && echo "$s" || echo "unknown, can't read $(tilde "$CLAUDE_FILE") from this shell")"
-  [ ! -d "$HOME/.claude" ] || echo "permissions         $(n="$(perm_missing | wc -l | tr -d ' ')"; [ "$n" -eq 0 ] && echo "wiki commands allowed" || echo "$n allow rule(s) missing")"
+  if [ -d "$HOME/.claude" ] && perm_unreadable; then echo "permissions         unknown, can't read ~/.claude/settings.json from this shell"
+  elif [ -d "$HOME/.claude" ]; then echo "permissions         $(n="$(perm_missing | wc -l | tr -d ' ')"; [ "$n" -eq 0 ] && echo "wiki commands allowed" || echo "$n allow rule(s) missing")"
+  fi
   [ "$(agy_state)" = none ] || echo "antigravity         plugin $(agy_state)$(m="$(agy_grants_missing 2>/dev/null)" && { n="$(printf '%s' "$m" | grep -c . || true)"; [ "$n" -eq 0 ] && echo ", grants in place" || echo ", $n grant(s) missing"; })"
   [ "$(codex_state)" = none ] || echo "codex               plugin $(codex_state)"
   case "$(cursor_state)" in none) ;; claude) echo "cursor              runs the Claude Code plugin" ;; *) echo "cursor              hook $(cursor_state)" ;; esac
@@ -7111,8 +7123,12 @@ case "$cmd" in
   permissions)
     # The allow rules setup offers, as JSON lines to paste into permissions.allow.
     perm_rules | sed 's/.*/"&",/'
-    n="$(perm_missing | wc -l | tr -d ' ')"
-    echo "$n of these are missing from ~/.claude/settings.json. $WIKI_CMD setup permissions adds them." >&2
+    if perm_unreadable; then
+      echo "Can't read ~/.claude/settings.json from this shell, so there's no telling which of these it has." >&2
+    else
+      n="$(perm_missing | wc -l | tr -d ' ')"
+      echo "$n of these are missing from ~/.claude/settings.json. $WIKI_CMD setup permissions adds them." >&2
+    fi
     if [ "$(agy_state)" != none ]; then
       echo >&2
       echo "Antigravity grants, for userSettings.globalPermissionGrants.allow in $(tilde "$AGY_CONFIG"):" >&2
