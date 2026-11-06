@@ -120,7 +120,7 @@ To add a section:
 
 To add a part, add its number to the `smoke` matrix in `.github/workflows/ci.yml`. The lint job fails when the matrix and the table don't list the same parts. Branch protection requires `smoke (ubuntu-latest)` and `smoke (macos-latest)`, which pass when every part has, so the required checks stay the same.
 
-A change people will notice belongs in the setup guides or [Using it](using.md), not only in the CHANGELOG, and gets an entry at the top of `NEWS.md`. A new entry reaches plugin users through `wiki status`, even if they never run `wiki update`. The one `claude plugin validate` warning, no `version`, is on purpose.
+A change people will notice belongs in the setup guides or [Using it](using.md), not only in the CHANGELOG, and gets an entry at the top of `NEWS.md`: one line for each thing a user would notice, as the top of that file says. A new entry reaches plugin users through `wiki status`, even if they never run `wiki update`. The one `claude plugin validate` warning, no `version`, is on purpose.
 
 To try a change before pushing it, install the plugin from your clone: `claude plugin marketplace add <path to clone>`, then `claude plugin install llm-wiki@llm-wiki`. A marketplace added from a local path runs straight from your working tree, so a new session picks up your edits. Switch back with `claude plugin marketplace remove llm-wiki` and the install steps in [Set up with Claude Code](claude-code.md).
 

@@ -2185,6 +2185,25 @@ h=[l for l in open(sys.argv[1]) if l.startswith('## ')]
 assert h and all(re.match(r'## \d{4}-\d\d-\d\d: \S', l) for l in h) and len(set(h))==len(h)
 d=[l[3:13] for l in h]
 assert d==sorted(d,reverse=True)" "$REPO/NEWS.md"
+# wiki update prints every entry a user hasn't seen, as it is. An entry is one line for
+# each change they would notice, and nothing else.
+out="$(python3 -c "
+import sys
+entry, lines = None, {}
+for l in open(sys.argv[1]):
+    l = l.rstrip('\n')
+    if l.startswith('## '):
+        entry = l; lines[entry] = []
+    elif entry and l:
+        lines[entry].append(l)
+for e, ls in lines.items():
+    for l in ls:
+        if not l.startswith('- '): print('not a one-line item, in %s: %s' % (e, l[:60]))
+        elif len(l) > 160: print('%d characters, in %s: %s' % (len(l), e, l[:60]))
+    if not ls: print('nothing under %s' % e)
+    if len(ls) > 4: print('%d lines under %s' % (len(ls), e))
+" "$REPO/NEWS.md")"
+[ -z "$out" ] && ok "NEWS.md entries are one line per change, four at most" || bad "NEWS.md entries are one line per change, four at most" "$out"
 fi
 
 if section "What moved to llm-relay"; then
