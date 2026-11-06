@@ -186,8 +186,8 @@ func TestWhole(t *testing.T) {
 		"ab\xc3\xa9\xe2\x86":   "ab\xc3\xa9",         // a whole character stays before the cut one
 		"\xf0\x9f\x98\x80\xf0": "\xf0\x9f\x98\x80",
 	} {
-		if got := string(whole([]byte(text))); got != want {
-			t.Errorf("whole(%q) = %q, want %q", text, got, want)
+		if got := string(Whole([]byte(text))); got != want {
+			t.Errorf("Whole(%q) = %q, want %q", text, got, want)
 		}
 	}
 }

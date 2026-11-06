@@ -134,7 +134,8 @@ def wiki_list(_):
             pages = sum(len([f for f in fs if f.endswith(".md")]) for _, _, fs in os.walk(os.path.join(path, "wiki")))
             covers = ""
             try:
-                with open(os.path.join(path, "repos.md")) as f:
+                # A repos.md that isn't UTF-8 must not end the listing.
+                with open(os.path.join(path, "repos.md"), errors="replace") as f:
                     repos = [l[2:].strip() for l in f if l.startswith("- ")]
                 if repos:
                     covers = ", covers: " + " ".join(repos)

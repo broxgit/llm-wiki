@@ -237,7 +237,7 @@ need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 # Raise GO_PROTOCOL, with the constant in cmd/llm-wiki/main.go, whenever a ported
 # command's arguments or output change. scripts/helper.sh builds releases and writes
 # helper.lock.
-GO_PROTOCOL=7
+GO_PROTOCOL=8
 HELPER_LOCK="$REPO/helper.lock"
 HELPER_DIR="${LLM_WIKI_HELPER_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/llm-wiki/helper}"
 
@@ -2430,11 +2430,14 @@ EOF2
 }
 
 # stats_log <wiki> <result> [word]: one line in stats.csv. It must never fail a command,
-# such as in a sandbox that can't write there.
+# such as in a sandbox that can't write there. The word loses its commas and is cut at
+# 60 bytes, less a character the cut left unfinished. By byte, under LC_ALL=C: GNU cut
+# counts bytes whatever the locale and BSD cut counts characters, and the compiled
+# helper's MCP server writes this line itself for its own searches.
 stats_log() {
   (
     [ -s "$STATS_FILE" ] || echo "date,wiki,result,word" >> "$STATS_FILE"
-    printf '%s,%s,%s,%s\n' "$(date -u +%Y-%m-%d)" "$1" "$2" "$(printf '%s' "${3:-}" | tr -d ',\n' | cut -c1-60)" >> "$STATS_FILE"
+    printf '%s,%s,%s,%s\n' "$(date -u +%Y-%m-%d)" "$1" "$2" "$(printf '%s' "${3:-}" | LC_ALL=C tr -d ',\n' | LC_ALL=C cut -c1-60 | LC_ALL=C sed -E "s/$FIND_CUT//")" >> "$STATS_FILE"
   ) 2>/dev/null || true
 }
 
@@ -3674,9 +3677,11 @@ setup_helper() {
 }
 
 # ---- MCP ---------------------------------------------------------------------
-# mcp/server.py is a small MCP server over the collections, for sessions with no
-# file access, such as the Claude desktop app's Chat tab. It runs this script for
-# everything but reading a file. setup adds it to the desktop app's config.
+# A small MCP server over the collections, for sessions with no file access, such as
+# the Claude desktop app's Chat tab. The compiled helper serves it when there is one,
+# and mcp/server.py otherwise: the same replies from both, which a smoke test compares.
+# Both run this script for what isn't ported. setup adds the server to the desktop
+# app's config.
 CLAUDE_DESKTOP_DIR="${LLM_WIKI_DESKTOP_DIR:-$HOME/Library/Application Support/Claude}"
 CLAUDE_DESKTOP_CONFIG="$CLAUDE_DESKTOP_DIR/claude_desktop_config.json"
 
@@ -3870,11 +3875,33 @@ cmd_mcp() {
     "") ;;
     *) die "mcp: no options, or --print for the config entry. It speaks MCP on stdin and stdout, for an MCP client to start." ;;
   esac
-  command -v python3 >/dev/null 2>&1 || die "the MCP server needs python3"
-  local list
+  local list bin ctype
   if [ -n "${LLM_WIKI_FIXED_DIR:-}" ]; then list="$(printf 'here\t%s' "$WIKIS_DIR")"; else list="$(collections)"; fi
   # Apps started from the desktop get a short PATH, without Homebrew's tools.
-  exec env PATH="$PATH:/opt/homebrew/bin:/usr/local/bin" LLM_WIKI_SH="$REPO/wiki.sh" LLM_WIKI_COLLECTIONS="$list" python3 "$REPO/mcp/server.py"
+  PATH="$PATH:/opt/homebrew/bin:/usr/local/bin"
+  # The helper or the Python, chosen once: a server that is up can't fall back.
+  if bin="$(go_helper)"; then
+    ctype="$(mcp_ctype || true)"
+    [ -z "$ctype" ] || export LC_CTYPE="$ctype"
+    exec env PATH="$PATH" LLM_WIKI_SH="$REPO/wiki.sh" LLM_WIKI_COLLECTIONS="$list" LLM_WIKI_TIPS="$TIPS_STATE" "$bin" mcp
+  fi
+  command -v python3 >/dev/null 2>&1 || die "the MCP server needs python3, or the compiled helper. Run: $WIKI_CMD helper fetch"
+  exec env PATH="$PATH" LLM_WIKI_SH="$REPO/wiki.sh" LLM_WIKI_COLLECTIONS="$list" python3 "$REPO/mcp/server.py"
+}
+
+# mcp_ctype: the LC_CTYPE Python would give the server, or nothing. In the C locale,
+# which is what the desktop app starts a server in, Python sets LC_CTYPE to a UTF-8 one
+# for itself and so for every wiki.sh it runs, whose cut, tr and awk then go by
+# character. The helper sets nothing, so its wiki.sh would go by byte and the two
+# servers would answer differently. The names are the ones Python tries, in its order.
+mcp_ctype() {
+  [ -z "${LC_ALL:-}" ] || return 0
+  case "${LC_CTYPE:-${LANG:-}}" in "" | C | POSIX) ;; *) return 0 ;; esac
+  locale -a 2>/dev/null | awk '
+    { n = tolower($0); gsub(/-/, "", n) }
+    n == "c.utf8" { c = 1 }
+    n == "utf8" { u = 1 }
+    END { if (c) print "C.UTF-8"; else if (u) print "UTF-8" }'
 }
 
 # chat_state: none (no desktop app here), missing, old, or current.
