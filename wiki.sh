@@ -405,6 +405,12 @@ tilde() {
   esac
 }
 
+# can_read <file or folder>: whether this shell can read it. An agent's sandbox can
+# refuse what the permissions allow, so this tries rather than asks.
+can_read() {
+  if [ -d "$1" ]; then ls "$1" >/dev/null 2>&1; else head -c 1 "$1" >/dev/null 2>&1; fi
+}
+
 # Drop . and .. from an absolute path without touching the disk. The path may not exist yet.
 normalize() {
   local IFS=/ part out=""
@@ -586,7 +592,7 @@ print_conventions() {
     name="$(printf '%s' "$line" | sed -n 's/^- \([A-Za-z0-9._-]*\) (\([a-z]*\)).*/\1/p')"
     kind="$(printf '%s' "$line" | sed -n 's/^- \([A-Za-z0-9._-]*\) (\([a-z]*\)).*/\2/p')"
     case "$kind" in
-      cli) if command -v "$name" >/dev/null 2>&1; then line="$line  [installed]"; else line="$line  [NOT INSTALLED: tell the user before you work around it]"; fi ;;
+      cli) if command -v "$name" >/dev/null 2>&1; then line="$line  [installed]"; else line="$line  [NOT FOUND on this shell's PATH: tell the user before you work around it]"; fi ;;
       mcp) line="$line  [an MCP server: check your tools for it]" ;;
     esac
     printf '%s\n' "$line"
@@ -733,6 +739,9 @@ EOF2
       if [ -z "$hinted" ] && compile_auto_on && ! compile_agent_ready; then
         hinted=1
         echo "Background compile is on, but $(compile_agent | awk '{ print $1 }') isn't a command in this shell, so it didn't start. Tell the user once: its folder may be missing from this tool's PATH."
+      elif [ -z "$hinted" ] && compile_auto_on && ! compile_agent_runs; then
+        hinted=1
+        echo "Background compile is on, but $(compile_agent | awk '{ print $1 }') can't be run from this shell, so it didn't start. Tell the user once: this tool's sandbox may be refusing it."
       fi
     fi
   done
@@ -956,6 +965,15 @@ compile_agent_ready() {
   command -v "${a%% *}" >/dev/null 2>&1
 }
 
+# compile_agent_runs: whether Claude Code, once found, can be run from this shell. An
+# agent's sandbox can refuse to execute a program that is installed, and a background
+# run would then fail at once, after the session was told to leave the notes to it.
+# Another agent's command is the user's own and wants a prompt, so it isn't tried.
+compile_agent_runs() {
+  compile_agent_is_claude || return 0
+  "$(compile_agent)" --version </dev/null >/dev/null 2>&1
+}
+
 # compile_prompt <wiki root> <name> <wiki command>: what the headless agent is told.
 compile_prompt() {
   cat <<EOF
@@ -1022,12 +1040,13 @@ note_age_hours() {
 # so the limit stays under that.
 COMPILE_LOCK=""
 compile_run() {
-  local root="$1" name n left start secs rc=0 result out oldest pid wd limit
+  local root="$1" name n left start secs rc=0 result out oldest pid wd limit before after f last="" nl=$'\n'
   name="${root##*/}"
   COMPILE_LOCK="$root/.compile-lock"
   trap '[ -z "$COMPILE_LOCK" ] || printf "free\n" > "$COMPILE_LOCK" 2>/dev/null' EXIT
-  n="$(pending_files "$root" | wc -l | tr -d ' ')"
-  oldest="$(note_age_hours "$(pending_files "$root" | head -n 1)")"
+  before="$(pending_files "$root")"
+  n="$(printf '%s' "$before" | grep -c . || true)"
+  oldest="$(note_age_hours "$(printf '%s\n' "$before" | head -n 1)")"
   mkdir -p "$COMPILE_DIR" || die "can't create $(tilde "$COMPILE_DIR")"
   out="$COMPILE_DIR/$name-$(date -u +%Y%m%d-%H%M%S).log"
   limit="${LLM_WIKI_COMPILE_TIMEOUT:-1200}"
@@ -1041,11 +1060,23 @@ compile_run() {
   wait "$pid" || rc=$?
   kill_tree "$wd"
   secs=$(( $(date -u +%s) - start ))
-  left="$(pending_files "$root" | wc -l | tr -d ' ')"
+  # Only the notes that were waiting at the start count as left. One captured while
+  # the run was going is the next run's, and would make a whole run look partial.
+  after="$(pending_files "$root")"
+  left=0
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    case "$nl$after$nl" in *"$nl$f$nl"*) left=$((left + 1)) ;; esac
+  done <<EOF
+$before
+EOF
   if [ -f "$out.timeout" ]; then
     rm -f "$out.timeout"
     result=timeout
-  elif [ "$rc" -ne 0 ]; then result=failed
+  elif [ "$rc" -ne 0 ]; then
+    result=failed
+    # Read before the sync below adds its own lines to the same file.
+    last="$(grep . "$out" 2>/dev/null | tail -n 1 | cut -c 1-200 || true)"
   elif [ "$left" -eq 0 ]; then result=ok
   else result=partial
   fi
@@ -1057,6 +1088,7 @@ compile_run() {
   [ -f "$COMPILE_DIR/runs.csv" ] || echo "date,wiki,notes,left,seconds,oldest_hours,result,agent" > "$COMPILE_DIR/runs.csv"
   printf '%s,%s,%s,%s,%s,%s,%s,%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$name" "$n" "$left" "$secs" "$oldest" "$result" "$(compile_agent | awk '{ sub(/.*\//, "", $1); print $1 }')" >> "$COMPILE_DIR/runs.csv"
   echo "compiled: $name, $((n - left)) of $n note(s) in ${secs}s, $result. Output: $(tilde "$out")"
+  [ -z "$last" ] || echo "Its last line: $last"
   [ "$result" = ok ]
 }
 
@@ -1068,6 +1100,7 @@ compile_background() {
   [ -z "${LLM_WIKI_BACKGROUND:-}" ] || return 1
   [ -n "$(pending_files "$root")" ] || return 1
   compile_agent_ready || return 1
+  compile_agent_runs || return 1
   ( cmd_lock "$root" ) >/dev/null 2>&1 || return 1
   LLM_WIKI_BACKGROUND=1 WIKIS_DIR="$WIKIS_DIR" nohup "$REPO/wiki.sh" compile "$root" --locked </dev/null >/dev/null 2>&1 &
 }
@@ -1092,7 +1125,9 @@ cmd_compile() {
       compile_set auto "$wiki" || die "can't write $(tilde "$COMPILE_FILE")"
       if [ "$wiki" = on ]; then
         echo "compile: on. Session start hands waiting notes to a background run of $(compile_agent)."
-        compile_agent_ready || echo "But $(compile_agent | awk '{ print $1 }') isn't a command here, so nothing will run until it is."
+        if ! compile_agent_ready; then echo "But $(compile_agent | awk '{ print $1 }') isn't a command here, so nothing will run until it is."
+        elif ! compile_agent_runs; then echo "But $(compile_agent | awk '{ print $1 }') can't be run from this shell, so nothing will run from here."
+        fi
       else
         echo "compile: off. Sessions compile waiting notes themselves, as the handbook says."
       fi
@@ -1103,8 +1138,12 @@ cmd_compile() {
       echo "agent: $(compile_agent)$([ "$(compile_agent)" != claude ] || echo ", model $(m="$(compile_get model)"; echo "${m:-sonnet}")")"
       if [ -f "$COMPILE_DIR/runs.csv" ]; then
         echo
-        echo "Last runs (date, wiki, notes, left waiting, seconds, oldest note's age in hours, result, agent):"
-        tail -n +2 "$COMPILE_DIR/runs.csv" | tail -n 10
+        if can_read "$COMPILE_DIR/runs.csv"; then
+          echo "Last runs (date, wiki, notes, left waiting, seconds, oldest note's age in hours, result, agent):"
+          tail -n +2 "$COMPILE_DIR/runs.csv" | tail -n 10
+        else
+          echo "Last runs: can't read $(tilde "$COMPILE_DIR/runs.csv") from this shell. If this is an agent's sandbox, run it outside the sandbox."
+        fi
       fi
       return 0
       ;;
@@ -1124,6 +1163,7 @@ cmd_compile() {
   n="$(pending_files "$root" | wc -l | tr -d ' ')"
   if [ "$n" -eq 0 ]; then echo "nothing waiting in $(tilde "$root")"; return 0; fi
   compile_agent_ready || die "$(compile_agent | awk '{ print $1 }') isn't a command here. Install it, or name another agent in $(tilde "$COMPILE_FILE") as agent=<command that reads the prompt on stdin>"
+  compile_agent_runs || die "$(compile_agent | awk '{ print $1 }') can't be run from this shell. If this is an agent's sandbox, run it outside the sandbox, or compile the notes yourself as the handbook says."
   if [ "$bg" = 1 ]; then
     compile_background "$root" || die "another session holds the lock on $(tilde "$root"), so nothing was started"
     echo "compiling: $n note(s) in $(tilde "$root"), in the background. See how it went with: $WIKI_CMD compile"
@@ -2613,10 +2653,13 @@ CLAUDE_FILE="$HOME/.claude/CLAUDE.md"
 # and a line naming this folder would break when the plugin updates.
 from_plugin() { case "$REPO" in "$HOME/.claude/plugins/"*) return 0 ;; esac; return 1; }
 
-# claude_state: current, old (an older wiki line), or missing. With the plugin, current.
+# claude_state: current, old (an older wiki line), missing, or unreadable when the file
+# is there and this shell can't read it. With the plugin, current.
 claude_state() {
   if from_plugin; then echo current; return 0; fi
-  if [ -f "$CLAUDE_FILE" ] && grep -qxF "$(claude_line)" "$CLAUDE_FILE"; then
+  if [ -f "$CLAUDE_FILE" ] && ! can_read "$CLAUDE_FILE"; then
+    echo unreadable
+  elif [ -f "$CLAUDE_FILE" ] && grep -qxF "$(claude_line)" "$CLAUDE_FILE"; then
     echo current
   elif [ -f "$CLAUDE_FILE" ] && grep -qF "knowledge wikis live in" "$CLAUDE_FILE"; then
     echo old
@@ -3157,7 +3200,7 @@ cmd_deps() {
   [ -d "$WIKIS_DIR" ] || die "no wikis at $(tilde "$WIKIS_DIR")"
   need_python "deps"
   map="$(repo_map)"
-  [ -n "$map" ] || die "no repositories under code_dirs ($(journal_get code_dirs)). Set it with: $WIKI_CMD journal set code_dirs <folders>"
+  [ -n "$map" ] || die "no repositories under code_dirs ($(journal_get code_dirs)). If this runs in an agent's sandbox, it may not be able to read that folder: run it outside the sandbox. Otherwise set code_dirs: $WIKI_CMD journal set code_dirs <folders>"
   out=""
   [ "$write" = 0 ] || { mkdir -p "$WIKIS_DIR/$SHARED/data"; out="$WIKIS_DIR/$SHARED/data/dependencies.csv"; }
   DEPS_REPOS="$map" python3 - "$WIKIS_DIR" "$all" "$out" "$(journal_get exclude)" <<'PY'
@@ -3557,6 +3600,8 @@ NEWS_SEEN="${XDG_STATE_HOME:-$HOME/.local/state}/llm-wiki/news-seen"
 news_unseen() {
   [ -f "$NEWS_FILE" ] || { echo 0; return 0; }
   if [ -f "$NEWS_SEEN" ]; then
+    # A marker this shell can't read says nothing either way, so nothing counts as new.
+    can_read "$NEWS_SEEN" || { echo 0; return 0; }
     awk -v seen="$(cat "$NEWS_SEEN")" '/^## /{ if ($0 == seen) { found = 1; exit } n++ } END { print found ? n + 0 : 0 }' "$NEWS_FILE"
   else
     grep -q '^## ' "$NEWS_FILE" && echo 1 || echo 0
@@ -5325,6 +5370,10 @@ setup_completion() {
 # counts toward the project its file paths and `git -C` folders point at most.
 report_tokens_gemini() {
   local from="$AGY_HOME/antigravity/brain" bin
+  if [ -d "$from" ] && ! can_read "$from"; then
+    echo "Can't read $(tilde "$from") from this shell, so no token counts. If this is an agent's sandbox, run it outside the sandbox."
+    return 0
+  fi
   # As in report_tokens, the helper prints nothing when it fails and the Python answers.
   if [ -d "$from" ] && bin="$(go_helper)" \
     && "$bin" report-tokens-gemini "$from" "$1" "$2" "$(journal_get day_starts)" "$WIKIS_DIR" "$(journal_get exclude)" 2>/dev/null; then
@@ -5440,6 +5489,11 @@ PY
 # report_tokens <start> <end>: the Tokens section, from transcripts.
 report_tokens() {
   local from="$HOME/.claude/projects" bin
+  # A folder this shell can't read would otherwise look like a week with no sessions.
+  if [ -d "$from" ] && ! can_read "$from"; then
+    echo "Can't read $(tilde "$from") from this shell, so no token counts. If this is an agent's sandbox, run it outside the sandbox."
+    return 0
+  fi
   # The compiled helper prints the same table several times faster. It prints nothing
   # when it fails, so the Python below still answers.
   if [ -d "$from" ] && bin="$(go_helper)" \
@@ -6443,6 +6497,7 @@ setup_claude() {
       echo "$(tilde "$CLAUDE_FILE") has an older wiki line."
       if ask_yn "Replace it with the current one?" y; then cmd_claude | head -n 1 | sed 's/^/  /'; fi
       ;;
+    unreadable) echo "Can't read $(tilde "$CLAUDE_FILE") from this shell, so there's no telling whether it has the wiki line." ;;
     missing)
       echo "One line in $(tilde "$CLAUDE_FILE") lets every Claude Code session find its wiki."
       echo "Other agents: put the same line in their user-level instruction file."
@@ -6573,7 +6628,7 @@ setup_list() {
   else
     echo "git                 not a repo"
   fi
-  echo "claude              $(claude_state)"
+  echo "claude              $(s="$(claude_state)"; [ "$s" != unreadable ] && echo "$s" || echo "unknown, can't read $(tilde "$CLAUDE_FILE") from this shell")"
   [ ! -d "$HOME/.claude" ] || echo "permissions         $(n="$(perm_missing | wc -l | tr -d ' ')"; [ "$n" -eq 0 ] && echo "wiki commands allowed" || echo "$n allow rule(s) missing")"
   [ "$(agy_state)" = none ] || echo "antigravity         plugin $(agy_state)$(m="$(agy_grants_missing 2>/dev/null)" && { n="$(printf '%s' "$m" | grep -c . || true)"; [ "$n" -eq 0 ] && echo ", grants in place" || echo ", $n grant(s) missing"; })"
   [ "$(codex_state)" = none ] || echo "codex               plugin $(codex_state)"

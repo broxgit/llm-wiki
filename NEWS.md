@@ -4,6 +4,17 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. A short paragraph, then lines starting `- ` for what changed and `- Do:` for what to do about it. Add an entry for anything a user would notice, and none for fixes they wouldn't.
 
+## 2026-11-06: Background compile counts its runs right, and a sandbox's refusals are named
+
+A second, shorter run in Antigravity's sandbox confirmed yesterday's fixes there and showed what was still rough.
+
+- A note captured while a background run was going counted against that run. A run that compiled its one note could be recorded as "0 of 1, partial". Only the notes waiting when the run began count now. Rows already in `wiki compile` keep the old count.
+- Where Claude Code is installed and the shell isn't allowed to run it, which is the case in Antigravity's sandbox, `wiki start` says so and leaves the notes to the session. Before, it said a background run had the notes, and that run failed at once. `wiki compile <wiki>` and `wiki compile on` say the same.
+- A run that fails prints the agent's last line next to the path of its output.
+- Where a sandbox refuses a read, commands say so instead of calling the thing missing or empty: `wiki report` for your transcripts, `wiki compile` for its runs, `wiki setup --list` for `~/.claude/CLAUDE.md`, `wiki deps` for your code folders, and `wiki status` for its news marker.
+- Session start marks a listed tool `NOT FOUND on this shell's PATH` where it said `NOT INSTALLED`. In another agent's shell the tool is often installed and its folder isn't on the PATH.
+- Do: run `wiki update`. Nothing else.
+
 ## 2026-11-05: Fixes from a test run in another agent's sandbox
 
 Gemini ran the day's changes in Antigravity's sandbox and found six bugs. They are fixed.

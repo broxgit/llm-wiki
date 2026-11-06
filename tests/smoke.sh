@@ -743,6 +743,17 @@ printf '\n## Pin versions\n- kind: correction\n- rule: Pin versions.\n- status: 
 lacks "an accepted fix not seen since isn't flagged" "AGAIN" "$W" patterns
 cp "$T/patterns.bak" "$WIKIS_DIR/demo/patterns.md"
 rm -f "$WIKIS_DIR/demo/wiki/conflict-test.md"
+# Transcripts this shell can't read, as in an agent's sandbox, used to read as a week
+# with no sessions.
+if [ "$(id -u)" != 0 ]; then
+  chmod 000 "$HOME/.claude/projects"
+  expect "report says when it can't read the transcripts" "Can't read ~/.claude/projects from this shell" "$W" report
+  expect "and so does the old code" "Can't read ~/.claude/projects from this shell" env LLM_WIKI_NO_GO=1 "$W" report
+  lacks "instead of a week with no sessions" "No Claude Code sessions in this range" "$W" report
+  chmod 755 "$HOME/.claude/projects"
+else
+  skipped "transcripts that can't be read (root can read anything)"
+fi
 lacks "a new collection's report isn't due yet" "due" "$W" report --due
 touch -t 202001010000 "$WIKIS_DIR/WIKIS.md"
 rm -f "$HOME/.config/llm-wiki/tips"
@@ -800,10 +811,11 @@ cat > "$T/bin/fake-agent" <<FAKE
 #!/bin/sh
 cat > "$T/fake-prompt"
 [ -z "\${FAKE_SLEEP:-}" ] || sleep "\$FAKE_SLEEP"
-[ -z "\${FAKE_FAIL:-}" ] || exit 3
+[ -z "\${FAKE_FAIL:-}" ] || { echo "fake-agent: refused" >&2; exit 3; }
 for f in \$("$W" pending "\$LLM_WIKI_COMPILE_WIKI" | sed -n 's/^\(raw\/[^ ]*\).*/\1/p'); do
   "$W" log "\$LLM_WIKI_COMPILE_WIKI" ingest "Fake" --source "\$f" >/dev/null
 done
+[ -z "\${FAKE_LATE:-}" ] || printf 'Captured: 2026-01-01\n\nLate.\n' > "$WIKIS_DIR/bg/raw/2026-01-01-000009-late.md"
 echo "0 created, 0 updated"
 FAKE
 chmod +x "$T/bin/fake-agent"
@@ -847,6 +859,7 @@ expect "compile alone shows the last runs" ",bg,2,0," "$W" compile
 expect "with nothing waiting, it says so" "nothing waiting" "$W" compile bg
 bg_note 3
 out="$(FAKE_FAIL=1 "$W" compile bg 2>&1)" && bad "a failed agent is a failed run" "$out" || case "$out" in *"0 of 1 note(s)"*", failed."*) ok "a failed agent is a failed run" ;; *) bad "a failed agent is a failed run" "$out" ;; esac
+case "$out" in *"Its last line: fake-agent: refused"*) ok "and says the agent's last line" ;; *) bad "and says the agent's last line" "$out" ;; esac
 expect "and the lock is freed all the same" "free" cat "$BG/.compile-lock"
 out="$(FAKE_SLEEP=30 LLM_WIKI_COMPILE_TIMEOUT=1 "$W" compile bg 2>&1)" && bad "a run past its time limit is stopped" "$out" || case "$out" in *", timeout."*) ok "a run past its time limit is stopped" ;; *) bad "a run past its time limit is stopped" "$out" ;; esac
 expect "and the lock is freed then too" "free" cat "$BG/.compile-lock"
@@ -895,6 +908,7 @@ expect "and still leaves the notes to the session" "Compile them before the user
 mkdir -p "$T/claude-bin"
 cat > "$T/claude-bin/claude" <<FAKE
 #!/bin/sh
+[ "\$1" != --version ] || exit 0
 printf '%s\n' "\$@" > "$T/claude-args"
 cat > /dev/null
 for f in \$("$W" pending bg | sed -n 's/^\(raw\/[^ ]*\).*/\1/p'); do
@@ -913,6 +927,37 @@ bg_note 7
 out="$(PATH="$T/claude-bin:$PATH" "$W" compile bg 2>&1)"
 case "$out" in *"1 of 1 note(s)"*", ok."*) ok "with no agent named, claude on the PATH runs" ;; *) bad "with no agent named, claude on the PATH runs" "$out" ;; esac
 check "the same way" grep -qx -- '--allowedTools' "$T/claude-args"
+# A note captured while a run is going is the next run's. It used to turn a run that
+# compiled everything it was given into "0 of 1, partial".
+printf 'agent=%s\n' "$T/bin/fake-agent" > "$BGC"
+bg_note 8
+out="$(FAKE_LATE=1 "$W" compile bg 2>&1)"
+case "$out" in *"1 of 1 note(s)"*", ok."*) ok "a note captured during a run doesn't count against it" ;; *) bad "a note captured during a run doesn't count against it" "$out" ;; esac
+check "the run is recorded with nothing left" bash -c "tail -n 1 '$BGR' | grep -q ',bg,1,0,[0-9]*,[0-9]*,ok,fake-agent$'"
+expect "and the late note waits for the next run" "000009-late" "$W" pending bg
+# Claude Code that is installed and can't be executed, as in an agent's sandbox. The
+# run used to start and fail at once, after start had told the session to leave the notes.
+mkdir -p "$T/claude-blocked"
+printf '#!/bin/sh\nexit 126\n' > "$T/claude-blocked/claude" && chmod +x "$T/claude-blocked/claude"
+printf 'auto=on\nagent=%s\n' "$T/claude-blocked/claude" > "$BGC"
+n="$(grep -c ',bg,' "$BGR")"
+out="$("$W" start bg 2>&1)"
+case "$out" in *"claude can't be run from this shell, so it didn't start"*) ok "on with Claude Code it can't run, start says why nothing started" ;; *) bad "on with Claude Code it can't run, start says why nothing started" "$out" ;; esac
+case "$out" in *"Compile them before the user's request"*) ok "and leaves the notes to the session" ;; *) bad "and leaves the notes to the session" "$out" ;; esac
+case "$out" in *"in the background now"*) bad "and doesn't say a run has them" "$out" ;; *) ok "and doesn't say a run has them" ;; esac
+lacks "the hook starts nothing either" "in the background" bg_hook
+out="$("$W" compile bg 2>&1)" && bad "compile says it can't run Claude Code" "$out" || case "$out" in *"claude can't be run from this shell"*) ok "compile says it can't run Claude Code" ;; *) bad "compile says it can't run Claude Code" "$out" ;; esac
+expect "and so does compile on" "can't be run from this shell" "$W" compile on
+check "no run was started or recorded" test "$(grep -c ',bg,' "$BGR")" = "$n"
+expect "and the lock is free" "free" cat "$BG/.compile-lock"
+if [ "$(id -u)" != 0 ]; then
+  chmod 000 "$BGR"
+  out="$("$W" compile 2>&1)" && case "$out" in *"can't read"*"runs.csv from this shell"*) ok "compile alone says when it can't read the runs" ;; *) bad "compile alone says when it can't read the runs" "$out" ;; esac || bad "compile alone says when it can't read the runs" "$out"
+  case "$out" in *"ermission denied"*) bad "without a raw error" "$out" ;; *) ok "without a raw error" ;; esac
+  chmod 644 "$BGR"
+else
+  skipped "a runs file that can't be read (root can read anything)"
+fi
 rm -f "$BGC"
 fi
 
@@ -1138,6 +1183,15 @@ printf '.DS_Store\n.compile-lock\njournal/\ndelegation.md\ndelegation-log.csv\ns
 git -C "$WIKIS_DIR" add .gitignore >/dev/null 2>&1 && git -C "$WIKIS_DIR" commit -qm "old ignores" -- .gitignore >/dev/null 2>&1
 expect "with no wiki behind, upgrade still commits collection changes" 'Committed the upgrade as "wikis: update collection files"' "$W" upgrade --all
 check "and the ignore rules are anchored" grep -qx '/delegation.md' "$WIKIS_DIR/.gitignore"
+if [ "$(id -u)" != 0 ] && [ ! -e "$HOME/.claude/CLAUDE.md" ]; then
+  mkdir -p "$HOME/.claude" && printf 'x\n' > "$HOME/.claude/CLAUDE.md" && chmod 000 "$HOME/.claude/CLAUDE.md"
+  out="$("$W" setup --list 2>&1)"
+  case "$out" in *"claude  "*"unknown, can't read ~/.claude/CLAUDE.md"*) ok "setup --list says when it can't read CLAUDE.md" ;; *) bad "setup --list says when it can't read CLAUDE.md" "$out" ;; esac
+  case "$out" in *"ermission denied"*) bad "without a raw error" "$out" ;; *) ok "without a raw error" ;; esac
+  chmod 644 "$HOME/.claude/CLAUDE.md" && rm -f "$HOME/.claude/CLAUDE.md"
+else
+  skipped "a CLAUDE.md that can't be read"
+fi
 fi
 
 if section "Stats"; then
@@ -1403,6 +1457,9 @@ if [ "$(id -u)" != 0 ]; then
 else
   skipped "a code folder that can't be read (root can read anything)"
 fi
+mkdir -p "$T/code-none" && "$W" journal set code_dirs "$T/code-none" >/dev/null
+out="$("$W" deps --all 2>&1)" && bad "deps with no repositories says a sandbox may be why" "$out" || case "$out" in *"no repositories under code_dirs"*"agent's sandbox"*) ok "deps with no repositories says a sandbox may be why" ;; *) bad "deps with no repositories says a sandbox may be why" "$out" ;; esac
+"$W" journal set code_dirs "$T/code" >/dev/null
 "$W" deps --all --write >/dev/null 2>&1
 check "deps --write saves the shared wiki's data/dependencies.csv" grep -q '^uses,app,go,example.com/me/lib/sub,lib,' "$WIKIS_DIR/global/data/dependencies.csv"
 rm -rf "$D" "$WIKIS_DIR/global/data/dependencies.csv"
@@ -1443,7 +1500,7 @@ printf -- '---\ntitle: Conventions\nsummary: x\nupdated: 2026-10-30\nverified: 2
 out="$("$W" start web 2>&1)"
 case "$out" in *"For agents, from"*"demo/wiki/conventions.md"*"check CI with gh pr checks"*) ok "start prints the project's own For agents section" ;; *) bad "start prints the project's own For agents section" "$out" ;; esac
 case "$out" in *"- ls (cli): listing  [installed]"*) ok "start marks a listed tool that's installed" ;; *) bad "start marks a listed tool that's installed" "$out" ;; esac
-case "$out" in *"nosuchtool123 (cli): never installed  [NOT INSTALLED"*) ok "and one that isn't" ;; *) bad "and one that isn't" "$out" ;; esac
+case "$out" in *"nosuchtool123 (cli): never installed  [NOT FOUND on this shell's PATH"*) ok "and one that isn't" ;; *) bad "and one that isn't" "$out" ;; esac
 case "$out" in *"jira (mcp): tickets  [an MCP server"*) ok "and asks the agent to check an MCP itself" ;; *) bad "and asks the agent to check an MCP itself" "$out" ;; esac
 check "nothing in the page is run" test ! -e "$T/pwned"
 rm -f "$WIKIS_DIR/demo/wiki/conventions.md"
@@ -2048,6 +2105,16 @@ case "$out" in *"Second body"*) bad "update leaves out what's been read" "$out" 
 case "$(news news 2>&1)" in *"Nothing new"*) ok "update marks it read" ;; *) bad "update marks it read" "" ;; esac
 printf '# News\n\n## 2026-01-05: Renamed\n\nBody.\n' > "$N/NEWS.md"
 case "$(news status 2>&1)" in *"to read about"*) bad "a heading that's gone counts as nothing new" "" ;; *) ok "a heading that's gone counts as nothing new" ;; esac
+if [ "$(id -u)" != 0 ]; then
+  printf '# News\n\n## 2026-01-06: Sixth\n\nBody.\n\n## 2026-01-05: Renamed\n\nBody.\n' > "$N/NEWS.md"
+  news news >/dev/null 2>&1
+  chmod 000 "$N/state/llm-wiki/news-seen"
+  out="$(news status 2>&1)"
+  case "$out" in *"ermission denied"* | *"to read about"*) bad "a marker it can't read counts as nothing new, with no raw error" "$out" ;; *) ok "a marker it can't read counts as nothing new, with no raw error" ;; esac
+  chmod 644 "$N/state/llm-wiki/news-seen"
+else
+  skipped "a news marker that can't be read (root can read anything)"
+fi
 check "news without a NEWS.md stays quiet" env XDG_STATE_HOME="$N/none" LLM_WIKI_NEWS_FILE="$N/none.md" "$W" status
 check "NEWS.md entries are dated, with different titles" python3 -c "
 import re,sys
