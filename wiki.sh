@@ -1053,7 +1053,9 @@ compile_run() {
   start="$(date -u +%s)"
   compile_agent_run "$root" "$name" > "$out" 2>&1 &
   pid=$!
-  ( sleep "$limit"; : > "$out.timeout"; kill_tree "$pid" ) >/dev/null 2>&1 &
+  # Only a sleep that ran its full time is a timeout. Calling the limit off stops the
+  # sleep first, and with ";" the lines after it could still run before they were stopped.
+  ( sleep "$limit" && : > "$out.timeout" && kill_tree "$pid" ) >/dev/null 2>&1 &
   wd=$!
   # Disowned, so stopping it below doesn't print "Terminated".
   disown "$wd" 2>/dev/null || true
