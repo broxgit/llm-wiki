@@ -25,6 +25,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/broxgit/llm-wiki/internal/routing"
 )
 
 // Options are what cmd_standup has worked out by the time it starts gathering.
@@ -175,7 +177,7 @@ func readRepo(r string, o Options, f *filter) repoResult {
 	}
 	g := gitIn{dir: r}
 	url, _, _ := g.run("config", "--get", "remote.origin.url")
-	res.name = repoName(r, url)
+	res.name = routing.RepoName(r, url)
 	if g.err == nil && f.excluded(res.name) {
 		res.skipRepo = true
 		return res
@@ -229,17 +231,6 @@ func readRepo(r string, o Options, f *filter) repoResult {
 	}
 	res.err = g.err
 	return res
-}
-
-// repoName is wiki.sh's repo_name.
-func repoName(dir, url string) string {
-	if url == "" {
-		return dir[strings.LastIndex(dir, "/")+1:]
-	}
-	url = strings.TrimSuffix(url, "/")
-	url = url[strings.LastIndex(url, "/")+1:]
-	url = url[strings.LastIndex(url, ":")+1:]
-	return strings.TrimSuffix(url, ".git")
 }
 
 // gitIn runs git in one folder, and keeps the first failure to start it, which the Bash

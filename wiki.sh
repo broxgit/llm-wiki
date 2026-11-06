@@ -237,7 +237,7 @@ need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 # Raise GO_PROTOCOL, with the constant in cmd/llm-wiki/main.go, whenever a ported
 # command's arguments or output change. scripts/helper.sh builds releases and writes
 # helper.lock.
-GO_PROTOCOL=5
+GO_PROTOCOL=6
 HELPER_LOCK="$REPO/helper.lock"
 HELPER_DIR="${LLM_WIKI_HELPER_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/llm-wiki/helper}"
 
@@ -545,8 +545,23 @@ which_wiki() {
   return 0
 }
 
+# which [<repository>]: the wiki that covers a repository, or with no name, the
+# repository this folder is in.
 cmd_which() {
-  local name="$1" w
+  local name="${1:-}" w bin out nl=$'\n'
+  # The compiled helper answers both. Its first line says which answer follows, the
+  # wiki or the advice. It prints nothing when it isn't sure, and the code below answers.
+  if bin="$(go_helper)" \
+    && out="$("$bin" which --wikis "$WIKIS_DIR" --home "$HOME" --wiki-cmd "$WIKI_CMD" --name "$name" 2>/dev/null)"; then
+    case "$out" in
+      "covered$nl"*) printf '%s\n' "${out#*"$nl"}"; return 0 ;;
+      "uncovered$nl"*) printf '%s\n' "${out#*"$nl"}" >&2; exit 1 ;;
+    esac
+  fi
+  if [ -z "$name" ]; then
+    name="$(git rev-parse --show-toplevel 2>/dev/null)" || die "which needs a repository name, or to run inside a repository"
+    name="$(repo_name "$name")"
+  fi
   w="$(which_wiki "$name")"
   if [ -n "$w" ]; then
     tilde "$WIKIS_DIR/$w"
@@ -559,7 +574,8 @@ cmd_which() {
 
 # which_miss <repository>: say so, and point at the likely fix. A repository whose
 # folder name differs from its project wiki, like history for cloud-dvr, otherwise
-# leaves sessions guessing names.
+# leaves sessions guessing names. LC_ALL=C, so the words, the match and the order
+# don't depend on the locale, and the compiled helper can print the same.
 which_miss() {
   local name="$1" d w t hits=""
   echo "no wiki covers $name"
@@ -568,15 +584,15 @@ which_miss() {
     is_wiki "$d" || continue
     w="${d##*/}"
     # Shares a word of three letters or more, or its index mentions the repository.
-    for t in $(printf '%s' "$name" | tr -c 'A-Za-z0-9\n' ' '); do
+    for t in $(printf '%s' "$name" | LC_ALL=C tr -c 'A-Za-z0-9\n' ' '); do
       [ "${#t}" -ge 3 ] || continue
       case "-$w-" in *"$t"*) hits="$hits $w"; continue 2 ;; esac
     done
-    grep -qiF -- "$name" "$d/index.md" 2>/dev/null && hits="$hits $w"
+    LC_ALL=C grep -qiF -- "$name" "$d/index.md" 2>/dev/null && hits="$hits $w"
   done
   if [ -n "$hits" ]; then
     # shellcheck disable=SC2086
-    echo "Close matches:$(printf ' %s' $hits | tr ' ' '\n' | sort -u | head -n 5 | tr '\n' ' ' | sed 's/ $//')"
+    echo "Close matches:$(printf ' %s' $hits | tr ' ' '\n' | LC_ALL=C sort -u | head -n 5 | tr '\n' ' ' | sed 's/ $//')"
     echo "If $name belongs to one of them: $WIKI_CMD cover <wiki> $name"
   fi
   echo "If it's a project of its own, the first session with something to file creates its wiki: $WIKI_CMD new $name"
@@ -7267,13 +7283,7 @@ case "$cmd" in
     ;;
   status) cmd_status ;;
   find) [ -n "$target" ] || die "find needs a word"; cmd_find "$target" ;;
-  which)
-    if [ -z "$target" ]; then
-      target="$(git rev-parse --show-toplevel 2>/dev/null)" || die "which needs a repository name, or to run inside a repository"
-      target="$(repo_name "$target")"
-    fi
-    cmd_which "$target"
-    ;;
+  which) cmd_which "$target" ;;
   stale) cmd_stale "${target:-90}" ;;
   start) cmd_start ${target:+"$target"} ;;
   upgrade)
