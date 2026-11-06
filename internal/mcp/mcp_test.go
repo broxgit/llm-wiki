@@ -69,7 +69,11 @@ case "$FAKE" in
   slow) sleep 5 ;;
   linger) sleep 5 & echo "gone" ;;
   bytes) printf 'caf\351 \342\206\r\nnext\r' ; printf ' err\n' >&2 ;;
-  *) case "$1" in which) [ "$2" = jobs ] && [ "${WIKIS_DIR##*/}" = wikis-work ] ;; sync) echo "pulled"; echo "pushed" ;; *) echo "ran $1" ;; esac ;;
+  no-remote) case "$1" in sync) echo "committed: m"; echo "no remote, so nothing to pull or push" ;; *) echo "ran $1" ;; esac ;;
+  unowned) case "$1" in sync) echo "~/wikis/demo isn't in a repo the wikis own, so there's nothing to sync. Commits are up to you there." ;; *) echo "ran $1" ;; esac ;;
+  first-push) case "$1" in sync) echo "committed: m"; echo "synced: pushed ~/wikis to origin for the first time" ;; *) echo "ran $1" ;; esac ;;
+  noisy-push) case "$1" in sync) echo "synced: pulled and pushed ~/wikis"; echo "remote: a hook said this" >&2 ;; *) echo "ran $1" ;; esac ;;
+  *) case "$1" in which) [ "$2" = jobs ] && [ "${WIKIS_DIR##*/}" = wikis-work ] ;; sync) echo "committed: m"; echo "synced: pulled and pushed ~/wikis" ;; *) echo "ran $1" ;; esac ;;
 esac
 `)
 	if err := os.Chmod(fake, 0o755); err != nil {
@@ -644,6 +648,24 @@ func TestCaptureNotPushed(t *testing.T) {
 	_ = root
 	if got, isErr := call(t, s, "wiki_capture", m{"wiki": "demo", "slug": "x", "note": "n"}); isErr || got != "saved\nSaved on this machine, but not pushed: error: no remote" {
 		t.Errorf("wiki_capture = %q, error %v", got, isErr)
+	}
+}
+
+// sync ends well in four ways, and only two of them pushed. A capture is called pushed
+// only when sync says "synced: ", wherever in its output that line is.
+func TestCapturePushedOnlyWhenSyncPushed(t *testing.T) {
+	const pushed = "ran capture\nPushed. A later session with file access compiles it into pages."
+	for how, want := range map[string]string{
+		"no-remote":  "ran capture\nSaved on this machine, but not pushed: no remote, so nothing to pull or push",
+		"unowned":    "ran capture\nSaved on this machine, but not pushed: ~/wikis/demo isn't in a repo the wikis own, so there's nothing to sync. Commits are up to you there.",
+		"first-push": pushed,
+		"noisy-push": pushed,
+	} {
+		s, _ := fixture(t)
+		fake(s, how)
+		if got, isErr := call(t, s, "wiki_capture", m{"wiki": "demo", "slug": "x", "note": "n"}); isErr || got != want {
+			t.Errorf("with a sync that ends as %s, wiki_capture = %q, error %v", how, got, isErr)
+		}
 	}
 }
 
