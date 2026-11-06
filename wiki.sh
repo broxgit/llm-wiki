@@ -411,6 +411,18 @@ can_read() {
   if [ -d "$1" ]; then ls "$1" >/dev/null 2>&1; else head -c 1 "$1" >/dev/null 2>&1; fi
 }
 
+# first_unreadable <file>...: the first of these that is there and this shell can't read.
+# A state worked out from a file like that would come out as "old" or "missing".
+first_unreadable() {
+  local f
+  for f in "$@"; do
+    if [ -e "$f" ] && ! can_read "$f"; then printf '%s\n' "$f"; return 0; fi
+  done
+}
+
+# unknown_state <label> <file>: a setup --list line for a state that can't be told.
+unknown_state() { printf '%-19s unknown, can%st read %s from this shell\n' "$1" "'" "$(tilde "$2")"; }
+
 # Drop . and .. from an absolute path without touching the disk. The path may not exist yet.
 normalize() {
   local IFS=/ part out=""
@@ -2786,8 +2798,10 @@ EOF2
 }
 
 # agy_state: none (no Antigravity here), missing, old, or current.
+agy_unreadable() { first_unreadable "$AGY_DIR/plugin.json" "$AGY_DIR/rules/AGENTS.md" "$AGY_DIR/hooks.json"; }
 agy_state() {
   [ -d "$AGY_HOME" ] || { echo none; return 0; }
+  [ -z "$(agy_unreadable)" ] || { echo unreadable; return 0; }
   [ -f "$AGY_DIR/plugin.json" ] || { echo missing; return 0; }
   if [ "$(cat "$AGY_DIR/rules/AGENTS.md" 2>/dev/null)" = "$(agy_rule)" ] \
     && [ "$(cat "$AGY_DIR/hooks.json" 2>/dev/null)" = "$(agy_hooks)" ] \
@@ -2928,9 +2942,12 @@ EOF2
 codex_installed() { grep -qF "[plugins.\"$CODEX_KEY\"]" "$CODEX_DIR/config.toml" 2>/dev/null; }
 codex_line() { grep -m 1 -F "knowledge wikis live in" "$CODEX_DIR/AGENTS.md" 2>/dev/null || true; }
 
-# codex_state: none (no Codex here), missing, old, or current.
+# codex_state: none (no Codex here), missing, old, current, or unreadable when a file
+# it goes by is there and this shell can't read it.
+codex_unreadable() { first_unreadable "$CODEX_DIR/config.toml" "$CODEX_PLUGIN/.codex-plugin/plugin.json" "$CODEX_DIR/AGENTS.md"; }
 codex_state() {
   [ -d "$CODEX_DIR" ] || { echo none; return 0; }
+  [ -z "$(codex_unreadable)" ] || { echo unreadable; return 0; }
   [ -f "$CODEX_PLUGIN/.codex-plugin/plugin.json" ] || { echo missing; return 0; }
   if codex_installed \
     && [ "$(cat "$CODEX_PLUGIN/.codex-plugin/plugin.json" 2>/dev/null)" = "$(codex_manifest)" ] \
@@ -3080,8 +3097,10 @@ cursor_rule() { codex_rule "the llm-wiki hook in $(tilde "$CURSOR_HOOKS")" "$(cu
 
 # cursor_state: none (no Cursor here), claude (it runs the Claude Code plugin's
 # hook instead), missing, old, or current.
+cursor_unreadable() { first_unreadable "$HOME/.claude/plugins/installed_plugins.json" "$CURSOR_HOOKS"; }
 cursor_state() {
   [ -d "$CURSOR_DIR" ] || { echo none; return 0; }
+  [ -z "$(cursor_unreadable)" ] || { echo unreadable; return 0; }
   [ -z "$(claude_plugin_rows)" ] || { echo claude; return 0; }
   command -v python3 >/dev/null 2>&1 || { echo missing; return 0; }
   python3 - "$CURSOR_HOOKS" "$(cursor_cmd)" 2>/dev/null <<'PY' || echo missing
@@ -3787,6 +3806,7 @@ cmd_mcp() {
 chat_state() {
   [ -d "$CLAUDE_DESKTOP_DIR" ] || { echo none; return 0; }
   command -v python3 >/dev/null 2>&1 || { echo none; return 0; }
+  [ -z "$(first_unreadable "$CLAUDE_DESKTOP_CONFIG")" ] || { echo unreadable; return 0; }
   CMD="$(codex_cmd)" python3 - "$CLAUDE_DESKTOP_CONFIG" 2>/dev/null <<'PY' || echo missing
 import json, os, sys
 e = (json.load(open(sys.argv[1])).get("mcpServers") or {}).get("llm-wiki")
@@ -3845,10 +3865,19 @@ chat_wait_closed() {
   sleep 1
 }
 
+# setup_unreadable <section> <file>: a step whose state can't be told from this shell
+# says so in a full run and changes nothing. With --new it has nothing to ask.
+setup_unreadable() {
+  [ "$SETUP_MODE" != new ] || return 0
+  section "$1"
+  echo "Can't read $(tilde "$2") from this shell, so there's no telling how this is set up. Nothing was changed."
+}
+
 setup_chat() {
   local state
   state="$(chat_state)"
   [ "$state" != none ] || return 0
+  if [ "$state" = unreadable ]; then setup_unreadable "Claude desktop Chat" "$CLAUDE_DESKTOP_CONFIG"; return 0; fi
   if [ "$SETUP_MODE" = new ] && { [ "$state" = current ] || { [ "$state" = missing ] && setup_done chat; }; }; then
     return 0
   fi
@@ -6644,9 +6673,10 @@ setup_list() {
   if [ -d "$HOME/.claude" ] && perm_unreadable; then echo "permissions         unknown, can't read ~/.claude/settings.json from this shell"
   elif [ -d "$HOME/.claude" ]; then echo "permissions         $(n="$(perm_missing | wc -l | tr -d ' ')"; [ "$n" -eq 0 ] && echo "wiki commands allowed" || echo "$n allow rule(s) missing")"
   fi
-  [ "$(agy_state)" = none ] || echo "antigravity         plugin $(agy_state)$(m="$(agy_grants_missing 2>/dev/null)" && { n="$(printf '%s' "$m" | grep -c . || true)"; [ "$n" -eq 0 ] && echo ", grants in place" || echo ", $n grant(s) missing"; })"
-  [ "$(codex_state)" = none ] || echo "codex               plugin $(codex_state)"
-  case "$(cursor_state)" in none) ;; claude) echo "cursor              runs the Claude Code plugin" ;; *) echo "cursor              hook $(cursor_state)" ;; esac
+  if [ "$(agy_state)" = unreadable ]; then unknown_state antigravity "$(agy_unreadable)"; fi
+  case "$(agy_state)" in none | unreadable) ;; *) echo "antigravity         plugin $(agy_state)$(m="$(agy_grants_missing 2>/dev/null)" && { n="$(printf '%s' "$m" | grep -c . || true)"; [ "$n" -eq 0 ] && echo ", grants in place" || echo ", $n grant(s) missing"; })" ;; esac
+  case "$(codex_state)" in none) ;; unreadable) unknown_state codex "$(codex_unreadable)" ;; *) echo "codex               plugin $(codex_state)" ;; esac
+  case "$(cursor_state)" in none) ;; unreadable) unknown_state cursor "$(cursor_unreadable)" ;; claude) echo "cursor              runs the Claude Code plugin" ;; *) echo "cursor              hook $(cursor_state)" ;; esac
   if [ -n "$(completion_shell)" ]; then
     printf '%-19s %s' "completion" "$(completion_on "$(completion_shell)" && echo "on ($(completion_shell))" || echo off)"
     case "$pending" in *" completion."*) printf '  <- new' ;; esac
@@ -6662,7 +6692,7 @@ setup_list() {
   printf '%-19s %s' "helper" "$(cmd_helper | head -n 1 | sed 's/^helper: //'), fetched at session start: $(helper_auto_on && echo on || echo off)"
   case "$pending" in *" helper "*) printf '  <- new' ;; esac
   printf '\n'
-  [ "$(chat_state)" = none ] || echo "chat                server $(chat_state)"
+  case "$(chat_state)" in none) ;; unreadable) unknown_state chat "$CLAUDE_DESKTOP_CONFIG" ;; *) echo "chat                server $(chat_state)" ;; esac
 
   for k in $JOURNAL_KEYS; do
     v="$(journal_get "$k")"
@@ -6830,6 +6860,7 @@ setup_antigravity() {
   local state gm="$AGY_HOME/GEMINI.md" line
   state="$(agy_state)"
   [ "$state" != none ] || return 0
+  if [ "$state" = unreadable ]; then setup_unreadable "Antigravity" "$(agy_unreadable)"; return 0; fi
   if [ "$SETUP_MODE" = new ] && { [ "$state" = current ] || { [ "$state" = missing ] && setup_done antigravity; }; } \
     && ! grep -qF "knowledge wikis live in" "$gm" 2>/dev/null \
     && { setup_done antigravity.grants || ! agy_grants_missing | grep -q .; }; then
@@ -6870,6 +6901,7 @@ setup_codex() {
   local state
   state="$(codex_state)"
   [ "$state" != none ] || return 0
+  if [ "$state" = unreadable ]; then setup_unreadable "Codex" "$(codex_unreadable)"; return 0; fi
   if [ "$SETUP_MODE" = new ] && { [ "$state" = current ] || { [ "$state" = missing ] && setup_done codex; }; }; then
     return 0
   fi
@@ -6903,6 +6935,7 @@ setup_codex() {
 setup_cursor() {
   local state
   state="$(cursor_state)"
+  if [ "$state" = unreadable ]; then setup_unreadable "Cursor" "$(cursor_unreadable)"; return 0; fi
   case "$state" in none) return 0 ;; claude) [ "$SETUP_MODE" = new ] || { section "Cursor"; echo "Cursor runs the Claude Code plugin's hook, so it needs nothing more. Keep the plugin current with $WIKI_CMD update."; }; return 0 ;; esac
   if [ "$SETUP_MODE" = new ] && { [ "$state" = current ] || { [ "$state" = missing ] && setup_done cursor; }; }; then
     return 0
