@@ -14,6 +14,7 @@ A second, shorter run in Antigravity's sandbox confirmed yesterday's fixes there
 - A run that fails prints the agent's last line next to the path of its output.
 - Where a sandbox refuses a read, commands say so instead of calling the thing missing or empty: `wiki report` for your transcripts, `wiki compile` for its runs, `wiki setup --list` for `~/.claude/CLAUDE.md` and Claude Code's settings, `wiki deps` for your code folders, and `wiki status` for its news marker. Settings it can't read no longer count as allow rules to add.
 - Session start marks a listed tool `NOT FOUND on this shell's PATH` where it said `NOT INSTALLED`. In another agent's shell the tool is often installed and its folder isn't on the PATH.
+- The Antigravity, Codex, Cursor and Chat lines of `wiki setup --list` say `unknown, can't read ...` when a sandbox refuses their files, where they said `old` or `missing`. `wiki status` no longer counts those as new settings, and `wiki setup` leaves such a plugin alone, where it used to install it again.
 - Do: run `wiki update`. Nothing else.
 
 ## 2026-11-05: Fixes from a test run in another agent's sandbox

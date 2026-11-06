@@ -1554,6 +1554,16 @@ check "the hook doesn't create the plugin by itself" test ! -e "$HOME/.gemini/co
 mkdir -p "$HOME/.gemini/config/plugins/llm-wiki" && printf '{}' > "$HOME/.gemini/config/plugins/llm-wiki/plugin.json"
 printf '{}' | "$W" __agy-start >/dev/null
 expect "once installed, the hook keeps the plugin current" "plugin current" "$W" setup --list
+# A file the state is worked out from, which this shell can't read, as in another
+# agent's sandbox. It used to come out as "old", and setup would write the plugin again.
+if [ "$(id -u)" != 0 ]; then
+  chmod 000 "$HOME/.gemini/config/plugins/llm-wiki/hooks.json"
+  expect "a plugin file it can't read is unknown, not old" "antigravity         unknown, can't read ~/.gemini/config/plugins/llm-wiki/hooks.json" "$W" setup --list
+  expect "and setup antigravity changes nothing" "Nothing was changed" in_tty "$W" setup antigravity
+  chmod 644 "$HOME/.gemini/config/plugins/llm-wiki/hooks.json"
+else
+  skipped "an Antigravity plugin file that can't be read (root can read anything)"
+fi
 check "its rule names the wikis and the start hook" grep -q "SessionStart hook runs" "$HOME/.gemini/config/plugins/llm-wiki/rules/AGENTS.md"
 check "its hooks.json is Antigravity's flat SessionStart format" python3 -c "import json,sys; h=json.load(open(sys.argv[1]))['llm-wiki']['SessionStart'][0]; assert h['type']=='command' and h['command'].endswith(' __agy-start')" "$HOME/.gemini/config/plugins/llm-wiki/hooks.json"
 check "its plugin.json has only fields Antigravity reads" python3 -c "import json,sys; assert set(json.load(open(sys.argv[1]))) <= {'name','description','logo','suggestedPrompts','displayName','version','disabled'}" "$HOME/.gemini/config/plugins/llm-wiki/plugin.json"
@@ -1631,6 +1641,19 @@ rm "$HOME/.codex/skills/bump-proto"; "$W" upgrade --all >/dev/null 2>&1
 check "upgrade --all links team skills for Codex too" test -L "$HOME/.codex/skills/bump-proto"
 check "and the team skills from the wikis" test "$HOME/.codex/skills/bump-proto" -ef "$WIKIS_DIR/global/skills/bump-proto"
 expect "setup --list shows it current" "codex               plugin current" env PATH="$T/bin:$PATH" "$W" setup --list
+if [ "$(id -u)" != 0 ]; then
+  todo_was="$(PATH="$T/bin:$PATH" "$W" status 2>&1 | grep 'new setting' || true)"
+  chmod 000 "$HOME/.codex/config.toml"
+  expect "a Codex file it can't read is unknown, not old" "codex               unknown, can't read ~/.codex/config.toml" env PATH="$T/bin:$PATH" "$W" setup --list
+  now="$(PATH="$T/bin:$PATH" "$W" status 2>&1 | grep 'new setting' || true)"
+  [ "$now" = "$todo_was" ] && ok "and status doesn't count it as a new setting" || bad "and status doesn't count it as a new setting" "was: $todo_was now: $now"
+  : > "$T/codex.log"
+  expect "and setup codex changes nothing" "Nothing was changed" env PATH="$T/bin:$PATH" LLM_WIKI_TEST_TTY=1 "$W" setup codex
+  check "nor runs codex" test ! -s "$T/codex.log"
+  chmod 644 "$HOME/.codex/config.toml"
+else
+  skipped "a Codex file that can't be read (root can read anything)"
+fi
 : > "$T/codex.log"
 PATH="$T/bin:$PATH" in_tty "$W" setup codex </dev/null >/dev/null 2>&1
 check "running setup again doesn't reinstall an unchanged plugin" test ! -s "$T/codex.log"
@@ -1658,6 +1681,14 @@ out="$(printf 'y\n' | in_tty "$W" setup cursor 2>&1)"
 case "$out" in *"added."*"User Rules"*"llm-wiki hook in ~/.cursor/hooks.json runs"*) ok "setup cursor adds the hook and gives the user-rules line" ;; *) bad "setup cursor adds the hook and gives the user-rules line" "$out" ;; esac
 check "its hooks.json keeps the other hooks and adds ours" python3 -c "import json,sys; h=json.load(open(sys.argv[1])); s=h['hooks']['sessionStart']; assert h['version']==1 and h['hooks']['afterFileEdit'][0]['command']=='./format.sh' and s[0]['command']=='./mine.sh' and s[1]['command'].endswith(' __cursor-start') and len(s)==2" "$HOME/.cursor/hooks.json"
 expect "setup --list shows it current" "cursor              hook current" "$W" setup --list
+if [ "$(id -u)" != 0 ]; then
+  chmod 000 "$HOME/.cursor/hooks.json"
+  expect "a Cursor hooks file it can't read is unknown, not missing" "cursor              unknown, can't read ~/.cursor/hooks.json" "$W" setup --list
+  expect "and setup cursor changes nothing" "Nothing was changed" in_tty "$W" setup cursor
+  chmod 644 "$HOME/.cursor/hooks.json"
+else
+  skipped "a Cursor hooks file that can't be read (root can read anything)"
+fi
 in_tty "$W" setup cursor </dev/null >/dev/null 2>&1
 check "running setup again doesn't add it twice" python3 -c "import json,sys; assert len(json.load(open(sys.argv[1]))['hooks']['sessionStart'])==2" "$HOME/.cursor/hooks.json"
 check "it links the llm-wiki skill for Cursor" test -f "$HOME/.cursor/skills/llm-wiki/SKILL.md"
@@ -1827,6 +1858,14 @@ printf '{"mcpServers":{}}\n' > "$D/claude_desktop_config.json"
 expect "--yes adds it with no terminal when the app is closed" "added. Open the Claude app" env LLM_WIKI_DESKTOP_DIR="$D" LLM_WIKI_DESKTOP_PROC="^no such process" "$W" setup chat --yes
 expect "--yes works only for chat" "--yes works only with" "$W" setup git --yes
 expect "and setup --list shows it current" "server current" env LLM_WIKI_DESKTOP_DIR="$D" "$W" setup --list
+if [ "$(id -u)" != 0 ]; then
+  chmod 000 "$D/claude_desktop_config.json"
+  expect "a desktop config it can't read is unknown, not missing" "chat                unknown, can't read" env LLM_WIKI_DESKTOP_DIR="$D" "$W" setup --list
+  expect "and setup chat changes nothing" "Nothing was changed" env LLM_WIKI_DESKTOP_DIR="$D" LLM_WIKI_TEST_TTY=1 "$W" setup chat
+  chmod 644 "$D/claude_desktop_config.json"
+else
+  skipped "a desktop config that can't be read (root can read anything)"
+fi
 rm -rf "$D"
 fi
 
