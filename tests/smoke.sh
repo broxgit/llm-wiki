@@ -512,6 +512,7 @@ case "$out" in *"Wiki reads are about 5"[0-9].[0-9]"% of new input"*) ok "tokens
 } > "$HOME/.claude/projects/p1/s2.jsonl"
 if command -v go >/dev/null 2>&1; then
   check "the Go helper builds" build_helper
+  check "and its own tests pass" go test -C "$REPO" ./cmd/... ./internal/...
   check "it speaks the protocol wiki.sh expects" test "$("$T/bin/llm-wiki" protocol)" = "$(sed -n 's/^GO_PROTOCOL=//p' "$W")"
   py="$(LLM_WIKI_NO_GO=1 "$W" report 2>&1)"
   go="$(LLM_WIKI_GO="$T/bin/llm-wiki" "$W" report 2>&1)"
@@ -766,6 +767,7 @@ case "$out" in *"One tip"*) bad "a week with a report offer has no tip" "$out" ;
 fi
 
 if section "Bookkeeping commands"; then
+out="$("$W" log --help 2>&1)" && case "$out" in *"Usage:"*"--source raw/FILE"*"--corrections N"*"--patterns N"*) ok "log --help lists every option" ;; *) bad "log --help lists every option" "$out" ;; esac || bad "log --help lists every option" "$out"
 out="$(printf 'We picked Postgres.\n' | "$W" capture demo "Decided Postgres!" 2>&1)"
 case "$out" in *"captured: raw/20"*"-decided-postgres.md"*) ok "capture names a note from the clock and the slug" ;; *) bad "capture names a note from the clock and the slug" "$out" ;; esac
 f="$(ls "$WIKIS_DIR"/demo/raw/*-decided-postgres.md | head -n 1)"
@@ -812,6 +814,7 @@ cat > "$T/bin/fake-agent" <<FAKE
 cat > "$T/fake-prompt"
 [ -z "\${FAKE_SLEEP:-}" ] || sleep "\$FAKE_SLEEP"
 [ -z "\${FAKE_FAIL:-}" ] || { echo "fake-agent: refused" >&2; exit 3; }
+[ -z "\${FAKE_NOTHING:-}" ] || { echo "fake-agent: left them all, none could be compiled"; exit 0; }
 for f in \$("$W" pending "\$LLM_WIKI_COMPILE_WIKI" | sed -n 's/^\(raw\/[^ ]*\).*/\1/p'); do
   "$W" log "\$LLM_WIKI_COMPILE_WIKI" ingest "Fake" --source "\$f" >/dev/null
 done
@@ -937,6 +940,10 @@ check "the same way" grep -qx -- '--allowedTools' "$T/claude-args"
 # compiled everything it was given into "0 of 1, partial".
 printf 'agent=%s\n' "$T/bin/fake-agent" > "$BGC"
 bg_note 8
+# A run that ends well and compiled none of its notes isn't "partial": nothing was done.
+out="$(FAKE_NOTHING=1 "$W" compile bg 2>&1)" && bad "a run that compiles nothing is recorded as none" "$out" || case "$out" in *"0 of 1 note(s)"*", none."*) ok "a run that compiles nothing is recorded as none" ;; *) bad "a run that compiles nothing is recorded as none" "$out" ;; esac
+case "$out" in *"Its last line: fake-agent: left them all"*) ok "and says the agent's last line, which is where it says why" ;; *) bad "and says the agent's last line, which is where it says why" "$out" ;; esac
+check "and so in the runs" bash -c "tail -n 1 '$BGR' | grep -q ',bg,1,1,[0-9]*,[0-9]*,none,fake-agent$'"
 out="$(FAKE_LATE=1 "$W" compile bg 2>&1)"
 case "$out" in *"1 of 1 note(s)"*", ok."*) ok "a note captured during a run doesn't count against it" ;; *) bad "a note captured during a run doesn't count against it" "$out" ;; esac
 check "the run is recorded with nothing left" bash -c "tail -n 1 '$BGR' | grep -q ',bg,1,0,[0-9]*,[0-9]*,ok,fake-agent$'"
@@ -991,6 +998,7 @@ verified: 2026-11-05
 - on tool `Agent`: Set the model.
 - on bash `[ -f retry.conf ]`: Read retry.conf first.
 - sometimes bash `x`: not a reminder
+- on bash ` `: a pattern of one space would match nearly every command
 
 ```
 - before bash `git tag`: an example inside a fence
@@ -1009,7 +1017,8 @@ case "$out" in "on${TAB}bash${TAB}npm publish${TAB}Ask first.${TAB}global"*) ok 
 check "five are read: one shared, four of its own" test "$(printf '%s\n' "$out" | grep -c .)" = 5
 case "$out" in *"not a reminder"* | *"inside a fence"*) bad "a line that isn't a reminder, or sits in a code fence, is left out" "$out" ;; *) ok "a line that isn't a reminder, or sits in a code fence, is left out" ;; esac
 out="$("$W" lint rem 2>&1)"
-case "$out" in *"reminder line not understood: 1"*"sometimes bash"*) ok "lint names the line it couldn't read" ;; *) bad "lint names the line it couldn't read" "$out" ;; esac
+case "$out" in *"reminder line not understood: 2"*"sometimes bash"*) ok "lint names the line it couldn't read" ;; *) bad "lint names the line it couldn't read" "$out" ;; esac
+case "$out" in *"a pattern of one space"*) ok "and one whose pattern is only a space" ;; *) bad "and one whose pattern is only a space" "$out" ;; esac
 lacks "and not the one in the fence" "inside a fence" "$W" lint rem
 
 # tool_call <json>: what the tool-call hook replies.
@@ -1051,6 +1060,19 @@ import reminders
 assert reminders.glob('is it up?', '*up?'), 'a ? matches itself'
 assert not reminders.glob('is it upx', '*up?'), 'a ? matched another character'
 assert reminders.glob('a\\nb', 'a*b'), 'a * crosses lines'
+"
+check "a file pattern is read from the project folder down, not from the folders above it" python3 -B -c "
+import io, sys
+sys.argv, sys.stdin = ['x', '/nowhere'], io.StringIO('')
+sys.path.insert(0, '$REPO/hooks')
+import reminders
+m = lambda path, cwd: reminders.matches('edit', 'payments/*', 'Edit', {'file_path': path}, cwd)
+assert m('/w/app/payments/charge.go', '/w/app'), 'a folder in the project'
+assert m('/w/app/svc/payments/charge.go', '/w/app'), 'a folder deeper in the project'
+assert not m('/w/payments/app/src/main.go', '/w/payments/app'), 'a folder of that name above the project matched'
+assert not m('/elsewhere/payments/x.go', '/w/app'), 'a file outside the project matched'
+assert reminders.matches('edit', '*.sql', 'Edit', {'file_path': '/elsewhere/a.sql'}, '/w/app'), 'a pattern that fits the whole path'
+assert m('/w/app/payments/charge.go', ''), 'with no project folder given, as before'
 "
 out="$(tool_call 'not json'; echo "rc=$?")"
 [ "$out" = "rc=0" ] && ok "input it can't read is ignored, and the hook still exits 0" || bad "input it can't read is ignored, and the hook still exits 0" "$out"
@@ -1502,9 +1524,10 @@ check "and the pull brought the other machine's note" test -f "$WIKIS_DIR/demo/r
 case "$out" in *"===== "*"/demo/index.md"*"===== "*"/global/index.md (global)"*"For agents, from"*"===== Waiting to be compiled"*"/demo: "*"note(s)"*) ok "start prints the indexes, For agents and what waits, in that order" ;; *) bad "start prints the indexes, For agents and what waits, in that order" "$out" ;; esac
 expect "start points at the handbook" "/demo/AGENTS.md, the handbook" "$W" start web
 mkdir -p "$WIKIS_DIR/demo/wiki"
-printf -- '---\ntitle: Conventions\nsummary: x\nupdated: 2026-10-30\nverified: 2026-10-30\n---\n\n## For agents\n\n- After a push, check CI with gh pr checks.\n\n## Tools\n\n- ls (cli): listing\n- nosuchtool123 (cli): never installed\n- jira (mcp): tickets\n- $(touch %s/pwned) (cli): never run\n' "$T" > "$WIKIS_DIR/demo/wiki/conventions.md"
+printf -- '---\ntitle: Conventions\nsummary: x\nupdated: 2026-10-30\nverified: 2026-10-30\n---\n\n## For agents\n\n- After a push, check CI with gh pr checks. [raw/2026-10-30-000000-ci.md]\n\n## Tools\n\n- ls (cli): listing (raw/2026-10-30-000000-tools.md)\n- nosuchtool123 (cli): never installed\n- jira (mcp): tickets\n- $(touch %s/pwned) (cli): never run\n' "$T" > "$WIKIS_DIR/demo/wiki/conventions.md"
 out="$("$W" start web 2>&1)"
 case "$out" in *"For agents, from"*"demo/wiki/conventions.md"*"check CI with gh pr checks"*) ok "start prints the project's own For agents section" ;; *) bad "start prints the project's own For agents section" "$out" ;; esac
+case "$out" in *"raw/2026-10-30-000000"*) bad "start leaves a rule's citation out, in either bracket" "$out" ;; *) ok "start leaves a rule's citation out, in either bracket" ;; esac
 case "$out" in *"- ls (cli): listing  [installed]"*) ok "start marks a listed tool that's installed" ;; *) bad "start marks a listed tool that's installed" "$out" ;; esac
 case "$out" in *"nosuchtool123 (cli): never installed  [NOT FOUND on this shell's PATH"*) ok "and one that isn't" ;; *) bad "and one that isn't" "$out" ;; esac
 case "$out" in *"jira (mcp): tickets  [an MCP server"*) ok "and asks the agent to check an MCP itself" ;; *) bad "and asks the agent to check an MCP itself" "$out" ;; esac

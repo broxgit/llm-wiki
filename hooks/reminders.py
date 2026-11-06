@@ -45,10 +45,14 @@ def matches(kind, pattern, tool, tool_input, cwd):
         path = tool_input.get("file_path") or tool_input.get("notebook_path")
         if not isinstance(path, str) or not path:
             return False
-        names = [path]
-        if cwd and path.startswith(cwd.rstrip("/") + "/"):
-            names.append(path[len(cwd.rstrip("/")) + 1:])
-        return any(glob(n, pattern) or glob(n, "*/" + pattern) for n in names)
+        root = cwd.rstrip("/") + "/" if cwd else ""
+        if root and path.startswith(root):
+            # Inside the project, only what is under it counts: against the whole
+            # path, "payments/*" would match a folder of that name above the project.
+            name = path[len(root):]
+            return glob(name, pattern) or glob(name, "*/" + pattern)
+        # Outside it, or with no project folder given, the pattern has to fit the path.
+        return glob(path, pattern) or (not root and glob(path, "*/" + pattern))
     return False
 
 

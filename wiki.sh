@@ -137,8 +137,8 @@ Usage: $WIKI_CMD <command> [options]
   compile [<wiki>] [--background] | on | off
                        Compile a wiki's waiting notes with a headless agent. on makes
                        session start do it in the background. compile --help has more.
-  log <wiki> <type> [title] [--created P] [--updated P] [--fixed T] [--reported T]
-                       Append a log.md entry and print its counts.
+  log <wiki> <type> [title] [--source raw/F] [--created P] [--updated P] ...
+                       Append a log.md entry and print its counts. log --help has the options.
   sync <wiki> [-m MSG] Commit this wiki's changes, pull with a merge, and push.
   index <wiki> [--check]  Bring index.md in step with the pages' frontmatter, in place.
   lint <wiki>... | --all  The mechanical lint checks. Reports, changes nothing.
@@ -590,13 +590,14 @@ which_miss() {
 print_conventions() {
   local f="$1/wiki/conventions.md" sec line name kind
   [ -f "$f" ] || return 0
-  sec="$(awk '/^## For agents/ { on = 1; next } on && /^## / { exit } on' "$f")"
+  # A citation is for people reading the page. A session gets the rule without it.
+  sec="$(awk '/^## For agents/ { on = 1; next } on && /^## / { exit } on' "$f" | sed -E 's/ *[[(]raw\/[^])]*[])]//g')"
   if [ -n "$(printf '%s' "$sec" | tr -d '[:space:]')" ]; then
     echo
     echo "===== For agents, from $(tilde "$f")"
     printf '%s\n' "$sec"
   fi
-  sec="$(awk '/^## Tools/ { on = 1; next } on && /^## / { exit } on' "$f")"
+  sec="$(awk '/^## Tools/ { on = 1; next } on && /^## / { exit } on' "$f" | sed -E 's/ *[[(]raw\/[^])]*[])]//g')"
   [ -n "$(printf '%s' "$sec" | tr -d '[:space:]')" ] || return 0
   echo
   echo "===== Tools this work needs, from $(tilde "$f")"
@@ -628,7 +629,7 @@ reminders_of() {
     on && /^```/ { fence = !fence; next }
     on && !fence && /^- / {
       s = substr($0, 3)
-      if (s !~ /^(before|on) (bash|edit|tool) `[^`]+`: +[^ ]/) { if (mode == "bad") print; next }
+      if (s !~ /^(before|on) (bash|edit|tool) `[^`]*[^` ][^`]*`: +[^ ]/) { if (mode == "bad") print; next }
       if (mode == "bad") next
       split(s, w, " ")
       t = substr(s, index(s, "`") + 1)
@@ -1092,6 +1093,10 @@ EOF
     # Read before the sync below adds its own lines to the same file.
     last="$(grep . "$out" 2>/dev/null | tail -n 1 | cut -c 1-200 || true)"
   elif [ "$left" -eq 0 ]; then result=ok
+  elif [ "$left" -eq "$n" ]; then
+    # It ran and compiled nothing. Its last line is where it says why.
+    result=none
+    last="$(grep . "$out" 2>/dev/null | tail -n 1 | cut -c 1-200 || true)"
   else result=partial
   fi
   printf 'free\n' > "$COMPILE_LOCK" 2>/dev/null || true
@@ -1205,6 +1210,24 @@ syncs when it ends.
 EOF
 }
 
+log_usage() {
+  cat <<EOF
+Usage: $WIKI_CMD log <wiki> <type> [<title>] [options]
+
+Appends an entry to the wiki's log.md and prints its counts.
+  type: ingest (needs a title: what the note was about), lint, restructure or resolve
+
+  --source raw/FILE   The note an ingest compiled. This is what marks the note compiled.
+  --created PAGE      A page the work created. Repeat for each.
+  --updated PAGE      A page it updated. Repeat for each.
+  --fixed TEXT        Something a lint fixed. Repeat for each.
+  --reported TEXT     Something a lint found and left. Repeat for each.
+  --corrections N     How many earlier claims the note corrected.
+  --conflicts N       How many contradictions were flagged. 0 for an ingest unless given.
+  --patterns N        How many Feedback lines were tallied into patterns.md.
+EOF
+}
+
 # log <wiki> <type> [<title>] [--created P]... [--updated P]... [--fixed T]... [--reported T]...
 #   [--corrections N] [--conflicts N] [--patterns N]
 cmd_log() {
@@ -1222,6 +1245,7 @@ cmd_log() {
         case "$1" in --corrections) corrections="$v" ;; --conflicts) conflicts="$v" ;; --patterns) patterns="$v" ;; esac
         shift 2
         ;;
+      -h | --help) log_usage; return 0 ;;
       -*) die "log options: --source raw/F, --created P, --updated P, --fixed T, --reported T, --corrections N, --conflicts N, --patterns N" ;;
       *) if [ -z "$wiki" ]; then wiki="$1"; elif [ -z "$type" ]; then type="$1"; else title="${title:+$title }$1"; fi; shift ;;
     esac

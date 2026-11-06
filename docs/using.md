@@ -131,7 +131,7 @@ A rule your agent read at session start can be out of mind by the time it applie
 
 - `before` stops the first matching call once and shows the rule, so the agent reads it before acting. The same call made again goes through.
 - `on` hands the rule over with the call's result, for things worth knowing but not worth a stop.
-- `bash` matches text a command contains, `edit` a file being edited, and `tool` a tool's name. `*` matches anything.
+- `bash` matches text a command contains, `edit` a file being edited, by its path under the project folder, and `tool` a tool's name. `*` matches anything.
 
 The shared wiki's reminders apply in every project. Each is given once a session, and again after a compaction. They run through the Claude Code plugin, so keep the rule in `For agents` too, where every agent reads it. `wiki lint` tells you about a line it couldn't read.
 
