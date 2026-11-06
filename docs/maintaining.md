@@ -99,11 +99,26 @@ A journal setting is one line in `JOURNAL_SETTINGS` in `wiki.sh`: key, type, bas
 Merging to `main` is the release. The plugin has no version number, so every commit on `main` reaches plugin users with auto-update on, and a broken one breaks everyone's sessions at once. So:
 
 1. Work on a branch.
-2. Run the smoke tests: `tests/smoke.sh`. They take a few seconds, run in a temp folder with their own `HOME`, and never touch your wikis. Install gitleaks first, or the secret-scan tests are skipped.
-3. Push the branch and open a pull request. CI runs shellcheck, `claude plugin validate`, and the smoke tests on Linux and on macOS with Apple's bash 3.2.
+2. Run the smoke tests: `tests/smoke.sh`. They take a few minutes, run in a temp folder with their own `HOME`, and never touch your wikis. Install gitleaks first, or the secret-scan tests are skipped.
+3. Push the branch and open a pull request. CI runs shellcheck, `claude plugin validate`, and the smoke tests on Linux and on macOS with Apple's bash 3.2, in four parts at once on each.
 4. Merge when CI is green. GitHub enforces this: `main` is protected, so it takes a pull request with all three CI checks passing, for admins too. In an emergency, untick "Do not allow bypassing the above settings" in the repository's Settings → Branches, and tick it again afterwards.
 
 Add a smoke test when you fix a bug or add a command. Each one is a line or two: see the helpers at the top of `tests/smoke.sh`.
+
+### The smoke test's parts
+
+On macOS the whole suite took nine minutes in CI, so CI runs it in four parts, each its own job: `tests/smoke.sh --part <n>`. `tests/smoke.sh` with no option still runs everything, in order. `tests/smoke.sh --list` shows which part each section is in.
+
+The table at the top of `tests/smoke.sh` holds, for each section, its part and the earlier sections it uses: the ones that made a wiki, a repository, a file or a setting it reads. A part runs its own sections and, without counting their checks, the sections they use from other parts, in the suite's order. So a part starts from the state its sections expect, without copying setup into them.
+
+To add a section:
+
+1. Write it as `if section "<name>"; then` ... `fi`, like the others. The function a check needs from another section belongs with the helpers at the top, not in the section that first used it.
+2. Add a line to the table: its part, its name, and the earlier sections whose state it reads. A section missing from the table fails the run.
+3. Put it in the part that is quickest now. `SMOKE_TIMES=1 tests/smoke.sh --part <n>` prints how long each section takes. CI prints the same, so the macOS job logs give the real times. The two slowest sections, the weekly report and the standup, each take most of a part.
+4. Run `tests/smoke-parts.sh`. It runs the whole suite and every part, and fails unless each check of the whole run is made in exactly one part, and every check passes. A check that passes in its part only because state is missing, such as a `lacks` with nothing there to find, is the risk it can't see. When a section reads what another made, name that section in the table.
+
+To add a part, add its number to the `smoke` matrix in `.github/workflows/ci.yml`. The lint job fails when the matrix and the table don't list the same parts. Branch protection requires `smoke (ubuntu-latest)` and `smoke (macos-latest)`, which pass when every part has, so the required checks stay the same.
 
 A change people will notice belongs in the setup guides or [Using it](using.md), not only in the CHANGELOG, and gets an entry at the top of `NEWS.md`. A new entry reaches plugin users through `wiki status`, even if they never run `wiki update`. The one `claude plugin validate` warning, no `version`, is on purpose.
 

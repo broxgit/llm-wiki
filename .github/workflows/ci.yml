@@ -12,7 +12,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: shellcheck
-        run: shellcheck -S warning wiki.sh hooks/session-start.sh hooks/pre-tool-use.sh hooks/pre-commit scripts/migrate-to-plugin.sh scripts/helper.sh tests/smoke.sh
+        run: shellcheck -S warning wiki.sh hooks/session-start.sh hooks/pre-tool-use.sh hooks/pre-commit scripts/migrate-to-plugin.sh scripts/helper.sh tests/smoke.sh tests/smoke-parts.sh
+      - name: The smoke matrix runs every part of the suite
+        run: test "$(tests/smoke.sh --list | cut -f 1 | sort -un | paste -sd ' ' -)" = "1 2 3 4"
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -75,11 +77,16 @@ jobs:
             --notes "The llm-wiki helper built from source $src. wiki update downloads it and keeps it only if it matches helper.lock. There is nothing to install by hand." \
             || gh release view "$tag" >/dev/null
 
+  # The suite runs in parts, side by side, as tests/smoke.sh --part <n>: on macOS the
+  # whole of it took nine minutes. The parts list must match the table at the top of
+  # tests/smoke.sh, which the lint job checks. docs/maintaining.md has how to change it.
   smoke:
+    name: smoke part ${{ matrix.part }} (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        part: [1, 2, 3, 4]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -114,4 +121,17 @@ jobs:
       - name: Smoke tests
         run: |
           bash --version | head -n 1
-          tests/smoke.sh
+          SMOKE_TIMES=1 tests/smoke.sh --part ${{ matrix.part }}
+
+  # Branch protection requires checks named smoke (ubuntu-latest) and smoke (macos-latest),
+  # from before the parts. These pass when every part passed, on both systems.
+  smoke-result:
+    name: smoke (${{ matrix.os }})
+    needs: smoke
+    if: always()
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "${{ needs.smoke.result }}" = success
