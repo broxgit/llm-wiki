@@ -237,7 +237,7 @@ need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 # Raise GO_PROTOCOL, with the constant in cmd/llm-wiki/main.go, whenever a ported
 # command's arguments or output change. scripts/helper.sh builds releases and writes
 # helper.lock.
-GO_PROTOCOL=6
+GO_PROTOCOL=7
 HELPER_LOCK="$REPO/helper.lock"
 HELPER_DIR="${LLM_WIKI_HELPER_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/llm-wiki/helper}"
 
@@ -2368,14 +2368,39 @@ EOF2
 # Index lines first, then pages whose text mentions the word but whose index line
 # doesn't: an identifier, error string or host name is rarely in a summary.
 FIND_PAGES=5
+# The start of a UTF-8 character whose end a cut at a byte took off: the first byte of
+# two, one or two of three, or up to three of four. By byte, for a sed under LC_ALL=C.
+FIND_CUT=$'([\300-\337]|[\340-\357][\200-\277]?|[\360-\367][\200-\277]?[\200-\277]?)$'
 cmd_find() {
-  local word="$1" d hits pages f line n found=0 first=""
+  local word="$1" found=0 first="" bin out nl=$'\n'
   [ -d "$WIKIS_DIR" ] || die "no wikis at $(tilde "$WIKIS_DIR")"
+  # The compiled helper searches too. Its first line says how the search went, for the
+  # log below. It prints nothing when it isn't sure, and find_search answers.
+  if bin="$(go_helper)" && out="$("$bin" find --wikis "$WIKIS_DIR" --word "$word" 2>/dev/null)"; then
+    case "$out" in
+      "found "?*"$nl"?*) first="${out%%"$nl"*}"; first="${first#found }"; [ -z "$first" ] || found=1 ;;
+      "none$nl"?*) found=2 ;;
+    esac
+    [ "$found" = 0 ] || printf '%s\n' "${out#*"$nl"}"
+  fi
+  [ "$found" != 0 ] || find_search "$word"
+  # Logged here because sessions mostly skip logging by hand. A word that found nothing
+  # shows what pages are missing.
+  if [ "$found" = 1 ]; then stats_log "$first" search-found "$word"; else stats_log "$SHARED" search-none "$word"; fi
+}
+
+# find_search <word>: print what find prints, and set found and first for cmd_find's
+# log. LC_ALL=C, so the order of wikis and pages, which letters match whatever their
+# case, and where a page's line is cut don't depend on the locale, and the compiled
+# helper can print the same. A line is cut at a byte, and never inside a character.
+find_search() {
+  local word="$1" d hits pages f line n
+  local LC_ALL=C
   for d in "$WIKIS_DIR"/*/; do
     d="${d%/}"
     [ -f "$d/index.md" ] || continue
     # Headings like "# Index" and "## Concepts" aren't entries.
-    hits="$(grep -v '^#' "$d/index.md" | grep -i -F -- "$word" || true)"
+    hits="$(LC_ALL=C grep -v '^#' "$d/index.md" | LC_ALL=C grep -i -F -- "$word" || true)"
     pages=""
     if [ -d "$d/wiki" ]; then
       n=0
@@ -2383,27 +2408,25 @@ cmd_find() {
         [ -n "$f" ] && [ "$n" -lt "$FIND_PAGES" ] || continue
         f="${f#"$d"/}"
         case "$hits" in *"($f)"*) continue ;; esac
-        # The first mention in the page's text, not its frontmatter.
-        line="$(awk -v w="$word" 'NR == 1 && /^---$/ { fm = 1; next } fm && /^---$/ { fm = 0; next }
-          !fm && index(tolower($0), tolower(w)) { print; exit }' "$d/$f" | sed 's/^[[:space:]]*//' | cut -c 1-120)"
+        # The first mention in the page's text, not its frontmatter: its first 120 bytes,
+        # less a character the cut left unfinished.
+        line="$(LC_ALL=C awk -v w="$word" 'NR == 1 && /^---$/ { fm = 1; next } fm && /^---$/ { fm = 0; next }
+          !fm && index(tolower($0), tolower(w)) { print; exit }' "$d/$f" | LC_ALL=C sed 's/^[[:space:]]*//' | LC_ALL=C cut -c 1-120 | LC_ALL=C sed -E "s/$FIND_CUT//")"
         [ -n "$line" ] || continue
         pages="$pages    $f: $line"$'\n'
         n=$((n + 1))
       done <<EOF2
-$(grep -r -l -i -F --include='*.md' --exclude-dir=sources -- "$word" "$d/wiki" 2>/dev/null | sort)
+$(LC_ALL=C grep -r -l -i -F --include='*.md' --exclude-dir=sources -- "$word" "$d/wiki" 2>/dev/null | LC_ALL=C sort)
 EOF2
     fi
     [ -n "$hits$pages" ] || continue
     found=1
     [ -n "$first" ] || first="${d##*/}"
     echo "${d##*/}:"
-    [ -z "$hits" ] || printf '%s\n' "$hits" | sed 's/^/  /'
+    [ -z "$hits" ] || printf '%s\n' "$hits" | LC_ALL=C sed 's/^/  /'
     [ -z "$pages" ] || printf '  also in pages:\n%s' "$pages"
   done
   [ "$found" = 1 ] || echo "no mentions in any index or page: $word"
-  # Logged here because sessions mostly skip logging by hand. A word that found nothing
-  # shows what pages are missing.
-  if [ "$found" = 1 ]; then stats_log "$first" search-found "$word"; else stats_log "$SHARED" search-none "$word"; fi
 }
 
 # stats_log <wiki> <result> [word]: one line in stats.csv. It must never fail a command,

@@ -86,6 +86,8 @@ def run(folder, *args, stdin=None):
             input=stdin if stdin is not None else "",
             capture_output=True,
             text=True,
+            # A page that isn't UTF-8 must not end the call: its bytes come back as U+FFFD.
+            errors="replace",
             env=env,
             # Not in the collection or a project: start would take that for the repository.
             cwd=tempfile.gettempdir(),
