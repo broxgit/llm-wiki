@@ -3,10 +3,90 @@
 # Everything runs in a temp folder with its own HOME, so real wikis and settings are
 # never touched. Works with the bash that ships on macOS (3.2) and on Linux.
 #
-#   tests/smoke.sh
+#   tests/smoke.sh              the whole suite
+#   tests/smoke.sh --part <n>   one part of it, as CI runs it: one job per part
+#   tests/smoke.sh --list       which part each section is in
 #
+# SMOKE_TIMES=1 prints how long each section took, for balancing the parts.
+# tests/smoke-parts.sh checks that the parts add up to the whole suite.
 # The secret-scan tests run only when gitleaks is installed. CI installs it.
 set -u
+
+# Each section is in one part. A section also names the earlier sections whose state
+# it uses, such as a wiki they made. A part runs its own sections and, without
+# counting their checks, the ones they use from other parts, in the suite's order.
+# Keep the parts' times close: CI waits for the slowest. docs/maintaining.md has more.
+#
+# part | section | uses
+# Read, not $(cat <<...): bash 3.2 can't parse a quote inside a here-document in $( ).
+read -r -d '' PARTS <<'TABLE' || true
+1 | Collection |
+1 | What a new wiki gets | Collection
+1 | Upgrade | Collection
+1 | Two clones merge index.md and log.md | Collection
+1 | Secret scan | Collection
+1 | Session hook | Collection
+1 | Links and plugin mode | Collection
+1 | Seed | Collection
+1 | Pending and bulk compile | Seed, Session hook
+1 | Team skills | Seed, Session hook
+4 | Tips | Team skills, Session hook
+3 | Tab completion | Collection
+1 | Weekly report | Seed, Session hook
+3 | Bookkeeping commands | Collection
+3 | Background compile | Session hook
+3 | Reminders | Two clones merge index.md and log.md, Session hook
+3 | Index and lint | Collection
+3 | Setup fit | Session hook
+3 | Harvest Claude Code memory | Session hook
+3 | Setup fixes | Collection
+3 | Stats | Collection
+3 | Plugin updates reach the wiki command | Session hook
+2 | Journal and standup | Collection
+2 | Commit distance | Journal and standup
+2 | Dependency map | Journal and standup
+3 | Sync takes turns | Two clones merge index.md and log.md, Seed
+3 | Session start in one call | Two clones merge index.md and log.md
+3 | A remote the branch doesn't track | Two clones merge index.md and log.md
+4 | Antigravity plugin | Session hook, Team skills
+4 | Codex plugin | Session hook, Team skills
+4 | Cursor | Session hook, Team skills
+4 | Feedback on llm-wiki | Session hook
+4 | MCP server | Two clones merge index.md and log.md
+4 | Compiled without summary pages (v24) | Collection
+4 | Claude Code permissions |
+4 | Collections | Session hook
+2 | Bash 3.2 safety |
+2 | Missing flag values | Collection
+3 | Update | Two clones merge index.md and log.md
+2 | News |
+2 | What moved to llm-relay |
+3 | Tour |
+4 | The released helper | Session hook
+TABLE
+PART=""
+case "${1:-}" in
+  "") ;;
+  --part) PART="${2:-}" ;;
+  --list) printf '%s\n' "$PARTS" | awk -F ' *[|] *' 'NF >= 2 { print $1 "\t" $2 }'; exit 0 ;;
+  *) printf 'usage: tests/smoke.sh [--part <n> | --list]\n' >&2; exit 2 ;;
+esac
+# Each section's mode in this run: run, setup or skip. A use must name an earlier section.
+PLAN="$(printf '%s\n' "$PARTS" | awk -F ' *[|] *' -v part="$PART" '
+  function use(s,   i, k, a) {
+    k = split(uses[s], a, / *, */)
+    for (i = 1; i <= k; i++) if (!(a[i] in mode)) { mode[a[i]] = "setup"; use(a[i]) }
+  }
+  NF >= 2 { n++; name[n] = $2; p[$2] = $1; uses[$2] = $3; at[$2] = n; if ($1 == part) found = 1 }
+  END {
+    if (part != "" && !found) { print "no part " part " in the table at the top of tests/smoke.sh" > "/dev/stderr"; exit 2 }
+    for (i = 1; i <= n; i++) {
+      k = split(uses[name[i]], a, / *, */)
+      for (j = 1; j <= k; j++) if (!(a[j] in at) || at[a[j]] >= i) { print name[i] " uses \"" a[j] "\", which isn'"'"'t a section before it" > "/dev/stderr"; exit 2 }
+    }
+    for (i = 1; i <= n; i++) if (part == "" || p[name[i]] == part) { mode[name[i]] = "run"; use(name[i]) }
+    for (i = 1; i <= n; i++) print (name[i] in mode ? mode[name[i]] : "skip") "\t" name[i]
+  }')" || exit 2
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 W="$REPO/wiki.sh"
@@ -30,14 +110,36 @@ pass=0
 fail=0
 skip=0
 
-ok() { pass=$((pass + 1)); printf 'ok    %s\n' "$1"; }
+# A section run only to set up a part counts its failures, not its passes.
+section_mode=run
+ok() { [ "$section_mode" = setup ] || { pass=$((pass + 1)); printf 'ok    %s\n' "$1"; }; }
 bad() {
   fail=$((fail + 1))
-  printf 'FAIL  %s\n' "$1"
+  if [ "$section_mode" = setup ]; then printf 'FAIL  %s (while setting up this part)\n' "$1"; else printf 'FAIL  %s\n' "$1"; fi
   [ -z "${2:-}" ] || printf '%s\n' "$2" | head -n 15 | sed 's/^/        /'
 }
-skipped() { skip=$((skip + 1)); printf 'skip  %s\n' "$1"; }
-section() { printf '\n# %s\n' "$1"; }
+skipped() { [ "$section_mode" = setup ] || { skip=$((skip + 1)); printf 'skip  %s\n' "$1"; }; }
+clock() { perl -MTime::HiRes=time -e 'printf "%.1f", time'; }
+# section_time: how long the section that just ended took, with SMOKE_TIMES=1.
+section_time() { [ -z "${SMOKE_TIMES:-}" ] || [ -z "${section_start:-}" ] || awk -v a="$section_start" -v b="$(clock)" -v s="$1" 'BEGIN { printf "time  %5.1fs  %s\n", b - a, s }'; }
+# section <name>: starts a section, and fails when this run skips it.
+section() {
+  section_time "${section_name:-}"
+  section_name="$1"
+  [ -z "${SMOKE_TIMES:-}" ] || section_start="$(clock)"
+  section_mode="$(printf '%s\n' "$PLAN" | awk -F '\t' -v s="$1" '$2 == s { print $1; exit }')"
+  case "$section_mode" in
+    run) printf '\n# %s\n' "$1" ;;
+    setup) printf '\n# %s, to set up this part\n' "$1" ;;
+    skip) return 1 ;;
+    *)
+      section_mode=run
+      printf '\n# %s\n' "$1"
+      bad "the section has a part in the table at the top of tests/smoke.sh"
+      [ -z "$PART" ] || return 1
+      ;;
+  esac
+}
 
 # check <name> <command...>: the command succeeds.
 check() {
@@ -66,8 +168,28 @@ lacks() {
   case "$out" in *"$unwanted"*) bad "$name (has \"$unwanted\")" "$out" ;; *) ok "$name" ;; esac
 }
 set_version() { sed "s/^Handbook version [0-9]*\./Handbook version $2./" "$1" > "$1.tmp" && mv "$1.tmp" "$1"; }
+# hook <project dir> [stdin json]
+hook() { printf '%s' "${2:-}" | CLAUDE_PLUGIN_ROOT="$REPO" CLAUDE_PLUGIN_DATA="$T/data" CLAUDE_PROJECT_DIR="$1" bash "$REPO/hooks/session-start.sh"; }
+# context <json>: the additionalContext from hook output, or a parse error.
+context() {
+  python3 -c 'import json, sys
+d = json.load(sys.stdin)["hookSpecificOutput"]
+assert d["hookEventName"] == "SessionStart"
+print(d["additionalContext"])'
+}
+mkskill() { mkdir -p "$1" && printf -- '---\nname: %s\ndescription: %s\n---\n\nSteps.\n' "${1##*/}" "$2" > "$1/SKILL.md"; }
+# setup wants a terminal for its questions. The tests answer through a pipe.
+in_tty() { LLM_WIKI_TEST_TTY=1 "$@"; }
+# build_helper: the compiled helper, in $T/bin/llm-wiki, and two stand-ins for a helper
+# gone wrong: one built for another protocol, and one that fails.
+build_helper() {
+  (cd "$REPO" && go build -o "$T/bin/llm-wiki" ./cmd/llm-wiki) || return 1
+  printf '#!/bin/sh\n[ "$1" = protocol ] && { echo 0; exit 0; }\necho "STALE TABLE"\n' > "$T/bin/stale-helper"
+  printf '#!/bin/sh\n[ "$1" = protocol ] && { sed -n "s/^GO_PROTOCOL=//p" "%s"; exit 0; }\nexit 1\n' "$W" > "$T/bin/broken-helper"
+  chmod +x "$T/bin/stale-helper" "$T/bin/broken-helper"
+}
 
-section "Collection"
+if section "Collection"; then
 expect "init --git makes the first commit" "first commit made" "$W" init --git
 check "the collection is a git repo" git -C "$WIKIS_DIR" rev-parse --is-inside-work-tree
 check "the shared wiki starts with a conventions page" grep -q '^## For agents' "$WIKIS_DIR/global/wiki/conventions.md"
@@ -93,8 +215,9 @@ case "$out" in *"also in pages"*"deploy.md"*) bad "find doesn't repeat a page it
 expect "claude --print prints the line" "knowledge wikis live in" "$W" claude --print
 check "claude --print writes nothing" test ! -e "$HOME/.claude/CLAUDE.md"
 expect "the line says what wiki.sh means, for agents without the hook" "Wherever their handbooks say \`wiki.sh\`, run" "$W" claude --print
+fi
 
-section "What a new wiki gets"
+if section "What a new wiki gets"; then
 for f in .gitattributes .gitignore patterns.md links.md repos.md rules/peers.md rules/compile.md; do
   check "demo has $f" test -f "$WIKIS_DIR/demo/$f"
 done
@@ -102,8 +225,9 @@ expect "index.md merges by union" "merge: union" git -C "$WIKIS_DIR" check-attr 
 expect "log.md merges by union" "merge: union" git -C "$WIKIS_DIR" check-attr merge -- demo/log.md
 check "delegation.md is git-ignored" git -C "$WIKIS_DIR" check-ignore -q delegation.md
 check "the secret-scan hook is installed" grep -q "llm-wiki secret scan" "$WIKIS_DIR/.git/hooks/pre-commit"
+fi
 
-section "Upgrade"
+if section "Upgrade"; then
 set_version "$WIKIS_DIR/demo/AGENTS.md" 12
 rm -f "$WIKIS_DIR/demo/patterns.md" "$WIKIS_DIR/demo/.gitattributes"
 out="$("$W" upgrade demo 2>&1)"
@@ -123,8 +247,9 @@ expect "upgrade leaves a newer wiki alone" "newer than your template" "$W" upgra
 check "the newer handbook is untouched" grep -q "Handbook version 999" "$WIKIS_DIR/demo/AGENTS.md"
 set_version "$WIKIS_DIR/demo/AGENTS.md" "$TV"
 lacks "status is quiet once current" "behind template" "$W" status
+fi
 
-section "Two clones merge index.md and log.md"
+if section "Two clones merge index.md and log.md"; then
 git -C "$WIKIS_DIR" add -A >/dev/null 2>&1
 git -C "$WIKIS_DIR" commit -qm "smoke: setup" >/dev/null 2>&1
 git init -q --bare "$T/remote.git"
@@ -140,8 +265,9 @@ git -C "$T/clone2" commit -qam "demo: ingest Beta"
 check "pull merges without a conflict" git -C "$T/clone2" pull -q --no-rebase --no-edit
 check "index.md keeps both lines" bash -c "grep -q Alpha '$T/clone2/demo/index.md' && grep -q Beta '$T/clone2/demo/index.md'"
 check "log.md keeps both entries" bash -c "grep -q 'ingest: Alpha' '$T/clone2/demo/log.md' && grep -q 'ingest: Beta' '$T/clone2/demo/log.md'"
+fi
 
-section "Secret scan"
+if section "Secret scan"; then
 if command -v gitleaks >/dev/null 2>&1; then
   # Built at runtime so this file never holds a token-shaped string.
   token="ghp_$(printf 'a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8')"
@@ -155,18 +281,10 @@ if command -v gitleaks >/dev/null 2>&1; then
 else
   skipped "secret scan (gitleaks isn't installed)"
 fi
+fi
 
-section "Session hook"
+if section "Session hook"; then
 mkdir -p "$T/projects/web" && git -C "$T/projects/web" init -q
-# hook <project dir> [stdin json]
-hook() { printf '%s' "${2:-}" | CLAUDE_PLUGIN_ROOT="$REPO" CLAUDE_PLUGIN_DATA="$T/data" CLAUDE_PROJECT_DIR="$1" bash "$REPO/hooks/session-start.sh"; }
-# context <json>: the additionalContext from hook output, or a parse error.
-context() {
-  python3 -c 'import json, sys
-d = json.load(sys.stdin)["hookSpecificOutput"]
-assert d["hookEventName"] == "SessionStart"
-print(d["additionalContext"])'
-}
 out="$(hook "$T/projects/web" | context 2>&1)"
 case "$out" in *"$WIKIS_DIR/demo/AGENTS.md"*) ok "the hook names the covering wiki's handbook" ;; *) bad "the hook names the covering wiki's handbook" "$out" ;; esac
 n="$(printf '%s' "$out" | wc -c | tr -d ' ')"
@@ -194,8 +312,9 @@ expect "the hook says to keep knowledge in the wiki, not the agent's memory" "no
 check "the hook writes the wiki command" test -x "$T/data/bin/wiki"
 expect "the wiki command runs wiki.sh" "WIKI" "$T/data/bin/wiki" status
 expect "the wiki command's messages say wiki" "Run: wiki init" env WIKIS_DIR="$T/none" "$T/data/bin/wiki" status
+fi
 
-section "Links and plugin mode"
+if section "Links and plugin mode"; then
 ln -s "$W" "$T/bin/wk"
 expect "a symlinked wiki.sh finds its template" "demo" "$T/bin/wk" which web
 expect "a symlinked wiki.sh on the PATH uses its link's name" "Run: wk init" env WIKIS_DIR="$T/none" PATH="$T/bin:$PATH" wk status
@@ -222,8 +341,9 @@ out="$("$P/wiki.sh" status 2>&1)"
 set_version "$WIKIS_DIR/demo/AGENTS.md" "$TV"
 rm "$HOME/.claude/plugins/installed_plugins.json"
 case "$out" in *"Claude Code has def456 installed"*"Do: quit and reopen"*) ok "an old copy after an update says to restart Claude" ;; *) bad "an old copy after an update says to restart Claude" "$out" ;; esac
+fi
 
-section "Seed"
+if section "Seed"; then
 A="$T/projects/api"
 mkdir -p "$A/docs/adr" "$A/node_modules/pkg" "$A/src"
 printf '# API\n\nThe billing API.\n' > "$A/README.md"
@@ -256,8 +376,9 @@ for want in "seeded:  CLAUDE.md" "seeded:  AGENTS.md" "seeded:  .cursorrules" "s
 done
 case "$out" in *workflows*) bad "seed skips CI workflow files" "$out" ;; *) ok "seed skips CI workflow files" ;; esac
 check "a file with no extension is copied as .txt" bash -c "ls '$WIKIS_DIR/agents/raw/' | grep -q 'seed-[0-9]*-cursorrules.txt'"
+fi
 
-section "Pending and bulk compile"
+if section "Pending and bulk compile"; then
 expect "pending lists what waits in each wiki" "demo:" "$W" pending
 expect "pending <wiki> lists its files" "seed-01-readme.md" "$W" pending demo
 out="$("$W" pending demo --show 2>&1)"
@@ -280,11 +401,11 @@ for i in 01 02 03 04 05 06 07 08 09 10 11; do printf 'Captured: 2026-01-01\n\nNo
 mkdir -p "$T/projects/bulkrepo" && git -C "$T/projects/bulkrepo" init -q
 expect "with more than ten waiting, the session does the request first" "more than ten, so do the user's request first" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; hook '$T/projects/bulkrepo' | context"
 lacks "with a few waiting, it compiles first" "more than ten" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; hook '$T/projects/web' | context"
+fi
 
-section "Team skills"
+if section "Team skills"; then
 SK="$HOME/.claude/skills"
 mkdir -p "$SK/go-expert" && printf -- '---\nname: go-expert\ndescription: mine\n---\n' > "$SK/go-expert/SKILL.md"
-mkskill() { mkdir -p "$1" && printf -- '---\nname: %s\ndescription: %s\n---\n\nSteps.\n' "${1##*/}" "$2" > "$1/SKILL.md"; }
 expect "with none, skills says how they arrive" "No team skills yet" "$W" skills
 mkskill "$WIKIS_DIR/global/skills/bump-proto" "Bump a shared proto everywhere."
 mkskill "$WIKIS_DIR/demo/skills/deploy" "Deploy demo."
@@ -303,8 +424,9 @@ check "a deleted skill's link is removed" test ! -e "$SK/agents-deploy"
 check "and the survivor takes its own name" bash -c "test '$SK/deploy' -ef '$WIKIS_DIR/demo/skills/deploy' && ! test -e '$SK/demo-deploy'"
 mkskill "$WIKIS_DIR/global/skills/rotate-keys" "Rotate keys."
 expect "the session hook links new team skills and says so" "available: rotate-keys" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; hook '$T/projects/web' | context"
+fi
 
-section "Tips"
+if section "Tips"; then
 export XDG_CONFIG_HOME="$T/config"
 "$W" new extra-one >/dev/null
 "$W" new extra-two >/dev/null
@@ -329,8 +451,9 @@ n="$(printf '%s' "$out" | wc -c | tr -d ' ')"
 if [ "$n" -lt 2000 ]; then ok "with a tip the hook's context is still short ($n chars)"; else bad "with a tip the hook's context is still short ($n chars, limit 2000)"; fi
 lacks "no tip right after compaction" "One tip" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; hook '$T/projects/web' '{\"source\":\"compact\"}' | context"
 unset XDG_CONFIG_HOME
+fi
 
-section "Tab completion"
+if section "Tab completion"; then
 expect "the first word completes to commands" "standup" "$W" __complete 1 st
 expect "journal set completes setting names" "max_commits" "$W" __complete 3 journal set ""
 expect "setup completes the newer sections" "feedback" "$W" __complete 2 setup ""
@@ -356,8 +479,9 @@ else
   skipped "zsh completion (zsh isn't installed)"
 fi
 refuse "completion needs a shell name" "$W" completion fish
+fi
 
-section "Weekly report"
+if section "Weekly report"; then
 mkdir -p "$HOME/.claude/projects/p1"
 now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 big="$(awk 'BEGIN { for (i = 0; i < 4000; i++) printf "x" }')"
@@ -384,7 +508,7 @@ case "$out" in *"Wiki reads are about 5"[0-9].[0-9]"% of new input"*) ok "tokens
   printf 'not json at all\n\n'
 } > "$HOME/.claude/projects/p1/s2.jsonl"
 if command -v go >/dev/null 2>&1; then
-  check "the Go helper builds" bash -c "cd '$REPO' && go build -o '$T/bin/llm-wiki' ./cmd/llm-wiki"
+  check "the Go helper builds" build_helper
   check "it speaks the protocol wiki.sh expects" test "$("$T/bin/llm-wiki" protocol)" = "$(sed -n 's/^GO_PROTOCOL=//p' "$W")"
   py="$(LLM_WIKI_NO_GO=1 "$W" report 2>&1)"
   go="$(LLM_WIKI_GO="$T/bin/llm-wiki" "$W" report 2>&1)"
@@ -395,9 +519,6 @@ if command -v go >/dev/null 2>&1; then
   [ "$(LLM_WIKI_NO_GO=1 "$W" report 2>&1)" = "$(LLM_WIKI_GO="$T/bin/llm-wiki" "$W" report 2>&1)" ] && ok "with a project excluded too" || bad "with a project excluded too"
   "$W" journal set exclude "" >/dev/null
   [ "$(LLM_WIKI_NO_GO=1 "$W" report --since 2019-12-25 2>&1)" = "$(LLM_WIKI_GO="$T/bin/llm-wiki" "$W" report --since 2019-12-25 2>&1)" ] && ok "and over a longer range" || bad "and over a longer range"
-  printf '#!/bin/sh\n[ "$1" = protocol ] && { echo 0; exit 0; }\necho "STALE TABLE"\n' > "$T/bin/stale-helper"
-  printf '#!/bin/sh\n[ "$1" = protocol ] && { sed -n "s/^GO_PROTOCOL=//p" "%s"; exit 0; }\nexit 1\n' "$W" > "$T/bin/broken-helper"
-  chmod +x "$T/bin/stale-helper" "$T/bin/broken-helper"
   lacks "a helper built for another protocol is passed over" "STALE TABLE" env LLM_WIKI_GO="$T/bin/stale-helper" "$W" report
   expect "and the Python answers" "| demo | 2 | 3k | 3.0M | 2k | 3k |" env LLM_WIKI_GO="$T/bin/stale-helper" "$W" report
   expect "a helper that fails falls back to the Python" "| demo | 2 | 3k | 3.0M | 2k | 3k |" env LLM_WIKI_GO="$T/bin/broken-helper" "$W" report
@@ -628,8 +749,9 @@ rm -f "$HOME/.config/llm-wiki/tips"
 out="$(hook "$T/projects/web" '{"source":"startup"}' | context 2>&1)"
 case "$out" in *"weekly wiki report is due"*) ok "the session hook offers the weekly report" ;; *) bad "the session hook offers the weekly report" "$out" ;; esac
 case "$out" in *"One tip"*) bad "a week with a report offer has no tip" "$out" ;; *) ok "a week with a report offer has no tip" ;; esac
+fi
 
-section "Bookkeeping commands"
+if section "Bookkeeping commands"; then
 out="$(printf 'We picked Postgres.\n' | "$W" capture demo "Decided Postgres!" 2>&1)"
 case "$out" in *"captured: raw/20"*"-decided-postgres.md"*) ok "capture names a note from the clock and the slug" ;; *) bad "capture names a note from the clock and the slug" "$out" ;; esac
 f="$(ls "$WIKIS_DIR"/demo/raw/*-decided-postgres.md | head -n 1)"
@@ -666,8 +788,9 @@ expect "lock --release frees it" "released:" "$W" lock demo --release
 printf 'held abc123 2020-01-01T00:00:00Z\n' > "$WIKIS_DIR/demo/.compile-lock"
 expect "a lock older than 30 minutes is taken" "locked:" "$W" lock demo
 "$W" lock demo --release >/dev/null
+fi
 
-section "Background compile"
+if section "Background compile"; then
 # A stand-in for the headless agent: it keeps the prompt, and logs each waiting note
 # as compiled, which is what marks one done.
 cat > "$T/bin/fake-agent" <<FAKE
@@ -788,8 +911,9 @@ out="$(PATH="$T/claude-bin:$PATH" "$W" compile bg 2>&1)"
 case "$out" in *"1 of 1 note(s)"*", ok."*) ok "with no agent named, claude on the PATH runs" ;; *) bad "with no agent named, claude on the PATH runs" "$out" ;; esac
 check "the same way" grep -qx -- '--allowedTools' "$T/claude-args"
 rm -f "$BGC"
+fi
 
-section "Reminders"
+if section "Reminders"; then
 "$W" new rem >/dev/null
 RM="$WIKIS_DIR/rem"
 RD="$HOME/.local/state/llm-wiki/reminders"
@@ -929,8 +1053,9 @@ expect "inside a wiki, it uses that wiki" "sync: demo, the wiki this folder is i
 mkdir -p "$T/projects/nowiki" && git -C "$T/projects/nowiki" init -q
 out="$(cd "$T/projects/nowiki" && "$W" sync 2>&1)" && bad "a repository no wiki covers is an error" "$out" || case "$out" in *"no wiki covers nowiki. Run:"*"sync <wiki>"*) ok "a repository no wiki covers is an error that says what to run" ;; *) bad "a repository no wiki covers is an error that says what to run" "$out" ;; esac
 expect "outside any repository or wiki, it says to name one" "isn't in a repository or a wiki" bash -c "cd '$T' && '$W' sync"
+fi
 
-section "Index and lint"
+if section "Index and lint"; then
 L="$WIKIS_DIR/lintdemo"
 "$W" new lintdemo >/dev/null
 mkdir -p "$L/wiki/concepts" "$L/wiki/howto"
@@ -963,8 +1088,9 @@ printf '\n- [Ghost](wiki/concepts/ghost.md): gone\n' >> "$L/index.md"
 expect "lint reports an index line with no page" "index line with no page" "$W" lint lintdemo
 expect "lint --all covers every wiki" "== global" "$W" lint --all
 refuse "lint needs a wiki or --all" "$W" lint
+fi
 
-section "Setup fit"
+if section "Setup fit"; then
 expect "which suggests a wiki with a shared word" "Close matches: demo" "$W" which demo-api
 expect "and the cover fix" "cover <wiki> demo-api" "$W" which demo-api
 refuse "which still exits 1 when nothing covers it" "$W" which demo-api
@@ -977,8 +1103,9 @@ out="$(hook "$T/projects/web" | context 2>&1)"
 case "$out" in *"means $T/data/bin/wiki"* | *"means ~/"*"/bin/wiki"*) ok "the hook gives sessions the stable wiki command" ;; *) bad "the hook gives sessions the stable wiki command" "$out" ;; esac
 expect "the report defers to the user's reply style" "usual reply style" "$W" report
 check "save writes journal lines" grep -q 'journal note' "$REPO/commands/save.md"
+fi
 
-section "Harvest Claude Code memory"
+if section "Harvest Claude Code memory"; then
 M="$HOME/.claude/projects/-x-web"
 mkdir -p "$M/memory" "$HOME/.claude/projects/-x-unknown/memory"
 printf '{"type":"user","cwd":"%s","sessionId":"h1"}\n' "$T/projects/web" > "$M/h1.jsonl"
@@ -1000,15 +1127,17 @@ check "each wiki gets a manifest naming the source project" bash -c "grep -q 'sa
 check "the memory notes are untouched" grep -q 'Never push without asking' "$M/memory/no-push.md"
 expect "harvesting again copies nothing new" "skipped 3 already harvested" "$W" harvest
 lacks "after a harvest, its tip goes away" "of its own memory" "$W" tips
+fi
 
-section "Setup fixes"
+if section "Setup fixes"; then
 check "setup --new would ask about tab completion" bash -c "SHELL=/bin/zsh '$W' setup --list | grep -q '^completion  *off  <- new'"
 printf '.DS_Store\n.compile-lock\njournal/\ndelegation.md\ndelegation-log.csv\nstats.csv\n' > "$WIKIS_DIR/.gitignore"
 git -C "$WIKIS_DIR" add .gitignore >/dev/null 2>&1 && git -C "$WIKIS_DIR" commit -qm "old ignores" -- .gitignore >/dev/null 2>&1
 expect "with no wiki behind, upgrade still commits collection changes" 'Committed the upgrade as "wikis: update collection files"' "$W" upgrade --all
 check "and the ignore rules are anchored" grep -qx '/delegation.md' "$WIKIS_DIR/.gitignore"
+fi
 
-section "Stats"
+if section "Stats"; then
 rm -f "$WIKIS_DIR/stats.csv"
 expect "stats with no log says so" "No lookups logged yet" "$W" stats
 check "stats.csv is git-ignored" git -C "$WIKIS_DIR" check-ignore -q stats.csv
@@ -1034,8 +1163,9 @@ case "$out" in *"answered"*"%"*) bad "and gives no hit rate" "$out" ;; *) ok "an
 case "$out" in *"- global: pages opened"*) bad "an edit isn't opening a page" "$out" ;; *) ok "an edit isn't opening a page" ;; esac
 case "$out" in *"- *: pages opened"*) bad "a glob in a command isn't a wiki" "$out" ;; *) ok "a glob in a command isn't a wiki" ;; esac
 rm -rf "$TP"
+fi
 
-section "Plugin updates reach the wiki command"
+if section "Plugin updates reach the wiki command"; then
 # Two installed versions side by side, as Claude Code leaves them after an update.
 # v2's template says v98, so status shows which version ran.
 C1="$HOME/.claude/plugins/cache/mk/llm-wiki/v1"
@@ -1073,8 +1203,9 @@ printf '{"version":2,"plugins":{"llm-wiki@mk":[{"scope":"user","installPath":"%s
 expect "a record pointing nowhere gives a clear error" "can't find the llm-wiki plugin" "$T/pdata/bin/wiki" status
 check "a plugin run from a clone never looks up a version" grep -q 'key=""' "$T/data/bin/wiki"
 rm -f "$HOME/.claude/plugins/installed_plugins.json"
+fi
 
-section "Journal and standup"
+if section "Journal and standup"; then
 expect "journal note writes an entry" "journal:" "$W" journal note demo "smoke test entry"
 refuse "journal note refuses a future day" "$W" journal note --day 2999-01-01 demo "too early"
 expect "standup includes the journal entry" "smoke test entry" "$W" standup --since 2d
@@ -1097,7 +1228,9 @@ mkdir -p "$T/code-empty"
 "$W" journal set code_dirs "$T/code-empty" >/dev/null
 expect "and says when it found no repositories at all" "No git repositories found under $T/code-empty" "$W" standup --since 2d
 "$W" journal set code_dirs "$T/code" >/dev/null
-# The compiled helper built above, against the Bash, on a fixture with fixed dates.
+# The compiled helper, against the Bash, on a fixture with fixed dates. The weekly
+# report's section builds it; a part of the suite without that section builds it here.
+[ -x "$T/bin/llm-wiki" ] || ! command -v go >/dev/null 2>&1 || build_helper >/dev/null 2>&1
 if [ -x "$T/bin/llm-wiki" ]; then
   S="$T/code-s"; d1="2026-01-15T12:00:00"
   scommit() { GIT_AUTHOR_DATE="$d1" GIT_COMMITTER_DATE="$d1" git -C "$1" -c user.email="${3:-}" commit -q --allow-empty -m "$2"; }
@@ -1210,8 +1343,9 @@ if [ -x "$T/bin/llm-wiki" ]; then
 else
   skipped "the Go helper against the Bash for the standup (go isn't installed)"
 fi
+fi
 
-section "Commit distance"
+if section "Commit distance"; then
 R="$T/code/demo"
 mkdir -p "$R" && git -C "$R" init -q && git -C "$R" commit -q --allow-empty -m first
 old="$(git -C "$R" rev-parse --short HEAD)"
@@ -1233,8 +1367,9 @@ expect "and still by its folder name" "far.md  (55 commits behind demo)" "$W" st
 fm far "nothere@$old"
 lacks "a repository with no clone falls back to dates quietly" "far.md" "$W" stale 90
 rm -f "$WIKIS_DIR"/demo/wiki/{far,near,gone,bare}.md
+fi
 
-section "Dependency map"
+if section "Dependency map"; then
 D="$T/code/deps"
 mkdir -p "$D/lib" "$D/app/web" "$D/app/inner"
 git -C "$D/lib" init -q; git -C "$D/app" init -q; git -C "$D/app/inner" init -q
@@ -1268,8 +1403,9 @@ fi
 "$W" deps --all --write >/dev/null 2>&1
 check "deps --write saves the shared wiki's data/dependencies.csv" grep -q '^uses,app,go,example.com/me/lib/sub,lib,' "$WIKIS_DIR/global/data/dependencies.csv"
 rm -rf "$D" "$WIKIS_DIR/global/data/dependencies.csv"
+fi
 
-section "Sync takes turns"
+if section "Sync takes turns"; then
 # Another session's sync holds the collection's lock: this one waits, then runs.
 L="$(git -C "$WIKIS_DIR" rev-parse --absolute-git-dir)/llm-wiki-sync.lock"
 mkdir "$L"; ( sleep 2; rmdir "$L" ) &
@@ -1286,8 +1422,9 @@ cp "$T/clone2/demo/raw/2026-10-30-000001-same.md" "$WIKIS_DIR/demo/raw/"
 printf 'Captured: 2026-10-30\n\nOther.\n' > "$WIKIS_DIR/agents/raw/2026-10-30-000002-other.md"
 out="$("$W" sync agents -m "agents: other" 2>&1)"
 case "$out" in *"identical to what came in"*"synced:"*) ok "sync sets aside an identical local copy of an incoming file, then pulls" ;; *) bad "sync sets aside an identical local copy of an incoming file, then pulls" "$out" ;; esac
+fi
 
-section "Session start in one call"
+if section "Session start in one call"; then
 git -C "$WIKIS_DIR" add -A >/dev/null 2>&1; git -C "$WIKIS_DIR" commit -qm "smoke: before start" >/dev/null 2>&1; git -C "$WIKIS_DIR" push -q >/dev/null 2>&1
 git -C "$T/clone2" pull -q --no-rebase --no-edit >/dev/null 2>&1
 printf 'Captured: 2026-10-29\n\nFrom the other machine.\n' > "$T/clone2/demo/raw/2026-10-29-000000-other.md"
@@ -1312,8 +1449,9 @@ git -C "$WIKIS_DIR" remote set-url origin "$T/nowhere.git"
 out="$("$W" start web 2>&1)" && ok "a failed pull doesn't fail start" || bad "a failed pull doesn't fail start" "$out"
 case "$out" in *"pull: failed"*"pull before your first write"*) ok "and says so, with what to do" ;; *) bad "and says so, with what to do" "$out" ;; esac
 git -C "$WIKIS_DIR" remote set-url origin "$T/remote.git"
+fi
 
-section "A remote the branch doesn't track"
+if section "A remote the branch doesn't track"; then
 # setup's `git remote add` set no upstream, so a bare pull failed (a work Mac, 2026-10-30).
 git -C "$WIKIS_DIR" branch -q --unset-upstream
 expect "start pulls anyway" "pull: up to date with the remote" "$W" start web
@@ -1331,8 +1469,9 @@ check "the remote has the branch, and the branch tracks it" git -C "$WIKIS_DIR" 
 git -C "$WIKIS_DIR" remote set-url origin "$T/remote.git"
 git -C "$WIKIS_DIR" fetch -q origin && git -C "$WIKIS_DIR" branch -q --set-upstream-to="origin/$(git -C "$WIKIS_DIR" symbolic-ref --short HEAD)"
 git -C "$WIKIS_DIR" rm -q "demo/raw/first-push.md" && git -C "$WIKIS_DIR" commit -q -m "demo: drop test note" && git -C "$WIKIS_DIR" pull -q --no-rebase --no-edit && git -C "$WIKIS_DIR" push -q
+fi
 
-section "Antigravity plugin"
+if section "Antigravity plugin"; then
 lacks "without Antigravity, setup --list says nothing about it" "antigravity" "$W" setup --list
 mkdir -p "$HOME/.gemini"
 expect "with Antigravity, setup --list shows the plugin missing" "plugin missing" "$W" setup --list
@@ -1384,8 +1523,9 @@ expect "once present, setup --list says so" "grants in place" "$W" setup --list
 printf '{"something":"else"}\n' > "$HOME/.gemini/config/config.json"
 lacks "an unexpected config.json isn't touched or reported on" "grant" "$W" setup --list
 rm -rf "$HOME/.gemini"
+fi
 
-section "Codex plugin"
+if section "Codex plugin"; then
 lacks "without Codex, setup --list says nothing about it" "codex" "$W" setup --list
 mkdir -p "$HOME/.codex"
 expect "with Codex, setup --list shows the plugin missing" "codex               plugin missing" "$W" setup --list
@@ -1413,8 +1553,6 @@ esac
 EOF
 chmod +x "$T/bin/codex"
 printf '# Mine\n\nKeep this.\n\nMy knowledge wikis live in ~/old. Run the old line.\n\nAnd this.\n' > "$HOME/.codex/AGENTS.md"
-# setup wants a terminal for its questions. The tests answer through a pipe.
-in_tty() { LLM_WIKI_TEST_TTY=1 "$@"; }
 out="$(printf 'y\n' | PATH="$T/bin:$PATH" in_tty "$W" setup codex 2>&1)"
 case "$out" in *"replaces the wiki line"*"/hooks and trust both"*) ok "setup codex installs it and says to trust its hooks" ;; *) bad "setup codex installs it and says to trust its hooks" "$out" ;; esac
 check "it adds the marketplace and the plugin with the codex command" grep -qx "plugin add llm-wiki@llm-wiki" "$T/codex.log"
@@ -1438,8 +1576,9 @@ rm "$HOME/.codex/skills/llm-wiki"
 printf '{"cwd":"%s","hook_event_name":"SessionStart"}' "$T/projects/web" | "$W" __codex-start >/dev/null
 check "each session start relinks the skill" test -f "$HOME/.codex/skills/llm-wiki/SKILL.md"
 rm -rf "$HOME/.codex" "$T/bin/codex" "$T/codex.log"
+fi
 
-section "Cursor"
+if section "Cursor"; then
 lacks "without Cursor, setup --list says nothing about it" "cursor" "$W" setup --list
 mkdir -p "$HOME/.cursor"
 expect "with Cursor and no Claude Code plugin, setup --list shows the hook missing" "cursor              hook missing" "$W" setup --list
@@ -1471,8 +1610,9 @@ lacks "status is quiet while the plugin copy matches its marketplace" "behind it
 git -C "$T/mkt" commit -q --allow-empty -m two
 expect "status says when the plugin copy is behind its marketplace, for Cursor too" "llm-wiki@mk is installed from ${first:0:7}, behind its marketplace at $(git -C "$T/mkt" rev-parse --short=7 HEAD). Claude Code and Cursor run that copy" "$W" status
 rm -rf "$HOME/.cursor" "$HOME/.claude/plugins/installed_plugins.json" "$HOME/.claude/plugins/known_marketplaces.json" "$T/mkt"
+fi
 
-section "Feedback on llm-wiki"
+if section "Feedback on llm-wiki"; then
 FB="$HOME/.local/state/llm-wiki/feedback"
 expect "feedback is off until the user turns it on" "feedback               off" bash -c "'$W' setup --list | sed 's/  */               /'"
 expect "and setup --new would ask" "feedback" bash -c "'$W' setup --list | grep '<- new'"
@@ -1550,8 +1690,9 @@ rm -rf "$T/other-coll" "$HOME/.config/llm-wiki/collections"
 check "the handbook rule ships in the template" grep -q 'wiki.sh feedback add' "$REPO/template/rules/feedback.md"
 check "and AGENTS.md points to it" grep -q 'rules/feedback.md' "$REPO/template/AGENTS.md"
 rm -rf "$FB" "$HOME/.config/llm-wiki/feedback" "$T/bin/gh" "$T/gh.log" "$T/gh.body" "$T/fb.md"
+fi
 
-section "MCP server"
+if section "MCP server"; then
 # mcp_call <tool> <json arguments>: the tool's text, with ERROR: in front if it failed.
 mcp_call() {
   local a="${2:-}"
@@ -1621,8 +1762,9 @@ expect "--yes adds it with no terminal when the app is closed" "added. Open the 
 expect "--yes works only for chat" "--yes works only with" "$W" setup git --yes
 expect "and setup --list shows it current" "server current" env LLM_WIKI_DESKTOP_DIR="$D" "$W" setup --list
 rm -rf "$D"
+fi
 
-section "Compiled without summary pages (v24)"
+if section "Compiled without summary pages (v24)"; then
 "$W" new v24 >/dev/null 2>&1
 V="$WIKIS_DIR/v24"
 for n in a b c d; do printf 'Captured: 2026-10-29\n\nNote %s.\n' "$n" > "$V/raw/2026-10-29-000001-$n.md"; done
@@ -1638,7 +1780,8 @@ case "$out" in *"000001-c.md"*) bad "a note with a summary page from before v24 
 case "$out" in *"000001-d.md"*) ok "and an uncompiled note still waits" ;; *) bad "and an uncompiled note still waits" "$out" ;; esac
 expect "status counts the same one note" "v24 v$TV 1 free" bash -c "'$W' status | grep '^v24 ' | tr -s ' '"
 expect "lint agrees: one note waiting" "notes waiting to be compiled (1)" "$W" lint v24
-section "Claude Code permissions"
+fi
+if section "Claude Code permissions"; then
 mkdir -p "$HOME/.claude" && printf '{"permissions":{"allow":["Bash(ls *)"]},"theme":"dark"}\n' > "$HOME/.claude/settings.json"
 mkdir -p "$HOME/.claude/plugins/data/llm-wiki-llm-wiki/bin" && printf '#!/bin/sh\n' > "$HOME/.claude/plugins/data/llm-wiki-llm-wiki/bin/wiki" && chmod +x "$HOME/.claude/plugins/data/llm-wiki-llm-wiki/bin/wiki"
 out="$("$W" permissions 2>&1)"
@@ -1650,8 +1793,9 @@ expect "setup --list counts the missing rules" "allow rule(s) missing" "$W" setu
 expect "once present, setup --list says the commands are allowed" "wiki commands allowed" "$W" setup --list
 check "and other settings were kept" python3 -c "import json,sys; s=json.load(open(sys.argv[1])); assert s['theme']=='dark' and 'Bash(ls *)' in s['permissions']['allow']" "$HOME/.claude/settings.json"
 rm -f "$HOME/.claude/settings.json"
+fi
 
-section "Collections"
+if section "Collections"; then
 CW="$T/wikis-work"
 WIKIS_DIR="$CW" "$W" init >/dev/null 2>&1
 WIKIS_DIR="$CW" "$W" new jobapp >/dev/null 2>&1
@@ -1699,11 +1843,13 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"w
 check "lookups count per collection" bash -c "grep -q ',global,hit$' '$HOME/wikis/stats.csv' && grep -q ',global,hit$' '$CW/stats.csv'"
 rm -f "$HOME/wikis/global/wiki/hit.md" "$CW/global/wiki/hit.md" "$HOME/wikis/stats.csv"
 rm -f "$HOME/.config/llm-wiki/collections"
+fi
 
-section "Bash 3.2 safety"
+if section "Bash 3.2 safety"; then
 lacks "no loop is fed by process substitution, which can end the script on bash 3.2" "done < <(" grep -n "done < <(" "$REPO/wiki.sh" "$REPO/hooks/session-start.sh" "$REPO/hooks/pre-commit" "$REPO/scripts/migrate-to-plugin.sh"
+fi
 
-section "Missing flag values"
+if section "Missing flag values"; then
 while IFS= read -r args; do
   # A flag at the end of the line, with its value missing.
   # shellcheck disable=SC2086
@@ -1727,8 +1873,9 @@ tips --repo
 tips --mute
 EOF
 lacks "and every flag's arm in wiki.sh is guarded" "shift" bash -c "grep -E '^ +-[^ )]*\) .*\\\$\{2:-\}.*shift' '$REPO/wiki.sh' | grep -v 'need_value\|die \|needs a name'"
+fi
 
-section "Update"
+if section "Update"; then
 lacks "collections keeps its hint off stdout, for scripts" "Only the default" bash -c "'$W' collections 2>/dev/null"
 git -C "$WIKIS_DIR" add -A >/dev/null 2>&1; git -C "$WIKIS_DIR" commit -qm "smoke: before update" >/dev/null 2>&1; git -C "$WIKIS_DIR" push -q >/dev/null 2>&1
 set_version "$WIKIS_DIR/demo/AGENTS.md" 1
@@ -1876,8 +2023,9 @@ check "provisioning an older agent sees a value, not a blank" grep -qx 'SECRET_M
 check "--update saves settings for next time" python3 -c "import json,sys; s=json.load(open(sys.argv[1])); assert s=={'repo':'acme/wikis','wikis':['work']}" "$MC/a/notes/.llm-wiki.json"
 expect "a second setup points at --update" "add --update" bash -c "printf 'y\n\n' | env MC='$MC' PATH='$MC/bin:$PATH' LLM_WIKI_TEST_TTY=1 LLM_WIKI_ATK='$MC/atk' '$W' setup microsoft-copilot --repo acme/wikis --name notes --dir '$MC/a' 2>&1 || true"
 kill "$MC_PID" 2>/dev/null; wait "$MC_PID" 2>/dev/null || true
+fi
 
-section "News"
+if section "News"; then
 N="$T/news"; mkdir -p "$N/state"
 printf '# News\n\n## 2026-01-02: Second\n\nSecond body.\n\n- Do: second step.\n\n## 2026-01-01: First\n\nFirst body.\n' > "$N/NEWS.md"
 news() { env XDG_STATE_HOME="$N/state" LLM_WIKI_NEWS_FILE="$N/NEWS.md" "$W" "$@"; }
@@ -1904,8 +2052,9 @@ h=[l for l in open(sys.argv[1]) if l.startswith('## ')]
 assert h and all(re.match(r'## \d{4}-\d\d-\d\d: \S', l) for l in h) and len(set(h))==len(h)
 d=[l[3:13] for l in h]
 assert d==sorted(d,reverse=True)" "$REPO/NEWS.md"
+fi
 
-section "What moved to llm-relay"
+if section "What moved to llm-relay"; then
 expect "wiki relay says where it went" "https://github.com/broxgit/llm-relay" "$W" relay
 expect "and what to run instead" "Then use: relay scan --branch main" "$W" relay scan --branch main
 refuse "and fails" "$W" relay run t/d
@@ -1919,8 +2068,9 @@ lacks "the usage doesn't list it" "relay run" "$W" --help
 lacks "and setup --help doesn't" "copilot-cowork" "$W" setup --help
 lacks "and setup --list doesn't" "copilot-cowork" "$W" setup --list
 check "the relay's files are gone" test ! -e "$REPO/scripts/relay.sh" -a ! -e "$REPO/cowork"
+fi
 
-section "Tour"
+if section "Tour"; then
 TH="$T/tour-home"
 TD="$TH/tmp/llm-wiki-tour"
 mkdir -p "$TH/tmp"
@@ -1976,8 +2126,9 @@ expect "clean removes the sandbox" "Removed" tour --clean
 check "and it's gone" test ! -e "$TD"
 expect "clean with no sandbox says so" "No tour sandbox" tour --clean
 expect "unknown options are refused" "tour options" tour --nope
+fi
 
-section "The released helper"
+if section "The released helper"; then
 # This section is about the helper itself, so it runs with the helper allowed
 # even when the whole suite was started with LLM_WIKI_NO_GO=1.
 unset LLM_WIKI_NO_GO
@@ -2076,6 +2227,8 @@ if command -v go >/dev/null 2>&1 && [ -n "$HPLAT" ]; then
 else
   skipped "fetching and verifying a release (go isn't installed)"
 fi
+fi
 
+section_time "${section_name:-}"
 printf '\n%d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
 [ "$fail" -eq 0 ]
