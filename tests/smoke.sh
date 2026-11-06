@@ -863,6 +863,12 @@ case "$out" in *"Its last line: fake-agent: refused"*) ok "and says the agent's 
 expect "and the lock is freed all the same" "free" cat "$BG/.compile-lock"
 out="$(FAKE_SLEEP=30 LLM_WIKI_COMPILE_TIMEOUT=1 "$W" compile bg 2>&1)" && bad "a run past its time limit is stopped" "$out" || case "$out" in *", timeout."*) ok "a run past its time limit is stopped" ;; *) bad "a run past its time limit is stopped" "$out" ;; esac
 expect "and the lock is freed then too" "free" cat "$BG/.compile-lock"
+# The time limit's own sleep ending early, as it does when the limit is called off a
+# moment after the agent finishes, used to mark the run as timed out and stop the agent.
+mkdir -p "$T/nosleep" && printf '#!/bin/sh\nexit 1\n' > "$T/nosleep/sleep" && chmod +x "$T/nosleep/sleep"
+out="$(PATH="$T/nosleep:$PATH" "$W" compile bg 2>&1)"
+case "$out" in *"1 of 1 note(s)"*", ok."*) ok "a time limit that ends early stops nothing" ;; *) bad "a time limit that ends early stops nothing" "$out" ;; esac
+bg_note 0
 "$W" lock bg >/dev/null
 rm -f "$T/fake-prompt"
 refuse "compile leaves a held lock alone" "$W" compile bg

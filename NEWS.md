@@ -9,6 +9,7 @@ Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title i
 A second, shorter run in Antigravity's sandbox confirmed yesterday's fixes there and showed what was still rough.
 
 - A note captured while a background run was going counted against that run. A run that compiled its one note could be recorded as "0 of 1, partial". Only the notes waiting when the run began count now. Rows already in `wiki compile` keep the old count.
+- A run that finished at the moment its time limit was being called off could be recorded as `timeout`, and a slow machine made that more likely. Only a limit that ran its full time counts now.
 - Where Claude Code is installed and the shell isn't allowed to run it, which is the case in Antigravity's sandbox, `wiki start` says so and leaves the notes to the session. Before, it said a background run had the notes, and that run failed at once. `wiki compile <wiki>` and `wiki compile on` say the same.
 - A run that fails prints the agent's last line next to the path of its output.
 - Where a sandbox refuses a read, commands say so instead of calling the thing missing or empty: `wiki report` for your transcripts, `wiki compile` for its runs, `wiki setup --list` for `~/.claude/CLAUDE.md` and Claude Code's settings, `wiki deps` for your code folders, and `wiki status` for its news marker. Settings it can't read no longer count as allow rules to add.
