@@ -13,6 +13,7 @@ import os
 import re
 import secrets
 import shlex
+import socketserver
 import stat
 import subprocess
 import sys
@@ -153,7 +154,13 @@ def create_app_from_manifest(app_name, repo, org):
             else:
                 self.reply(400, "<!doctype html><title>llm-wiki</title><p>That didn't match this setup.</p>")
 
-    server = HTTPServer(("127.0.0.1", 0), Handler)
+    class LocalServer(HTTPServer):
+        def server_bind(self):
+            # HTTPServer.server_bind looks up the host's name, a reverse-DNS query that can take half a minute on some networks. Nothing here uses it.
+            socketserver.TCPServer.server_bind(self)
+            self.server_port = self.server_address[1]
+
+    server = LocalServer(("127.0.0.1", 0), Handler)
     port = server.server_address[1]
     server.timeout = 1
     print("A GitHub page is opening with the app's settings filled in. Select Create GitHub App.")

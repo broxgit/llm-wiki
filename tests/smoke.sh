@@ -1908,7 +1908,7 @@ rm -rf "$HOME/.cursor" "$HOME/.claude/plugins/installed_plugins.json" "$T/bin/cl
 # setup microsoft-copilot, with a fake GitHub, gh, browser and Microsoft toolkit.
 MC="$T/mc"; mkdir -p "$MC/bin"
 cat > "$MC/github.py" <<'EOF'
-import json, sys
+import json, socketserver, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 class H(BaseHTTPRequestHandler):
     def log_message(self, *_): pass
@@ -1917,7 +1917,10 @@ class H(BaseHTTPRequestHandler):
         status = 201 if self.path == "/app-manifests/goodcode/conversions" else 404
         data = json.dumps(body if status == 201 else {}).encode()
         self.send_response(status); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
-s = HTTPServer(("127.0.0.1", 0), H)
+class S(HTTPServer):
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)  # skip the reverse-DNS lookup HTTPServer does
+s = S(("127.0.0.1", 0), H)
 open(sys.argv[1], "w").write(str(s.server_address[1]))
 s.serve_forever()
 EOF
