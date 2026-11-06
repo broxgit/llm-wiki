@@ -95,6 +95,9 @@ T="$(cd "$T" && pwd -P)"
 trap 'rm -rf "$T"' EXIT
 
 export HOME="$T/home"
+# Settings and state live under $HOME. GitHub's Linux runners set XDG_CONFIG_HOME to
+# the runner's own folder, which a part would otherwise read.
+unset XDG_CONFIG_HOME XDG_STATE_HOME XDG_DATA_HOME XDG_CACHE_HOME
 export WIKIS_DIR="$T/wikis"
 # Released helpers come from a folder here, never the network.
 export LLM_WIKI_HELPER_BASE="file://$T/release"
