@@ -219,7 +219,9 @@ def wiki_capture(args):
         raise ToolError("the note is over %d characters. Save the main points." % MAX_NOTE)
     out = must(folder, "capture", wiki, slug, stdin=note)
     ok, synced = run(folder, "sync", wiki, "-m", "%s: capture %s" % (wiki, slug))
-    if ok:
+    # sync also ends well with nothing pushed: no remote, or a folder that isn't in a
+    # repository the wikis own. Only its "synced: " line says the note left this machine.
+    if ok and (synced.startswith("synced: ") or "\nsynced: " in synced):
         return out + "\nPushed. A later session with file access compiles it into pages."
     return out + "\nSaved on this machine, but not pushed: " + (synced.splitlines()[-1] if synced else "sync failed")
 
