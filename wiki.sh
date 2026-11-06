@@ -567,6 +567,18 @@ cmd_which() {
     tilde "$WIKIS_DIR/$w"
     printf '\n'
   else
+    # A folder this shell can't read looks empty, so "no wiki covers" would be a guess.
+    # One that can't be read beside a wiki that covers the repository changes nothing:
+    # the answer is still the wiki found.
+    w="$(first_unreadable "$WIKIS_DIR")"
+    if [ -z "$w" ]; then
+      for w in "$WIKIS_DIR"/*/; do
+        w="${w%/}"
+        [ -d "$w" ] && ! can_read "$w" && break
+        w=""
+      done
+    fi
+    [ -z "$w" ] || die "$(printf "can't read %s, so there's no telling which wiki covers %s. If this runs inside an agent's sandbox, allow %s there, or run the command outside the sandbox." "$(tilde "$w")" "$name" "$(tilde "$WIKIS_DIR")")"
     which_miss "$name" >&2
     exit 1
   fi

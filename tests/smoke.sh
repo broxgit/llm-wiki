@@ -2011,6 +2011,8 @@ if [ -x "$T/bin/llm-wiki" ]; then
   }
   # wgo <folder> [which's arguments]: which with the helper, both streams.
   wgo() { (cd "$1" && shift && env -u WIKIS_DIR LLM_WIKI_NO_GO= LLM_WIKI_GO="$T/bin/llm-wiki" "$W" which ${1+"$@"} 2>&1); }
+  # wno <folder> [which's arguments]: which with the Bash alone, both streams.
+  wno() { (cd "$1" && shift && env -u WIKIS_DIR LLM_WIKI_NO_GO=1 "$W" which ${1+"$@"} 2>&1); }
   # fake_wiki <folder> [index line]: the two files that make a folder a wiki.
   fake_wiki() { mkdir -p "$1" && printf '# Handbook\n' > "$1/AGENTS.md" && printf '# Index\n%s\n' "${2:-}" > "$1/index.md"; }
   CWT="$(printf '%s' "$CW" | sed "s#^$HOME#~#")"
@@ -2053,6 +2055,10 @@ lines"
     chmod 644 "$CW/jobapp/repos.md"
     chmod 000 "$CW/jobapp"
     wsame "which, helper and Bash: a wiki's folder that can't be read" bash "$RC" jobapp-api --collection work
+    expect "which says it can't read a wiki's folder, with the helper" "can't read $CWT/jobapp" wgo "$RC" jobapp-api --collection work
+    expect "and with the Bash" "can't read $CWT/jobapp" wno "$RC" jobapp-api --collection work
+    lacks "and does not say no wiki covers it" "no wiki covers" wgo "$RC" jobapp-api --collection work
+    refuse "and exits non-zero" wno "$RC" jobapp-api --collection work
     wsame "which, helper and Bash: a wiki found by name beside one that can't be read" helper "$RC" payroll --collection work
     chmod 755 "$CW/jobapp"
     chmod 000 "$HOME/wikis/billing/index.md"
@@ -2060,6 +2066,10 @@ lines"
     chmod 644 "$HOME/wikis/billing/index.md"
     chmod 000 "$CW"
     wsame "which, helper and Bash: a collection that can't be read" bash "$RC" jobapp --collection work
+    expect "which says it can't read a collection, with the helper" "can't read $CWT" wgo "$RC" zzz-unknown --collection work
+    expect "and with the Bash" "can't read $CWT" wno "$RC" zzz-unknown --collection work
+    lacks "and does not say no wiki covers it" "no wiki covers" wno "$RC" zzz-unknown --collection work
+    expect "and that no telling which wiki covers the name" "no telling which wiki covers zzz-unknown" wno "$RC" zzz-unknown --collection work
     chmod 755 "$CW"
   else
     skipped "which with folders that can't be read (root can read anything)"
