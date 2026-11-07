@@ -1809,6 +1809,9 @@ printf 'Hit this in the client-secret-wiki wiki.\n' | "$W" feedback add bug "a n
 m="$(cd "$FB" && echo *-a-note-naming-another-collection.md)"; m="${m%.md}"
 lacks "the draft scrubs wiki names from every collection" "client-secret-wiki" "$W" feedback show "$m"
 rm -rf "$T/other-coll" "$HOME/.config/llm-wiki/collections"
+# Two summaries that share a slug, saved in the same second, are two notes.
+printf 'x\n' | "$W" feedback add docs "It broke" >/dev/null; printf 'y\n' | "$W" feedback add docs "It broke!" >/dev/null
+check "two notes whose summaries share a slug never overwrite each other" bash -c "[ \$(ls '$FB' | grep -c -- '-it-broke') -eq 2 ] && grep -lq '^Summary: It broke!' '$FB'/*-it-broke*.md"
 check "the handbook rule ships in the template" grep -q 'wiki.sh feedback add' "$REPO/template/rules/feedback.md"
 check "and AGENTS.md points to it" grep -q 'rules/feedback.md' "$REPO/template/AGENTS.md"
 rm -rf "$FB" "$HOME/.config/llm-wiki/feedback" "$T/bin/gh" "$T/gh.log" "$T/gh.body" "$T/fb.md"
