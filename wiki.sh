@@ -3606,6 +3606,10 @@ EOF
   stamp="$(date -u +%Y%m%d-%H%M%S)"
   slug="$(printf '%s' "$sum" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]\{1,\}/-/g; s/^-//; s/-$//' | cut -c1-40 | sed 's/-$//')"
   f="$FEEDBACK_DIR/$stamp-$slug.md"
+  # Two summaries can share a slug. Saved in the same second, the second overwrote the
+  # first, which made the MCP servers' comparison in the smoke test depend on the clock.
+  n=2
+  while [ -e "$f" ]; do f="$FEEDBACK_DIR/$stamp-$slug-$n.md"; n=$((n + 1)); done
   {
     printf 'Kind: %s\nSummary: %s\nStatus: new\nAgent: %s\nCaptured: %s\n' "$kind" "$sum" "${agent:-unknown}" "$(date -u '+%Y-%m-%d %H:%M UTC')"
     printf 'llm-wiki: %s\nHandbook: v%s\n' "$(llm_wiki_version)" "$(version_of "$TEMPLATE/AGENTS.md")"
