@@ -577,7 +577,9 @@ func (s *Server) wikiCapture(a args) (string, error) {
 		return "", err
 	}
 	ok, synced := s.run(in.Folder, "", "sync", wiki, "-m", wiki+": capture "+slug)
-	if ok {
+	// sync also ends well with nothing pushed: no remote, or a folder that isn't in a
+	// repository the wikis own. Only its "synced: " line says the note left this machine.
+	if ok && (strings.HasPrefix(synced, "synced: ") || strings.Contains(synced, "\nsynced: ")) {
 		return out + "\nPushed. A later session with file access compiles it into pages.", nil
 	}
 	why := "sync failed"

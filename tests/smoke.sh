@@ -1865,6 +1865,16 @@ mcp_tools() {
   rm -f "$SC" "$WIKIS_DIR/demo/wiki/mcp-one.md" "$WIKIS_DIR/demo/wiki/mcp-two.md"; [ ! -f "$T/stats.bak" ] || mv "$T/stats.bak" "$SC"
   check "$who: the note is a normal capture" bash -c "grep -q '^Captured: ' '$WIKIS_DIR'/demo/raw/*-$slug.md && grep -q 'We chose Postgres' '$WIKIS_DIR'/demo/raw/*-$slug.md"
   check "$who: and it reached the remote" bash -c "git --git-dir='$T/remote.git' log -1 --format=%s | grep -q 'capture $slug'"
+  # sync also ends well with nothing pushed, and a capture then isn't called pushed:
+  # with no remote, and in a folder that isn't in a repository the wikis own.
+  git -C "$WIKIS_DIR" remote remove origin
+  expect "$who: with no remote, a capture is saved and not called pushed" "but not pushed: no remote, so nothing to pull or push" mcp_call wiki_capture "{\"wiki\":\"demo\",\"slug\":\"$slug-no-remote\",\"note\":\"n\"}"
+  git -C "$WIKIS_DIR" remote add origin "$T/remote.git"
+  mv "$WIKIS_DIR/WIKIS.md" "$T/WIKIS.aside"
+  expect "$who: nor in a folder the wikis don't own" "Saved on this machine, but not pushed: " mcp_call wiki_capture "{\"wiki\":\"demo\",\"slug\":\"$slug-unowned\",\"note\":\"n\"}"
+  mv "$T/WIKIS.aside" "$WIKIS_DIR/WIKIS.md"
+  rm -f "$WIKIS_DIR"/demo/raw/*-"$slug"-no-remote.md "$WIKIS_DIR"/demo/raw/*-"$slug"-unowned.md; "$W" sync demo >/dev/null 2>&1
+  check "$who: and the remote is back in step after those" bash -c "[ \"\$(git -C '$WIKIS_DIR' rev-parse HEAD)\" = \"\$(git --git-dir='$T/remote.git' rev-parse HEAD)\" ]"
   expect "$who: wiki_feedback follows the setting" "feedback is off" mcp_call wiki_feedback '{"kind":"idea","summary":"s","details":"d"}'
 }
 mcp_tools "the Python" from-chat

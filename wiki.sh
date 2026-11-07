@@ -237,7 +237,7 @@ need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 # Raise GO_PROTOCOL, with the constant in cmd/llm-wiki/main.go, whenever a ported
 # command's arguments or output change. scripts/helper.sh builds releases and writes
 # helper.lock.
-GO_PROTOCOL=8
+GO_PROTOCOL=9
 HELPER_LOCK="$REPO/helper.lock"
 HELPER_DIR="${LLM_WIKI_HELPER_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/llm-wiki/helper}"
 
@@ -1396,6 +1396,8 @@ cmd_sync() {
   [ -n "$(git -C "$repo" remote)" ] || { echo "no remote, so nothing to pull or push"; return 0; }
   if [ "$(track_remote "$repo")" = new ]; then
     git -C "$repo" push -q -u origin HEAD || die "the first push to origin failed. Check the remote with: $WIKI_CMD setup git"
+    # "synced: " is how both MCP servers know a capture was pushed. Keep it on every
+    # ending that pushed, and off the ones that didn't.
     echo "synced: pushed $(tilde "$repo") to origin for the first time"
     return 0
   fi
