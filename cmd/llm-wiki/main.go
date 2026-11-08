@@ -18,17 +18,18 @@ import (
 	"github.com/broxgit/llm-wiki/internal/mcp"
 	"github.com/broxgit/llm-wiki/internal/routing"
 	"github.com/broxgit/llm-wiki/internal/standup"
+	"github.com/broxgit/llm-wiki/internal/status"
 	"github.com/broxgit/llm-wiki/internal/tokens"
 )
 
 // protocol is what wiki.sh checks before it trusts this program: the commands, their
 // arguments and what they print. Raise it, and GO_PROTOCOL in wiki.sh with it, whenever
 // one of those changes, so a binary left over from an older checkout is passed over.
-const protocol = "9"
+const protocol = "10"
 
 func main() {
 	if len(os.Args) < 2 {
-		fail("usage: llm-wiki protocol | report-tokens|report-tokens-gemini <transcripts> <start> <end> <day-starts> <wikis> <exclude> | standup-activity <options> | journal-backfill <transcripts> <start> <end> <day-starts> <wikis> <exclude> <out> <brain> | which <options> | find <options> | mcp")
+		fail("usage: llm-wiki protocol | report-tokens|report-tokens-gemini <transcripts> <start> <end> <day-starts> <wikis> <exclude> | standup-activity <options> | journal-backfill <transcripts> <start> <end> <day-starts> <wikis> <exclude> <out> <brain> | which <options> | find <options> | status <options> | mcp")
 	}
 	switch os.Args[1] {
 	case "protocol":
@@ -64,6 +65,12 @@ func main() {
 		fmt.Print(out)
 	case "find":
 		out, err := runFind(os.Args[2:])
+		if err != nil {
+			fail(err.Error())
+		}
+		fmt.Print(out)
+	case "status":
+		out, err := runStatus(os.Args[2:])
 		if err != nil {
 			fail(err.Error())
 		}
@@ -155,6 +162,46 @@ func runFind(args []string) (string, error) {
 		return "none\n" + text, nil
 	}
 	return "found " + first + "\n" + text, nil
+}
+
+// runStatus answers the table of `wiki status`. A first line says what follows, and
+// then every line says what it is, so wiki.sh can tell a whole answer from anything
+// else: "row" for a line of the table, "todo" for a to-do line, "ahead" when a wiki
+// is ahead of this plugin's template, and "also" with the notes waiting in each
+// collection named with --also, in order.
+func runStatus(args []string) (string, error) {
+	var o status.Options
+	fs := flag.NewFlagSet("status", flag.ContinueOnError)
+	fs.StringVar(&o.Wikis, "wikis", "", "")
+	fs.StringVar(&o.TemplateVersion, "template-version", "", "")
+	fs.StringVar(&o.WikiCmd, "wiki-cmd", "", "")
+	fs.BoolVar(&o.Plugin, "plugin", false, "")
+	fs.Func("also", "", func(dir string) error { o.Also = append(o.Also, dir); return nil })
+	if err := fs.Parse(args); err != nil {
+		return "", err
+	}
+	if fs.NArg() > 0 || o.Wikis == "" {
+		return "", errors.New("status takes: --wikis <folder> --template-version <n> --wiki-cmd <command> [--plugin] [--also <folder>]...")
+	}
+	r, err := status.Run(o)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	b.WriteString("status\n")
+	for _, line := range r.Rows {
+		b.WriteString("row " + line + "\n")
+	}
+	for _, line := range r.Todos {
+		b.WriteString("todo " + line + "\n")
+	}
+	if r.Ahead {
+		b.WriteString("ahead\n")
+	}
+	for _, n := range r.Also {
+		b.WriteString("also " + strconv.Itoa(n) + "\n")
+	}
+	return b.String(), nil
 }
 
 func lines(s string) []string {

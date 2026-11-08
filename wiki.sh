@@ -237,7 +237,7 @@ need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 # Raise GO_PROTOCOL, with the constant in cmd/llm-wiki/main.go, whenever a ported
 # command's arguments or output change. scripts/helper.sh builds releases and writes
 # helper.lock.
-GO_PROTOCOL=9
+GO_PROTOCOL=10
 HELPER_LOCK="$REPO/helper.lock"
 HELPER_DIR="${LLM_WIKI_HELPER_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/llm-wiki/helper}"
 
@@ -2248,11 +2248,17 @@ EOF
 todo_add() { STATUS_TODO="$STATUS_TODO- $1
 "; }
 
-cmd_status() {
-  local d v tv waiting f b lock line note since n found=0 ahead=0 behind="" w r
-  STATUS_TODO=""
-  [ -d "$WIKIS_DIR" ] || { echo "no wikis at $(tilde "$WIKIS_DIR"). Run: $WIKI_CMD init"; return 0; }
-  tv="$(version_of "$TEMPLATE/AGENTS.md")"
+# status_table <template version>: the table of status, one row per wiki, adding its
+# to-do lines to STATUS_TODO. LC_ALL=C, so the order of the wikis and what sed, grep, tr
+# and awk make of a file don't depend on the locale, and the compiled helper can print
+# the same. In a UTF-8 locale, macOS's sed and tr stop at a byte that isn't UTF-8, and
+# status ended there. A local is exported only if LC_ALL already was, and a terminal
+# sets LANG and leaves LC_ALL unset, so the export is what takes it to the commands this
+# runs. Bash puts the variable back as it was, export and all, when the function returns.
+status_table() {
+  local tv="$1" d v waiting lock line note since n found=0 behind="" w
+  local LC_ALL=C
+  export LC_ALL
   printf '%-26s %-9s %-8s %s\n' "WIKI" "HANDBOOK" "WAITING" "LOCK"
   for d in "$WIKIS_DIR"/*/; do
     d="${d%/}"
@@ -2295,7 +2301,7 @@ cmd_status() {
     # Someone upgraded a shared wiki with a newer template than this clone.
     # A plugin's folder isn't a clone, so the fix is a plugin update, said once below.
     if [ -n "$tv" ] && [ "${v:-0}" -gt "$tv" ]; then
-      if from_plugin; then ahead=1; note="$note  <- ahead of this plugin's template v$tv"
+      if from_plugin; then STATUS_AHEAD=1; note="$note  <- ahead of this plugin's template v$tv"
       else note="$note  <- ahead of your template v$tv"; todo_add "$w: upgraded by a newer llm-wiki than this one. Run: $WIKI_CMD update"; fi
     fi
     if [ -f "$d/repos.md" ] && grep -q '^- ' "$d/repos.md"; then
@@ -2307,19 +2313,83 @@ cmd_status() {
   set -- $behind
   if [ $# -eq 1 ]; then todo_add "$1: handbook behind template v$tv. Run: $WIKI_CMD upgrade $1"
   elif [ $# -gt 1 ]; then todo_add "$# wikis' handbooks behind template v$tv ($*). Run: $WIKI_CMD upgrade --all"; fi
+}
+
+# status_waiting <collection folder>: how many notes wait in all its wikis. LC_ALL=C and
+# exported, as in status_table.
+status_waiting() {
+  local d
+  local LC_ALL=C
+  export LC_ALL
+  for d in "$1"/*/; do ! is_wiki "${d%/}" || pending_files "${d%/}"; done 2>/dev/null | wc -l | tr -d ' ' || true
+}
+
+# status_helper <template version> <other collections>: the table from the compiled
+# helper, and the counts for the other collections in STATUS_ALSO. Its first line is
+# "status" and each line after it says what it is. Anything else, or a failure, and
+# this prints nothing and fails, so status_table answers.
+status_helper() {
+  local others="$2" bin out line rows="" todo="" ahead=0 also="" want=0 got=0 n f nl=$'\n'
+  bin="$(go_helper)" || return 1
+  set -- --wikis "$WIKIS_DIR" --template-version "$1" --wiki-cmd "$WIKI_CMD"
+  ! from_plugin || set -- "$@" --plugin
+  while IFS="$TAB" read -r n f; do
+    [ -n "$f" ] || continue
+    set -- "$@" --also "$f"
+    want=$((want + 1))
+  done <<EOF2
+$others
+EOF2
+  out="$("$bin" status "$@" 2>/dev/null)" || return 1
+  case "$out" in "status$nl"*) ;; *) return 1 ;; esac
+  while IFS= read -r line; do
+    case "$line" in
+      "row "*) rows="$rows${line#row }$nl" ;;
+      "todo "*) todo="$todo- ${line#todo }$nl" ;;
+      ahead) ahead=1 ;;
+      "also "*)
+        n="${line#also }"
+        case "$n" in '' | *[!0-9]*) return 1 ;; esac
+        also="$also$n "; got=$((got + 1)) ;;
+      *) return 1 ;;
+    esac
+  done <<EOF2
+${out#*"$nl"}
+EOF2
+  [ -n "$rows" ] && [ "$got" = "$want" ] || return 1
+  printf '%s' "$rows"
+  STATUS_TODO="$STATUS_TODO$todo"
+  STATUS_AHEAD="$ahead"
+  STATUS_ALSO="$also"
+}
+
+cmd_status() {
+  local tv f b n w r others
+  STATUS_TODO="" STATUS_AHEAD=0 STATUS_ALSO=""
+  [ -d "$WIKIS_DIR" ] || { echo "no wikis at $(tilde "$WIKIS_DIR"). Run: $WIKI_CMD init"; return 0; }
+  tv="$(version_of "$TEMPLATE/AGENTS.md")"
+  # Other collections on this machine, so nothing waits unseen in one.
+  others="$(collections | while IFS="$TAB" read -r n f _; do
+    [ "$f" != "$WIKIS_DIR" ] && [ -d "$f" ] || continue
+    printf '%s\t%s\n' "$n" "$f"
+  done)"
+  # The compiled helper makes the table and counts the other collections' notes. When
+  # it isn't sure it answers nothing, and the Bash does it all.
+  status_helper "$tv" "$others" || status_table "$tv"
   if [ -f "$JOURNAL_CFG" ]; then
     echo "journal: $(journal_get enabled), commit $(journal_get commit), entries $(journal_get entries)"
   fi
-  # Other collections on this machine, so nothing waits unseen in one.
-  collections | while IFS="$TAB" read -r n f _; do
-    [ "$f" != "$WIKIS_DIR" ] && [ -d "$f" ] || continue
-    w="$(for d in "$f"/*/; do ! is_wiki "${d%/}" || pending_files "${d%/}"; done 2>/dev/null | wc -l | tr -d ' ' || true)"
+  while IFS="$TAB" read -r n f; do
+    [ -n "$f" ] || continue
+    if [ -n "$STATUS_ALSO" ]; then w="${STATUS_ALSO%% *}"; STATUS_ALSO="${STATUS_ALSO#* }"; else w="$(status_waiting "$f")"; fi
     echo "also:    collection $n at $(tilde "$f"), $w note(s) waiting. $WIKI_CMD status --collection $n"
-  done
+  done <<EOF2
+$others
+EOF2
   if [ -f "$DELEG_FILE" ]; then echo "delegation: mode $(deleg_mode)"; fi
   if from_plugin; then
     n="$(plugin_key)"
-    if [ "$ahead" = 1 ]; then
+    if [ "$STATUS_AHEAD" = 1 ]; then
       f="$(plugin_installed)"
       # An app started before an update keeps the old plugin loaded, and its
       # session hook points the wiki command back at that old copy.
@@ -2855,15 +2925,39 @@ If you can hand work to sub-agents on cheaper models, do it for large, self-cont
 EOF2
 }
 
+# The tool-call hooks run a copy of hooks/agy-hook.sh kept in the plugin's own folder:
+# a Claude Code plugin update moves $REPO, and Antigravity must not be left pointing at
+# a folder that is gone. They bypass wiki.sh, which takes 40 ms to start.
+# The matcher "*" is the docs' own spelling for every tool.
+agy_hook_files() { printf '%s\n' agy-hook.sh reminders.py; }
 agy_hooks() {
+  local h
+  h="sh $(tilde "$AGY_DIR")/hooks/agy-hook.sh"
   cat <<EOF2
 {
   "llm-wiki": {
     "SessionStart": [
       { "type": "command", "command": "$(agy_cmd) __agy-start", "timeout": 30 }
+    ],
+    "PreToolUse": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "$h tool", "timeout": 5 }] }
+    ],
+    "PreInvocation": [
+      { "type": "command", "command": "$h invoke", "timeout": 5 }
     ]
   }
 }
+EOF2
+}
+
+# agy_hooks_current: whether the plugin's copies of the hook scripts match this version's.
+agy_hooks_current() {
+  local f
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    cmp -s "$REPO/hooks/$f" "$AGY_DIR/hooks/$f" || return 1
+  done <<EOF2
+$(agy_hook_files)
 EOF2
 }
 
@@ -2878,13 +2972,14 @@ EOF2
 }
 
 # agy_state: none (no Antigravity here), missing, old, or current.
-agy_unreadable() { first_unreadable "$AGY_DIR/plugin.json" "$AGY_DIR/rules/AGENTS.md" "$AGY_DIR/hooks.json"; }
+agy_unreadable() { first_unreadable "$AGY_DIR/plugin.json" "$AGY_DIR/rules/AGENTS.md" "$AGY_DIR/hooks.json" "$AGY_DIR/hooks/agy-hook.sh" "$AGY_DIR/hooks/reminders.py"; }
 agy_state() {
   [ -d "$AGY_HOME" ] || { echo none; return 0; }
   [ -z "$(agy_unreadable)" ] || { echo unreadable; return 0; }
   [ -f "$AGY_DIR/plugin.json" ] || { echo missing; return 0; }
   if [ "$(cat "$AGY_DIR/rules/AGENTS.md" 2>/dev/null)" = "$(agy_rule)" ] \
     && [ "$(cat "$AGY_DIR/hooks.json" 2>/dev/null)" = "$(agy_hooks)" ] \
+    && agy_hooks_current \
     && [ -e "$AGY_DIR/skills/llm-wiki/SKILL.md" ] && [ -e "$AGY_DIR/skills/wiki-status/SKILL.md" ]; then
     echo current
   else
@@ -2895,7 +2990,14 @@ agy_state() {
 # agy_write: write or refresh the plugin's files. The skill is a link into this
 # copy of the template, refreshed with the rest, so it follows plugin updates.
 agy_write() {
-  mkdir -p "$AGY_DIR/rules" "$AGY_DIR/skills" || return 1
+  local f
+  mkdir -p "$AGY_DIR/rules" "$AGY_DIR/skills" "$AGY_DIR/hooks" || return 1
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    cmp -s "$REPO/hooks/$f" "$AGY_DIR/hooks/$f" || { cp "$REPO/hooks/$f" "$AGY_DIR/hooks/$f" && chmod 755 "$AGY_DIR/hooks/$f"; } || return 1
+  done <<EOF2
+$(agy_hook_files)
+EOF2
   [ "$(cat "$AGY_DIR/plugin.json" 2>/dev/null)" = "$(agy_manifest)" ] || agy_manifest > "$AGY_DIR/plugin.json"
   [ "$(cat "$AGY_DIR/rules/AGENTS.md" 2>/dev/null)" = "$(agy_rule)" ] || agy_rule > "$AGY_DIR/rules/AGENTS.md"
   [ "$(cat "$AGY_DIR/hooks.json" 2>/dev/null)" = "$(agy_hooks)" ] || agy_hooks > "$AGY_DIR/hooks.json"
@@ -2906,6 +3008,37 @@ agy_write() {
   # Team skills from the wikis, as `wiki skills link` gives Claude Code.
   skills_link_into "$AGY_DIR/skills" quiet >/dev/null 2>&1 || true
   command_skills_into "$AGY_DIR/skills" "$(agy_cmd)" >/dev/null 2>&1 || true
+}
+
+# agy_reminders_write <stdin json> <start's output>: the conversation's reminders, for
+# the tool-call hooks, as the Claude Code hook writes them. The wiki is the one the first
+# line of start's output names. Nothing here may fail the session.
+agy_reminders_write() {
+  local conv wiki rdir rows
+  conv="$(printf '%s' "$1" | python3 -c '
+import json, sys
+try:
+    c = json.load(sys.stdin).get("conversationId") or ""
+except Exception:
+    c = ""
+print(c if c and set(c) <= set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") else "")' 2>/dev/null || true)"
+  [ -n "$conv" ] || return 0
+  wiki="$(printf '%s\n' "$2" | sed -n '1s/^wiki: //p' | sed 's/,.*//')"
+  # shellcheck disable=SC2088
+  case "$wiki" in "~/"*) wiki="$HOME/${wiki:2}" ;; esac
+  is_wiki "$wiki" || return 0
+  rdir="${XDG_STATE_HOME:-$HOME/.local/state}/llm-wiki/reminders"
+  rows="$(session_reminders "$wiki" 2>/dev/null || true)"
+  if [ -n "$rows" ]; then
+    mkdir -p "$rdir" 2>/dev/null && printf '%s\n' "$rows" > "$rdir/agy-$conv.tsv" 2>/dev/null || true
+  else
+    rm -f "$rdir/agy-$conv.tsv" 2>/dev/null || true
+  fi
+  # Antigravity has no compaction event, so a new conversation is the only reset.
+  rm -f "$rdir/agy-$conv.seen" "$rdir/agy-$conv.pending" 2>/dev/null || true
+  # Conversations end without telling anyone: what they leave is swept here.
+  find "$rdir" -type f -name 'agy-*' -mtime +7 -exec rm -f {} + 2>/dev/null || true
+  find "$rdir" -type f -name 'agy-*.pending' -mtime +1 -exec rm -f {} + 2>/dev/null || true
 }
 
 # __agy-start: the plugin's SessionStart hook. Reads Antigravity's JSON on stdin,
@@ -2931,6 +3064,7 @@ print(p[7:] if p.startswith("file://") else p)' 2>/dev/null || true)"
   # Keep the plugin current, so an update reaches the next conversation.
   [ ! -d "$AGY_DIR" ] || agy_write >/dev/null 2>&1 || true
   out="$( (cmd_start "$dir") 2>&1 || true)"
+  agy_reminders_write "$input" "$out"
   printf 'llm-wiki: this plugin ran `%s start` for this conversation. Its output follows. Read the AGENTS.md of the wiki it names and follow it. Do not run start again.\n\n%s\n' "$(agy_cmd)" "$out" \
     | python3 -c 'import json, sys; print(json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": sys.stdin.read()}}]}))'
 }
@@ -6978,9 +7112,9 @@ setup_antigravity() {
   case "$state" in
     current) echo "The llm-wiki plugin for Antigravity is up to date." ;;
     old)
-      agy_write && echo "Updated the llm-wiki plugin for Antigravity. New conversations use it." ;;
+      agy_write && echo "Updated the llm-wiki plugin for Antigravity. New conversations use it, and Gemini now gets the wikis' reminders at the tool calls they apply to. Quit and reopen Antigravity once, so it reads the new hooks." ;;
     missing)
-      echo "Antigravity is installed. An llm-wiki plugin points its conversations at your wikis, and loads the wiki's index and agreements at the start, like the Claude Code plugin."
+      echo "Antigravity is installed. An llm-wiki plugin points its conversations at your wikis, loads the wiki's index and agreements at the start, and hands over the wikis' reminders at the tool calls they apply to, like the Claude Code plugin."
       if ask_yn "Add it to $(tilde "$AGY_DIR")?" y; then
         if agy_write; then
           echo "  added. Quit and reopen Antigravity once, so it finds the new plugin."

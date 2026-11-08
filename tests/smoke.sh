@@ -1569,7 +1569,7 @@ git -C "$WIKIS_DIR" rm -q "demo/raw/first-push.md" && git -C "$WIKIS_DIR" commit
 fi
 
 if section "Antigravity plugin"; then
-lacks "without Antigravity, setup --list says nothing about it" "antigravity" "$W" setup --list
+lacks "without Antigravity, setup --list says nothing about it" "antigravity    " "$W" setup --list
 mkdir -p "$HOME/.gemini"
 expect "with Antigravity, setup --list shows the plugin missing" "plugin missing" "$W" setup --list
 expect "and names the section" "| antigravity |" "$W" setup --list
@@ -1629,6 +1629,99 @@ expect "setup --list counts the missing Antigravity grants" "grant(s) missing" "
 expect "once present, setup --list says so" "grants in place" "$W" setup --list
 printf '{"something":"else"}\n' > "$HOME/.gemini/config/config.json"
 lacks "an unexpected config.json isn't touched or reported on" "grant" "$W" setup --list
+# The tool-call hooks: Gemini's tool names read as Claude's, Antigravity's reply shapes.
+AP="$HOME/.gemini/config/plugins/llm-wiki"
+"$W" new agyrem >/dev/null
+cat > "$WIKIS_DIR/agyrem/wiki/conventions.md" <<'REM'
+---
+title: Conventions for agyrem
+summary: How to work in agyrem.
+updated: 2026-11-07
+verified: 2026-11-07
+---
+
+## Reminders
+
+- before bash `git push`: Before a push, make sure the hooks ran.
+- on edit `payments/*`: Money is in cents.
+- on tool `Agent`: Set the model.
+REM
+mkdir -p "$T/projects/agyrem/payments" && git -C "$T/projects/agyrem" init -q
+RD="$HOME/.local/state/llm-wiki/reminders"
+LOG="$HOME/.local/state/llm-wiki/agy-hooks.log"
+export TMPDIR="$T/tmp"; mkdir -p "$TMPDIR"
+agy_start() { printf '{"workspacePaths":["file://%s"],"conversationId":"%s"}' "$T/projects/agyrem" "$1" | "$W" __agy-start >/dev/null; }
+# agy <tool|invoke> <json>: what Antigravity's hook replies.
+agy() { printf '%s' "$2" | sh "$AP/hooks/agy-hook.sh" "$1"; }
+# call <conversation> <tool name> <args json>
+call() { printf '{"conversationId":"%s","workspacePaths":["file://%s"],"toolCall":{"name":"%s","args":%s}}' "$1" "$T/projects/agyrem" "$2" "$3"; }
+ALLOW='{"decision": "allow"}'
+is() { local name="$1" want="$2" got="$3"; if [ "$got" = "$want" ]; then ok "$name"; else bad "$name" "wanted: $want
+got: $got"; fi; }
+check "setup installs the tool-call hooks beside the plugin" test -x "$AP/hooks/agy-hook.sh" -a -f "$AP/hooks/reminders.py"
+check "hooks.json has PreToolUse for every tool (the docs' matcher *), and PreInvocation" python3 -c "
+import json, sys
+h = json.load(open(sys.argv[1]))['llm-wiki']
+m = h['PreToolUse'][0]
+assert m['matcher'] == '*' and m['hooks'][0]['type'] == 'command' and m['hooks'][0]['command'].endswith('hooks/agy-hook.sh tool')
+assert h['PreInvocation'][0]['command'].endswith('hooks/agy-hook.sh invoke')
+assert h['SessionStart'][0]['command'].endswith(' __agy-start')" "$AP/hooks.json"
+rm "$AP/hooks/agy-hook.sh"
+expect "a plugin without them is old" "plugin old" "$W" setup --list
+agy_start c-1
+expect "and the next conversation brings them back" "plugin current" "$W" setup --list
+check "a conversation's reminders are written when it starts" grep -q "git push" "$RD/agy-c-1.tsv"
+check "and nothing is queued yet" test ! -e "$RD/agy-c-1.pending"
+before="$(find "$HOME/.gemini" "$T/projects/agyrem" -type f | sort | cksum)"
+out="$(agy tool "$(call c-1 run_command '{"CommandLine":"cd x && git push origin main","Cwd":"/x"}')")"
+if printf '%s' "$out" | python3 -c 'import json, sys; d = json.load(sys.stdin); assert d["decision"] == "deny" and "make sure the hooks ran" in d["reason"] and "from the wiki agyrem" in d["reason"]' 2>/dev/null; then ok "a before reminder denies the shell command once, with the rule"; else bad "a before reminder denies the shell command once, with the rule" "$out"; fi
+is "the same command made again goes through" "$ALLOW" "$(agy tool "$(call c-1 run_command '{"CommandLine":"git push origin main"}')")"
+is "a command no reminder covers goes through" "$ALLOW" "$(agy tool "$(call c-1 run_command '{"CommandLine":"ls"}')")"
+is "an edit reminder doesn't match a read" "$ALLOW" "$(agy tool "$(call c-1 view_file "{\"AbsolutePath\":\"$T/projects/agyrem/payments/a.go\"}")")"
+check "and queues nothing" test ! -e "$RD/agy-c-1.pending"
+is "an on reminder lets the edit go" "$ALLOW" "$(agy tool "$(call c-1 replace_file_content "{\"TargetFile\":\"$T/projects/agyrem/payments/charge.go\"}")")"
+check "and queues its rule" grep -q "^- Money is in cents. (from the wiki agyrem, wiki/conventions.md)$" "$RD/agy-c-1.pending"
+is "a file outside what the pattern covers queues nothing more" "$ALLOW" "$(agy tool "$(call c-1 write_to_file "{\"TargetFile\":\"$T/projects/agyrem/main.go\"}")")"
+is "the same edit again goes through" "$ALLOW" "$(agy tool "$(call c-1 multi_replace_file_content "{\"TargetFile\":\"$T/projects/agyrem/payments/charge.go\"}")")"
+is "a tool reminder matches Gemini's subagent tool" "$ALLOW" "$(agy tool "$(call c-1 invoke_subagent '{"Subagents":[]}')")"
+out="$(agy invoke '{"conversationId":"c-1"}')"
+if printf '%s' "$out" | python3 -c 'import json, sys; m = json.load(sys.stdin)["injectSteps"][0]["systemMessage"]["systemMessage"]; assert "Money is in cents." in m and "Set the model." in m' 2>/dev/null; then ok "PreInvocation hands over the queued rules as a system message"; else bad "PreInvocation hands over the queued rules as a system message" "$out"; fi
+is "once" '{}' "$(agy invoke '{"conversationId":"c-1"}')"
+check "and the queue is gone" test ! -e "$RD/agy-c-1.pending"
+check "the hooks wrote nothing outside the state folder" test "$before" = "$(find "$HOME/.gemini" "$T/projects/agyrem" -type f | sort | cksum)"
+agy_start c-2
+printf -- '- Old news (from the wiki agyrem, wiki/conventions.md)\n' > "$RD/agy-c-2.pending"; touch -t 202001010000 "$RD/agy-c-2.pending"
+is "a queue more than a day old is dropped, not delivered" '{}' "$(agy invoke '{"conversationId":"c-2"}')"
+check "and removed" test ! -e "$RD/agy-c-2.pending"
+printf 'x\n' > "$RD/agy-c-9.pending"; touch -t 202001010000 "$RD/agy-c-9.pending"
+agy_start c-3
+check "a new conversation sweeps old queues" test ! -e "$RD/agy-c-9.pending"
+# A hook's exit code isn't documented, so on every path it prints a reply that lets the call go, and exits 0.
+is "bad JSON gets an allow" "$ALLOW" "$(agy tool 'not json')"
+is "an empty line gets an allow" "$ALLOW" "$(agy tool '')"
+is "a call of an unexpected shape gets an allow" "$ALLOW" "$(agy tool '{"conversationId":"c-3","toolCall":"run_command"}')"
+is "a call with no conversation gets an allow" "$ALLOW" "$(agy tool '{"toolCall":{"name":"run_command","args":{"CommandLine":"git push"}}}')"
+is "a conversation with no rows gets an allow" "$ALLOW" "$(agy tool "$(call c-none run_command '{"CommandLine":"git push"}')")"
+is "PreInvocation with bad JSON gets an empty reply" '{}' "$(agy invoke 'not json')"
+is "a missing state folder gets an allow" "$ALLOW" "$(printf '%s' "$(call c-3 run_command '{"CommandLine":"git push"}')" | XDG_STATE_HOME="$T/no-state" sh "$AP/hooks/agy-hook.sh" tool)"
+check "and the hook still exits 0" sh -c "printf 'x' | XDG_STATE_HOME='$T/no-state' sh '$AP/hooks/agy-hook.sh' tool >/dev/null"
+check "and says so in the log, in the temp folder when the state folder is missing" grep -q "no-state" "$TMPDIR/llm-wiki-agy-hooks.log"
+if [ "$(id -u)" != 0 ]; then
+  agy_start c-4
+  chmod 000 "$RD/agy-c-4.tsv"
+  is "an unreadable rows file gets an allow" "$ALLOW" "$(agy tool "$(call c-4 run_command '{"CommandLine":"git push"}')")"
+  chmod 644 "$RD/agy-c-4.tsv"
+  chmod 000 "$RD"
+  is "an unreadable state folder gets an allow, as in a sandbox that refuses it" "$ALLOW" "$(agy tool "$(call c-4 run_command '{"CommandLine":"git push"}')")"
+  chmod 755 "$RD"
+else
+  skipped "the hooks with a state folder that can't be read (root can read anything)"
+fi
+is "with python3 gone, an allow" "$ALLOW" "$(printf '%s' "$(call c-3 run_command '{"CommandLine":"git push"}')" | PATH="/nonexistent" /bin/sh "$AP/hooks/agy-hook.sh" tool)"
+for want in deny queued delivered no-match no-conversation no-rows "error: "; do
+  check "the log has a $want line" grep -q "	$want" "$LOG"
+done
+check "each line of it has a time, the event, the conversation, the tool and what came of it" awk -F'\t' 'NF != 5 { exit 1 }' "$LOG"
 rm -rf "$HOME/.gemini"
 fi
 
@@ -2350,6 +2443,136 @@ goes"
   chmod +x "$T/bin/odd-helper"
   [ "$(frun "$T/bin/odd-helper" "$RC" canary)" = "$want" ] && ok "and an answer with no first line saying found or none is passed over" || bad "and an answer with no first line saying found or none is passed over" "$(frun "$T/bin/odd-helper" "$RC" canary)"
 
+  # status, from the compiled helper and from the Bash: the same stdout, stderr and exit
+  # code. The helper makes the table and counts the other collections' notes; the rest
+  # is the Bash's either way. A wrapper notes how the helper's status ended, and the
+  # MCP comparison below runs through it too, so it notes what else ran as spy-helper does.
+  printf '#!/bin/sh\necho "$1" >> "%s"\n[ "$1" = status ] || exec "%s" "$@"\n"%s" "$@"\nrc=$?\necho "$rc" >> "%s"\nexit $rc\n' "$T/helper-ran" "$T/bin/llm-wiki" "$T/bin/llm-wiki" "$T/status-ran" > "$T/bin/status-spy"
+  chmod +x "$T/bin/status-spy"
+  # srun <helper> [VAR=value...]: status from a repository the default collection takes,
+  # with that helper, or with the Bash alone when none is named, and no locale unless
+  # given. Prints stdout and the exit code. stderr goes to $T/status.err. $SW is the
+  # wiki.sh to run.
+  srun() {
+    local go="$1" no=1
+    shift
+    [ -z "$go" ] || no=""
+    (cd "$RC" && env -u WIKIS_DIR -u LC_ALL -u LC_CTYPE -u LANG LLM_WIKI_NO_GO="$no" LLM_WIKI_GO="$go" "$@" "${SW:-$W}" status 2>"$T/status.err"; echo "exit $?")
+  }
+  # ssame <check> <helper|bash> [VAR=value...]: both print the same, and with the helper
+  # on, the answer came from the one named.
+  ssame() {
+    local name="$1" who="$2" a b ran
+    shift 2
+    : > "$T/status-ran"
+    a="$(srun "" "$@")"
+    cp "$T/status.err" "$T/status.a"
+    b="$(srun "$T/bin/status-spy" "$@")"
+    ran="$(cat "$T/status-ran")"
+    case "$who:$ran" in helper:0) ran=helper ;; helper:* | bash: | bash:0) ran="not the $who (the helper's status ended: ${ran:-never ran})" ;; *) ran=bash ;; esac
+    if [ "$a" = "$b" ] && cmp -s "$T/status.a" "$T/status.err" && [ "$ran" = "$who" ]; then
+      ok "$name"
+    else
+      bad "$name" "$(printf 'answered by: %s\n' "$ran"; diff <(printf '%s\n' "$a") <(printf '%s\n' "$b"); diff "$T/status.a" "$T/status.err")"
+    fi
+  }
+  # sw <name> <version, or none>: a wiki for status, with an index and a log.
+  sw() {
+    mkdir -p "$FD/$1/raw"
+    if [ "$2" = none ]; then printf '# AGENTS.md\n' > "$FD/$1/AGENTS.md"; else printf '# AGENTS.md\n\nHandbook version %s.\n' "$2" > "$FD/$1/AGENTS.md"; fi
+    printf '# Index\n' > "$FD/$1/index.md"
+    printf '# Log\n' > "$FD/$1/log.md"
+  }
+  # Beta and alpha have no log.md, which ends the Bash's status: see the check for it.
+  printf '# Log\n' > "$FD/Beta/log.md"; printf '# Log\n' > "$FD/alpha/log.md"
+  sw st-due "$TV"
+  for n in a.md b.md c.txt d.md e.tar.gz f.md g.md h.md i.md j.md .hidden.md; do printf 'x\n' > "$FD/st-due/raw/2026-01-01-$n"; done
+  printf 'x\n' > "$FD/st-due/raw/.x.md"; mkdir -p "$FD/st-due/raw/folder.md" "$FD/st-due/wiki/sources"
+  printf '# Log\n\n## 2026-01-01 ingest | a\n- source: raw/2026-01-01-a.md\n- source: raw/2026-01-01-e.tar.gz\n' > "$FD/st-due/log.md"
+  printf -- '---\nsources: [raw/2026-01-01-b.md, "raw/2026-01-01-c.txt"]\n---\nsources: raw/2026-01-01-zz.md\n' > "$FD/st-due/wiki/p.md"
+  printf 'An old summary page.\n' > "$FD/st-due/wiki/sources/2026-01-01-d.md"
+  sw st-lint "$TV"
+  { printf '# Log\n\n## 2026-01-01 ingest | old\n## 2026-01-02 lint | lint\n'; for n in 1 2 3 4 5 6 7 8 9 10; do printf '## 2026-01-03 ingest | %s\n' "$n"; done; } > "$FD/st-lint/log.md"
+  sw st-pat "$TV"
+  printf '# Patterns\n\n## Ready\n- kind: correction\n- status: watching\n- seen: 2026-01-01 a raw/a.md x3\n## Again\n- kind: correction\n- status: accepted 2026-01-05: a convention\n- seen: 2026-01-06 b raw/b.md\n' > "$FD/st-pat/patterns.md"
+  sw st-old 1; sw st-new 999; sw st-nover none
+  sw st-lock "$TV"; printf 'held by s-1 since 2026-01-01\nmore\n' > "$FD/st-lock/.compile-lock"
+  # covers-nl/ comes before covers/ in the shell's glob, which sorts with the slash.
+  sw st-cov "$TV"; printf -- '- web\n- api\r\nnot a line\n- last' > "$FD/st-cov/repos.md"
+  sw st-cov-nl "$TV"; printf -- '- one\n- two\n' > "$FD/st-cov-nl/repos.md"
+  # Bytes that aren't UTF-8 stopped macOS's sed in a UTF-8 locale, and status with it.
+  sw st-latin "$TV"; printf 'caf\351\n\nHandbook version %s.\n' "$TV" > "$FD/st-latin/AGENTS.md"
+  printf -- '- caf\351\n' > "$FD/st-latin/repos.md"; printf '# Log\n- source: raw/caf\351.md\n' > "$FD/st-latin/log.md"; printf 'x\n' > "$FD/st-latin/raw/caf$(printf '\351').md"
+  sw "st-caf$(printf '\303\251')" "$TV"
+  printf 'x\n' > "$CW/jobapp/raw/2026-01-01-a.md"; printf 'x\n' > "$CW/jobapp/raw/2026-01-01-b.md"
+
+  ssame "status, helper and Bash: every kind of row and to-do, with the other collection's notes" helper
+  out="$(srun "$T/bin/llm-wiki")"
+  expect "and the helper counts the notes waiting, less those compiled" "st-due                     v$TV       6        free  <- compile due" printf '%s' "$out"
+  expect "and the patterns ready and not working, and the ingests since a lint" "st-pat                     v$TV       0        free  <- 1 pattern(s) ready  <- 1 accepted fix(es) not working" printf '%s' "$out"
+  expect "and the lock" "st-lock                    v$TV       0        held by s-1 since 2026-01-01" printf '%s' "$out"
+  expect "and what a wiki covers, a last line with no line feed and all" "free  covers: web api$(printf '\r') last" printf '%s' "$out"
+  expect "and the other collection's notes" "also:    collection work at $(printf '%s' "$CW" | sed "s#^$HOME#~#"), 2 note(s) waiting." printf '%s' "$out"
+  [ "$(printf '%s\n' "$out" | awk '$1 ~ /^(Beta|alpha|st-cov-nl|st-cov)$/ { printf "%s ", $1 }')" = "Beta alpha st-cov-nl st-cov " ] && ok "and orders the wikis by byte, as the shell's glob of */ does" || bad "and orders the wikis by byte, as the shell's glob of */ does" "$out"
+  if [ -n "$U8" ]; then
+    # A terminal sets LANG and leaves LC_ALL unset, so the Bash's own LC_ALL=C has to
+    # reach its sed, grep, awk and tr by export. LC_ALL in the environment hid that.
+    ssame "status, helper and Bash: the same in a UTF-8 locale, set by LANG as a terminal sets it" helper LANG="$U8"
+    out="$(srun "" LANG="$U8")"
+    case "$out" in *"st-pat "*"exit 0") ok "and the Bash makes the whole table there, past a wiki that isn't UTF-8" ;; *) bad "and the Bash makes the whole table there, past a wiki that isn't UTF-8" "$out" ;; esac
+    [ "$out" = "$(srun "")" ] && ok "status with the Bash prints the same in a UTF-8 locale as in none" || bad "status with the Bash prints the same in a UTF-8 locale as in none" "$(diff <(printf '%s\n' "$out") <(srun ""))"
+    ssame "status, helper and Bash: the same with LC_ALL set to a UTF-8 locale" helper LC_ALL="$U8"
+  else
+    skipped "status in a UTF-8 locale (none is installed)"
+  fi
+  # From the plugin, a wiki ahead of the template is the plugin's to fix.
+  SPL="$HOME/.claude/plugins/cache/llm-wiki/llm-wiki/st123"
+  mkdir -p "$SPL" && (cd "$REPO" && tar cf - --exclude .git --exclude tests --exclude tour --exclude bin .) | (cd "$SPL" && tar xf -)
+  SW="$SPL/wiki.sh" ssame "status, helper and Bash: from the plugin, with a wiki ahead of its template" helper
+  SW="$SPL/wiki.sh" expect "and the helper says so" "<- ahead of this plugin's template v$TV" srun "$T/bin/llm-wiki"
+  rm -rf "$SPL"
+
+  # What the helper isn't sure of, it leaves to the Bash.
+  printf '## X\0\n' >> "$FD/st-pat/patterns.md"
+  ssame "status, helper and Bash: a patterns.md with a NUL byte" bash
+  printf '# Patterns\n\n## X\n- status: accepted 20260105\n- seen: 20260106 a\n' > "$FD/st-pat/patterns.md"
+  ssame "status, helper and Bash: dates awk might compare as numbers" bash
+  ln -s ../index.md "$FD/st-due/wiki/link.md"
+  ssame "status, helper and Bash: a link under wiki/" bash
+  rm -f "$FD/st-due/wiki/link.md"
+  printf 'x\n' > "$FD/st-due/raw/two
+lines.md"
+  ssame "status, helper and Bash: a note whose name has a line break" bash
+  rm -f "$FD/st-due/raw/two
+lines.md"
+  sw "st-old one" 1
+  ssame "status, helper and Bash: a wiki behind the template whose name has a space" bash
+  rm -rf "$FD/st-old one"
+  mv "$FD/st-lint/log.md" "$T/st-log"
+  ssame "status, helper and Bash: a wiki with no log.md, where the Bash stops" bash
+  expect "which the Bash still does, after the rows before it" "exit 2" srun ""
+  mv "$T/st-log" "$FD/st-lint/log.md"
+  if [ "$(id -u)" != 0 ]; then
+    chmod 000 "$FD/st-due/raw"
+    ssame "status, helper and Bash: a raw/ that can't be read" bash
+    expect "which the Bash shows as ?" "<- can't read raw/" srun ""
+    chmod 755 "$FD/st-due/raw"
+  else
+    skipped "status with a raw/ that can't be read (root can read anything)"
+  fi
+  # An answer that isn't whole is passed over, and the Bash makes the table.
+  want="$(srun "")"
+  [ "$(srun "$T/bin/broken-helper")" = "$want" ] && ok "a helper that fails falls back to the Bash for status" || bad "a helper that fails falls back to the Bash for status" "$(srun "$T/bin/broken-helper")"
+  [ "$(srun "$T/bin/stale-helper")" = "$want" ] && ok "and one built for another protocol is passed over" || bad "and one built for another protocol is passed over"
+  for odd in 'row WIKI\n' 'status\nrow WIKI\nbogus\n' 'status\nrow WIKI\n' 'status\n'; do
+    printf '#!/bin/sh\n[ "$1" = protocol ] && { sed -n "s/^GO_PROTOCOL=//p" "%s"; exit 0; }\nprintf "%s"\n' "$W" "$odd" > "$T/bin/odd-helper"
+    [ "$(srun "$T/bin/odd-helper")" = "$want" ] || break
+    odd=""
+  done
+  [ -z "$odd" ] && ok "and so is an answer with no first line, a line it can't place, no also line for the other collection, or no table" || bad "and so is an answer with no first line, a line it can't place, no also line for the other collection, or no table" "helper's answer: $odd"
+  rm -f "$CW/jobapp/raw/2026-01-01-a.md" "$CW/jobapp/raw/2026-01-01-b.md"
+  rm -rf "$FD"/st-*
+
   # The MCP server, from the compiled helper and from mcp/server.py: the same replies to
   # the same requests, and the same files left behind. Replies are compared as JSON:
   # the helper writes no space after a colon or a comma, sorts an object's keys, and
@@ -2509,6 +2732,7 @@ def requests(batch):
         call("wiki_start", {"repository": "jobapp-api"}, id="start")
         call("wiki_start", {"repository": "nosuchrepo"})
         call("wiki_start", {"repository": "alpha\n"})
+        call("wiki_status", None)
     elif batch == "write":
         # The tools that write. Only ever in the test's own folders.
         call("wiki_capture", {"wiki": "alpha", "slug": "from-chat", "note": "We chose Postgres, in a chat.\nWith an arrow " + arrow + ".\n"}, id="capture")
@@ -2654,12 +2878,13 @@ PY
   }
   # mcp_run <py|go> <batch>: one server's replies to a batch, in $T/mcp.<who>.out, its
   # stderr beside them, and what it left behind in $T/mcp.<who>.files. No locale is set,
-  # as in the desktop app. The helper's is the spy, so $T/helper-ran says what else ran.
+  # as in the desktop app. The helper's is the spy, so $T/helper-ran says what else ran,
+  # and $T/status-ran how each status the helper was asked for ended.
   mcp_run() {
     local who="$1" no=1 go="" d IFS='|'
-    [ "$who" = py ] || { no=""; go="$T/bin/spy-helper"; }
+    [ "$who" = py ] || { no=""; go="$T/bin/status-spy"; }
     mcp_back
-    : > "$T/helper-ran"
+    : > "$T/helper-ran"; : > "$T/status-ran"
     python3 "$MS" requests "$2" > "$T/mcp.req"
     (cd "$T" && env -u WIKIS_DIR -u LC_ALL -u LC_CTYPE -u LANG LLM_WIKI_NO_GO="$no" LLM_WIKI_GO="$go" "$W" mcp < "$T/mcp.req" > "$T/mcp.$who.out" 2> "$T/mcp.$who.err")
     # shellcheck disable=SC2086
@@ -2687,6 +2912,7 @@ PY
   mcp_first() { rm -rf "$T/mcp-kept"; cp -Rp "$T/mcp-first" "$T/mcp-kept"; mcp_back; }
   mcp_same "MCP, helper and Python: the same replies to every request and every tool" same
   check "and the helper's server answered them itself: no wiki.sh find or which" bash -c "grep -qx mcp '$T/helper-ran' && ! grep -q -x -e find -e which '$T/helper-ran'"
+  [ "$(sort -u "$T/status-ran")" = 0 ] && ok "and the helper made the table for each wiki_status" || bad "and the helper made the table for each wiki_status" "$(cat "$T/status-ran" "$T/helper-ran")"
   check "a long word is logged cut at 60 bytes and not inside a character, by the helper's server" grep -E -q ",global,search-none,x($(printf '\303\251')){29}\$" "$FD/stats.csv"
   check "and each search is logged once" bash -c "[ \"\$(grep -c ',search-found,twobyte$' '$FD/stats.csv')\" = 1 ] && [ \"\$(grep -c ',search-none,twobyte$' '$CW/stats.csv')\" = 1 ] && grep -qx \"used:find $(date -u +%Y-%m-%d)\" '$MTIPS'"
   # What a client is owed, whatever the two servers agree on.
@@ -2710,6 +2936,7 @@ and a third" ] && ok "a page's line ends reach a client as line feeds" || bad "a
   mcp_keep
   mcp_same "MCP, helper and Python: the same where the helper's server leaves it to wiki.sh" fallback
   check "and there wiki.sh did the search and the routing" bash -c "grep -qx find '$T/helper-ran' && grep -qx which '$T/helper-ran'"
+  [ -s "$T/status-ran" ] && ! grep -qx 0 "$T/status-ran" && ok "and the Bash made the status table, with a link under wiki/" || bad "and the Bash made the status table, with a link under wiki/" "$(cat "$T/status-ran")"
   expect "a link inside the wiki is read" "canary, the sixth page, so never shown" python3 "$MS" text "$T/mcp.go.out" read-link
   expect "a link to a file counts as a page, and one to a folder doesn't" "alpha (collection default): 22 page(s)" python3 "$MS" text "$T/mcp.go.out" list
   expect "and a repos.md that isn't UTF-8 is read" "jobapp (collection work): 2 page(s), covers: jobapp-web jobapp-api $(printf 'caf\357\277\275')" python3 "$MS" text "$T/mcp.go.out" list
