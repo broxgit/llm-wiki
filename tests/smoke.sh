@@ -99,6 +99,11 @@ export HOME="$T/home"
 # the runner's own folder, which a part would otherwise read.
 unset XDG_CONFIG_HOME XDG_STATE_HOME XDG_DATA_HOME XDG_CACHE_HOME
 export WIKIS_DIR="$T/wikis"
+# The fixtures are dated with `date -u`, and the report's range ends on the journal's
+# day, which is the local date, or the day before until day_starts. One clock for both:
+# UTC here, and day_starts 00:00 once the collection exists. Without it the report
+# checks failed from midnight to 04:00 UTC in CI, and in the evening on a Mac.
+export TZ=UTC
 # Released helpers come from a folder here, never the network.
 export LLM_WIKI_HELPER_BASE="file://$T/release"
 mkdir -p "$HOME" "$T/bin"
@@ -196,6 +201,7 @@ build_helper() {
 
 if section "Collection"; then
 expect "init --git makes the first commit" "first commit made" "$W" init --git
+"$W" journal set day_starts 00:00 >/dev/null
 check "the collection is a git repo" git -C "$WIKIS_DIR" rev-parse --is-inside-work-tree
 check "the shared wiki starts with a conventions page" grep -q '^## For agents' "$WIKIS_DIR/global/wiki/conventions.md"
 check "the shared index lists it" grep -q 'wiki/conventions.md' "$WIKIS_DIR/global/index.md"
