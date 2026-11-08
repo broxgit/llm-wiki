@@ -246,3 +246,22 @@ func TestTildeLikeBash(t *testing.T) {
 		}
 	}
 }
+
+// The shell sorts "$WIKIS_DIR"/*/ with the slash each match ends in, so a name that
+// continues with a dash comes before the shorter one: covers-nl/ before covers/.
+func TestFoldersOrder(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"llm-wiki", "covers", "llm", "covers-nl", "Zed", ".hidden", "covers.old", "covers_x"} {
+		write(t, root+"/"+name+"/index.md", "# Index\n")
+	}
+	write(t, root+"/a-file", "not a folder\n")
+	got, err := Folders(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// "Zed/" is below the lower case names, "-" below "." below "/", and "_" above all.
+	want := []string{"Zed", "covers-nl", "covers.old", "covers", "covers_x", "llm-wiki", "llm"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("Folders = %q, want %q", got, want)
+	}
+}

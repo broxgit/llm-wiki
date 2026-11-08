@@ -148,8 +148,7 @@ func miss(o Options, name string, wikis []string) (string, error) {
 }
 
 // wikiNames is the wikis of a collection, as the shell's "$WIKIS_DIR"/*/ and is_wiki
-// find them. They come sorted by byte, which is the shell's order only under LC_ALL=C,
-// so nothing here may depend on the order.
+// find them, in the order Folders gives.
 func wikiNames(root string) ([]string, error) {
 	dirs, err := Folders(root)
 	if err != nil {
@@ -172,8 +171,11 @@ func wikiNames(root string) ([]string, error) {
 }
 
 // Folders is what the shell's "$WIKIS_DIR"/*/ matches: the folders of a collection, or
-// links to folders, whose names don't start with a dot. They come sorted by byte, which
-// is the shell's order under LC_ALL=C.
+// links to folders, whose names don't start with a dot. They come in the shell's order
+// under LC_ALL=C, which sorts the matches with the slash each one ends in: by byte on
+// name + "/". So covers-nl comes before covers, because "-" (0x2D) is below "/" (0x2F),
+// where sorting the bare names puts covers first. Every command that walks the wikis
+// takes its order from here.
 func Folders(root string) ([]string, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -198,6 +200,7 @@ func Folders(root string) ([]string, error) {
 		}
 		names = append(names, e.Name())
 	}
+	sort.Slice(names, func(i, j int) bool { return names[i]+"/" < names[j]+"/" })
 	return names, nil
 }
 

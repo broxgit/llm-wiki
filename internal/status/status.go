@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"os"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -50,7 +49,7 @@ func Run(o Options) (Result, error) {
 	if err != nil {
 		return r, err
 	}
-	names, err := folders(o.Wikis)
+	names, err := routing.Folders(o.Wikis)
 	if err != nil {
 		return r, err
 	}
@@ -173,7 +172,7 @@ func pad(s string, n int) string {
 
 // waitingIn is status_waiting: the notes waiting in all of a collection's wikis.
 func waitingIn(root string) (int, error) {
-	names, err := folders(root)
+	names, err := routing.Folders(root)
 	if routing.NotThere(err) {
 		return 0, nil
 	}
@@ -194,14 +193,6 @@ func waitingIn(root string) (int, error) {
 		total += n
 	}
 	return total, nil
-}
-
-// folders is the shell's "$WIKIS_DIR"/*/ under LC_ALL=C, in its order: by byte, with
-// the slash each match ends in, so covers-nl/ comes before covers/.
-func folders(root string) ([]string, error) {
-	names, err := routing.Folders(root)
-	sort.Slice(names, func(i, j int) bool { return names[i]+"/" < names[j]+"/" })
-	return names, err
 }
 
 // isWiki is wiki.sh's is_wiki.
