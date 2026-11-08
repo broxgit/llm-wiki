@@ -2,3 +2,4 @@
 .DS_Store
 .local-work
 /bin/
+__pycache__/

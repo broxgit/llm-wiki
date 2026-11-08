@@ -16,14 +16,32 @@ session-start hook clears that record, so they come back after a compaction.
 In every pattern, * matches anything.
 
 A hook must never break a session, so anything unexpected ends quietly with no reply.
+
+With --antigravity <tool|invoke> it is the adapter for Google's Antigravity, which has
+no context reply on a tool call. The conversation's rows are in agy-<conversation id>.tsv,
+written by wiki.sh's __agy-start. Gemini's tool names are read as Claude's, the shape of
+the reply is Antigravity's, and every path ends with a reply, since a hook's exit code
+is not documented:
+
+  tool    PreToolUse: before is {"decision": "deny", "reason": ...}, once. An on reminder
+          is queued in agy-<id>.pending and the call is allowed.
+  invoke  PreInvocation: hands over what is queued, once, as a system message, just
+          before the model's next step.
+
+Each run adds a line to agy-hooks.log beside the reminders folder.
 """
 
 import json
 import os
 import re
 import sys
+import tempfile
+import time
+from urllib.parse import unquote
 
 EDIT_TOOLS = ("Edit", "Write", "NotebookEdit", "MultiEdit")
+AGY_TOOLS = {"run_command": "Bash", "write_to_file": "Edit", "replace_file_content": "Edit",
+             "multi_replace_file_content": "Edit", "invoke_subagent": "Agent"}
 SAFE = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
 
 
@@ -56,16 +74,12 @@ def matches(kind, pattern, tool, tool_input, cwd):
     return False
 
 
-def main():
-    call = json.load(sys.stdin)
-    session = call.get("session_id") or ""
-    if not session or not set(session) <= SAFE:
-        return
-    base = os.path.join(sys.argv[1], session)
+def hits_for(call, base):
+    """The unseen reminders that apply to the call, marked seen. [] when there are none."""
     try:
         rows = open(base + ".tsv", encoding="utf-8").read().splitlines()
     except OSError:
-        return
+        return None
     try:
         seen = set(open(base + ".seen", encoding="utf-8").read().split())
     except OSError:
@@ -81,28 +95,120 @@ def main():
         when, kind, pattern, rule, wiki = parts
         if matches(kind, pattern, tool, tool_input, cwd):
             hits.append((number, when, rule, wiki))
+    if hits:
+        with open(base + ".seen", "a", encoding="utf-8") as f:
+            f.write("".join("%d\n" % number for number, _, _, _ in hits))
+    return hits
+
+
+def rules_of(hits):
+    return "\n".join("- %s (from the wiki %s, wiki/conventions.md)" % (rule, wiki) for _, _, rule, wiki in hits)
+
+
+HEADING = "A reminder from the user's wiki that applies to the call you just made:\n"
+
+
+def deny_reason(hits):
+    return ("Stopped once, so you read this before the call. It won't stop this call again.\n"
+            + rules_of(hits)
+            + "\nIf the call already follows this, make the same call again. If it doesn't, change it first.")
+
+
+def main():
+    call = json.load(sys.stdin)
+    session = call.get("session_id") or ""
+    if not session or not set(session) <= SAFE:
+        return
+    hits = hits_for(call, os.path.join(sys.argv[1], session))
     if not hits:
         return
-    with open(base + ".seen", "a", encoding="utf-8") as f:
-        f.write("".join("%d\n" % number for number, _, _, _ in hits))
-    rules = "\n".join("- %s (from the wiki %s, wiki/conventions.md)" % (rule, wiki) for _, _, rule, wiki in hits)
     if any(when == "before" for _, when, _, _ in hits):
-        reply = {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": "Stopped once, so you read this before the call. It won't stop this call again.\n"
-            + rules
-            + "\nIf the call already follows this, make the same call again. If it doesn't, change it first.",
-        }
+        reply = {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": deny_reason(hits)}
     else:
-        reply = {
-            "hookEventName": "PreToolUse",
-            "additionalContext": "A reminder from the user's wiki that applies to the call you just made:\n" + rules,
-        }
+        reply = {"hookEventName": "PreToolUse", "additionalContext": HEADING + rules_of(hits)}
     print(json.dumps({"hookSpecificOutput": reply}))
 
 
+def workspace_of(call, path):
+    """The workspace folder the file is in, else the first. Antigravity may give file:// URLs."""
+    folders = []
+    for w in call.get("workspacePaths") or []:
+        if isinstance(w, str) and w:
+            folders.append(unquote(w[7:]) if w.startswith("file://") else w)
+    for w in folders:
+        if path and path.startswith(w.rstrip("/") + "/"):
+            return w
+    return folders[0] if folders else ""
+
+
+def log(state, *fields):
+    """One line per run. Best effort: the sandbox may refuse the state folder, so the
+    temp folder is the second place."""
+    line = "\t".join([time.strftime("%Y-%m-%dT%H:%M:%S")] + [str(f).replace("\t", " ").replace("\n", " ") for f in fields]) + "\n"
+    for path in (os.path.join(state, "agy-hooks.log"), os.path.join(tempfile.gettempdir(), "llm-wiki-agy-hooks.log")):
+        try:
+            if os.path.exists(path) and os.path.getsize(path) > 100000:
+                keep = open(path, encoding="utf-8").read().splitlines(True)[-200:]
+                open(path, "w", encoding="utf-8").write("".join(keep))
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(line)
+            return
+        except OSError:
+            continue
+
+
+def antigravity(event, rdir):
+    """The reply for Antigravity, and what to log. Returns (reply, conversation, tool, outcome)."""
+    allow = {"decision": "allow"} if event == "tool" else {}
+    call = json.load(sys.stdin)
+    conv = call.get("conversationId") or ""
+    if not conv or not set(conv) <= SAFE:
+        return allow, conv, "", "no-conversation"
+    base = os.path.join(rdir, "agy-" + conv)
+    if event == "invoke":
+        pending = base + ".pending"
+        try:
+            age = time.time() - os.path.getmtime(pending)
+            text = open(pending, encoding="utf-8").read()
+        except OSError:
+            return allow, conv, "", "nothing-queued" if os.path.isdir(rdir) else "no-state"
+        os.remove(pending)
+        if age > 86400 or not text.strip():
+            return allow, conv, "", "dropped-stale"
+        return {"injectSteps": [{"systemMessage": {"systemMessage": HEADING + text.rstrip("\n")}}]}, conv, "", "delivered"
+    name = (call.get("toolCall") or {}).get("name") or ""
+    args = (call.get("toolCall") or {}).get("args") or {}
+    tool = AGY_TOOLS.get(name, name)
+    path = args.get("TargetFile") or ""
+    tool_input = {"command": args.get("CommandLine"), "file_path": path}
+    translated = {"tool_name": tool, "tool_input": tool_input, "cwd": workspace_of(call, path)}
+    hits = hits_for(translated, base)
+    if hits is None:
+        return allow, conv, name, "no-rows" if os.path.isdir(rdir) else "no-state"
+    if not hits:
+        return allow, conv, name, "no-match"
+    if any(when == "before" for _, when, _, _ in hits):
+        return {"decision": "deny", "reason": deny_reason(hits)}, conv, name, "deny"
+    with open(base + ".pending", "a", encoding="utf-8") as f:
+        f.write(rules_of(hits) + "\n")
+    return allow, conv, name, "queued"
+
+
+def run_antigravity(event):
+    rdir = sys.argv[1]
+    allow = {"decision": "allow"} if event == "tool" else {}
+    try:
+        reply, conv, tool, outcome = antigravity(event, rdir)
+    except Exception as e:
+        reply, conv, tool, outcome = allow, "", "", "error: %s" % type(e).__name__
+    print(json.dumps(reply))
+    log(os.path.dirname(rdir.rstrip("/")), event, conv, tool, outcome)
+
+
 try:
-    main()
+    if len(sys.argv) > 3 and sys.argv[2] == "--antigravity":
+        run_antigravity("invoke" if sys.argv[3] == "invoke" else "tool")
+    else:
+        main()
 except Exception:
     pass

@@ -1563,7 +1563,7 @@ git -C "$WIKIS_DIR" rm -q "demo/raw/first-push.md" && git -C "$WIKIS_DIR" commit
 fi
 
 if section "Antigravity plugin"; then
-lacks "without Antigravity, setup --list says nothing about it" "antigravity" "$W" setup --list
+lacks "without Antigravity, setup --list says nothing about it" "antigravity    " "$W" setup --list
 mkdir -p "$HOME/.gemini"
 expect "with Antigravity, setup --list shows the plugin missing" "plugin missing" "$W" setup --list
 expect "and names the section" "| antigravity |" "$W" setup --list
@@ -1623,6 +1623,99 @@ expect "setup --list counts the missing Antigravity grants" "grant(s) missing" "
 expect "once present, setup --list says so" "grants in place" "$W" setup --list
 printf '{"something":"else"}\n' > "$HOME/.gemini/config/config.json"
 lacks "an unexpected config.json isn't touched or reported on" "grant" "$W" setup --list
+# The tool-call hooks: Gemini's tool names read as Claude's, Antigravity's reply shapes.
+AP="$HOME/.gemini/config/plugins/llm-wiki"
+"$W" new agyrem >/dev/null
+cat > "$WIKIS_DIR/agyrem/wiki/conventions.md" <<'REM'
+---
+title: Conventions for agyrem
+summary: How to work in agyrem.
+updated: 2026-11-07
+verified: 2026-11-07
+---
+
+## Reminders
+
+- before bash `git push`: Before a push, make sure the hooks ran.
+- on edit `payments/*`: Money is in cents.
+- on tool `Agent`: Set the model.
+REM
+mkdir -p "$T/projects/agyrem/payments" && git -C "$T/projects/agyrem" init -q
+RD="$HOME/.local/state/llm-wiki/reminders"
+LOG="$HOME/.local/state/llm-wiki/agy-hooks.log"
+export TMPDIR="$T/tmp"; mkdir -p "$TMPDIR"
+agy_start() { printf '{"workspacePaths":["file://%s"],"conversationId":"%s"}' "$T/projects/agyrem" "$1" | "$W" __agy-start >/dev/null; }
+# agy <tool|invoke> <json>: what Antigravity's hook replies.
+agy() { printf '%s' "$2" | sh "$AP/hooks/agy-hook.sh" "$1"; }
+# call <conversation> <tool name> <args json>
+call() { printf '{"conversationId":"%s","workspacePaths":["file://%s"],"toolCall":{"name":"%s","args":%s}}' "$1" "$T/projects/agyrem" "$2" "$3"; }
+ALLOW='{"decision": "allow"}'
+is() { local name="$1" want="$2" got="$3"; if [ "$got" = "$want" ]; then ok "$name"; else bad "$name" "wanted: $want
+got: $got"; fi; }
+check "setup installs the tool-call hooks beside the plugin" test -x "$AP/hooks/agy-hook.sh" -a -f "$AP/hooks/reminders.py"
+check "hooks.json has PreToolUse for every tool (the docs' matcher *), and PreInvocation" python3 -c "
+import json, sys
+h = json.load(open(sys.argv[1]))['llm-wiki']
+m = h['PreToolUse'][0]
+assert m['matcher'] == '*' and m['hooks'][0]['type'] == 'command' and m['hooks'][0]['command'].endswith('hooks/agy-hook.sh tool')
+assert h['PreInvocation'][0]['command'].endswith('hooks/agy-hook.sh invoke')
+assert h['SessionStart'][0]['command'].endswith(' __agy-start')" "$AP/hooks.json"
+rm "$AP/hooks/agy-hook.sh"
+expect "a plugin without them is old" "plugin old" "$W" setup --list
+agy_start c-1
+expect "and the next conversation brings them back" "plugin current" "$W" setup --list
+check "a conversation's reminders are written when it starts" grep -q "git push" "$RD/agy-c-1.tsv"
+check "and nothing is queued yet" test ! -e "$RD/agy-c-1.pending"
+before="$(find "$HOME/.gemini" "$T/projects/agyrem" -type f | sort | cksum)"
+out="$(agy tool "$(call c-1 run_command '{"CommandLine":"cd x && git push origin main","Cwd":"/x"}')")"
+if printf '%s' "$out" | python3 -c 'import json, sys; d = json.load(sys.stdin); assert d["decision"] == "deny" and "make sure the hooks ran" in d["reason"] and "from the wiki agyrem" in d["reason"]' 2>/dev/null; then ok "a before reminder denies the shell command once, with the rule"; else bad "a before reminder denies the shell command once, with the rule" "$out"; fi
+is "the same command made again goes through" "$ALLOW" "$(agy tool "$(call c-1 run_command '{"CommandLine":"git push origin main"}')")"
+is "a command no reminder covers goes through" "$ALLOW" "$(agy tool "$(call c-1 run_command '{"CommandLine":"ls"}')")"
+is "an edit reminder doesn't match a read" "$ALLOW" "$(agy tool "$(call c-1 view_file "{\"AbsolutePath\":\"$T/projects/agyrem/payments/a.go\"}")")"
+check "and queues nothing" test ! -e "$RD/agy-c-1.pending"
+is "an on reminder lets the edit go" "$ALLOW" "$(agy tool "$(call c-1 replace_file_content "{\"TargetFile\":\"$T/projects/agyrem/payments/charge.go\"}")")"
+check "and queues its rule" grep -q "^- Money is in cents. (from the wiki agyrem, wiki/conventions.md)$" "$RD/agy-c-1.pending"
+is "a file outside what the pattern covers queues nothing more" "$ALLOW" "$(agy tool "$(call c-1 write_to_file "{\"TargetFile\":\"$T/projects/agyrem/main.go\"}")")"
+is "the same edit again goes through" "$ALLOW" "$(agy tool "$(call c-1 multi_replace_file_content "{\"TargetFile\":\"$T/projects/agyrem/payments/charge.go\"}")")"
+is "a tool reminder matches Gemini's subagent tool" "$ALLOW" "$(agy tool "$(call c-1 invoke_subagent '{"Subagents":[]}')")"
+out="$(agy invoke '{"conversationId":"c-1"}')"
+if printf '%s' "$out" | python3 -c 'import json, sys; m = json.load(sys.stdin)["injectSteps"][0]["systemMessage"]["systemMessage"]; assert "Money is in cents." in m and "Set the model." in m' 2>/dev/null; then ok "PreInvocation hands over the queued rules as a system message"; else bad "PreInvocation hands over the queued rules as a system message" "$out"; fi
+is "once" '{}' "$(agy invoke '{"conversationId":"c-1"}')"
+check "and the queue is gone" test ! -e "$RD/agy-c-1.pending"
+check "the hooks wrote nothing outside the state folder" test "$before" = "$(find "$HOME/.gemini" "$T/projects/agyrem" -type f | sort | cksum)"
+agy_start c-2
+printf -- '- Old news (from the wiki agyrem, wiki/conventions.md)\n' > "$RD/agy-c-2.pending"; touch -t 202001010000 "$RD/agy-c-2.pending"
+is "a queue more than a day old is dropped, not delivered" '{}' "$(agy invoke '{"conversationId":"c-2"}')"
+check "and removed" test ! -e "$RD/agy-c-2.pending"
+printf 'x\n' > "$RD/agy-c-9.pending"; touch -t 202001010000 "$RD/agy-c-9.pending"
+agy_start c-3
+check "a new conversation sweeps old queues" test ! -e "$RD/agy-c-9.pending"
+# A hook's exit code isn't documented, so on every path it prints a reply that lets the call go, and exits 0.
+is "bad JSON gets an allow" "$ALLOW" "$(agy tool 'not json')"
+is "an empty line gets an allow" "$ALLOW" "$(agy tool '')"
+is "a call of an unexpected shape gets an allow" "$ALLOW" "$(agy tool '{"conversationId":"c-3","toolCall":"run_command"}')"
+is "a call with no conversation gets an allow" "$ALLOW" "$(agy tool '{"toolCall":{"name":"run_command","args":{"CommandLine":"git push"}}}')"
+is "a conversation with no rows gets an allow" "$ALLOW" "$(agy tool "$(call c-none run_command '{"CommandLine":"git push"}')")"
+is "PreInvocation with bad JSON gets an empty reply" '{}' "$(agy invoke 'not json')"
+is "a missing state folder gets an allow" "$ALLOW" "$(printf '%s' "$(call c-3 run_command '{"CommandLine":"git push"}')" | XDG_STATE_HOME="$T/no-state" sh "$AP/hooks/agy-hook.sh" tool)"
+check "and the hook still exits 0" sh -c "printf 'x' | XDG_STATE_HOME='$T/no-state' sh '$AP/hooks/agy-hook.sh' tool >/dev/null"
+check "and says so in the log, in the temp folder when the state folder is missing" grep -q "no-state" "$TMPDIR/llm-wiki-agy-hooks.log"
+if [ "$(id -u)" != 0 ]; then
+  agy_start c-4
+  chmod 000 "$RD/agy-c-4.tsv"
+  is "an unreadable rows file gets an allow" "$ALLOW" "$(agy tool "$(call c-4 run_command '{"CommandLine":"git push"}')")"
+  chmod 644 "$RD/agy-c-4.tsv"
+  chmod 000 "$RD"
+  is "an unreadable state folder gets an allow, as in a sandbox that refuses it" "$ALLOW" "$(agy tool "$(call c-4 run_command '{"CommandLine":"git push"}')")"
+  chmod 755 "$RD"
+else
+  skipped "the hooks with a state folder that can't be read (root can read anything)"
+fi
+is "with python3 gone, an allow" "$ALLOW" "$(printf '%s' "$(call c-3 run_command '{"CommandLine":"git push"}')" | PATH="/nonexistent" /bin/sh "$AP/hooks/agy-hook.sh" tool)"
+for want in deny queued delivered no-match no-conversation no-rows "error: "; do
+  check "the log has a $want line" grep -q "	$want" "$LOG"
+done
+check "each line of it has a time, the event, the conversation, the tool and what came of it" awk -F'\t' 'NF != 5 { exit 1 }' "$LOG"
 rm -rf "$HOME/.gemini"
 fi
 

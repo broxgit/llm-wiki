@@ -2925,15 +2925,39 @@ If you can hand work to sub-agents on cheaper models, do it for large, self-cont
 EOF2
 }
 
+# The tool-call hooks run a copy of hooks/agy-hook.sh kept in the plugin's own folder:
+# a Claude Code plugin update moves $REPO, and Antigravity must not be left pointing at
+# a folder that is gone. They bypass wiki.sh, which takes 40 ms to start.
+# The matcher "*" is the docs' own spelling for every tool.
+agy_hook_files() { printf '%s\n' agy-hook.sh reminders.py; }
 agy_hooks() {
+  local h
+  h="sh $(tilde "$AGY_DIR")/hooks/agy-hook.sh"
   cat <<EOF2
 {
   "llm-wiki": {
     "SessionStart": [
       { "type": "command", "command": "$(agy_cmd) __agy-start", "timeout": 30 }
+    ],
+    "PreToolUse": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "$h tool", "timeout": 5 }] }
+    ],
+    "PreInvocation": [
+      { "type": "command", "command": "$h invoke", "timeout": 5 }
     ]
   }
 }
+EOF2
+}
+
+# agy_hooks_current: whether the plugin's copies of the hook scripts match this version's.
+agy_hooks_current() {
+  local f
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    cmp -s "$REPO/hooks/$f" "$AGY_DIR/hooks/$f" || return 1
+  done <<EOF2
+$(agy_hook_files)
 EOF2
 }
 
@@ -2948,13 +2972,14 @@ EOF2
 }
 
 # agy_state: none (no Antigravity here), missing, old, or current.
-agy_unreadable() { first_unreadable "$AGY_DIR/plugin.json" "$AGY_DIR/rules/AGENTS.md" "$AGY_DIR/hooks.json"; }
+agy_unreadable() { first_unreadable "$AGY_DIR/plugin.json" "$AGY_DIR/rules/AGENTS.md" "$AGY_DIR/hooks.json" "$AGY_DIR/hooks/agy-hook.sh" "$AGY_DIR/hooks/reminders.py"; }
 agy_state() {
   [ -d "$AGY_HOME" ] || { echo none; return 0; }
   [ -z "$(agy_unreadable)" ] || { echo unreadable; return 0; }
   [ -f "$AGY_DIR/plugin.json" ] || { echo missing; return 0; }
   if [ "$(cat "$AGY_DIR/rules/AGENTS.md" 2>/dev/null)" = "$(agy_rule)" ] \
     && [ "$(cat "$AGY_DIR/hooks.json" 2>/dev/null)" = "$(agy_hooks)" ] \
+    && agy_hooks_current \
     && [ -e "$AGY_DIR/skills/llm-wiki/SKILL.md" ] && [ -e "$AGY_DIR/skills/wiki-status/SKILL.md" ]; then
     echo current
   else
@@ -2965,7 +2990,14 @@ agy_state() {
 # agy_write: write or refresh the plugin's files. The skill is a link into this
 # copy of the template, refreshed with the rest, so it follows plugin updates.
 agy_write() {
-  mkdir -p "$AGY_DIR/rules" "$AGY_DIR/skills" || return 1
+  local f
+  mkdir -p "$AGY_DIR/rules" "$AGY_DIR/skills" "$AGY_DIR/hooks" || return 1
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    cmp -s "$REPO/hooks/$f" "$AGY_DIR/hooks/$f" || { cp "$REPO/hooks/$f" "$AGY_DIR/hooks/$f" && chmod 755 "$AGY_DIR/hooks/$f"; } || return 1
+  done <<EOF2
+$(agy_hook_files)
+EOF2
   [ "$(cat "$AGY_DIR/plugin.json" 2>/dev/null)" = "$(agy_manifest)" ] || agy_manifest > "$AGY_DIR/plugin.json"
   [ "$(cat "$AGY_DIR/rules/AGENTS.md" 2>/dev/null)" = "$(agy_rule)" ] || agy_rule > "$AGY_DIR/rules/AGENTS.md"
   [ "$(cat "$AGY_DIR/hooks.json" 2>/dev/null)" = "$(agy_hooks)" ] || agy_hooks > "$AGY_DIR/hooks.json"
@@ -2976,6 +3008,37 @@ agy_write() {
   # Team skills from the wikis, as `wiki skills link` gives Claude Code.
   skills_link_into "$AGY_DIR/skills" quiet >/dev/null 2>&1 || true
   command_skills_into "$AGY_DIR/skills" "$(agy_cmd)" >/dev/null 2>&1 || true
+}
+
+# agy_reminders_write <stdin json> <start's output>: the conversation's reminders, for
+# the tool-call hooks, as the Claude Code hook writes them. The wiki is the one the first
+# line of start's output names. Nothing here may fail the session.
+agy_reminders_write() {
+  local conv wiki rdir rows
+  conv="$(printf '%s' "$1" | python3 -c '
+import json, sys
+try:
+    c = json.load(sys.stdin).get("conversationId") or ""
+except Exception:
+    c = ""
+print(c if c and set(c) <= set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") else "")' 2>/dev/null || true)"
+  [ -n "$conv" ] || return 0
+  wiki="$(printf '%s\n' "$2" | sed -n '1s/^wiki: //p' | sed 's/,.*//')"
+  # shellcheck disable=SC2088
+  case "$wiki" in "~/"*) wiki="$HOME/${wiki:2}" ;; esac
+  is_wiki "$wiki" || return 0
+  rdir="${XDG_STATE_HOME:-$HOME/.local/state}/llm-wiki/reminders"
+  rows="$(session_reminders "$wiki" 2>/dev/null || true)"
+  if [ -n "$rows" ]; then
+    mkdir -p "$rdir" 2>/dev/null && printf '%s\n' "$rows" > "$rdir/agy-$conv.tsv" 2>/dev/null || true
+  else
+    rm -f "$rdir/agy-$conv.tsv" 2>/dev/null || true
+  fi
+  # Antigravity has no compaction event, so a new conversation is the only reset.
+  rm -f "$rdir/agy-$conv.seen" "$rdir/agy-$conv.pending" 2>/dev/null || true
+  # Conversations end without telling anyone: what they leave is swept here.
+  find "$rdir" -type f -name 'agy-*' -mtime +7 -exec rm -f {} + 2>/dev/null || true
+  find "$rdir" -type f -name 'agy-*.pending' -mtime +1 -exec rm -f {} + 2>/dev/null || true
 }
 
 # __agy-start: the plugin's SessionStart hook. Reads Antigravity's JSON on stdin,
@@ -3001,6 +3064,7 @@ print(p[7:] if p.startswith("file://") else p)' 2>/dev/null || true)"
   # Keep the plugin current, so an update reaches the next conversation.
   [ ! -d "$AGY_DIR" ] || agy_write >/dev/null 2>&1 || true
   out="$( (cmd_start "$dir") 2>&1 || true)"
+  agy_reminders_write "$input" "$out"
   printf 'llm-wiki: this plugin ran `%s start` for this conversation. Its output follows. Read the AGENTS.md of the wiki it names and follow it. Do not run start again.\n\n%s\n' "$(agy_cmd)" "$out" \
     | python3 -c 'import json, sys; print(json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": sys.stdin.read()}}]}))'
 }
@@ -7048,9 +7112,9 @@ setup_antigravity() {
   case "$state" in
     current) echo "The llm-wiki plugin for Antigravity is up to date." ;;
     old)
-      agy_write && echo "Updated the llm-wiki plugin for Antigravity. New conversations use it." ;;
+      agy_write && echo "Updated the llm-wiki plugin for Antigravity. New conversations use it, and Gemini now gets the wikis' reminders at the tool calls they apply to. Quit and reopen Antigravity once, so it reads the new hooks." ;;
     missing)
-      echo "Antigravity is installed. An llm-wiki plugin points its conversations at your wikis, and loads the wiki's index and agreements at the start, like the Claude Code plugin."
+      echo "Antigravity is installed. An llm-wiki plugin points its conversations at your wikis, loads the wiki's index and agreements at the start, and hands over the wikis' reminders at the tool calls they apply to, like the Claude Code plugin."
       if ask_yn "Add it to $(tilde "$AGY_DIR")?" y; then
         if agy_write; then
           echo "  added. Quit and reopen Antigravity once, so it finds the new plugin."
