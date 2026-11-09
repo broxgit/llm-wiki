@@ -56,14 +56,14 @@ Before you rely on the result, check it the way criterion 3 promised: run the te
 
 ## The log
 
-After each handoff, log it: `wiki.sh delegation log <kind> <model> <effort> <ok|fixed|redone>`. Without the script, append one line to `delegation-log.csv` in the collection's top folder. Create it with this header if it's missing:
+Where the plugin's hook runs (Claude Code with the llm-wiki plugin), the start of each handoff is logged for you, as a row with the result `started`. When you have checked the work, record the outcome: `wiki.sh delegation log <kind> <model> <effort> <ok|fixed|redone>`. Where there is no hook, the same command logs it all. Without the script, append one line to `delegation-log.csv` in the collection's top folder. Create it with this header if it's missing:
 
 ```
 date,project,kind,model,effort,result
 2026-10-27,orders-api,test run,sonnet,low,ok
 ```
 
-`date` is UTC. `kind` is a short phrase with no commas, such as `test run`, `file sweep`, or `boilerplate`. Use the same phrase each time for the same kind of work. `result` is `ok` (used as returned), `fixed` (you corrected it), or `redone` (you did it yourself). `wiki.sh delegation` sums the log.
+`date` is UTC. `kind` is a short phrase with no commas, such as `test run`, `file sweep`, or `boilerplate`. Use the same phrase each time for the same kind of work. `result` is `ok` (used as returned), `fixed` (you corrected it), or `redone` (you did it yourself). `wiki.sh delegation` sums the log. A `started` row counts as open until its outcome is recorded: it is not a success.
 
 ## Making it a rule
 

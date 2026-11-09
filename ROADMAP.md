@@ -6,14 +6,6 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 
 ## Next
 
-### Sessions record what they now lose
-
-- **Why:** the handbook's by-hand logging mostly doesn't happen, and some kinds of knowledge have nowhere to go. In the week to 2026-11-09 the report found 9 logged lookups against 25 page reads in the transcripts, no handoff was logged of seven sessions and three subagents, and the things waiting on the user lived only in a conversation. Agreed with the user on 2026-11-09. The rule for all of it: a hook where a hook can see the event, a line in a note where it can't, and no new step done from memory.
-- **Sketch:** two changes.
-  - **One handbook version.** A capture can carry `Verified: <page>` for a page checked and still true, so compile stamps its verified date where today a session that never compiles forgets it. `Waiting: <who> | <what>` and `Due: <YYYY-MM-DD> | <what>` for things waiting on someone, dated follow-ups and claims not yet tested: compile tallies them as it does `Feedback:` lines, a later note closes one, and `wiki status` prints what is open and what is past its date. A `Feedback:` kind `lesson`, for a mistake the agent caught itself, counted and proposed like a correction. A change git doesn't record (under `~/.claude`, a machine's settings, an installed tool) gets a capture with the machine named. Work the user puts off goes in the owning repository's `ROADMAP.md`, or in a capture where there is none.
-  - **The hooks.** A read of a wiki page logs itself in `stats.csv`, as `wiki find` and the MCP server's `wiki_read` already do, and the handbook's step to log each lookup by hand goes. The hook that fires when a session starts a sub-session or subagent writes the start of the handoff to `delegation-log.csv`; the outcome stays a judgment, added when the work is checked.
-- **Open:** whether hit and miss survive once reads log themselves, or the handbook stops asking for the judgment. Where the ledger for `Waiting:` and `Due:` lines lives, and how a note names the one it closes. Decided against: recording what a lookup saved, which would be a guess about a path not taken; counting approvals, since nothing follows from the count; and a registry of the sessions at work in a repository.
-
 ### Port wiki.sh to Go, one command at a time
 
 - **Why:** see the first step under Done. The aim is one binary that needs no Bash 3.2 workarounds and no Python.
@@ -71,6 +63,7 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - The GitHub route beyond one test: how a Project answers a question its files don't cover, how much of a collection fits, a whole repository added to a plain chat, and other web agents' GitHub connectors.
 - Microsoft 365 Copilot beyond a few runs (2026-11-03; real wikis on the user's work Mac): an answer inside the Mac app, a question spanning several wikis, and a toolkit newer than the pinned version. Whether reading one index really fixes the first question: two chats passed, and the cap on tool calls per turn is a guess. `--update` ran live once; whether GitHub keeps the sign-in after it wasn't reported.
 - Patterns in real use: whether agents write `Feedback:` lines unprompted, and whether the thresholds are right.
+- The Read and handoff hooks in a real Claude Code or Antigravity session (handbook v29): that `Read` reaches the plugin's hook with the path in `file_path`, that `start_session` arrives as an `mcp__*start_session` tool, and that Antigravity's `read_file` carries `Path` or `AbsolutePath`. Only JSON fed by the smoke test has been seen.
 
 ## Decided against
 
@@ -79,6 +72,14 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Handbook v29: sessions record what they lost (2026-11-09)
+
+- **Why:** the handbook's by-hand logging mostly didn't happen, and some knowledge had nowhere to go. In the week to 2026-11-09 the report found 9 logged lookups against 25 page reads in the transcripts, no handoff logged of seven sessions and three subagents, and what waited on the user lived only in a conversation. The rule: a hook where a hook can see the event, a line in a note where it can't, and no new step done from memory. Agreed with the user on 2026-11-09. Two halves, one handbook version.
+- **What changed, the notes:** `Verified:` lines in a capture, stamped at compile. `Waiting:`, `Due:` and `Done:` lines, tallied by compile into each wiki's `open.md` (`template/open.md`, `rules/open.md`), listed by the new `wiki open` (`open_ledger`, `cmd_open`), counted in `wiki status`, and checked by lint. A `lesson` kind for `Feedback:`. Captures for changes git doesn't record, and a place for deferred work. `AGENTS.md` grew by four lines.
+- **What changed, the hooks:** `hooks/pre-tool-use.sh` now also matches `Read`. A read of a `.md` page under `<collection>/<wiki>/wiki/` appends `date,wiki,hit` to that collection's `stats.csv`, once per wiki per session (`<session id>.reads` beside the reminders), and a handoff (`Agent`, `Task`, a `start_session` tool) appends a `started` row to `delegation-log.csv`. Both are in `hooks/reminders.py`, which Antigravity's hook runs too, for `read_file` and `view_file`. The wrapper starts Python only for a read whose path has `/wiki/` and ends `.md`, for a handoff, or when the session has reminders. Step 6 of Query is gone. `wiki delegation` has an OPEN column and says what a `started` row is.
+- **Still untested:** whether agents write the `Verified:`, `Waiting:` and `Due:` lines unprompted, and whether compile matches a `Done:` to the right entry (a `Done:` matches an open entry whose heading contains its text, ignoring case). The count in `wiki status` is Bash, not the helper. Nobody has watched the hooks run in a real Claude Code or Antigravity session: the smoke test drives them with JSON, and what Claude Code sends for `start_session` (the tool is a `mcp__ccd_session__` one) and what Antigravity sends for a read is as documented or seen once. A session whose reads go through a shell command or the MCP tools isn't caught by the Read hook (the MCP server logs its own). A page the agent reads is logged, whether or not it answered, so every logged lookup is a hit.
+- **Open:** whether to drop hit and miss from `wiki stats` and the tip that reads them. Whether Gemini's `invoke_subagent` should log a handoff too. Decided against: recording what a lookup saved, which would be a guess about a path not taken; counting approvals, since nothing follows from the count; and a registry of the sessions at work in a repository.
 
 ### The report splits wiki use into lookups and upkeep (2026-11-09)
 

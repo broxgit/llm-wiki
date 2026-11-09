@@ -169,6 +169,7 @@ Usage: $WIKI_CMD <command> [options]
   stale [days]         List pages not verified in that many days (default 90), or 50
                        commits behind their repository's clone under code_dirs.
   patterns             Recurring feedback across wikis, and which patterns are ready to propose.
+  open                 What is waiting on someone or on a date, in every wiki. open --help has more.
   skills [link]        Team skills in the wikis, and link them into ~/.claude/skills.
   tips [--mute NAME]   Features your own wikis suggest you'd get something out of.
   completion zsh|bash  Print tab completion for a shell. wiki setup turns it on.
@@ -1593,10 +1594,16 @@ cmd_lint() {
   fi
   bad="$(mktemp)"
   for d in "${roots[@]}"; do reminders_of "$d" bad | sed "s#^#$d$TAB#"; done > "$bad"
-  python3 - "$WIKIS_DIR" "$SHARED" "$(days_ago 180)" "$lag" "$bad" "${roots[@]}" <<'PY'
+  openbad="$(mktemp)"
+  for d in "${roots[@]}"; do open_ledger "$d" | sed -n 's/^bad|[^|]*|\([^|]*\)|[^|]*|\(.*\)$/\2 (\1)/p' | sed "s#^#$d$TAB#"; done > "$openbad"
+  python3 - "$WIKIS_DIR" "$SHARED" "$(days_ago 180)" "$lag" "$bad" "$openbad" "${roots[@]}" <<'PY'
 import os, re, sys
-wikis, shared, stale_cut, lagfile, badfile = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
-roots = sys.argv[6:]
+wikis, shared, stale_cut, lagfile, badfile, openfile = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6]
+roots = sys.argv[7:]
+bad_open = {}
+for line in open(openfile, errors="replace").read().splitlines():
+    root, _, text = line.partition("\t")
+    bad_open.setdefault(root, []).append(text)
 bad_reminders = {}
 for line in open(badfile, errors="replace").read().splitlines():
     root, _, text = line.partition("\t")
@@ -1707,6 +1714,9 @@ for root in roots:
     # Reminder lines the tool-call hook would skip without a word.
     for text in bad_reminders.get(root, []):
         add("reminder line not understood", f"wiki/conventions.md: {text[:80]}")
+    # Entries in open.md that open and status can't read.
+    for text in bad_open.get(root, []):
+        add("open.md entry not understood", text[:100])
     # Waiting notes.
     raw = os.path.join(root, "raw")
     # Compiled: named in a log entry's `- source:` line, listed in a page's
@@ -1737,7 +1747,7 @@ for root in roots:
 if total:
     print("\nFix the mechanical ones without asking: links, index lines (wiki index), frontmatter. Ask before merging, deleting or moving pages.")
 PY
-  rm -f "$lag" "$bad"
+  rm -f "$lag" "$bad" "$openbad"
 }
 
 # ---- pending ----------------------------------------------------------------
@@ -2376,6 +2386,13 @@ cmd_status() {
   # The compiled helper makes the table and counts the other collections' notes. When
   # it isn't sure it answers nothing, and the Bash does it all.
   status_helper "$tv" "$others" || status_table "$tv"
+  # What agents recorded as waiting or due, from each wiki's open.md.
+  n="$(open_counts)"
+  if [ "${n%% *}" -gt 0 ]; then
+    w="${n%% *} item(s) waiting on someone or a date"
+    [ "${n##* }" -eq 0 ] || w="$w, ${n##* } past its date"
+    todo_add "open: $w. Run: $WIKI_CMD open"
+  fi
   if [ -f "$JOURNAL_CFG" ]; then
     echo "journal: $(journal_get enabled), commit $(journal_get commit), entries $(journal_get entries)"
   fi
@@ -5140,6 +5157,81 @@ EOF2
   [ "$regressed" = 0 ] || echo "$regressed accepted fix(es) seen again since (AGAIN): the fix isn't working. Tell the user."
 }
 
+# ---- open items -------------------------------------------------------------
+# Each wiki's open.md tallies what is waiting on someone or on a date. See template/rules/open.md.
+
+# open_ledger <wiki root>: one line per entry: state|kind|who or due date|status|what
+# state is "open", "overdue" (a due entry, still open, dated before today), "done", or
+# "bad" (an entry that can't be read: the third field says why). LC_ALL=C on the
+# command, and today's UTC date passed in, so the locale and the clock stay in one place.
+open_ledger() {
+  [ -f "$1/open.md" ] || return 0
+  LC_ALL=C awk -v today="$(date -u +%Y-%m-%d)" '
+    function flush(   state, detail) {
+      if (name == "") return
+      state = "open"; detail = (kind == "due") ? due : who
+      if (kind != "waiting" && kind != "due") { state = "bad"; detail = "kind is missing or not waiting or due" }
+      else if (kind == "due" && due !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) { state = "bad"; detail = "a due entry needs a date as YYYY-MM-DD" }
+      else if (status ~ /^done [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) state = "done"
+      else if (status != "open") { state = "bad"; detail = "status is missing or not open or done YYYY-MM-DD" }
+      else if (kind == "due" && due < today) state = "overdue"
+      print state "|" kind "|" detail "|" status "|" name
+      name = ""; kind = ""; who = ""; due = ""; status = ""
+    }
+    /^## / { flush(); name = substr($0, 4); next }
+    /^- kind:/ { kind = $3 }
+    /^- who:/ { sub(/^- who: */, ""); who = $0 }
+    /^- due:/ { due = $3 }
+    /^- status:/ { sub(/^- status: */, ""); status = $0 }
+    END { flush() }
+  ' "$1/open.md"
+}
+
+open_usage() {
+  cat <<EOF
+Usage: $WIKI_CMD open
+
+Lists what is open in every wiki: things waiting on someone, and dates to look at.
+Those past their date come first in each wiki. Agents add them to their notes as
+Waiting: and Due: lines, and close them with Done:. rules/open.md has the format.
+EOF
+}
+
+cmd_open() {
+  local d line state kind detail status name n_open=0 n_over=0 want wikis=0
+  case "${1:-}" in -h | --help) open_usage; return 0 ;; "") ;; *) die "open takes no arguments. Try $WIKI_CMD open --help" ;; esac
+  [ -d "$WIKIS_DIR" ] || die "no wikis at $(tilde "$WIKIS_DIR")"
+  for d in "$WIKIS_DIR"/*/; do
+    d="${d%/}"
+    is_wiki "$d" || continue
+    line="$(open_ledger "$d" | grep -E '^(open|overdue)\|' || true)"
+    [ -n "$line" ] || continue
+    wikis=$((wikis + 1))
+    echo "== ${d##*/}"
+    for want in overdue open; do
+      while IFS='|' read -r state kind detail status name; do
+        [ "$state" = "$want" ] || continue
+        if [ "$state" = overdue ]; then n_over=$((n_over + 1)); printf '  OVERDUE  %s (due %s)\n' "$name" "$detail"
+        elif [ "$kind" = due ]; then printf '           %s (due %s)\n' "$name" "$detail"
+        else printf '           %s (waiting on %s)\n' "$name" "${detail:-?}"; fi
+        n_open=$((n_open + 1))
+      done <<EOF2
+$line
+EOF2
+    done
+  done
+  if [ "$n_open" = 0 ]; then echo "Nothing open."; return 0; fi
+  echo
+  echo "$n_open open in $wikis wiki(s), $n_over past their date."
+}
+
+# open_counts: "<open> <overdue>" across the collection, open counting the overdue too.
+open_counts() {
+  local d
+  for d in "$WIKIS_DIR"/*/; do d="${d%/}"; if is_wiki "$d"; then open_ledger "$d"; fi; done | awk -F'|' '
+    $1 == "open" || $1 == "overdue" { n++ } $1 == "overdue" { o++ } END { print n + 0, o + 0 }'
+}
+
 # ---- skills -----------------------------------------------------------------
 # A skill that comes out of a pattern lives in the wiki that owns it, as
 # <wiki>/skills/<name>/SKILL.md, so everyone who syncs the collection gets it and a
@@ -5481,7 +5573,7 @@ EOF
 # Tab completion. `completion zsh|bash` prints a small script for the shell, which
 # asks `__complete` for candidates on every Tab. The candidates live here, so a
 # plugin update can't leave completion stale.
-COMMANDS="setup init new update start collections deps permissions seed harvest capture lock compile helper log sync index lint pending cover which status find stale patterns skills tips report stats feedback news tour mcp delegation upgrade unlock claude link journal standup completion"
+COMMANDS="setup init new update start collections deps permissions seed harvest capture lock compile helper log sync index lint pending cover which status find stale patterns open skills tips report stats feedback news tour mcp delegation upgrade unlock claude link journal standup completion"
 RANGES="lastworkday yesterday today week lastweek 7d 14d 30d"
 
 wiki_names() {
@@ -6124,17 +6216,18 @@ cmd_report() {
 }
 
 # ---- stats ------------------------------------------------------------------
-# Agents log each wiki lookup to stats.csv in the collection: date,wiki,hit|miss. wiki find
-# logs its own searches there too: date,wiki,search-found|search-none,word.
-# A hit means the pages answered at least part of the question. stats sums it, so
-# you can tell whether a wiki earns its keep.
+# Each wiki lookup is a line in stats.csv in the collection: date,wiki,hit|miss. The
+# plugin's hooks and the MCP server log a hit when a session opens a wiki's page, once
+# per wiki per session (hooks/reminders.py, log_lookup in mcp/server.py). Handbooks before
+# v29 asked agents to log it by hand, hit or miss. wiki find logs its own searches there
+# too: date,wiki,search-found|search-none,word. stats sums them.
 STATS_FILE="$WIKIS_DIR/stats.csv"
 
 cmd_stats() {
   local since="${1:-30d}" from
   since_ok "$since" || die "stats takes a range: lastworkday, yesterday, today, week, lastweek, a number of days like 30d, or a date"
   if [ ! -s "$STATS_FILE" ]; then
-    echo "No lookups logged yet. Sessions on handbook v16 or later log one line per question they check a wiki for."
+    echo "No lookups logged yet. The plugin's hook logs a lookup when a session opens a page of a wiki, once per wiki per session."
     return 0
   fi
   from="$(since_to_date "$(journal_today)" "$since")"
@@ -6154,7 +6247,7 @@ cmd_stats() {
       }
       if (found + none) printf "Searches: %d, of which %d found nothing%s\n", found + none, none, (words == "" ? "" : ": " words)
     }' "$STATS_FILE"
-  echo "Most sessions don't log their lookups, so rates rest on few answers. The weekly report counts page reads from transcripts."
+  echo "A session opening a wiki's page logs a hit, once per wiki per session, where the plugin's hook runs. Misses were logged by hand under older handbooks, so a rate says little now. The weekly report counts page reads from transcripts."
 }
 
 # ---- delegation -------------------------------------------------------------
@@ -6251,6 +6344,7 @@ deleg_log() {
 }
 
 cmd_delegation() {
+  local open
   case "${1:-show}" in
     off | ask | auto) deleg_set_mode "$1"; return 0 ;;
     log) shift; deleg_log "$@"; return 0 ;;
@@ -6268,12 +6362,16 @@ cmd_delegation() {
     return 0
   fi
   echo
-  printf '%-44s %5s %5s %6s %7s\n' "KIND (MODEL)" "RUNS" "OK" "FIXED" "REDONE"
+  printf '%-44s %5s %5s %6s %7s %5s\n' "KIND (MODEL)" "RUNS" "OK" "FIXED" "REDONE" "OPEN"
   awk -F, 'NR > 1 && NF >= 6 {
       kind = $3; for (i = 4; i <= NF - 3; i++) kind = kind "," $i
       k = kind " (" $(NF - 2) ")"; n[k]++; r[k "|" $NF]++
     }
-    END { for (k in n) printf "%-44s %5d %5d %6d %7d\n", substr(k, 1, 44), n[k], r[k "|ok"], r[k "|fixed"], r[k "|redone"] }' "$DELEG_LOG" | sort
+    END { for (k in n) printf "%-44s %5d %5d %6d %7d %5d\n", substr(k, 1, 44), n[k], r[k "|ok"], r[k "|fixed"], r[k "|redone"], r[k "|started"] }' "$DELEG_LOG" | sort
+  # A "started" row is written by the plugin's hook when a handoff begins. It has no
+  # outcome yet: the agent adds one, once it has checked the work.
+  open="$(awk -F, 'NR > 1 && NF >= 6 && $NF == "started" { n++ } END { print n + 0 }' "$DELEG_LOG")"
+  [ "$open" -eq 0 ] || echo "OPEN is $open handoff(s) the plugin's hook saw start, with no outcome recorded yet. They aren't counted as ok. Record each with: $WIKI_CMD delegation log <kind> <model> <effort> <ok|fixed|redone>"
 }
 
 # ---- plugin -----------------------------------------------------------------
@@ -7476,6 +7574,7 @@ case "$cmd" in
   sync) cmd_sync "$@"; exit 0 ;;
   index) cmd_index "$@"; exit 0 ;;
   lint) cmd_lint "$@"; exit 0 ;;
+  open) cmd_open "$@"; exit 0 ;;
 esac
 if [ "$cmd" = harvest ]; then
   cmd_harvest "$@"

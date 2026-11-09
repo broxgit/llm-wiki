@@ -35,7 +35,7 @@ The user keeps a template repo, usually named `llm-wiki`. It has a `template/` f
 
 Read `<root>/AGENTS.md` in full, then `<root>/index.md`. Do what `AGENTS.md` says. The copy in the wiki is the authority.
 
-`AGENTS.md` is the core. It names files under `rules/` for compile work, conflicts, lint, peer wikis, the journal, patterns, and delegation. Read one of those only when `AGENTS.md` says the work calls for it.
+`AGENTS.md` is the core. It names files under `rules/` for compile work, conflicts, lint, peer wikis, the journal, patterns, open items, and delegation. Read one of those only when `AGENTS.md` says the work calls for it.
 
 Read and edit the files where they live. Pull a file into a scratch area only for a step that can't be done in place.
 
@@ -70,7 +70,7 @@ If no wiki turned up and the user didn't ask for one, offer once to set one up, 
 1. Settle the location. First make sure no existing wiki lists this repository in its `repos.md`. The default is `~/wikis/<repository-name>`, named after the repository the session is working in. Use it without asking when `~/wikis` already exists. Otherwise confirm with the user. One wiki per project, not one per session. Never inside the template repo.
 2. Build it from one of these, in this order:
    - **The template repo.** Run its `wiki.sh new <wiki root>`. Without a shell, copy everything inside its `template/` folder into the new root, hidden files included, then create `index.md` containing `# Index` and `log.md` containing `# Log`.
-   - **An existing wiki.** Copy its `AGENTS.md`, `CLAUDE.md`, `links.md`, `.gitignore`, `.gitattributes`, and `rules/` folder. Add `raw/`, `wiki/`, and `data/` folders. Create `index.md` and `log.md` as above, `repos.md` containing `# Repositories`, and `patterns.md` containing `# Patterns`.
+   - **An existing wiki.** Copy its `AGENTS.md`, `CLAUDE.md`, `links.md`, `.gitignore`, `.gitattributes`, and `rules/` folder. Add `raw/`, `wiki/`, and `data/` folders. Create `index.md` and `log.md` as above, `repos.md` containing `# Repositories`, `patterns.md` containing `# Patterns`, and `open.md` containing `# Open items`.
    - **Neither is reachable.** Don't write a handbook from memory. Tell the user the template repo is needed and ask where it is.
 3. Check `links.md`. If the shared wiki it points at doesn't exist, offer once to scaffold it the same way.
 4. If the wiki sits inside a project folder, or this session is working in one, and that project has its own agent instruction file that doesn't mention the wiki, offer once to add this line to it: `This project's knowledge wiki is at <wiki root>. Read its AGENTS.md at session start and follow it.` That line lets future sessions find the wiki with no prompting.

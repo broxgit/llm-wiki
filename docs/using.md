@@ -162,7 +162,7 @@ When you correct the agent, paste review comments on code it wrote, or watch it 
 - **The same procedure in different repositories** becomes a [team skill](#team-skills).
 - **The same mechanical steps over and over** become a small script.
 
-A pattern is ready after 3 sightings, or 2 when they are review comments or come from different repositories. A "no" is remembered. `wiki patterns` shows what every wiki is tracking.
+A pattern is ready after 3 sightings, or 2 when they are review comments or come from different repositories. A "no" is remembered. `wiki patterns` shows what every wiki is tracking. A mistake an agent catches itself, with no one correcting it, counts like a correction.
 
 Paste merge request comments into the session that wrote the code. They are the best evidence there is.
 
@@ -195,7 +195,7 @@ Your preferences live in `~/wikis/delegation.md`:
 - **Who does what:** kinds of work, each with a model and effort. Rows marked `stay` never leave the session. Edit it to match the models you use.
 - **Auto:** kinds of work you've approved without asking. After you say yes to the same kind three times, the session offers to add it.
 
-`wiki setup delegation` sets the mode. `wiki delegation` shows how often each kind of handoff came back fine, needed fixing, or was redone.
+`wiki setup delegation` sets the mode. `wiki delegation` shows how often each kind of handoff came back fine, needed fixing, or was redone. With the plugin, the start of each subagent or sub-session is logged for you, and shows under OPEN until the agent records how it went.
 
 ## Work journal and standups
 
@@ -275,7 +275,7 @@ The copies are the repository's docs as written, which can be out of date. The a
 
 The weekly report (`wiki report`) counts how many sessions opened each wiki's pages, from the transcripts on this machine. It also lists searches that found nothing, which `wiki find` logs itself. Those words are the pages you're missing. Compiling a wiki counts as opening it too, so a busy wiki's count runs a little high.
 
-Sessions are also asked to log whether the pages helped: a hit or a miss. `wiki stats` shows those, but most sessions skip it, so read the rates as rough. Everything stays on your machine.
+With the plugin, a session that opens a page of a wiki logs a lookup for it, once per wiki per session, so nobody has to remember to. `wiki stats` counts those and the searches. Only reads are logged, so every lookup counts as a hit: what a wiki gives you is how many sessions use it and which searches come back empty. Older handbooks asked agents to log misses by hand, and `wiki stats` still counts those. Everything stays on your machine.
 
 ```
 wiki stats           # the last 30 days
@@ -358,6 +358,7 @@ Run `wiki` with no arguments for the full list. The ones you're likely to use:
 | `wiki deps [--all] [--write]` | Which repository owns which package, and which of your repositories use each other's, from `go.mod`, `package.json` and `pyproject.toml`. `--write` saves it to the shared wiki's `data/dependencies.csv`. |
 | `wiki stale [days]` | Pages not verified in that many days, 90 by default, or 50 commits behind their repository. |
 | `wiki patterns` | Recurring feedback, and which patterns are ready. |
+| `wiki open` | What agents recorded as waiting on someone or due on a date, in every wiki, past-due first. `wiki status` counts it. |
 | `wiki standup` | Raw material for a standup. |
 | `wiki upgrade --all` | Bring every wiki's handbook up to the template's. |
 | `wiki new <name>` | Create a wiki. Usually the agent does this. |
@@ -379,4 +380,4 @@ Run `wiki` with no arguments for the full list. The ones you're likely to use:
 | `wiki tips` | Features your own wikis suggest you'd get something out of. |
 | `wiki completion zsh\|bash` | Tab completion for your shell. `wiki setup` turns it on. |
 | `wiki report` | The weekly report: tokens, what the wikis gained, lookups, and what needs you. |
-| `wiki stats [range]` | What sessions logged about whether a wiki helped, and searches that found nothing. |
+| `wiki stats [range]` | Lookups sessions logged by opening a wiki's pages, and searches that found nothing. |

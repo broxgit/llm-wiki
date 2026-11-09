@@ -4,6 +4,12 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-11-09: `wiki open` lists what's waiting
+
+- `wiki open` lists what agents recorded as waiting on someone or due on a date, across your wikis, with the ones past their date first.
+- `wiki status` adds a line to its To do list when anything is open.
+- With the plugin, opening a wiki page logs a lookup by itself, and a subagent's start shows in `wiki delegation` as OPEN until its outcome is recorded.
+
 ## 2026-11-09: `wiki report` splits lookups from upkeep
 
 - The report's token tables now say how much of new input went to lookups (reads, searches, session starts) and how much to upkeep (captures, compiles, syncs).
