@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+
+	"github.com/broxgit/llm-wiki/internal/feedback"
 	"strings"
 	"testing"
 	"time"
@@ -656,6 +658,34 @@ func TestWrappedTools(t *testing.T) {
 	s.WikiSh = root + "/missing.sh"
 	if got, isErr := call(t, s, "wiki_status", m{}); !isErr || !strings.HasPrefix(got, "couldn't run wiki.sh: ") {
 		t.Errorf("no wiki.sh to run: %q, error %v", got, isErr)
+	}
+}
+
+// With what wiki.sh passes about notes, the server keeps a feedback note itself.
+func TestFeedbackKeptByTheServer(t *testing.T) {
+	s, root := fixture(t)
+	write(t, root+"/fb/mode", "mode=notes\n")
+	s.Feedback = feedback.Options{Dir: root + "/fb/notes", ModeFile: root + "/fb/mode", Kinds: "bug idea", Version: "abc1234", Handbook: "30", System: "a system"}
+	os.Remove(root + "/calls.log")
+	got, isErr := call(t, s, "wiki_feedback", m{"kind": "bug", "summary": "It broke", "details": "What I ran."})
+	if isErr || !regexp.MustCompile(`\Afeedback: saved [0-9]{8}-[0-9]{6}-it-broke\z`).MatchString(got) {
+		t.Errorf("wiki_feedback = %q, error %v", got, isErr)
+	}
+	if _, err := os.Stat(root + "/calls.log"); err == nil {
+		t.Errorf("it ran wiki.sh:\n%s", read(t, root+"/calls.log"))
+	}
+	notes, _ := filepath.Glob(root + "/fb/notes/*-it-broke.md")
+	if len(notes) != 1 || !strings.Contains(read(t, notes[0]), "\nAgent: unknown, through MCP\n") || !strings.HasSuffix(read(t, notes[0]), "\nSeen: 1\n\nWhat I ran.\n") {
+		t.Errorf("it left %v", notes)
+	}
+	// A refusal is the tool's error, in wiki.sh's words.
+	if got, isErr := call(t, s, "wiki_feedback", m{"kind": "oops", "summary": "x", "details": "d"}); !isErr || got != "error: feedback add: the kind is one of: bug idea" {
+		t.Errorf("a bad kind: %q, error %v", got, isErr)
+	}
+	// And where the port isn't sure, wiki.sh keeps the note.
+	call(t, s, "wiki_feedback", m{"kind": "bug", "summary": "nul", "details": "a\x00b"})
+	if calls := read(t, root+"/calls.log"); !strings.Contains(calls, "args: [feedback] [add] [bug] [nul] [--agent] [unknown, through MCP]\n") {
+		t.Errorf("a NUL in the details ran:\n%s", calls)
 	}
 }
 

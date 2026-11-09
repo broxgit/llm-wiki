@@ -11,7 +11,7 @@
 // It answers from its own packages what they can answer: a search from internal/find,
 // and which collection covers a repository from internal/routing. Where those aren't
 // sure it runs wiki.sh, as the Python always does. The tools that wrap commands not
-// ported yet (start, status, sync, feedback) run wiki.sh.
+// ported yet (start, status, sync) run wiki.sh.
 package mcp
 
 import (
@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/broxgit/llm-wiki/internal/feedback"
 	"io"
 	"os"
 	"runtime/debug"
@@ -56,13 +57,16 @@ type Collection struct {
 
 // Server is what wiki.sh worked out before it started the server.
 type Server struct {
-	WikiSh      string        // the script the wrapped tools run
-	Collections []Collection  // the default first
-	Home        string        // $HOME, written as ~ in what is printed
-	Tips        string        // the file wiki.sh records used commands in, or ""
-	Env         []string      // what wiki.sh runs with, before WIKIS_DIR and LLM_WIKI_CMD
-	Timeout     time.Duration // for one run of wiki.sh
-	Log         io.Writer     // for what went wrong inside the server; never stdout
+	WikiSh      string       // the script the wrapped tools run
+	Collections []Collection // the default first
+	Home        string       // $HOME, written as ~ in what is printed
+	Tips        string       // the file wiki.sh records used commands in, or ""
+	// Feedback is what wiki.sh worked out for a feedback note: where notes go and
+	// what they say about this machine. With no Dir, wiki.sh keeps the note.
+	Feedback feedback.Options
+	Env      []string      // what wiki.sh runs with, before WIKIS_DIR and LLM_WIKI_CMD
+	Timeout  time.Duration // for one run of wiki.sh
+	Log      io.Writer     // for what went wrong inside the server; never stdout
 
 	lookups map[[2]string]time.Time
 }
@@ -71,9 +75,13 @@ type Server struct {
 // LLM_WIKI_SH and LLM_WIKI_COLLECTIONS that mcp/server.py reads, and LLM_WIKI_TIPS.
 func FromEnv() *Server {
 	s := &Server{
-		WikiSh:  os.Getenv("LLM_WIKI_SH"),
-		Home:    os.Getenv("HOME"),
-		Tips:    os.Getenv("LLM_WIKI_TIPS"),
+		WikiSh: os.Getenv("LLM_WIKI_SH"),
+		Home:   os.Getenv("HOME"),
+		Tips:   os.Getenv("LLM_WIKI_TIPS"),
+		Feedback: feedback.Options{
+			Dir: os.Getenv("LLM_WIKI_FEEDBACK_DIR"), ModeFile: os.Getenv("LLM_WIKI_FEEDBACK_FILE"), Kinds: os.Getenv("LLM_WIKI_FEEDBACK_KINDS"),
+			Version: os.Getenv("LLM_WIKI_FEEDBACK_VERSION"), Handbook: os.Getenv("LLM_WIKI_FEEDBACK_HANDBOOK"), System: os.Getenv("LLM_WIKI_FEEDBACK_SYSTEM"),
+		},
 		Env:     os.Environ(),
 		Timeout: DefaultTimeout,
 		Log:     os.Stderr,
