@@ -237,7 +237,7 @@ need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 # Raise GO_PROTOCOL, with the constant in cmd/llm-wiki/main.go, whenever a ported
 # command's arguments or output change. scripts/helper.sh builds releases and writes
 # helper.lock.
-GO_PROTOCOL=10
+GO_PROTOCOL=11
 HELPER_LOCK="$REPO/helper.lock"
 HELPER_DIR="${LLM_WIKI_HELPER_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/llm-wiki/helper}"
 

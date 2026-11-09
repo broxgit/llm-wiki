@@ -2394,6 +2394,32 @@ $(date -u +%Y-%m-%d),jobapp,search-found,canary" frun "$T/bin/llm-wiki" "$RC" ca
   else
     skipped "find in a UTF-8 locale (none is installed)"
   fi
+  # Wikis whose names differ by a suffix after a dash. The shell's glob sorts them with
+  # the slash each match ends in, so covers-nl/ comes before covers/ and llm-wiki/ before
+  # llm/, and the first with a result is the one the search is logged against.
+  for w in covers covers-nl llm llm-wiki; do
+    mkdir -p "$FD/$w"
+    printf '# Handbook\n' > "$FD/$w/AGENTS.md"
+    printf '# Index\n- the dashword of %s\n' "$w" > "$FD/$w/index.md"
+  done
+  printf -- '- the llmword of llm\n' >> "$FD/llm/index.md"; printf -- '- the llmword of llm-wiki\n' >> "$FD/llm-wiki/index.md"
+  fsame "find, helper and Bash: wikis named covers, covers-nl, llm and llm-wiki" helper dashword
+  expect "and the helper orders them as the shell's glob of */ does, and logs the first" "covers-nl:
+  - the dashword of covers-nl
+covers:
+  - the dashword of covers
+llm-wiki:
+  - the dashword of llm-wiki
+llm:
+  - the dashword of llm
+exit 0
+stats:
+date,wiki,result,word
+$(date -u +%Y-%m-%d),covers-nl,search-found,dashword" frun "$T/bin/llm-wiki" "$RC" dashword
+  fsame "find, helper and Bash: a word only in llm and llm-wiki" helper llmword
+  expect "and the helper logs llm-wiki, which comes first" "$(date -u +%Y-%m-%d),llm-wiki,search-found,llmword" frun "$T/bin/llm-wiki" "$RC" llmword
+  expect "and the Bash does the same" "$(date -u +%Y-%m-%d),llm-wiki,search-found,llmword" frun "" "$RC" llmword
+  rm -rf "${FD:?}/covers" "${FD:?}/covers-nl" "${FD:?}/llm" "${FD:?}/llm-wiki"
   # The helper reads no page after the fifth it shows, and the Bash takes no line from one.
   printf 'canary\0\n' > "$FD/alpha/wiki/zz-nul.md"
   fsame "find, helper and Bash: a page with a NUL byte past the five shown" helper canary
