@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Handbook version 29.
+Handbook version 30.
 
 This folder is a knowledge base maintained by an LLM agent. Any agent working here follows this file. It needs no vendor features. Plain markdown, plain files.
 
@@ -135,7 +135,7 @@ Every wiki in this wiki's parent folder is a peer. Each covers one project, is n
 
 ## Sync
 
-When this wiki is a git repo, or sits in a collection (a git repo whose top level holds `WIKIS.md`), commit and push your own changes: run `wiki.sh sync <wiki> -m "<wiki>: <what>"` after each compile, and after captures that no compile follows. It commits only that wiki's folder, pulls with a merge, and pushes. Never rebase, stash, or skip the secret check with `--no-verify`. Read `rules/sync.md` to do it by hand, for a merge conflict, or for a commit refused because it holds a secret. In any other repo, leave commits to the user.
+When this wiki is a git repo, or sits in a collection (a git repo whose top level holds `WIKIS.md`), commit and push your own changes: run `wiki.sh sync <wiki> -m "<wiki>: <what>"` after each compile, and after captures that no compile follows. It commits only that wiki's folder and pushes. It pulls, with a merge, only when the remote has commits you don't or you had nothing to push, so pull yourself when you need other people's changes now. Never rebase, stash, or skip the secret check with `--no-verify`. Read `rules/sync.md` to do it by hand, for a merge conflict, or for a commit refused because it holds a secret. In any other repo, leave commits to the user.
 
 ## Token rules
 

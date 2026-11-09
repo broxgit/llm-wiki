@@ -4,6 +4,15 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v30 (2026-11-09)
+
+The handbook describes the faster `wiki sync`. Nothing else changed.
+
+- `wiki.sh sync` commits and pushes, and pulls only when the remote refuses the push or there was nothing to push. It used to pull every time. The handbook's Sync section and `rules/sync.md` say so.
+- A sync that only pulled prints `up to date:`. `synced:` means something was pushed.
+- An agent that needs other people's changes in the middle of a session pulls for them. Session start still pulls.
+- Do: run `wiki upgrade --all`.
+
 ## v29 (2026-11-09)
 
 Sessions record what they used to lose: a page checked and still true, something waiting on someone, a mistake caught alone, a change git doesn't see. A session that never compiled forgot the first, and the others lived only in a conversation.
