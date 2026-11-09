@@ -506,7 +506,7 @@ big="$(awk 'BEGIN { for (i = 0; i < 4000; i++) printf "x" }')"
 } > "$HOME/.claude/projects/p1/s1.jsonl"
 out="$("$W" report 2>&1)"
 case "$out" in *"| demo | 1 | 2k | 50k | 300 | 1k |"*) ok "tokens: a covered repository's session counts toward its wiki, each reply once" ;; *) bad "tokens: a covered repository's session counts toward its wiki, each reply once" "$out" ;; esac
-case "$out" in *"Wiki reads are about 5"[0-9].[0-9]"% of new input"*) ok "tokens: wiki reads are estimated against new input" ;; *) bad "tokens: wiki reads are estimated against new input" "$out" ;; esac
+case "$out" in *"Wiki use is about 5"[0-9].[0-9]"% of new input: lookups 5"[0-9].[0-9]"%, upkeep 0.0%. Lookups are reads, searches and session starts; upkeep is captures, compiles, lints, syncs and status. New input is what entered a session's context for the first time; cache reads are that context read again on later turns."*) ok "tokens: wiki use is estimated against new input, split into lookups and upkeep" ;; *) bad "tokens: wiki use is estimated against new input, split into lookups and upkeep" "$out" ;; esac
 # The compiled helper stands in for the Python above, so it must print the same report.
 # A second transcript holds the cases the two could differ on.
 {
@@ -536,6 +536,42 @@ if command -v go >/dev/null 2>&1; then
   lacks "a helper built for another protocol is passed over" "STALE TABLE" env LLM_WIKI_GO="$T/bin/stale-helper" "$W" report
   expect "and the Python answers" "| demo | 2 | 3k | 3.0M | 2k | 3k |" env LLM_WIKI_GO="$T/bin/stale-helper" "$W" report
   expect "a helper that fails falls back to the Python" "| demo | 2 | 3k | 3.0M | 2k | 3k |" env LLM_WIKI_GO="$T/bin/broken-helper" "$W" report
+  # What a tool call and its result count as, one at a time, in a transcript of their own.
+  # The result is 4000 characters against 2000 tokens of new input, so the call's share is
+  # about half, in the column for its kind.
+  mv "$HOME/.claude/projects" "$HOME/.claude/projects.keep"; mkdir -p "$HOME/.claude/projects/pc"
+  cclass() { # <what> <lookup|upkeep|none> <tool name> <input as JSON>
+    local want="$2" shape pyc goc
+    {
+      printf '{"type":"assistant","timestamp":"%s","cwd":"%s","sessionId":"sc","message":{"id":"mc","usage":{"input_tokens":2000,"output_tokens":10},"content":[{"type":"tool_use","id":"tc","name":"%s","input":%s}]}}\n' "$now" "$T/projects/web" "$3" "$4"
+      printf '{"type":"user","timestamp":"%s","cwd":"%s","sessionId":"sc","message":{"content":[{"type":"tool_result","tool_use_id":"tc","content":"%s"}]}}\n' "$now" "$T/projects/web" "$big"
+    } > "$HOME/.claude/projects/pc/sc.jsonl"
+    pyc="$(LLM_WIKI_NO_GO=1 "$W" report 2>&1 | grep '^Wiki use is about' | head -n 1)"
+    goc="$(LLM_WIKI_GO="$T/bin/llm-wiki" "$W" report 2>&1 | grep '^Wiki use is about' | head -n 1)"
+    case "$want" in
+      lookup) shape='Wiki use is about 5[0-9].[0-9]% of new input: lookups 5[0-9].[0-9]%, upkeep 0.0%. Lookups are*' ;;
+      upkeep) shape='Wiki use is about 5[0-9].[0-9]% of new input: lookups 0.0%, upkeep 5[0-9].[0-9]%. Lookups are*' ;;
+      *) shape='Wiki use is about 0.0% of new input: lookups 0.0%, upkeep 0.0%. Lookups are*' ;;
+    esac
+    # shellcheck disable=SC2254
+    case "$pyc" in $shape) ok "tokens: $1 counts as $want (Python)" ;; *) bad "tokens: $1 counts as $want (Python)" "$pyc" ;; esac
+    [ "$pyc" = "$goc" ] && ok "and the Go helper says the same" || bad "tokens: $1, the Go helper says the same" "$pyc"$'\n'"$goc"
+  }
+  cclass "an MCP wiki_search call" lookup mcp__llm-wiki__wiki_search '{"query":"deploy"}'
+  cclass "an MCP wiki_list call" lookup mcp__llm-wiki__wiki_list '{}'
+  cclass "an MCP wiki_capture call" upkeep mcp__llm-wiki__wiki_capture '{"wiki":"demo","text":"a decision"}'
+  cclass "an MCP wiki_status call" upkeep mcp__llm-wiki__wiki_status '{}'
+  cclass "an Edit inside the collection" upkeep Edit '{"file_path":"'"$WIKIS_DIR"'/demo/wiki/a.md","old_string":"x","new_string":"y"}'
+  cclass "a MultiEdit inside the collection" upkeep MultiEdit '{"file_path":"'"$WIKIS_DIR"'/demo/wiki/a.md","edits":[]}'
+  cclass "a Read inside the collection" lookup Read '{"file_path":"'"$WIKIS_DIR"'/demo/index.md"}'
+  cclass "a Read outside it" none Read '{"file_path":"'"$T"'/projects/web/x.ts"}'
+  cclass "a wiki.sh sync command" upkeep Bash '{"command":"'"$W"' sync demo"}'
+  cclass "a wiki.sh find command" lookup Bash '{"command":"'"$W"' find deploy"}'
+  cclass "a command with find and sync" upkeep Bash '{"command":"'"$W"' find deploy && '"$W"' sync demo"}'
+  cclass "a plain grep of the collection" lookup Bash '{"command":"grep -r deploy '"$WIKIS_DIR"'/demo"}'
+  cclass "a wiki command at the start of the line" upkeep Bash '{"command":"wiki capture x"}'
+  cclass "a command that has nothing to do with the wikis" none Bash '{"command":"ls"}'
+  rm -rf "$HOME/.claude/projects"; mv "$HOME/.claude/projects.keep" "$HOME/.claude/projects"
   # The Gemini table, on conversations with its edge cases. Each folder is one conversation.
   gconv() { GF="$HOME/.gemini/antigravity/brain/$1/.system_generated/logs/transcript_full.jsonl"; mkdir -p "${GF%/*}"; : > "$GF"; }
   gday="$(date -u +%Y-%m-%dT12:00:00Z)"
@@ -579,6 +615,7 @@ if command -v go >/dev/null 2>&1; then
   gemini="$(printf '%s\n' "$py" | sed -n '/^## Tokens (Gemini/,/^## What the wikis/p')"
   # What the Python printed for this fixture. global and other folders tie: global's conversation is met first.
   case "$gemini" in *"| demo | 2 | 2k | 20k | 345 | 1k |"$'\n'"| global | 2 | 2k | 100 | 0 | 0 |"$'\n'"| other folders | 1 | 2k | 100 | 0 | 400 |"$'\n'"| all | 5 | 6k | 20k | 345 | 1k |"*) ok "the Python counts the Gemini fixture's cases" ;; *) bad "the Python counts the Gemini fixture's cases" "$gemini" ;; esac
+  case "$gemini" in *"Wiki use is about "[1-9]*"% of new input: lookups "[1-9]*"%, upkeep "[1-9]*"%. Lookups are reads, searches and session starts; upkeep is captures, compiles, lints, syncs and status."$'\n'"Gemini counts tokens its own way, so these don't add to Claude's."*) ok "the Gemini fixture has both lookups and upkeep, and its own sentence" ;; *) bad "the Gemini fixture has both lookups and upkeep, and its own sentence" "$gemini" ;; esac
   [ "$py" = "$go" ] && ok "the Go helper prints the same Gemini table as the Python" || bad "the Go helper prints the same Gemini table as the Python" "$(diff <(printf '%s\n' "$py") <(printf '%s\n' "$go"))"
   for gs in "--since 2019-12-25" "--since 7d"; do
     # shellcheck disable=SC2086
@@ -594,6 +631,36 @@ if command -v go >/dev/null 2>&1; then
   printf '#!/bin/sh\n[ "$1" = protocol ] && { sed -n "s/^GO_PROTOCOL=//p" "%s"; exit 0; }\n[ "$1" = report-tokens-gemini ] && exit 3\nexec "%s" "$@"\n' "$W" "$T/bin/llm-wiki" > "$T/bin/gemini-broken-helper"
   chmod +x "$T/bin/gemini-broken-helper"
   [ "$(LLM_WIKI_GO="$T/bin/gemini-broken-helper" "$W" report 2>&1)" = "$py" ] && ok "and only the failed table falls back" || bad "and only the failed table falls back"
+  # The same, for Gemini: a call in one step, and the step after it, 4000 characters,
+  # against 2000 tokens of new input, so half.
+  mv "$HOME/.gemini" "$HOME/.gemini.keep"; gconv conv-x
+  gclass() { # <what> <lookup|upkeep|none> <tool name> <args as JSON>
+    local want="$2" shape pyc goc
+    {
+      printf '{"created_at":"%s","input_tokens":2000,"tool_calls":[{"name":"%s","args":%s}]}\n' "$gday" "$3" "$4"
+      printf '{"created_at":"%s","content":"%s"}\n' "$gday" "$big"
+    } > "$GF"
+    pyc="$(LLM_WIKI_NO_GO=1 "$W" report 2>&1 | sed -n '/^## Tokens (Gemini/,/^## What the wikis/p' | grep '^Wiki use is about' | head -n 1)"
+    goc="$(LLM_WIKI_GO="$T/bin/llm-wiki" "$W" report 2>&1 | sed -n '/^## Tokens (Gemini/,/^## What the wikis/p' | grep '^Wiki use is about' | head -n 1)"
+    case "$want" in
+      lookup) shape='Wiki use is about 50.0% of new input: lookups 50.0%, upkeep 0.0%. Lookups are*' ;;
+      upkeep) shape='Wiki use is about 50.0% of new input: lookups 0.0%, upkeep 50.0%. Lookups are*' ;;
+      *) shape='Wiki use is about 0.0% of new input: lookups 0.0%, upkeep 0.0%. Lookups are*' ;;
+    esac
+    # shellcheck disable=SC2254
+    case "$pyc" in $shape) ok "tokens: Gemini's $1 counts as $want (Python)" ;; *) bad "tokens: Gemini's $1 counts as $want (Python)" "$pyc" ;; esac
+    [ "$pyc" = "$goc" ] && ok "and the Go helper says the same" || bad "tokens: Gemini's $1, the Go helper says the same" "$pyc"$'\n'"$goc"
+  }
+  gclass "write_file in the collection" upkeep write_file '{"Path":"'"$WIKIS_DIR"'/demo/wiki/a.md"}'
+  gclass "replace_file_content in the collection" upkeep replace_file_content '{"Path":"'"$WIKIS_DIR"'/demo/wiki/a.md"}'
+  gclass "a read in the collection" lookup read_file '{"Path":"'"$WIKIS_DIR"'/demo/wiki/a.md"}'
+  gclass "a wiki.sh sync command" upkeep run_command '{"CommandLine":"bash wiki.sh sync demo"}'
+  gclass "a wiki.sh find command" lookup run_command '{"CommandLine":"bash wiki.sh find deploy"}'
+  gclass "a command with find and sync" upkeep run_command '{"CommandLine":"bash wiki.sh find x; bash wiki.sh sync"}'
+  gclass "a plain cat of the collection" lookup run_command '{"CommandLine":"cat '"$WIKIS_DIR"'/demo/index.md"}'
+  gclass "an MCP wiki_capture call" upkeep mcp_llm-wiki_wiki_capture '{}'
+  gclass "a read outside the collection" none read_file '{"Path":"'"$T"'/projects/web/x.ts"}'
+  rm -rf "$HOME/.gemini"; mv "$HOME/.gemini.keep" "$HOME/.gemini"
   # Steps the Python must judge: the helper refuses them, and the report is what the Python makes of them.
   gconv conv-odd
   for godd in '[1]' 'null' '{"created_at":5}' '{"created_at":"yesterday"}' '{"created_at":"2026-11-05T12:00:00"}' '{"input_tokens":1.5}' '{"input_tokens":"3"}' '{"input_tokens":NaN}' '{"content":["a"]}' '{"tool_calls":{"a":1}}' '{"tool_calls":[{"args":{"Path":3}}]}' '{"tool_calls":[{"args":{"Path":"~nobody/x"}}]}' '{"created_at":"'"$gday"'","content":"\xff"}'; do
@@ -708,7 +775,7 @@ now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   printf '{"type":"PLANNER_RESPONSE","created_at":"%s","tool_calls":[{"name":"read_file","args":{"Path":"%s/projects/web/x.ts"}}],"input_tokens":500,"output_tokens":100}\n' "$now" "$T"
 } > "$G/transcript_full.jsonl"
 out="$("$W" report 2>&1)"
-case "$out" in *"## Tokens (Gemini in Antigravity)"*"| demo | 1 | 2k | 20k | 400 |"*"don't add to Claude's"*) ok "report adds a separate Gemini token table, by project" ;; *) bad "report adds a separate Gemini token table, by project" "$out" ;; esac
+case "$out" in *"## Tokens (Gemini in Antigravity)"*"| demo | 1 | 2k | 20k | 400 |"*"syncs and status."$'\n'"Gemini counts tokens its own way, so these don't add to Claude's."*) ok "report adds a separate Gemini token table, by project" ;; *) bad "report adds a separate Gemini token table, by project" "$out" ;; esac
 "$W" journal set exclude demo >/dev/null
 out="$("$W" report 2>&1)"
 case "$out" in *"| demo | 1 |"*) bad "journal exclude leaves a project out of both token tables" "$out" ;; *) ok "journal exclude leaves a project out of both token tables" ;; esac

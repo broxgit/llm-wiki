@@ -237,7 +237,7 @@ need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 # Raise GO_PROTOCOL, with the constant in cmd/llm-wiki/main.go, whenever a ported
 # command's arguments or output change. scripts/helper.sh builds releases and writes
 # helper.lock.
-GO_PROTOCOL=11
+GO_PROTOCOL=12
 HELPER_LOCK="$REPO/helper.lock"
 HELPER_DIR="${LLM_WIKI_HELPER_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/llm-wiki/helper}"
 
@@ -5634,8 +5634,9 @@ setup_completion() {
 # ---- report -----------------------------------------------------------------
 # A weekly look at whether the wikis earn their keep, and what waits on a person.
 # Tokens come from Claude Code's transcripts, which record each reply's usage.
-# "Wiki reads" is an estimate: the size of what sessions read from the wikis, at
-# about four characters a token. The agent writes the material up.
+# "Wiki reads" is an estimate: the size of what sessions sent to the wikis and got back,
+# at about four characters a token, split into lookups and upkeep. The agent writes the
+# material up.
 
 # report_tokens_gemini <start> <end>: the same table for Gemini in Antigravity, from its
 # transcripts' per-step counts. Kept apart from Claude's: the models count tokens
@@ -5692,10 +5693,32 @@ def project(d):
 def day_of(ts):
     t = datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone()
     return (t - timedelta(hours=dh, minutes=dm)).date()
-def touches_wiki(a):
+# What a call that touches the wikis is: a lookup, or upkeep. The same rule is in Claude's
+# Python below and in the Go, internal/tokens/class.go: change them together.
+LOOKUP_TOOLS = ("wiki_read", "wiki_search", "wiki_start", "wiki_list")
+UPKEEP_TOOLS = ("wiki_capture", "wiki_status", "wiki_feedback")
+EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit", "write_file", "write_to_file", "replace_file_content", "multi_replace_file_content")
+LOOKUP_SUBS = ("find", "start", "which", "news", "tips", "patterns", "stats", "report", "standup", "help")
+SUB_AFTER = re.compile(r'''wiki\.sh\s+["']?([^\s;&|<>()"'`]+)''')
+SUB_FIRST = re.compile(r'''\s*wiki\s+["']?([^\s;&|<>()"'`]+)''')
+def wiki_kind(name, by_path, by_cmd, cmd):
+    if name.endswith(LOOKUP_TOOLS): return "lookup"
+    if name.endswith(UPKEEP_TOOLS): return "upkeep"
+    if by_path: return "upkeep" if name in EDIT_TOOLS else "lookup"
+    if by_cmd:
+        subs = SUB_AFTER.findall(cmd)
+        m = SUB_FIRST.match(cmd)
+        if m: subs.append(m.group(1))
+        return "upkeep" if any(x not in LOOKUP_SUBS for x in subs) else "lookup"
+    return None
+def touches_wiki(c):
+    a = c.get("args") or {}
+    name = c.get("name") if isinstance(c.get("name"), str) else ""
     p = a.get("Path") or ""
-    c = a.get("CommandLine") or ""
-    return (p and os.path.realpath(os.path.expanduser(p)).startswith(wikis_real + os.sep)) or wikis in c or "~/wikis" in c or "wiki.sh" in c
+    cmd = a.get("CommandLine") or ""
+    by_path = bool(p and os.path.realpath(os.path.expanduser(p)).startswith(wikis_real + os.sep))
+    by_cmd = wikis in cmd or "~/wikis" in cmd or "wiki.sh" in cmd
+    return wiki_kind(name, by_path, by_cmd, cmd)
 
 # Which wikis' pages a tool call opened, for the report's Wiki use section.
 _tilde = wikis.replace(os.path.expanduser("~"), "~", 1)
@@ -5725,7 +5748,7 @@ for f in sorted(Path(brain).glob("*/.system_generated/logs/transcript_full.jsonl
         if not e.get("created_at"): continue
         d = day_of(e["created_at"])
         if d < start or d > end: continue
-        row = rows.setdefault(p, {"sessions": set(), "new": 0, "cached": 0, "out": 0, "wiki": 0})
+        row = rows.setdefault(p, {"sessions": set(), "new": 0, "cached": 0, "out": 0, "lookup": 0, "upkeep": 0})
         row["sessions"].add(conv)
         row["new"] += e.get("input_tokens", 0) or 0
         row["cached"] += e.get("cache_read_tokens", 0) or 0
@@ -5735,8 +5758,9 @@ for f in sorted(Path(brain).glob("*/.system_generated/logs/transcript_full.jsonl
             if c.get("name") not in ("write_file", "edit_file"):
                 for w in PAGE.findall("%s %s" % (a.get("Path") or "", a.get("CommandLine") or "")):
                     usage.add((w, conv))
-            if touches_wiki(a) and i + 1 < len(steps):
-                row["wiki"] += len(str(steps[i + 1].get("content") or "")) // 4
+            kind = touches_wiki(c)
+            if kind and i + 1 < len(steps):
+                row[kind] += len(str(steps[i + 1].get("content") or "")) // 4
 
 if os.environ.get("REPORT_USAGE_FILE"):
     with open(os.environ["REPORT_USAGE_FILE"], "a") as uf:
@@ -5750,12 +5774,14 @@ if not rows:
 def k(n): return f"{n / 1e6:.1f}M" if n >= 1e6 else (f"{n / 1e3:.0f}k" if n >= 1e3 else str(n))
 print("| Project | Conversations | New input | Cache reads | Output | Wiki reads (est.) |")
 print("|---|---|---|---|---|---|")
-tot = {"s": 0, "new": 0, "cached": 0, "out": 0, "wiki": 0}
+tot = {"s": 0, "new": 0, "cached": 0, "out": 0, "lookup": 0, "upkeep": 0}
 for p, r in sorted(rows.items(), key=lambda x: -(x[1]["new"] + x[1]["cached"])):
-    print(f"| {p} | {len(r['sessions'])} | {k(r['new'])} | {k(r['cached'])} | {k(r['out'])} | {k(r['wiki'])} |")
-    tot["s"] += len(r["sessions"]); tot["new"] += r["new"]; tot["cached"] += r["cached"]; tot["out"] += r["out"]; tot["wiki"] += r["wiki"]
-print(f"| all | {tot['s']} | {k(tot['new'])} | {k(tot['cached'])} | {k(tot['out'])} | {k(tot['wiki'])} |")
-print("\nGemini counts tokens its own way, so these don't add to Claude's.")
+    print(f"| {p} | {len(r['sessions'])} | {k(r['new'])} | {k(r['cached'])} | {k(r['out'])} | {k(r['lookup'] + r['upkeep'])} |")
+    tot["s"] += len(r["sessions"]); tot["new"] += r["new"]; tot["cached"] += r["cached"]; tot["out"] += r["out"]; tot["lookup"] += r["lookup"]; tot["upkeep"] += r["upkeep"]
+print(f"| all | {tot['s']} | {k(tot['new'])} | {k(tot['cached'])} | {k(tot['out'])} | {k(tot['lookup'] + tot['upkeep'])} |")
+def pct(n): return 100 * n / tot["new"] if tot["new"] else 0
+print(f"\nWiki use is about {pct(tot['lookup'] + tot['upkeep']):.1f}% of new input: lookups {pct(tot['lookup']):.1f}%, upkeep {pct(tot['upkeep']):.1f}%. Lookups are reads, searches and session starts; upkeep is captures, compiles, lints, syncs and status.")
+print("Gemini counts tokens its own way, so these don't add to Claude's.")
 PY
 }
 
@@ -5816,12 +5842,31 @@ def project(cwd):
 
 def is_wiki_path(p):
     return isinstance(p, str) and (os.path.realpath(os.path.expanduser(p)).startswith(wikis_real + os.sep))
+# What a call that touches the wikis is: a lookup, or upkeep. The same rule is in Gemini's
+# Python above and in the Go, internal/tokens/class.go: change them together.
+LOOKUP_TOOLS = ("wiki_read", "wiki_search", "wiki_start", "wiki_list")
+UPKEEP_TOOLS = ("wiki_capture", "wiki_status", "wiki_feedback")
+EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit", "write_file", "write_to_file", "replace_file_content", "multi_replace_file_content")
+LOOKUP_SUBS = ("find", "start", "which", "news", "tips", "patterns", "stats", "report", "standup", "help")
+SUB_AFTER = re.compile(r'''wiki\.sh\s+["']?([^\s;&|<>()"'`]+)''')
+SUB_FIRST = re.compile(r'''\s*wiki\s+["']?([^\s;&|<>()"'`]+)''')
+def wiki_kind(name, by_path, by_cmd, cmd):
+    if name.endswith(LOOKUP_TOOLS): return "lookup"
+    if name.endswith(UPKEEP_TOOLS): return "upkeep"
+    if by_path: return "upkeep" if name in EDIT_TOOLS else "lookup"
+    if by_cmd:
+        subs = SUB_AFTER.findall(cmd)
+        m = SUB_FIRST.match(cmd)
+        if m: subs.append(m.group(1))
+        return "upkeep" if any(x not in LOOKUP_SUBS for x in subs) else "lookup"
+    return None
 def touches_wiki(use):
     inp = use.get("input") or {}
-    for k in ("file_path", "notebook_path", "path"):
-        if is_wiki_path(inp.get(k)): return True
+    name = use.get("name") if isinstance(use.get("name"), str) else ""
+    by_path = any(is_wiki_path(inp.get(k)) for k in ("file_path", "notebook_path", "path"))
     cmd = str(inp.get("command", ""))
-    return wikis in cmd or wikis_real in cmd or "~/wikis" in cmd or "wiki.sh" in cmd or re.match(r"\s*wiki\s", cmd) is not None
+    by_cmd = wikis in cmd or wikis_real in cmd or "~/wikis" in cmd or "wiki.sh" in cmd or re.match(r"\s*wiki\s", cmd) is not None
+    return wiki_kind(name, by_path, by_cmd, cmd)
 
 def day_of(ts):
     t = datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone()
@@ -5863,7 +5908,7 @@ for f in sorted(Path(sess_dir).rglob("*.jsonl")):  # in a fixed order: a reply i
         d = day_of(r["timestamp"])
         if d < start or d > end: continue
         p = project(r.get("cwd")) or main or "other folders"
-        row = rows.setdefault(p, {"sessions": set(), "new": 0, "cached": 0, "out": 0, "wiki": 0})
+        row = rows.setdefault(p, {"sessions": set(), "new": 0, "cached": 0, "out": 0, "lookup": 0, "upkeep": 0})
         row["sessions"].add(r.get("sessionId", f.stem))
         msg = r.get("message") or {}
         u = msg.get("usage")
@@ -5877,13 +5922,15 @@ for f in sorted(Path(sess_dir).rglob("*.jsonl")):  # in a fixed order: a reply i
             if not isinstance(c, dict): continue
             if c.get("type") == "tool_use":
                 note_pages(c, r.get("sessionId", f.stem))
-            if c.get("type") == "tool_use" and touches_wiki(c):
-                wiki_uses[c.get("id")] = p
-                row["wiki"] += len(json.dumps(c.get("input") or {})) // 4
+            kind = touches_wiki(c) if c.get("type") == "tool_use" else None
+            if kind:
+                wiki_uses[c.get("id")] = (p, kind)
+                row[kind] += len(json.dumps(c.get("input") or {})) // 4
             elif c.get("type") == "tool_result" and c.get("tool_use_id") in wiki_uses:
                 body = c.get("content")
                 if isinstance(body, list): body = " ".join(x.get("text", "") for x in body if isinstance(x, dict))
-                rows[wiki_uses[c["tool_use_id"]]]["wiki"] += len(str(body or "")) // 4
+                owner, kind = wiki_uses[c["tool_use_id"]]
+                rows[owner][kind] += len(str(body or "")) // 4
 
 if os.environ.get("REPORT_USAGE_FILE"):
     with open(os.environ["REPORT_USAGE_FILE"], "a") as uf:
@@ -5897,13 +5944,13 @@ if not rows:
 def k(n): return f"{n / 1e6:.1f}M" if n >= 1e6 else (f"{n / 1e3:.0f}k" if n >= 1e3 else str(n))
 print("| Project | Sessions | New input | Cache reads | Output | Wiki reads (est.) |")
 print("|---|---|---|---|---|---|")
-tot = {"s": 0, "new": 0, "cached": 0, "out": 0, "wiki": 0}
+tot = {"s": 0, "new": 0, "cached": 0, "out": 0, "lookup": 0, "upkeep": 0}
 for p, r in sorted(rows.items(), key=lambda x: -(x[1]["new"] + x[1]["cached"])):
-    print(f"| {p} | {len(r['sessions'])} | {k(r['new'])} | {k(r['cached'])} | {k(r['out'])} | {k(r['wiki'])} |")
-    tot["s"] += len(r["sessions"]); tot["new"] += r["new"]; tot["cached"] += r["cached"]; tot["out"] += r["out"]; tot["wiki"] += r["wiki"]
-print(f"| all | {tot['s']} | {k(tot['new'])} | {k(tot['cached'])} | {k(tot['out'])} | {k(tot['wiki'])} |")
-share = 100 * tot["wiki"] / tot["new"] if tot["new"] else 0
-print(f"\nWiki reads are about {share:.1f}% of new input. New input is what entered a session's context for the first time; cache reads are that context read again on later turns.")
+    print(f"| {p} | {len(r['sessions'])} | {k(r['new'])} | {k(r['cached'])} | {k(r['out'])} | {k(r['lookup'] + r['upkeep'])} |")
+    tot["s"] += len(r["sessions"]); tot["new"] += r["new"]; tot["cached"] += r["cached"]; tot["out"] += r["out"]; tot["lookup"] += r["lookup"]; tot["upkeep"] += r["upkeep"]
+print(f"| all | {tot['s']} | {k(tot['new'])} | {k(tot['cached'])} | {k(tot['out'])} | {k(tot['lookup'] + tot['upkeep'])} |")
+def pct(n): return 100 * n / tot["new"] if tot["new"] else 0
+print(f"\nWiki use is about {pct(tot['lookup'] + tot['upkeep']):.1f}% of new input: lookups {pct(tot['lookup']):.1f}%, upkeep {pct(tot['upkeep']):.1f}%. Lookups are reads, searches and session starts; upkeep is captures, compiles, lints, syncs and status. New input is what entered a session's context for the first time; cache reads are that context read again on later turns.")
 PY
 }
 
