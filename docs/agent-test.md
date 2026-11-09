@@ -46,9 +46,9 @@ Answer this as you normally would: **"How does the Antigravity plugin start each
 Expected:
 - You checked `~/wikis/llm-wiki/index.md` before searching the code.
 - You answered from a wiki page and cited its path.
-- You appended a line to `~/wikis/stats.csv`, as the handbook's Query section says.
+- The page read was logged to `~/wikis/stats.csv` by the plugin's hook. Without the plugin there is no log of it: the handbook no longer asks for one by hand.
 
-Record: which files you read, in order; the page you cited; and the `stats.csv` line you wrote.
+Record: which files you read, in order; the page you cited; and whether a `stats.csv` line appeared.
 
 ## Step 3: search page text
 

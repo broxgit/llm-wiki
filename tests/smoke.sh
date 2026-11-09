@@ -231,7 +231,7 @@ expect "the line says what wiki.sh means, for agents without the hook" "Wherever
 fi
 
 if section "What a new wiki gets"; then
-for f in .gitattributes .gitignore patterns.md links.md repos.md rules/peers.md rules/compile.md; do
+for f in .gitattributes .gitignore patterns.md open.md links.md repos.md rules/peers.md rules/compile.md rules/open.md; do
   check "demo has $f" test -f "$WIKIS_DIR/demo/$f"
 done
 expect "index.md merges by union" "merge: union" git -C "$WIKIS_DIR" check-attr merge -- demo/index.md
@@ -242,11 +242,12 @@ fi
 
 if section "Upgrade"; then
 set_version "$WIKIS_DIR/demo/AGENTS.md" 12
-rm -f "$WIKIS_DIR/demo/patterns.md" "$WIKIS_DIR/demo/.gitattributes"
+rm -f "$WIKIS_DIR/demo/patterns.md" "$WIKIS_DIR/demo/.gitattributes" "$WIKIS_DIR/demo/open.md" "$WIKIS_DIR/demo/rules/open.md"
 out="$("$W" upgrade demo 2>&1)"
 case "$out" in *"handbook: v12 -> v$TV"*) ok "upgrade moves the handbook to v$TV" ;; *) bad "upgrade moves the handbook to v$TV" "$out" ;; esac
 case "$out" in *"What's new since v12"*) ok "upgrade prints the changelog" ;; *) bad "upgrade prints the changelog" "$out" ;; esac
 check "upgrade restores patterns.md" test -f "$WIKIS_DIR/demo/patterns.md"
+check "upgrade gives an old wiki open.md and rules/open.md" test -f "$WIKIS_DIR/demo/open.md" -a -f "$WIKIS_DIR/demo/rules/open.md"
 rm "$WIKIS_DIR/global/wiki/conventions.md"
 "$W" upgrade --all >/dev/null 2>&1
 check "upgrade recreates a missing conventions page" test -f "$WIKIS_DIR/global/wiki/conventions.md"
@@ -821,6 +822,35 @@ printf '\n## Pin versions\n- kind: correction\n- rule: Pin versions.\n- status: 
 lacks "an accepted fix not seen since isn't flagged" "AGAIN" "$W" patterns
 cp "$T/patterns.bak" "$WIKIS_DIR/demo/patterns.md"
 rm -f "$WIKIS_DIR/demo/wiki/conflict-test.md"
+# Open items: Waiting: and Due: lines tallied in open.md. Dates come from the clock.
+day_off() { date -u -d "$1 days" +%Y-%m-%d 2>/dev/null || date -u -v"$([ "$1" -ge 0 ] && echo "+$1" || echo "$1")"d +%Y-%m-%d; }
+SOON="$(day_off 3)"
+PAST="$(day_off -3)"
+OPEN="$WIKIS_DIR/demo/open.md"
+cp "$OPEN" "$T/open.bak"
+lacks "status has no open line when nothing is open" "- open: " "$W" status
+expect "open says when nothing is open" "Nothing open." "$W" open
+expect "open --help describes the command" "Waiting: and Due: lines" "$W" open --help
+{
+  printf '\n## Confirm the hook fires in Antigravity\n- kind: waiting\n- who: user\n- status: open\n- from: %s raw/a.md\n' "$SOON"
+  printf '\n## Read the first week of runs\n- kind: due\n- due: %s\n- status: open\n- from: %s raw/a.md\n' "$SOON" "$SOON"
+  printf '\n## Check the retry fix held\n- kind: due\n- due: %s\n- status: open\n- from: %s raw/a.md\n' "$PAST" "$PAST"
+  printf '\n## Reply to the vendor\n- kind: waiting\n- who: Dana\n- status: done %s\n- from: %s raw/a.md\n' "$PAST" "$PAST"
+} >> "$OPEN"
+expect "open lists a waiting entry and who it waits on" "Confirm the hook fires in Antigravity (waiting on user)" "$W" open
+expect "and a due entry in the future" "Read the first week of runs (due $SOON)" "$W" open
+expect "and marks a due entry in the past overdue" "OVERDUE  Check the retry fix held (due $PAST)" "$W" open
+lacks "and leaves a done entry out" "Reply to the vendor" "$W" open
+expect "and ends with a count" "3 open in 1 wiki(s), 1 past their date." "$W" open
+out="$("$W" open 2>&1)"
+case "$out" in *"OVERDUE"*"Confirm the hook"*) ok "an overdue entry comes before the others in its wiki" ;; *) bad "an overdue entry comes before the others in its wiki" "$out" ;; esac
+expect "status counts what is open and what is past its date" "- open: 3 item(s) waiting on someone or a date, 1 past its date. Run: " "$W" status
+lacks "every To do line in status still ends with its fix" "no fix:" fixless status 'To do:'
+lacks "lint has no finding for a well-formed open.md" "open.md entry not understood" "$W" lint demo
+printf '\n## No kind here\n- status: open\n\n## Due without a date\n- kind: due\n- due: next week\n- status: open\n' >> "$OPEN"
+expect "lint reports an entry with no kind" "No kind here (kind is missing or not waiting or due)" "$W" lint demo
+expect "and a due entry with no valid date" "Due without a date (a due entry needs a date as YYYY-MM-DD)" "$W" lint demo
+cp "$T/open.bak" "$OPEN"
 # Transcripts this shell can't read, as in an agent's sandbox, used to read as a week
 # with no sessions.
 if [ "$(id -u)" != 0 ]; then
@@ -1160,6 +1190,78 @@ expect "after a compaction the reminders are given again" "make sure the hooks r
 hook "$T/projects/rem" '{"session_id":"s-1","source":"resume"}' >/dev/null
 out="$(printf '%s' "$push" | LLM_WIKI_BACKGROUND=1 CLAUDE_PLUGIN_ROOT="$REPO" sh "$REPO/hooks/pre-tool-use.sh")"
 [ -z "$out" ] && ok "a background compile's session gets no reminders" || bad "a background compile's session gets no reminders" "$out"
+# A read of a wiki page logs itself as a lookup, and a handoff logs its start. Neither
+# needs the session to have reminders, and neither may fail the call.
+LS="$WIKIS_DIR/stats.csv"; LD="$WIKIS_DIR/delegation-log.csv"
+rm -f "$LS"; [ ! -f "$LD" ] || mv "$LD" "$LD.keep"
+mkdir -p "$RM/wiki/concepts" "$RM/raw" "$WIKIS_DIR/notawiki/wiki" "$T/projects/rem/wiki"
+printf -- '---\ntitle: A\nsummary: a\nupdated: 2026-11-09\nverified: 2026-11-09\n---\n\nText.\n' > "$RM/wiki/concepts/a.md"
+cp "$RM/wiki/concepts/a.md" "$RM/wiki/concepts/b.md"
+cp "$RM/wiki/concepts/a.md" "$WIKIS_DIR/notawiki/wiki/x.md"
+cp "$RM/wiki/concepts/a.md" "$T/projects/rem/wiki/x.md"
+printf 'a note\n' > "$RM/raw/2026-11-09-000000-n.md"
+lines() { cat "$1" 2>/dev/null | grep -c . || true; }
+is() { local name="$1" want="$2" got="$3"; if [ "$got" = "$want" ]; then ok "$name"; else bad "$name" "wanted: $want
+got: $got"; fi; }
+# read_of <session> <path>: a Read call, through the hook.
+read_of() { tool_call '{"session_id":"'"$1"'","cwd":"'"$T"'/projects/rem","tool_name":"Read","tool_input":{"file_path":"'"$2"'"}}'; }
+today="$(date -u +%Y-%m-%d)"
+out="$(read_of l-1 "$RM/wiki/concepts/a.md"; echo "rc=$?")"
+[ "$out" = "rc=0" ] && ok "a read of a wiki page gets no reply, and the hook exits 0" || bad "a read of a wiki page gets no reply, and the hook exits 0" "$out"
+is "it logs a hit, under the header" "date,wiki,result
+$today,rem,hit" "$(cat "$LS" 2>/dev/null)"
+read_of l-1 "$RM/wiki/concepts/b.md" >/dev/null
+check "a second page of the same wiki in the session logs nothing more" test "$(lines "$LS")" = 2
+read_of l-2 "$RM/wiki/concepts/b.md" >/dev/null
+check "another session logs its own lookup" test "$(lines "$LS")" = 3
+check "and the header was written once" test "$(grep -c '^date,wiki,result' "$LS")" = 1
+check "the session's reads are kept beside its reminders" test -s "$RD/l-1.reads"
+for p in "$RM/index.md" "$RM/AGENTS.md" "$RM/raw/2026-11-09-000000-n.md" "$WIKIS_DIR/notawiki/wiki/x.md" "$T/projects/rem/wiki/x.md" "$T/projects/rem/payments/x.md" "$RM/wiki/concepts/nothing.md" "$RM/wiki/concepts"; do
+  read_of l-3 "$p" >/dev/null
+done
+check "index.md, AGENTS.md, raw/, a folder that isn't a wiki, a wiki/ outside the collections, a page that isn't there and a file outside the wikis log nothing" test "$(lines "$LS")" = 3
+printf '%s' '{"session_id":"l-3","tool_name":"Read","tool_input":{"file_path":"'"$RM"'/wiki/concepts/a.md"}}' | XDG_STATE_HOME="$T/no-state" sh "$REPO/hooks/pre-tool-use.sh"
+check "a session with no reminders folder still logs" test "$(lines "$LS")" = 4
+check "and the folder it made holds the record" test -s "$T/no-state/llm-wiki/reminders/l-3.reads"
+hook "$T/projects/rem" '{"session_id":"l-6","source":"startup"}' >/dev/null
+expect "a session with reminders still gets them for a Bash call" "make sure the hooks ran" tool_call '{"session_id":"l-6","cwd":"'"$T"'/projects/rem","tool_name":"Bash","tool_input":{"command":"git push"}}'
+out="$(read_of l-6 "$RM/wiki/concepts/a.md")"
+[ -z "$out" ] && ok "and a read of a page gets no reminder" || bad "and a read of a page gets no reminder" "$out"
+check "but it logs the lookup" test "$(lines "$LS")" = 5
+if [ "$(id -u)" != 0 ]; then
+  chmod 444 "$LS"
+  out="$(read_of l-7 "$RM/wiki/concepts/a.md"; echo "rc=$?")"
+  [ "$out" = "rc=0" ] && ok "a stats.csv that can't be written doesn't fail the hook" || bad "a stats.csv that can't be written doesn't fail the hook" "$out"
+  chmod 644 "$LS"
+else
+  skipped "a stats.csv that can't be written (root can write anywhere)"
+fi
+out="$(printf '%s' '{"session_id":"l-8","tool_name":"Read","tool_input":"nonsense"}' | CLAUDE_PLUGIN_ROOT="$REPO" sh "$REPO/hooks/pre-tool-use.sh"; echo "rc=$?")"
+[ "$out" = "rc=0" ] && ok "a Read call of an unexpected shape is ignored" || bad "a Read call of an unexpected shape is ignored" "$out"
+out="$(printf '%s' '{"session_id":"l-9","tool_name":"Read","tool_input":{"file_path":"'"$RM"'/wiki/concepts/a.md"}}' | LLM_WIKI_BACKGROUND=1 sh "$REPO/hooks/pre-tool-use.sh")"
+check "a background compile's reads aren't lookups" test "$(lines "$LS")" = 5
+
+# A handoff: the Agent and Task tools and a start_session tool write a row, "started".
+# agent_call <session> <tool name> <input json>
+agent_call() { printf '%s' '{"session_id":"'"$1"'","cwd":"'"$T"'/projects/rem","tool_name":"'"$2"'","tool_input":'"$3"'}' | XDG_STATE_HOME="$T/no-state" CLAUDE_PLUGIN_ROOT="$REPO" sh "$REPO/hooks/pre-tool-use.sh"; }
+out="$(agent_call h-1 Agent '{"description":"Run the tests, all of them","prompt":"x","model":"sonnet","effort":"low"}'; echo "rc=$?")"
+[ "$out" = "rc=0" ] && ok "an Agent call is allowed, with no reply" || bad "an Agent call is allowed, with no reply" "$out"
+is "and writes a row with the model and effort, under the header" "date,project,kind,model,effort,result
+$today,rem,Run the tests all of them,sonnet,low,started" "$(cat "$LD" 2>/dev/null)"
+agent_call h-1 mcp__ccd_session__start_session '{"title":"Fix the build","model":"opus","effort":"high","prompt":"x"}'
+is "a start_session call writes a row too" "$today,rem,Fix the build,opus,high,started" "$(tail -n 1 "$LD")"
+agent_call h-1 Task '{"description":"Sweep files, again","prompt":"x"}'
+is "a Task call with no model gives empty fields" "$today,rem,Sweep files again,,,started" "$(tail -n 1 "$LD")"
+agent_call h-1 Agent '{"description":"'"$(printf 'word %.0s' $(seq 30))"'"}'
+check "a long kind is cut at 60 characters" test "$(tail -n 1 "$LD" | cut -d, -f3 | awk '{ print length($0) }')" -le 60
+agent_call h-1 mcp__other__run '{"description":"not a handoff"}'
+agent_call h-1 Bash '{"command":"echo Agent start_session"}'
+check "other tools add no row, and the header was written once" bash -c "test \"\$(grep -c . '$LD')\" = 5 && test \"\$(grep -c '^date,project' '$LD')\" = 1"
+rm -rf "$T/no-state"
+"$W" delegation ask >/dev/null
+out="$("$W" delegation 2>&1)"
+case "$out" in *"OPEN"*"Fix the build (opus)"*"1     0      0       0     1"*"4 handoff(s)"*"no outcome recorded yet"*) ok "wiki delegation counts a started row as open, not as ok" ;; *) bad "wiki delegation counts a started row as open, not as ok" "$out" ;; esac
+rm -f "$LD" "$LS"; [ ! -f "$LD.keep" ] || mv "$LD.keep" "$LD"
 touch -t 202001010000 "$RD/old-session.tsv"
 hook "$T/projects/rem" '{"session_id":"s-2","source":"startup"}' >/dev/null
 check "session start sweeps reminder files over a week old" test ! -f "$RD/old-session.tsv"
@@ -1308,7 +1410,7 @@ printf 'date,wiki,result\n%s,demo,hit\n%s,demo,miss\n%s,global,hit\n2000-01-01,d
 expect "stats computes a wiki's hit rate" "50%" "$W" stats
 expect "stats totals every wiki" "67%" "$W" stats
 lacks "stats leaves out lookups before the range" "25%" "$W" stats
-expect "stats says most sessions don't log" "Most sessions don't log" "$W" stats
+expect "stats says a page read logs itself, and misses were by hand" "logs a hit, once per wiki per session" "$W" stats
 "$W" find zzznothingmatches >/dev/null
 check "find logs a search that found nothing, with its word" bash -c "tail -n 1 '$WIKIS_DIR/stats.csv' | grep -q ',global,search-none,zzznothingmatches$'"
 "$W" find canary >/dev/null
@@ -1769,6 +1871,27 @@ check "a new conversation sweeps old queues" test ! -e "$RD/agy-c-9.pending"
 agy_start c-5
 is "a read_file with Path is not an edit" "$ALLOW" "$(agy tool "$(call c-5 read_file "{\"Path\":\"$T/projects/agyrem/payments/charge.go\"}")")"
 check "and a read_file queues nothing" test ! -e "$RD/agy-c-5.pending"
+# A read_file or view_file of a wiki page is a lookup, once per wiki per conversation.
+LS="$WIKIS_DIR/stats.csv"; rm -f "$LS"
+mkdir -p "$WIKIS_DIR/agyrem/wiki/concepts"
+printf -- '---\ntitle: A\nsummary: a\nupdated: 2026-11-09\nverified: 2026-11-09\n---\n\nText.\n' > "$WIKIS_DIR/agyrem/wiki/concepts/a.md"
+cp "$WIKIS_DIR/agyrem/wiki/concepts/a.md" "$WIKIS_DIR/agyrem/wiki/concepts/b.md"
+lines() { cat "$1" 2>/dev/null | grep -c . || true; }
+today="$(date -u +%Y-%m-%d)"
+is "a read_file of a page gets an allow" "$ALLOW" "$(agy tool "$(call c-5 read_file "{\"Path\":\"$WIKIS_DIR/agyrem/wiki/concepts/a.md\"}")")"
+is "and logs a hit" "date,wiki,result
+$today,agyrem,hit" "$(cat "$LS" 2>/dev/null)"
+is "a view_file of another page, in the same conversation, gets an allow" "$ALLOW" "$(agy tool "$(call c-5 view_file "{\"AbsolutePath\":\"$WIKIS_DIR/agyrem/wiki/concepts/b.md\"}")")"
+check "and logs nothing more" test "$(lines "$LS")" = 2
+agy tool "$(call c-1 view_file "{\"AbsolutePath\":\"$WIKIS_DIR/agyrem/wiki/concepts/b.md\"}")" >/dev/null
+check "another conversation logs its own" test "$(lines "$LS")" = 3
+for p in "$WIKIS_DIR/agyrem/index.md" "$WIKIS_DIR/agyrem/AGENTS.md" "$T/projects/agyrem/payments/charge.go"; do
+  agy tool "$(call c-3 read_file "{\"Path\":\"$p\"}")" >/dev/null
+done
+check "index.md, AGENTS.md and a file outside the wikis log nothing" test "$(lines "$LS")" = 3
+check "the conversation's reads are kept beside its reminders" test -s "$RD/agy-c-5.reads"
+check "the plugin's copy of the hook body is this one" cmp -s "$REPO/hooks/reminders.py" "$AP/hooks/reminders.py"
+rm -f "$LS"
 # The args are built apart: bash 3.2 mangles this much quoting inside nested $( ).
 wf_args="{\"Path\":\"$T/projects/agyrem/payments/charge.go\",\"Content\":\"x\",\"Overwrite\":true}"
 is "a write_file with Path is an edit" "$ALLOW" "$(agy tool "$(call c-5 write_file "$wf_args")")"
@@ -1990,6 +2113,11 @@ printf 'x\n' | "$W" feedback add docs "It broke" >/dev/null; printf 'y\n' | "$W"
 check "two notes whose summaries share a slug never overwrite each other" bash -c "[ \$(ls '$FB' | grep -c -- '-it-broke') -eq 2 ] && grep -lq '^Summary: It broke!' '$FB'/*-it-broke*.md"
 check "the handbook rule ships in the template" grep -q 'wiki.sh feedback add' "$REPO/template/rules/feedback.md"
 check "and AGENTS.md points to it" grep -q 'rules/feedback.md' "$REPO/template/AGENTS.md"
+check "the open items rule ships in the template" grep -q 'Waiting: <who> | <what>' "$REPO/template/rules/open.md"
+check "and AGENTS.md points to it" grep -q 'rules/open.md' "$REPO/template/AGENTS.md"
+check "and the empty ledger ships" grep -q '^# Open items' "$REPO/template/open.md"
+check "and compile says how to stamp Verified: lines" grep -q 'Verified:' "$REPO/template/rules/compile.md"
+check "and the lesson kind is in the patterns rules" grep -q '\*\*lesson\*\*' "$REPO/template/rules/patterns.md"
 rm -rf "$FB" "$HOME/.config/llm-wiki/feedback" "$T/bin/gh" "$T/gh.log" "$T/gh.body" "$T/fb.md"
 fi
 

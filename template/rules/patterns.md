@@ -1,6 +1,6 @@
 # Patterns
 
-Read this when the user corrects your work, when review comments land on code an agent helped write, when you catch yourself repeating work, or when compile finds `Feedback:` lines.
+Read this when the user corrects your work, when you catch a mistake of your own, when review comments land on code an agent helped write, when you catch yourself repeating work, or when compile finds `Feedback:` lines.
 
 The goal: the user never gives the same correction twice. When feedback repeats, turn it into something that prevents it next time.
 
@@ -10,6 +10,7 @@ Add a `Feedback:` line to your next capture when:
 
 - **review**: a reviewer flags something in code an agent helped write. The user pastes the comments, or you read the merge request.
 - **correction**: the user corrects your work or your approach.
+- **lesson**: you catch a mistake of your own, with no one correcting you, that a rule would have prevented. It is counted and proposed at the same thresholds as a correction.
 - **ask**: the user asks for something the wiki shows they have asked for before.
 - **procedure**: you carry out a multi-step procedure that you, or a note in some wiki, have carried out before, in this repository or another, or the user tells you that you keep doing one. It needs judgment on each run, so its fix is a skill.
 - **toil**: the same commands, edits, or lookups, step for step, every time. No judgment needed, so its fix is a script. When a procedure is mostly toil, use `procedure`: the skill can call a script for the mechanical part.
@@ -32,6 +33,7 @@ Write the rule, not the incident. Examples:
 
 ```
 Feedback: review | here | Wrap returned errors with %w and context. No bare `return err`.
+Feedback: lesson | here | Run the migration check before pushing a schema change.
 Feedback: correction | go-common | Services using go-common's HTTP middleware get request metrics from it. Don't add metrics for those.
 Feedback: procedure | everywhere | Bump a shared proto across the repos that consume it.
 Feedback: toil | here | After changing an interface, regenerate mocks and fix imports.
@@ -80,7 +82,7 @@ When the user answers, set it to `accepted` or `declined`, and on `accepted` mak
 
 Pick the smallest fix that would have prevented every sighting.
 
-- **A convention.** For review, correction, and ask patterns. Add one line to `wiki/conventions.md` in the wiki that owns the scope. Create the page if it's missing, with normal frontmatter, and list it in the index. A correction about how agents should work with the user, such as when to commit or how to write, goes in the shared wiki's page under `## For agents`, so every session in every repository follows it.
+- **A convention.** For review, correction, lesson, and ask patterns. Add one line to `wiki/conventions.md` in the wiki that owns the scope. Create the page if it's missing, with normal frontmatter, and list it in the index. A correction about how agents should work with the user, such as when to commit or how to write, goes in the shared wiki's page under `## For agents`, so every session in every repository follows it.
 - **A note for code that uses a library.** For a rule about using something another wiki owns. Add it to that wiki's `wiki/conventions.md`, under `## For code that uses this`. Every repository that calls the library then gets the rule from one place.
 - **A skill.** For a procedure. Propose one skill, with the steps taken from the evidence. Once accepted, write it as `skills/<name>/SKILL.md` in the wiki that owns the scope: the shared wiki for `everywhere`. Give it frontmatter with `name`, and a `description` that says when to use it. Keep the steps in the skill. For facts the steps rely on, such as hosts, flags, or who owns what, cite wiki pages as `name:path` instead of copying them, so a correction reaches the skill too. List it under `## Skills` in that wiki's `index.md`, so agents without skills find it and follow it as a how-to. Then run `wiki.sh skills link`, which links it into `~/.claude/skills` for Claude Code. Everyone who syncs the collection gets it. Never write a team skill into `~/.claude/skills` directly: there, only you would have it.
 - **A tool.** For toil. Say what the script would do, about how long it is, and what it saves per run, in steps or tokens. Ask where it should live: the repository's own scripts folder, or a tools repository the user keeps. After it exists, add a how-to page with its path and usage, and use it from then on instead of doing the steps by hand.

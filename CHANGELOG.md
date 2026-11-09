@@ -4,6 +4,18 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v29 (2026-11-09)
+
+Sessions record what they used to lose: a page checked and still true, something waiting on someone, a mistake caught alone, a change git doesn't see. A session that never compiled forgot the first, and the others lived only in a conversation.
+
+- A capture can carry `Verified: <path of the page> [<short commit>]`. Compile sets that page's `verified` to the note's date, and its `commit` when the line gives one. It replaces "remember it for the next compile".
+- `Waiting: <who> | <what>`, `Due: <YYYY-MM-DD> | <what>` and `Done: <what>` lines go into a new `open.md` at the wiki's root, which compile keeps as it does `patterns.md`. `rules/open.md` has the format. `wiki open` lists what is open across the wikis, and `wiki status` counts it. Agents say what is waiting on the user when a session ends.
+- `Feedback:` takes a new kind, `lesson`: a mistake the agent caught itself that a rule would have prevented. It is counted and proposed like a correction.
+- A change git doesn't record (under `~/.claude` or another tool's settings, a machine's configuration, an installed tool) gets a capture that names the machine. Work the user puts off goes in the owning repository's `ROADMAP.md`, or in a capture with a `Waiting:` or `Due:` line where there is none.
+- The Query step that asked agents to log each lookup by hand is gone. With the plugin, a read of a page under a wiki's `wiki/` folder logs a `hit` in `stats.csv` itself, once per wiki per session, in Claude Code and in Antigravity; the MCP server already did. Every lookup now counts as a hit: misses were only ever logged by hand.
+- A handoff logs its own start. The `Agent` and `Task` tools and `start_session` add a row with the result `started` to `delegation-log.csv`. `rules/delegation.md` says to record the outcome once the work is checked, and `wiki delegation` shows a started row under OPEN, not as a success.
+- Do: run `wiki upgrade --all`. It adds `open.md` and `rules/open.md` to each wiki.
+
 ## v28 (2026-11-05)
 
 Reminders: a rule reaches the agent at the moment it applies. A rule read at session start is often out of mind two hours later, and a session missed one that way on the day this was written.

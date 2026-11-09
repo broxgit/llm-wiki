@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Handbook version 28.
+Handbook version 29.
 
 This folder is a knowledge base maintained by an LLM agent. Any agent working here follows this file. It needs no vendor features. Plain markdown, plain files.
 
@@ -17,6 +17,7 @@ This file holds what every session needs. The rest is in `rules/`. Read a rules 
 | commit by hand, or handle a merge conflict or a refused commit | `rules/sync.md` |
 | write a journal entry, or report what the user did | `rules/journal.md` |
 | record feedback, update `patterns.md`, propose a fix, or check code against conventions | `rules/patterns.md` |
+| record something waiting on someone or due on a date, or close it | `rules/open.md` |
 | hand a task to a sub-agent on another model, or suggest doing so | `rules/delegation.md` |
 
 ## Layout
@@ -29,6 +30,7 @@ log.md       Append-only record of changes.
 links.md     Shared wikis this one can fall back to.
 repos.md     Repositories this wiki covers, when it covers more than one.
 patterns.md  Recurring feedback and repeated work, tallied toward a fix.
+open.md      What is waiting on someone or on a date.
 skills/      Team skills: repeated procedures as <name>/SKILL.md.
 raw/         Immutable sources. New files only.
 wiki/        Compiled pages. The agent writes these.
@@ -59,7 +61,7 @@ The user should not have to tell you when to use the wiki. Decide for yourself w
 - a problem solved, with the cause and the fix
 - a research finding, with its source
 
-Finished work is not a capture by itself. The code and its history already record what changed. Note only what they don't show: why it was built that way, what was tried and dropped, what will trip up the next session.
+Finished work is not a capture by itself where a commit records it. The code and its history show what changed. Note only what they don't show: why it was built that way, what was tried and dropped, what will trip up the next session. A change git doesn't record is a capture: one under `~/.claude` or another tool's settings, a machine's configuration, or an installed tool. Name the machine. Work the user puts off goes in the owning repository's `ROADMAP.md`, or its equivalent, when it has one. Otherwise capture it with a `Waiting:` or `Due:` line.
 
 Capture at stopping points, not as you go. A stopping point is where a piece of work is done: you are about to report it finished, or the user moves on. In a long working session that is rarely more than one or two notes an hour, each covering everything since the last. Skip small talk, guesses, passing opinions, and work still in flux. When unsure whether something is a decision or a correction, capture it. When unsure whether it is only a record of work done, don't.
 
@@ -67,7 +69,9 @@ Capture at stopping points, not as you go. A stopping point is where a piece of 
 
 **Lint.** Due when the log shows 10 or more ingests since the last lint. Every compile ends by checking, so you don't have to remember.
 
-**Feedback.** The user should never give the same correction twice. When the user corrects your work, review comments land on code an agent helped write, or you repeat a procedure or mechanical work, add a `Feedback:` line to your next capture. `rules/patterns.md` has the format and where the note goes. When `patterns.md` shows a pattern is ready, propose a fix at a stopping point: a convention, a note in a library's wiki, a skill, or a small tool.
+**Feedback.** The user should never give the same correction twice. When the user corrects your work, you catch a mistake of your own that a rule would have prevented, review comments land on code an agent helped write, or you repeat a procedure or mechanical work, add a `Feedback:` line to your next capture. `rules/patterns.md` has the format and where the note goes. When `patterns.md` shows a pattern is ready, propose a fix at a stopping point: a convention, a note in a library's wiki, a skill, or a small tool.
+
+**Open items.** When something can't move until someone acts, or should be looked at on a date, add a `Waiting:` or `Due:` line to your next capture. `rules/open.md` has the format. When a session ends with items waiting on the user, say what they are in your last reply.
 
 **Procedures and tools.** This wiki's `For agents` section is the project's own definition of done. Follow it as you follow the shared one, whatever your tool does by default: if it says to check CI after a push, check it. When the work needs a tool listed under `Tools` that you don't have, such as an MCP server you can't see or a command that isn't installed, tell the user once, when that work starts. Don't skip the step silently or work around it. When you learn a procedure or a tool the project relies on, capture it.
 
@@ -95,7 +99,8 @@ Several sessions may use this wiki at once. That is safe because writes are spli
 3. Answer from the pages. Cite each page by path.
 4. If this wiki and the shared wikis can't answer, search by keyword before reading anything whole: `wiki.sh find <word>` searches every wiki's index and page text, then search `raw/`. Then try the peer wikis. If nothing answers, say so plainly.
 5. If the answer produced synthesis worth keeping, capture it.
-6. Log the lookup: append `<UTC date>,<wiki>,hit` to `stats.csv` in the folder above this wiki, or `miss` when no page helped. Use the wiki that answered, or this wiki for a miss. Create the file with the line `date,wiki,result` if it's missing. One line per question, only when you checked a wiki. Git ignores it.
+
+Reading a page and searching with `wiki.sh find` are logged for you, where the plugin's hook or the MCP server runs. Don't log lookups by hand.
 
 Keep wiki knowledge and general knowledge distinguishable. If you add something the wiki doesn't contain, label it.
 
@@ -105,7 +110,7 @@ The world changes. Pages don't. Each page records when its claims were last conf
 
 - Before you act on a claim, check it against its origin if the origin is at hand. For a claim about code, that is the code. For a fact taken from outside, such as a vote, a quote, a figure, or a document, that is the cited source. Acting means writing code, publishing, or giving instructions that depend on the claim. Answering a question in passing doesn't need the check.
 - If the claim no longer holds, tell the user and capture a correction into the owning wiki. A claim you checked against its origin and found false is a correction, not a contradiction. Fix it without asking.
-- If it holds, remember that. At your next compile, set that page's `verified` to today, and `commit` too when the claim is about code. That edit needs no source note.
+- If it holds, add `Verified: <path of the page> [<short commit>]` to your next capture. Write the path as the index does, such as `wiki/concepts/auth.md`, and give the commit when the claim is about code. For a page in another wiki write `<wiki>:<path>`, and capture it in that wiki. Compile stamps the page.
 - When you answer from a page verified more than 90 days ago and you couldn't check it, say when it was last verified.
 
 ## Capture
