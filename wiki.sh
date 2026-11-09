@@ -177,7 +177,7 @@ Usage: $WIKI_CMD <command> [options]
                        Notes agents kept about llm-wiki itself, and filing one as an
                        issue after you read it. Off until: setup feedback.
   helper [fetch | auto on|off]
-                       Which compiled helper report and standup use, and download the
+                       Which compiled helper the ported commands use, and download the
                        one released for this version. wiki update does that too, and
                        so does session start, in the background, unless auto is off.
   mcp [--print]        A local MCP server over the wikis, for sessions with no file
@@ -391,7 +391,7 @@ cmd_helper() {
     else echo "helper: $(tilde "$b"), an older release that still speaks protocol $GO_PROTOCOL. For this checkout's own: $WIKI_CMD helper fetch"
     fi
   else
-    echo "helper: none, so the ported commands (report, standup) run their slower built-in code. Run: $WIKI_CMD helper fetch"
+    echo "helper: none, so the ported commands run their slower built-in code. Run: $WIKI_CMD helper fetch"
   fi
   echo "This checkout names release ${src:-none}, protocol $GO_PROTOCOL, for $(helper_platform)."
   echo "Fetched automatically at session start: $(helper_auto_on && echo on || echo "off. Turn it on with: $WIKI_CMD helper auto on")"
@@ -2292,7 +2292,8 @@ status_table() {
       todo_add "$w: $waiting notes waiting. Ask an agent: \"compile $w\" (in Claude Code: /llm-wiki:compile $w)"
     fi
     # Ingest entries since the last lint entry. The handbook lints at 10.
-    since="$(awk '/^## [0-9-]+ lint/{n=0} /^## [0-9-]+ ingest/{n++} END{print n+0}' "$d/log.md" 2>/dev/null)"
+    # A wiki with no log.md has no ingests: awk fails on it, and set -e would end status.
+    since="$(awk '/^## [0-9-]+ lint/{n=0} /^## [0-9-]+ ingest/{n++} END{print n+0}' "$d/log.md" 2>/dev/null || true)"
     if [ "${since:-0}" -ge 10 ]; then
       note="$note  <- lint due ($since ingests)"
       todo_add "$w: lint due, $since ingests since the last. Ask an agent: \"lint $w\""
@@ -4234,7 +4235,7 @@ update_wikis() {
   if [ -z "${LLM_WIKI_NO_GO:-}" ] && [ -f "$HELPER_LOCK" ] && ! helper_ok "$REPO/bin/llm-wiki"; then
     echo
     echo "== Helper"
-    k="$(helper_fetch)" && echo "- $k" || echo "- $k. Nothing is lost: wiki report and standup run their built-in code, only slower."
+    k="$(helper_fetch)" && echo "- $k" || echo "- $k. Nothing is lost: the ported commands run their built-in code, only slower."
   fi
   while IFS="$TAB" read -r n f r; do
     [ -d "$f" ] || continue

@@ -2714,7 +2714,7 @@ goes"
     printf '# Index\n' > "$FD/$1/index.md"
     printf '# Log\n' > "$FD/$1/log.md"
   }
-  # Beta and alpha have no log.md, which ends the Bash's status: see the check for it.
+  # Beta and alpha get a log.md here; a wiki with no log.md has its own check below.
   printf '# Log\n' > "$FD/Beta/log.md"; printf '# Log\n' > "$FD/alpha/log.md"
   sw st-due "$TV"
   for n in a.md b.md c.txt d.md e.tar.gz f.md g.md h.md i.md j.md .hidden.md; do printf 'x\n' > "$FD/st-due/raw/2026-01-01-$n"; done
@@ -2780,8 +2780,10 @@ lines.md"
   ssame "status, helper and Bash: a wiki behind the template whose name has a space" bash
   rm -rf "$FD/st-old one"
   mv "$FD/st-lint/log.md" "$T/st-log"
-  ssame "status, helper and Bash: a wiki with no log.md, where the Bash stops" bash
-  expect "which the Bash still does, after the rows before it" "exit 2" srun ""
+  ssame "status, helper and Bash: a wiki with no log.md, which the Bash answers" bash
+  # The Bash used to stop at the first wiki with no log.md, with exit 2 and a table cut off there.
+  out="$(srun "")"
+  case "$out" in *"st-lint "*"st-pat "*"exit 0") ok "and the Bash makes the whole table, counting no ingests, and exits 0" ;; *) bad "and the Bash makes the whole table, counting no ingests, and exits 0" "$out" ;; esac
   mv "$T/st-log" "$FD/st-lint/log.md"
   if [ "$(id -u)" != 0 ]; then
     chmod 000 "$FD/st-due/raw"
@@ -3537,6 +3539,8 @@ HW="$HR/wiki.sh"
 HPLAT="$("$HW" helper | sed -n 's/.* for \([a-z0-9-]*\)\.$/\1/p')"
 check "wiki.sh names this machine's platform" test -n "$HPLAT"
 expect "with no helper anywhere, it says how to get one" "helper: none" "$HW" helper
+out="$("$HW" helper)"
+case "$out" in *"(report, standup)"*) bad "and doesn't list which commands are ported, a list that goes stale" "$out" ;; *) ok "and doesn't list which commands are ported, a list that goes stale" ;; esac
 out="$("$HW" helper fetch 2>&1)" && bad "fetch fails when the release isn't published" "$out" || case "$out" in *"couldn't be downloaded"*) ok "fetch fails when the release isn't published" ;; *) bad "fetch fails when the release isn't published" "$out" ;; esac
 check "and installs nothing" test ! -e "$HDIR/$HSRC/llm-wiki"
 if command -v go >/dev/null 2>&1 && [ -n "$HPLAT" ]; then
