@@ -1698,6 +1698,14 @@ check "and removed" test ! -e "$RD/agy-c-2.pending"
 printf 'x\n' > "$RD/agy-c-9.pending"; touch -t 202001010000 "$RD/agy-c-9.pending"
 agy_start c-3
 check "a new conversation sweeps old queues" test ! -e "$RD/agy-c-9.pending"
+# The app's own file tools differ from the docs: write_file takes Path, and so does read_file.
+agy_start c-5
+is "a read_file with Path is not an edit" "$ALLOW" "$(agy tool "$(call c-5 read_file "{\"Path\":\"$T/projects/agyrem/payments/charge.go\"}")")"
+check "and a read_file queues nothing" test ! -e "$RD/agy-c-5.pending"
+# The args are built apart: bash 3.2 mangles this much quoting inside nested $( ).
+wf_args="{\"Path\":\"$T/projects/agyrem/payments/charge.go\",\"Content\":\"x\",\"Overwrite\":true}"
+is "a write_file with Path is an edit" "$ALLOW" "$(agy tool "$(call c-5 write_file "$wf_args")")"
+check "and a write_file queues its rule" grep -q "^- Money is in cents. (from the wiki agyrem, wiki/conventions.md)$" "$RD/agy-c-5.pending"
 # A hook's exit code isn't documented, so on every path it prints a reply that lets the call go, and exits 0.
 is "bad JSON gets an allow" "$ALLOW" "$(agy tool 'not json')"
 is "an empty line gets an allow" "$ALLOW" "$(agy tool '')"

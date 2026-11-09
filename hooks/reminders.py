@@ -19,7 +19,9 @@ A hook must never break a session, so anything unexpected ends quietly with no r
 
 With --antigravity <tool|invoke> it is the adapter for Google's Antigravity, which has
 no context reply on a tool call. The conversation's rows are in agy-<conversation id>.tsv,
-written by wiki.sh's __agy-start. Gemini's tool names are read as Claude's, the shape of
+written by wiki.sh's __agy-start. Gemini's tool names are read as Claude's (the docs name
+write_to_file, replace_file_content and multi_replace_file_content, with the path in
+TargetFile; the app itself was seen to call write_file, with the path in Path), the shape of
 the reply is Antigravity's, and every path ends with a reply, since a hook's exit code
 is not documented:
 
@@ -41,7 +43,8 @@ from urllib.parse import unquote
 
 EDIT_TOOLS = ("Edit", "Write", "NotebookEdit", "MultiEdit")
 AGY_TOOLS = {"run_command": "Bash", "write_to_file": "Edit", "replace_file_content": "Edit",
-             "multi_replace_file_content": "Edit", "invoke_subagent": "Agent"}
+             "multi_replace_file_content": "Edit", "invoke_subagent": "Agent",
+             "write_file": "Edit"}  # the docs' names, plus the app's own
 SAFE = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
 
 
@@ -179,7 +182,7 @@ def antigravity(event, rdir):
     name = (call.get("toolCall") or {}).get("name") or ""
     args = (call.get("toolCall") or {}).get("args") or {}
     tool = AGY_TOOLS.get(name, name)
-    path = args.get("TargetFile") or ""
+    path = args.get("TargetFile") or args.get("Path") or ""
     tool_input = {"command": args.get("CommandLine"), "file_path": path}
     translated = {"tool_name": tool, "tool_input": tool_input, "cwd": workspace_of(call, path)}
     hits = hits_for(translated, base)
