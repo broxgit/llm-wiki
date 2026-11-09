@@ -4,6 +4,10 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-11-09: `wiki find` takes a phrase
+
+- `wiki find deploy token` searches for the phrase, as if quoted, where it said only "too many arguments".
+
 ## 2026-11-07: Gemini gets the wikis' reminders
 
 - Gemini in Antigravity now gets a wiki's `before` and `on` reminders at the tool calls they apply to. Quit and reopen Antigravity once.

@@ -215,6 +215,8 @@ expect "which finds a covered repository" "demo" "$W" which web
 refuse "which fails for an unknown repository" "$W" which nothing
 printf -- '- [Deploy flow](wiki/howto/deploy.md): blue-green behind the canary gate\n' >> "$WIKIS_DIR/demo/index.md"
 expect "find searches indexes" "Deploy flow" "$W" find canary
+expect "find takes several words as one phrase" "Deploy flow" "$W" find blue-green behind
+refuse "a command with one target still refuses a second" "$W" which web api
 expect "find skips index headings" "no mentions" "$W" find Index
 mkdir -p "$T/ro-config/llm-wiki" && chmod 555 "$T/ro-config/llm-wiki"
 expect "find works when its usage record can't be written, as in a read-only sandbox" "Deploy flow" env XDG_CONFIG_HOME="$T/ro-config" "$W" find canary

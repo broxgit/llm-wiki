@@ -161,7 +161,7 @@ Usage: $WIKI_CMD <command> [options]
                        permissions and wiki setup antigravity add them.
   which [repo]         Print the wiki that covers a repository, by default the one you're in.
   status               List wikis: handbook version, notes waiting, lock state.
-  find <word>          Search every wiki's index, then page text, for a word.
+  find <words>         Search every wiki's index, then page text, for a word or phrase.
   deps [--all] [--write]
                        Which repository owns which package, and which use each other's,
                        from go.mod, package.json and pyproject.toml. --write saves it
@@ -7460,7 +7460,10 @@ for arg in "$@"; do
     --yes) want_yes=1 ;;
     -h | --help) usage; exit 0 ;;
     -*) die "unknown option: $arg" ;;
-    *) [ -z "$target" ] || die "too many arguments"; target="$arg" ;;
+    # find takes a phrase, so `wiki find blue green` works as if quoted.
+    *) if [ -z "$target" ]; then target="$arg"
+       elif [ "$cmd" = find ]; then target="$target $arg"
+       else die "too many arguments"; fi ;;
   esac
 done
 
