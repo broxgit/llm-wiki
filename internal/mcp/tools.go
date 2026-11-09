@@ -3,6 +3,7 @@ package mcp
 import (
 	"errors"
 	"fmt"
+	"github.com/broxgit/llm-wiki/internal/capture"
 	"io"
 	"io/fs"
 	"os"
@@ -572,7 +573,7 @@ func (s *Server) wikiCapture(a args) (string, error) {
 	if utf8.RuneCountInString(note) > maxNote {
 		return "", toolError(fmt.Sprintf("the note is over %d characters. Save the main points.", maxNote))
 	}
-	out, err := s.must(in.Folder, note, "capture", wiki, slug)
+	out, err := s.capture(in.Folder, wiki, slug, note)
 	if err != nil {
 		return "", err
 	}
@@ -587,6 +588,23 @@ func (s *Server) wikiCapture(a args) (string, error) {
 		why = lastLine(synced)
 	}
 	return out + "\nSaved on this machine, but not pushed: " + why, nil
+}
+
+// capture saves the note as wiki.sh capture does, and answers as must would have:
+// the line it prints, or its refusal as the tool's error. Where the port isn't sure,
+// wiki.sh saves it.
+func (s *Server) capture(folder, wiki, slug, note string) (string, error) {
+	line, err := capture.Run(capture.Options{
+		Wikis: folder, Home: s.Home, Pwd: tempDir(), Args: []string{wiki, slug}, Stdin: strings.NewReader(note),
+	})
+	var refused *capture.Refused
+	if errors.As(err, &refused) {
+		return "", toolError("error: " + refused.Msg)
+	}
+	if err != nil {
+		return s.must(folder, note, "capture", wiki, slug)
+	}
+	return line, nil
 }
 
 func (s *Server) wikiFeedback(a args) (string, error) {

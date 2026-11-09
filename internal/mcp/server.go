@@ -11,7 +11,7 @@
 // It answers from its own packages what they can answer: a search from internal/find,
 // and which collection covers a repository from internal/routing. Where those aren't
 // sure it runs wiki.sh, as the Python always does. The tools that wrap commands not
-// ported yet (start, status, capture, sync, feedback) run wiki.sh.
+// ported yet (start, status, sync, feedback) run wiki.sh.
 package mcp
 
 import (

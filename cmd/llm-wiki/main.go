@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/broxgit/llm-wiki/internal/backfill"
+	"github.com/broxgit/llm-wiki/internal/capture"
 	"github.com/broxgit/llm-wiki/internal/find"
 	"github.com/broxgit/llm-wiki/internal/mcp"
 	"github.com/broxgit/llm-wiki/internal/routing"
@@ -25,11 +26,11 @@ import (
 // protocol is what wiki.sh checks before it trusts this program: the commands, their
 // arguments and what they print. Raise it, and GO_PROTOCOL in wiki.sh with it, whenever
 // one of those changes, so a binary left over from an older checkout is passed over.
-const protocol = "12"
+const protocol = "13"
 
 func main() {
 	if len(os.Args) < 2 {
-		fail("usage: llm-wiki protocol | report-tokens|report-tokens-gemini <transcripts> <start> <end> <day-starts> <wikis> <exclude> | standup-activity <options> | journal-backfill <transcripts> <start> <end> <day-starts> <wikis> <exclude> <out> <brain> | which <options> | find <options> | status <options> | mcp")
+		fail("usage: llm-wiki protocol | report-tokens|report-tokens-gemini <transcripts> <start> <end> <day-starts> <wikis> <exclude> | standup-activity <options> | journal-backfill <transcripts> <start> <end> <day-starts> <wikis> <exclude> <out> <brain> | which <options> | find <options> | status <options> | capture <options> -- <arguments> | mcp")
 	}
 	switch os.Args[1] {
 	case "protocol":
@@ -71,6 +72,12 @@ func main() {
 		fmt.Print(out)
 	case "status":
 		out, err := runStatus(os.Args[2:])
+		if err != nil {
+			fail(err.Error())
+		}
+		fmt.Print(out)
+	case "capture":
+		out, err := runCapture(os.Args[2:])
 		if err != nil {
 			fail(err.Error())
 		}
@@ -162,6 +169,35 @@ func runFind(args []string) (string, error) {
 		return "none\n" + text, nil
 	}
 	return "found " + first + "\n" + text, nil
+}
+
+// runCapture is `wiki capture`. Both answers leave by stdout, under a first line that
+// says which follows: "captured" and the line to print, or "refused" and what to die
+// with. A refusal is the command's answer, and as a failure it would send wiki.sh to
+// its own code, with stdin, where the note was, already read.
+func runCapture(args []string) (string, error) {
+	o := capture.Options{Stdin: os.Stdin}
+	fs := flag.NewFlagSet("capture", flag.ContinueOnError)
+	fs.StringVar(&o.Wikis, "wikis", "", "")
+	fs.StringVar(&o.Home, "home", "", "")
+	fs.StringVar(&o.Pwd, "pwd", "", "")
+	fs.BoolVar(&o.TTY, "tty", false, "")
+	if err := fs.Parse(args); err != nil {
+		return "", err
+	}
+	if o.Wikis == "" {
+		return "", errors.New("capture takes: --wikis <folder> --home <folder> --pwd <folder> [--tty] -- <arguments>")
+	}
+	o.Args = fs.Args()
+	line, err := capture.Run(o)
+	var refused *capture.Refused
+	if errors.As(err, &refused) {
+		return "refused\n" + refused.Msg + "\n", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return "captured\n" + line + "\n", nil
 }
 
 // runStatus answers the table of `wiki status`. A first line says what follows, and

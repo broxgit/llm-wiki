@@ -6,11 +6,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
 )
+
+// saved puts "ran capture" where the server's own capture says what it saved, whose
+// name holds the clock.
+func saved(got string) string {
+	return regexp.MustCompile(`\Acaptured: raw/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{6}-[a-z0-9-]+\.md in ~/wikis/demo`).ReplaceAllString(got, "ran capture")
+}
 
 func write(t *testing.T, path, text string) {
 	t.Helper()
@@ -583,13 +590,17 @@ func TestWrappedTools(t *testing.T) {
 	os.Remove(root + "/calls.log")
 	note := "We chose Postgres.\nBecause \u2192 reasons.\n"
 	got, isErr = call(t, s, "wiki_capture", m{"wiki": "demo", "slug": "pg", "note": note})
-	if isErr || got != "ran capture\nPushed. A later session with file access compiles it into pages." {
+	if isErr || saved(got) != "ran capture\nPushed. A later session with file access compiles it into pages." {
 		t.Errorf("wiki_capture = %q, error %v", got, isErr)
 	}
+	// The server saves the note itself, and wiki.sh only syncs.
 	calls := read(t, root+"/calls.log")
-	if !strings.Contains(calls, "args: [capture] [demo] [pg]\n") || !strings.Contains(calls, "stdin: We chose Postgres.\nBecause \u2192 reasons.\n") ||
-		!strings.Contains(calls, "args: [sync] [demo] [-m] [demo: capture pg]\n") {
+	if strings.Contains(calls, "args: [capture]") || !strings.Contains(calls, "args: [sync] [demo] [-m] [demo: capture pg]\n") {
 		t.Errorf("wiki_capture ran:\n%s", calls)
+	}
+	notes, _ := filepath.Glob(root + "/home/wikis/demo/raw/*-pg.md")
+	if len(notes) != 1 || read(t, notes[0]) != "Captured: "+time.Now().UTC().Format("2006-01-02")+"\n\n"+note {
+		t.Errorf("wiki_capture left %v", notes)
 	}
 	for _, c := range []struct {
 		args m
@@ -621,8 +632,18 @@ func TestWrappedTools(t *testing.T) {
 	if got, isErr := call(t, s, "wiki_status", m{}); !isErr || got != "error: it went wrong" {
 		t.Errorf("a wiki.sh that fails: %q, error %v", got, isErr)
 	}
-	if got, _ := call(t, s, "wiki_capture", m{"wiki": "demo", "slug": "x", "note": "n"}); got != "error: it went wrong" {
-		t.Errorf("a capture that fails: %q", got)
+	if got, isErr := call(t, s, "wiki_capture", m{"wiki": "demo", "slug": "x", "note": "n"}); isErr || saved(got) != "ran capture\nSaved on this machine, but not pushed: error: it went wrong" {
+		t.Errorf("a capture whose sync fails: %q, error %v", got, isErr)
+	}
+	// A note that can't be written is the tool's error, in wiki.sh's words.
+	if os.Getuid() != 0 {
+		raw := root + "/home/wikis/demo/raw"
+		_ = os.Chmod(raw, 0o555)
+		got, isErr := call(t, s, "wiki_capture", m{"wiki": "demo", "slug": "locked", "note": "n"})
+		_ = os.Chmod(raw, 0o755)
+		if !isErr || !strings.HasPrefix(got, "error: can't write ~/wikis/demo/raw/") || !strings.HasSuffix(got, "-locked.md. If this runs inside an agent's sandbox, allow ~/wikis there, or run the command outside the sandbox. Nothing was saved.") {
+			t.Errorf("a capture that can't write: %q, error %v", got, isErr)
+		}
 	}
 	fake(s, "quiet-fail")
 	if got, isErr := call(t, s, "wiki_status", m{}); !isErr || got != "wiki.sh status failed." {
@@ -646,7 +667,7 @@ func TestCaptureNotPushed(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = root
-	if got, isErr := call(t, s, "wiki_capture", m{"wiki": "demo", "slug": "x", "note": "n"}); isErr || got != "saved\nSaved on this machine, but not pushed: error: no remote" {
+	if got, isErr := call(t, s, "wiki_capture", m{"wiki": "demo", "slug": "x", "note": "n"}); isErr || saved(got) != "ran capture\nSaved on this machine, but not pushed: error: no remote" {
 		t.Errorf("wiki_capture = %q, error %v", got, isErr)
 	}
 }
@@ -663,7 +684,7 @@ func TestCapturePushedOnlyWhenSyncPushed(t *testing.T) {
 	} {
 		s, _ := fixture(t)
 		fake(s, how)
-		if got, isErr := call(t, s, "wiki_capture", m{"wiki": "demo", "slug": "x", "note": "n"}); isErr || got != want {
+		if got, isErr := call(t, s, "wiki_capture", m{"wiki": "demo", "slug": "x", "note": "n"}); isErr || saved(got) != want {
 			t.Errorf("with a sync that ends as %s, wiki_capture = %q, error %v", how, got, isErr)
 		}
 	}
