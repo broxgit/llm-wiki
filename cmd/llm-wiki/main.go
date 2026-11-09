@@ -15,6 +15,7 @@ import (
 
 	"github.com/broxgit/llm-wiki/internal/backfill"
 	"github.com/broxgit/llm-wiki/internal/capture"
+	"github.com/broxgit/llm-wiki/internal/feedback"
 	"github.com/broxgit/llm-wiki/internal/find"
 	"github.com/broxgit/llm-wiki/internal/mcp"
 	"github.com/broxgit/llm-wiki/internal/routing"
@@ -26,11 +27,11 @@ import (
 // protocol is what wiki.sh checks before it trusts this program: the commands, their
 // arguments and what they print. Raise it, and GO_PROTOCOL in wiki.sh with it, whenever
 // one of those changes, so a binary left over from an older checkout is passed over.
-const protocol = "13"
+const protocol = "14"
 
 func main() {
 	if len(os.Args) < 2 {
-		fail("usage: llm-wiki protocol | report-tokens|report-tokens-gemini <transcripts> <start> <end> <day-starts> <wikis> <exclude> | standup-activity <options> | journal-backfill <transcripts> <start> <end> <day-starts> <wikis> <exclude> <out> <brain> | which <options> | find <options> | status <options> | capture <options> -- <arguments> | mcp")
+		fail("usage: llm-wiki protocol | report-tokens|report-tokens-gemini <transcripts> <start> <end> <day-starts> <wikis> <exclude> | standup-activity <options> | journal-backfill <transcripts> <start> <end> <day-starts> <wikis> <exclude> <out> <brain> | which <options> | find <options> | status <options> | capture <options> -- <arguments> | feedback-add <options> -- <arguments> | mcp")
 	}
 	switch os.Args[1] {
 	case "protocol":
@@ -78,6 +79,12 @@ func main() {
 		fmt.Print(out)
 	case "capture":
 		out, err := runCapture(os.Args[2:])
+		if err != nil {
+			fail(err.Error())
+		}
+		fmt.Print(out)
+	case "feedback-add":
+		out, err := runFeedbackAdd(os.Args[2:])
 		if err != nil {
 			fail(err.Error())
 		}
@@ -198,6 +205,37 @@ func runCapture(args []string) (string, error) {
 		return "", err
 	}
 	return "captured\n" + line + "\n", nil
+}
+
+// runFeedbackAdd is `wiki feedback add`. As with capture, the details are on stdin, so
+// both answers leave by stdout under a first line: "said" and the line to print, or
+// "refused" and what to die with.
+func runFeedbackAdd(args []string) (string, error) {
+	o := feedback.Options{Stdin: os.Stdin}
+	fs := flag.NewFlagSet("feedback-add", flag.ContinueOnError)
+	for name, to := range map[string]*string{
+		"dir": &o.Dir, "mode-file": &o.ModeFile, "wikis": &o.Wikis, "home": &o.Home, "kinds": &o.Kinds,
+		"version": &o.Version, "handbook": &o.Handbook, "system": &o.System,
+	} {
+		fs.StringVar(to, name, "", "")
+	}
+	fs.BoolVar(&o.TTY, "tty", false, "")
+	if err := fs.Parse(args); err != nil {
+		return "", err
+	}
+	if o.Dir == "" || o.ModeFile == "" {
+		return "", errors.New("feedback-add takes: --dir <folder> --mode-file <file> --wikis <folder> --home <folder> --kinds <kinds> --version <commit> --handbook <version> --system <line> [--tty] -- <arguments>")
+	}
+	o.Args = fs.Args()
+	line, err := feedback.Add(o)
+	var refused *feedback.Refused
+	if errors.As(err, &refused) {
+		return "refused\n" + refused.Msg + "\n", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return "said\n" + line + "\n", nil
 }
 
 // runStatus answers the table of `wiki status`. A first line says what follows, and

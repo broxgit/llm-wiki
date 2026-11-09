@@ -9,7 +9,7 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 ### Port wiki.sh to Go, one command at a time
 
 - **Why:** see the first step under Done. The aim is one binary that needs no Bash 3.2 workarounds and no Python.
-- **Sketch:** the MCP server is in the helper, and still runs `wiki.sh` for `start`, `status`, `sync` and `feedback add`, which are most of what `wiki.sh` is. `capture` is in the helper. The table of `status` is in the helper now; the rest of `status` reads the machine's setup and stays Bash. `feedback add`, `start` and `sync` are next, one at a time, and each then leaves the server's list of wrapped commands. Small and separate: `chat_state`, `chat_write` and `mcp --print` still need `python3`, so `wiki setup chat` does too. `find` is ported as it was: index lines, then one line from each of five pages, in the order of their paths. Ranked section results would be new, so they are a change of their own. Still Bash in routing: choosing the collection (`collection_for`, which runs at the top of every command, the core ones included), `wiki_root`, `repo_map` and the `links.md` lookups. Each port prints what the old code prints, checked by the smoke tests, and adds nothing.
+- **Sketch:** the MCP server is in the helper, and still runs `wiki.sh` for `start`, `status` and `sync`, which are most of what `wiki.sh` is. `capture` and `feedback add` are in the helper. The table of `status` is in the helper now; the rest of `status` reads the machine's setup and stays Bash. `start` and `sync` are next, one at a time, and each then leaves the server's list of wrapped commands. Small and separate: `chat_state`, `chat_write` and `mcp --print` still need `python3`, so `wiki setup chat` does too. `find` is ported as it was: index lines, then one line from each of five pages, in the order of their paths. Ranked section results would be new, so they are a change of their own. Still Bash in routing: choosing the collection (`collection_for`, which runs at the top of every command, the core ones included), `wiki_root`, `repo_map` and the `links.md` lookups. Each port prints what the old code prints, checked by the smoke tests, and adds nothing.
 - **Open:** whether the desktop app's Chat tab itself runs the helper's server as it ran the Python one: the smoke tests and the Claude CLI can't show that. And when the ported commands may drop their old Bash and Python. The helper now reaches people through `wiki update`, but that has to prove itself first. The core commands (`start`, `capture`, `lock`, `sync`, `index`) stay in Bash until then, so a session can never break over a missing binary.
 
 ### Know whether sessions capture and compile
@@ -72,6 +72,12 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### The Go port: wiki feedback add (2026-11-09)
+
+- **Why:** the second of the commands the helper's MCP server still ran `wiki.sh` for.
+- **What changed:** `internal/feedback` and the helper's `feedback-add` keep a note, or count one with the same summary as seen again, as `feedback_add` did. `wiki.sh` passes the folder, the mode file and the lines a note carries about the machine, and `cmd_mcp` passes the same to the helper's server, which keeps notes itself. The old code is `feedback_note`, now under `LC_ALL=C` and with a quiet `mkdir`. Protocol 14.
+- **Still untested:** the port in real use.
 
 ### The Go port: wiki capture (2026-11-09)
 

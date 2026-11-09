@@ -2150,6 +2150,103 @@ check "and AGENTS.md points to it" grep -q 'rules/open.md' "$REPO/template/AGENT
 check "and the empty ledger ships" grep -q '^# Open items' "$REPO/template/open.md"
 check "and compile says how to stamp Verified: lines" grep -q 'Verified:' "$REPO/template/rules/compile.md"
 check "and the lesson kind is in the patterns rules" grep -q '\*\*lesson\*\*' "$REPO/template/rules/patterns.md"
+# feedback add, from the compiled helper and from the Bash: the same stdout, stderr and
+# exit code, and the same notes, by name, permissions and text. The clock in a name or
+# a note is written STAMP or WHEN, since the two run a moment apart.
+[ -x "$T/bin/llm-wiki" ] || ! command -v go >/dev/null 2>&1 || build_helper >/dev/null 2>&1
+if [ -x "$T/bin/llm-wiki" ]; then
+  printf '#!/bin/sh\n[ "$1" = feedback-add ] || exec "%s" "$@"\n"%s" "$@"\nrc=$?\necho "$rc" >> "%s"\nexit $rc\n' "$T/bin/llm-wiki" "$T/bin/llm-wiki" "$T/fb-ran" > "$T/bin/fb-spy"
+  chmod +x "$T/bin/fb-spy"
+  mkdir -p "$T/fbp/seed" "$T/fbp/share/llm-wiki" "$T/fbp/notes/llm-wiki" "$T/fbp/off/llm-wiki"
+  printf 'mode=share\n' > "$T/fbp/share/llm-wiki/feedback"; printf 'mode=notes\n' > "$T/fbp/notes/llm-wiki/feedback"; printf 'mode=nope\n' > "$T/fbp/off/llm-wiki/feedback"
+  fbnote() { printf 'Kind: bug\nSummary: %s\nStatus: %s\nAgent: someone\nCaptured: 2026-01-01 10:00 UTC\nllm-wiki: abc1234\nHandbook: v1\nSystem: a system\nSeen: %s\n\nSeen: in the details too\n' "$2" "$3" "$4" > "$T/fbp/seed/$1.md"; }
+  fbnote 20260101-100000-known-thing "Known Thing" new 2
+  fbnote 20260101-100001-old-thing "Old thing" "dismissed 2026-01-02" 1
+  fbnote 20260101-100002-odd-count "Odd count" new "x"
+  fbnote 20260101-100003-open-end "Open end" new 1; printf 'and no line break at the end' >> "$T/fbp/seed/20260101-100003-open-end.md"
+  fbnote 20260101-100004-uncounted "Uncounted" new 1; grep -v '^Seen: 1$' "$T/fbp/seed/20260101-100004-uncounted.md" > "$T/fbp/x"; mv "$T/fbp/x" "$T/fbp/seed/20260101-100004-uncounted.md"
+  printf 'what I ran\n\nwhat it printed\n\n\n' > "$T/fbp/details.md"; : > "$T/fbp/empty.md"
+  FSTAMP='s/[0-9]\{8\}-[0-9]\{6\}-/STAMP-/g; s/[0-9]\{4\}-[0-9][0-9]-[0-9][0-9] [0-9][0-9]:[0-9][0-9] UTC/WHEN/g'
+  # FLOCKED: the notes' folder can't be written in for the run. FNODIR: nor made.
+  FLOCKED=""; FNODIR=""
+  # brun <helper> <mode> <stdin's file> <feedback add's arguments>: feedback add with
+  # that helper, or with the Bash alone when none is named, on a fresh copy of the
+  # seeded notes. Prints stdout, the exit code and the notes. stderr goes to $T/fb.err.
+  brun() {
+    local go="$1" mode="$2" in="$3" no=1 f d="$T/fbp/state/llm-wiki/feedback"
+    shift 3
+    [ -z "$go" ] || no=""
+    chmod -R u+w "$T/fbp/state" 2>/dev/null; rm -rf "$T/fbp/state"; mkdir -p "$T/fbp/state/llm-wiki"
+    [ -n "$FNODIR" ] || cp -Rp "$T/fbp/seed" "$d"
+    [ -z "$FLOCKED" ] || chmod 555 "$d"
+    [ -z "$FNODIR" ] || chmod 555 "$T/fbp/state/llm-wiki"
+    (cd "$T" && XDG_STATE_HOME="$T/fbp/state" XDG_CONFIG_HOME="$T/fbp/$mode" LLM_WIKI_NO_GO="$no" LLM_WIKI_GO="$go" "$W" feedback add "$@" < "$in" 2>"$T/fb.raw-err"; echo "exit $?") | sed "$FSTAMP"
+    sed "$FSTAMP" "$T/fb.raw-err" > "$T/fb.err"
+    for f in "$d"/* "$d"/.[!.]*; do
+      [ -e "$f" ] || continue
+      printf -- '--- %s %s\n' "$(printf '%s' "${f##*/}" | sed "$FSTAMP")" "$(ls -l "$f" | cut -c1-10)"
+      sed "$FSTAMP" "$f"
+    done
+  }
+  # bsame <check> <helper|bash> <mode> <stdin's file> <arguments>: both say and keep
+  # the same, and with the helper on, the answer came from the one named.
+  bsame() {
+    local name="$1" who="$2" a b ran
+    shift 2
+    : > "$T/fb-ran"
+    a="$(brun "" "$@")"
+    cp "$T/fb.err" "$T/fb.a"
+    b="$(brun "$T/bin/fb-spy" "$@")"
+    ran="$(cat "$T/fb-ran")"
+    case "$who:$ran" in helper:0) ran=helper ;; helper:* | bash: | bash:0) ran="not the $who (the helper's feedback-add ended: ${ran:-never ran})" ;; *) ran=bash ;; esac
+    if [ "$a" = "$b" ] && cmp -s "$T/fb.a" "$T/fb.err" && [ "$ran" = "$who" ]; then
+      ok "$name"
+    else
+      bad "$name" "$(printf 'answered by: %s\n%s' "$ran" "$(diff <(printf '%s\n' "$a"; cat "$T/fb.a") <(printf '%s\n' "$b"; cat "$T/fb.err"))")"
+    fi
+  }
+  bsame "feedback add, helper and Bash: a note, with its details on stdin" helper share "$T/fbp/details.md" friction "Sync: says 'name a wiki' & no more!" --agent "Smoke, a model"
+  out="$(brun "$T/bin/fb-spy" share "$T/fbp/details.md" friction "Sync: says 'name a wiki' & no more!" --agent "Smoke, a model")"
+  case "$out" in "feedback: saved STAMP-sync-says-name-a-wiki-no-more. The user can file it with: wiki feedback send"*"exit 0"*"--- STAMP-sync-says-name-a-wiki-no-more.md -rw-r--r--"*"Kind: friction"*"Agent: Smoke, a model"*"Captured: WHEN"*"Seen: 1"*"what it printed") ok "and the helper's note has what the Bash's has, without the blank lines at the end" ;; *) bad "and the helper's note has what the Bash's has, without the blank lines at the end" "$out" ;; esac
+  bsame "with notes kept and not shared, which it doesn't offer to file" helper notes "$T/fbp/details.md" idea "an idea"
+  bsame "with feedback off, or set to a word it doesn't know" helper off "$T/fbp/details.md" idea "an idea"
+  bsame "details in a file, and no agent" helper share /dev/null docs "from a file" --file "$T/fbp/details.md"
+  bsame "a summary longer than a name, cut at a dash" helper share "$T/fbp/details.md" bug "a summary that runs on well past what a name holds"
+  bsame "a summary with no letters or digits" helper share "$T/fbp/details.md" bug "?!"
+  bsame "a summary with letters that aren't ASCII" helper share "$T/fbp/details.md" bug "$(printf 'Caf\303\251 \303\211COLE caf\351')"
+  bsame "the same summary again, whatever its case, is seen again" helper share "$T/fbp/details.md" bug "KNOWN thing" --agent "Another, model"
+  out="$(brun "$T/bin/fb-spy" share "$T/fbp/details.md" bug "KNOWN thing")"
+  case "$out" in "feedback: seen again, STAMP-known-thing (seen 3 times)"*"Seen: 3"*"Seen: 3"*"## Seen again WHEN"*"what it printed"*) ok "and the helper counts it in the note it was in" ;; *) bad "and the helper counts it in the note it was in" "$out" ;; esac
+  bsame "a note whose only count is a line of its details, which the Bash answers" bash share "$T/fbp/details.md" bug "uncounted"
+  bsame "a dismissed note's summary starts a new note" helper share "$T/fbp/details.md" bug "Old thing"
+  bsame "two kinds in one word, which the Bash takes" helper share "$T/fbp/details.md" "bug friction" "two kinds"
+  bsame "feedback add refuses, the same from both: nothing at all" helper share "$T/fbp/details.md"
+  bsame "a kind and no summary" helper share "$T/fbp/details.md" bug
+  bsame "a kind it doesn't have" helper share "$T/fbp/details.md" oops "a summary"
+  bsame "an empty summary" helper share "$T/fbp/details.md" bug ""
+  bsame "an option it doesn't have" helper share "$T/fbp/details.md" bug "a summary" --nope x
+  bsame "--agent with nothing after it" helper share "$T/fbp/details.md" bug "a summary" --agent
+  bsame "no details" helper share /dev/null bug "a summary"
+  bsame "details that are only line breaks" helper share "$T/fbp/empty.md" bug "a summary" --file "$T/fbp/empty.md"
+  bsame "a details file that isn't there, which the Bash answers" bash share /dev/null bug "a summary" --file "$T/fbp/gone.md"
+  bsame "a summary with a line break, which the Bash answers" bash share "$T/fbp/details.md" bug "two
+lines"
+  bsame "a count the shell reads its own way, which the Bash answers" bash share "$T/fbp/details.md" bug "odd count"
+  bsame "a note that doesn't end its last line, which the Bash answers" bash share "$T/fbp/details.md" bug "open end"
+  if [ "$(id -u)" != 0 ]; then
+    FLOCKED=1
+    bsame "a folder of notes it can't write in, which the Bash answers" bash share "$T/fbp/details.md" bug "locked out"
+    FLOCKED=""; FNODIR=1
+    bsame "and one it can't make" helper share "$T/fbp/details.md" bug "no folder"
+    FNODIR=""
+  else
+    skipped "feedback add where it can't write (running as root)"
+  fi
+  [ "$(brun "$T/bin/broken-helper" share "$T/fbp/details.md" bug "fallback")" = "$(brun "" share "$T/fbp/details.md" bug "fallback")" ] && ok "a helper that fails leaves feedback add to the Bash, with the details still on stdin" || bad "a helper that fails leaves feedback add to the Bash, with the details still on stdin"
+  chmod -R u+w "$T/fbp" 2>/dev/null; rm -rf "$T/fbp" "$T/bin/fb-spy" "$T"/fb.err "$T"/fb.a "$T"/fb.raw-err "$T/fb-ran"
+else
+  skipped "the Go helper against the Bash for feedback add (go isn't installed)"
+fi
 rm -rf "$FB" "$HOME/.config/llm-wiki/feedback" "$T/bin/gh" "$T/gh.log" "$T/gh.body" "$T/fb.md"
 fi
 
@@ -2224,7 +2321,7 @@ if [ -x "$T/bin/llm-wiki" ]; then
   check "wiki mcp is served by the compiled helper when there is one" grep -qx mcp "$T/helper-ran"
   : > "$T/helper-ran"
   mcp_call wiki_search '{"word":"canary"}' >/dev/null; mcp_call wiki_start '{"repository":"web"}' >/dev/null
-  check "and the helper's server searches and routes itself, with no wiki.sh find, which or capture" bash -c "! grep -q -x -e find -e which -e capture '$T/helper-ran'"
+  check "and the helper's server searches and routes itself, with no wiki.sh find, which, capture or feedback add" bash -c "! grep -q -x -e find -e which -e capture -e feedback-add '$T/helper-ran'"
   # The helper's server stays up whatever a line holds. Python reads a line that isn't
   # UTF-8 in the C locale and stops at one in a UTF-8 locale.
   U8="$(locale -a 2>/dev/null | grep -i -E '^(en_US|C)\.utf-?8$' | head -n 1)"
@@ -3176,7 +3273,7 @@ PY
   # mcp_first: back to the files as they were before the first batch.
   mcp_first() { rm -rf "$T/mcp-kept"; cp -Rp "$T/mcp-first" "$T/mcp-kept"; mcp_back; }
   mcp_same "MCP, helper and Python: the same replies to every request and every tool" same
-  check "and the helper's server answered them itself: no wiki.sh find, which or capture" bash -c "grep -qx mcp '$T/helper-ran' && ! grep -q -x -e find -e which -e capture '$T/helper-ran'"
+  check "and the helper's server answered them itself: no wiki.sh find, which, capture or feedback add" bash -c "grep -qx mcp '$T/helper-ran' && ! grep -q -x -e find -e which -e capture -e feedback-add '$T/helper-ran'"
   [ "$(sort -u "$T/status-ran")" = 0 ] && ok "and the helper made the table for each wiki_status" || bad "and the helper made the table for each wiki_status" "$(cat "$T/status-ran" "$T/helper-ran")"
   check "a long word is logged cut at 60 bytes and not inside a character, by the helper's server" grep -E -q ",global,search-none,x($(printf '\303\251')){29}\$" "$FD/stats.csv"
   check "and each search is logged once" bash -c "[ \"\$(grep -c ',search-found,twobyte$' '$FD/stats.csv')\" = 1 ] && [ \"\$(grep -c ',search-none,twobyte$' '$CW/stats.csv')\" = 1 ] && grep -qx \"used:find $(date -u +%Y-%m-%d)\" '$MTIPS'"

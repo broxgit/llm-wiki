@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/broxgit/llm-wiki/internal/capture"
+	"github.com/broxgit/llm-wiki/internal/feedback"
 	"io"
 	"io/fs"
 	"os"
@@ -622,5 +623,20 @@ func (s *Server) wikiFeedback(a args) (string, error) {
 	if agent == "" {
 		agent = "unknown, through MCP"
 	}
-	return s.must(c.Folder, details, "feedback", "add", kind, summary, "--agent", agent)
+	// The server keeps the note itself, and answers as must would have. Where the
+	// port isn't sure, or wiki.sh passed nothing about notes, wiki.sh keeps it.
+	args := []string{kind, summary, "--agent", agent}
+	if s.Feedback.Dir != "" && s.Feedback.ModeFile != "" && !strings.Contains(strings.Join(args, ""), "\x00") {
+		o := s.Feedback
+		o.Wikis, o.Home, o.StrictNul, o.Args, o.Stdin = c.Folder, s.Home, true, args, strings.NewReader(details)
+		line, err := feedback.Add(o)
+		var refused *feedback.Refused
+		if errors.As(err, &refused) {
+			return "", toolError("error: " + refused.Msg)
+		}
+		if err == nil {
+			return line, nil
+		}
+	}
+	return s.must(c.Folder, details, append([]string{"feedback", "add"}, args...)...)
 }

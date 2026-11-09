@@ -238,7 +238,7 @@ need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 # Raise GO_PROTOCOL, with the constant in cmd/llm-wiki/main.go, whenever a ported
 # command's arguments or output change. scripts/helper.sh builds releases and writes
 # helper.lock.
-GO_PROTOCOL=13
+GO_PROTOCOL=14
 HELPER_LOCK="$REPO/helper.lock"
 HELPER_DIR="${LLM_WIKI_HELPER_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/llm-wiki/helper}"
 
@@ -3755,8 +3755,36 @@ EOF
   echo "Read one: $WIKI_CMD feedback show <id>. File it: $WIKI_CMD feedback send <id>. Drop it: $WIKI_CMD feedback dismiss <id>."
 }
 
+# feedback_system: the System line of a note: the system, and the bash and git here.
+feedback_system() {
+  printf '%s %s, bash %s, git %s' "$(uname -s)" "$(uname -r)" "${BASH_VERSION%%(*}" "$(git version 2>/dev/null | sed 's/^git version //' || true)"
+}
+
+# feedback_add: the compiled helper keeps the note too. Its first line says which
+# answer follows, the line to print or what to refuse with. It fails only before it
+# reads stdin, and then feedback_note answers.
 feedback_add() {
+  local bin out tty="" nl=$'\n'
+  [ ! -t 0 ] || tty=--tty
+  # shellcheck disable=SC2086
+  if bin="$(go_helper)" && out="$("$bin" feedback-add --dir "$FEEDBACK_DIR" --mode-file "$FEEDBACK_FILE" --wikis "$WIKIS_DIR" \
+    --home "$HOME" --kinds "$FEEDBACK_KINDS" --version "$(llm_wiki_version)" --handbook "$(version_of "$TEMPLATE/AGENTS.md")" \
+    --system "$(feedback_system)" $tty -- "$@" 2>/dev/null)"; then
+    case "$out" in
+      "said$nl"?*) printf '%s\n' "${out#*"$nl"}"; return 0 ;;
+      "refused$nl"?*) die "${out#*"$nl"}" ;;
+    esac
+  fi
+  feedback_note "$@"
+}
+
+# feedback_note: what feedback add does, in Bash. LC_ALL=C, exported as status_table
+# does, so the order of the notes, which letters match whatever their case, and the
+# slug don't depend on the locale, and the compiled helper can do the same.
+feedback_note() {
   local kind="${1:-}" sum="${2:-}" agent="" file="" body f slug stamp n
+  local LC_ALL=C
+  export LC_ALL
   [ $# -lt 2 ] || shift 2
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -3773,7 +3801,7 @@ feedback_add() {
   fi
   if [ -n "$file" ]; then body="$(cat "$file")" || die "can't read $file"; elif [ ! -t 0 ]; then body="$(cat)"; fi
   [ -n "${body:-}" ] || die "feedback add: the details go in --file NOTE or on stdin: what you ran, what it printed, what you expected, what would have helped"
-  mkdir -p "$FEEDBACK_DIR" || die "$(cant_write "$FEEDBACK_DIR")"
+  mkdir -p "$FEEDBACK_DIR" 2>/dev/null || die "$(cant_write "$FEEDBACK_DIR")"
   # The same summary again: count it, and keep the new details under it.
   while IFS= read -r f; do
     [ -n "$f" ] || continue
@@ -3797,7 +3825,7 @@ EOF
   {
     printf 'Kind: %s\nSummary: %s\nStatus: new\nAgent: %s\nCaptured: %s\n' "$kind" "$sum" "${agent:-unknown}" "$(date -u '+%Y-%m-%d %H:%M UTC')"
     printf 'llm-wiki: %s\nHandbook: v%s\n' "$(llm_wiki_version)" "$(version_of "$TEMPLATE/AGENTS.md")"
-    printf 'System: %s %s, bash %s, git %s\n' "$(uname -s)" "$(uname -r)" "${BASH_VERSION%%(*}" "$(git version 2>/dev/null | sed 's/^git version //' || true)"
+    printf 'System: %s\n' "$(feedback_system)"
     printf 'Seen: 1\n\n%s\n' "$body"
   } > "$f" || die "$(cant_write "$f")"
   echo "feedback: saved $(basename "$f" .md)$([ "$(feedback_mode)" = share ] && echo '. The user can file it with: wiki feedback send')"
@@ -4073,7 +4101,10 @@ cmd_mcp() {
   if bin="$(go_helper)"; then
     ctype="$(mcp_ctype || true)"
     [ -z "$ctype" ] || export LC_CTYPE="$ctype"
-    exec env PATH="$PATH" LLM_WIKI_SH="$REPO/wiki.sh" LLM_WIKI_COLLECTIONS="$list" LLM_WIKI_TIPS="$TIPS_STATE" "$bin" mcp
+    exec env PATH="$PATH" LLM_WIKI_SH="$REPO/wiki.sh" LLM_WIKI_COLLECTIONS="$list" LLM_WIKI_TIPS="$TIPS_STATE" \
+      LLM_WIKI_FEEDBACK_DIR="$FEEDBACK_DIR" LLM_WIKI_FEEDBACK_FILE="$FEEDBACK_FILE" LLM_WIKI_FEEDBACK_KINDS="$FEEDBACK_KINDS" \
+      LLM_WIKI_FEEDBACK_VERSION="$(llm_wiki_version)" LLM_WIKI_FEEDBACK_HANDBOOK="$(version_of "$TEMPLATE/AGENTS.md")" \
+      LLM_WIKI_FEEDBACK_SYSTEM="$(feedback_system)" "$bin" mcp
   fi
   command -v python3 >/dev/null 2>&1 || die "the MCP server needs python3, or the compiled helper. Run: $WIKI_CMD helper fetch"
   exec env PATH="$PATH" LLM_WIKI_SH="$REPO/wiki.sh" LLM_WIKI_COLLECTIONS="$list" python3 "$REPO/mcp/server.py"
