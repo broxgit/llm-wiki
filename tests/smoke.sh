@@ -2224,7 +2224,7 @@ if [ -x "$T/bin/llm-wiki" ]; then
   check "wiki mcp is served by the compiled helper when there is one" grep -qx mcp "$T/helper-ran"
   : > "$T/helper-ran"
   mcp_call wiki_search '{"word":"canary"}' >/dev/null; mcp_call wiki_start '{"repository":"web"}' >/dev/null
-  check "and the helper's server searches and routes itself, with no wiki.sh find or which" bash -c "! grep -q -x -e find -e which '$T/helper-ran'"
+  check "and the helper's server searches and routes itself, with no wiki.sh find, which or capture" bash -c "! grep -q -x -e find -e which -e capture '$T/helper-ran'"
   # The helper's server stays up whatever a line holds. Python reads a line that isn't
   # UTF-8 in the C locale and stops at one in a UTF-8 locale.
   U8="$(locale -a 2>/dev/null | grep -i -E '^(en_US|C)\.utf-?8$' | head -n 1)"
@@ -3176,7 +3176,7 @@ PY
   # mcp_first: back to the files as they were before the first batch.
   mcp_first() { rm -rf "$T/mcp-kept"; cp -Rp "$T/mcp-first" "$T/mcp-kept"; mcp_back; }
   mcp_same "MCP, helper and Python: the same replies to every request and every tool" same
-  check "and the helper's server answered them itself: no wiki.sh find or which" bash -c "grep -qx mcp '$T/helper-ran' && ! grep -q -x -e find -e which '$T/helper-ran'"
+  check "and the helper's server answered them itself: no wiki.sh find, which or capture" bash -c "grep -qx mcp '$T/helper-ran' && ! grep -q -x -e find -e which -e capture '$T/helper-ran'"
   [ "$(sort -u "$T/status-ran")" = 0 ] && ok "and the helper made the table for each wiki_status" || bad "and the helper made the table for each wiki_status" "$(cat "$T/status-ran" "$T/helper-ran")"
   check "a long word is logged cut at 60 bytes and not inside a character, by the helper's server" grep -E -q ",global,search-none,x($(printf '\303\251')){29}\$" "$FD/stats.csv"
   check "and each search is logged once" bash -c "[ \"\$(grep -c ',search-found,twobyte$' '$FD/stats.csv')\" = 1 ] && [ \"\$(grep -c ',search-none,twobyte$' '$CW/stats.csv')\" = 1 ] && grep -qx \"used:find $(date -u +%Y-%m-%d)\" '$MTIPS'"
@@ -3231,6 +3231,100 @@ and a third" ] && ok "a page's line ends reach a client as line feeds" || bad "a
   mcp_first
   [ ! -f "$T/mcp-tips" ] || mv "$T/mcp-tips" "$MTIPS"
   rm -f "$FD/alpha/wiki/fits.md" "$FD/alpha/wiki/big.md" "$FD/alpha/wiki/zz-crlf.md" "$FD/alpha/wiki/zz-broken.md" "$T"/mcp.*.out "$T"/mcp.*.err "$T"/mcp.*.files "$T/mcp.req"; rm -rf "$T/mcp-kept" "$T/mcp-first"
+  # capture, from the compiled helper and from the Bash: the same stdout, stderr and
+  # exit code, and the same file in raw/, by name, permissions and bytes. The clock in
+  # a name is written STAMP, since the two run a moment apart.
+  printf '#!/bin/sh\n[ "$1" = capture ] || exec "%s" "$@"\n"%s" "$@"\nrc=$?\necho "$rc" >> "%s"\nexit $rc\n' "$T/bin/llm-wiki" "$T/bin/llm-wiki" "$T/capture-ran" > "$T/bin/capture-spy"
+  chmod +x "$T/bin/capture-spy"
+  rm -rf "$FD/alpha/raw"; mkdir -p "$FD/alpha/raw" "$T/cap"
+  printf 'a note in a file\n' > "$T/cap/note.md"; printf 'Captured: 2020-01-02\n\nit came dated\n' > "$T/cap/dated.md"
+  printf 'data\n' > "$T/cap/Two.Dots.TXT"; printf 'plain\n' > "$T/cap/noext"; printf 'KEY=1\n' > "$T/cap/.env"; printf 'x\n' > "$T/cap/end."
+  printf '#!/bin/sh\n' > "$T/cap/run.sh"; chmod 755 "$T/cap/run.sh"; : > "$T/cap/empty.md"
+  CSTAMP='s/[0-9]\{4\}-[0-9][0-9]-[0-9][0-9]-[0-9]\{6\}-/STAMP-/g'
+  # crun <helper> <folder> <stdin's file> <capture's arguments>: capture there with that
+  # helper, or with the Bash alone when none is named. Prints stdout, the exit code and
+  # what raw/ holds, then empties raw/. stderr goes to $T/capture.err. With CLOCKED set,
+  # raw/ can't be written in for the run.
+  CLOCKED=""
+  crun() {
+    local go="$1" dir="$2" in="$3" no=1 f
+    shift 3
+    [ -z "$go" ] || no=""
+    [ -z "$CLOCKED" ] || chmod 555 "$FD/alpha/raw"
+    (cd "$dir" && env -u WIKIS_DIR LLM_WIKI_NO_GO="$no" LLM_WIKI_GO="$go" "$W" capture "$@" < "$in" 2>"$T/capture.raw-err"; echo "exit $?") | sed "$CSTAMP"
+    sed "$CSTAMP" "$T/capture.raw-err" > "$T/capture.err"
+    echo "raw:"
+    for f in "$FD/alpha/raw"/*; do
+      [ -e "$f" ] || continue
+      printf '%s %s %s\n' "$(printf '%s' "${f##*/}" | sed "$CSTAMP")" "$(ls -l "$f" | cut -c1-10)" "$(cksum < "$f")"
+    done
+    chmod -R u+w "$FD/alpha/raw" 2>/dev/null; rm -rf "$FD/alpha/raw"; mkdir -p "$FD/alpha/raw"
+  }
+  # csame <check> <helper|bash> <folder> <stdin's file> <capture's arguments>: both say
+  # and save the same, and with the helper on, the answer came from the one named.
+  csame() {
+    local name="$1" who="$2" a b ran
+    shift 2
+    : > "$T/capture-ran"
+    a="$(crun "" "$@")"
+    cp "$T/capture.err" "$T/capture.a"
+    b="$(crun "$T/bin/capture-spy" "$@")"
+    ran="$(cat "$T/capture-ran")"
+    case "$who:$ran" in helper:0) ran=helper ;; helper:* | bash: | bash:0) ran="not the $who (the helper's capture ended: ${ran:-never ran})" ;; *) ran=bash ;; esac
+    if [ "$a" = "$b" ] && cmp -s "$T/capture.a" "$T/capture.err" && [ "$ran" = "$who" ]; then
+      ok "$name"
+    else
+      bad "$name" "$(printf 'answered by: %s\nBash: %s\n%s\nhelper: %s\n%s' "$ran" "$a" "$(cat "$T/capture.a")" "$b" "$(cat "$T/capture.err")")"
+    fi
+  }
+  csame "capture, helper and Bash: a note on stdin" helper "$T" "$T/cap/note.md" alpha "Decided: Postgres, v2!"
+  out="$(crun "$T/bin/capture-spy" "$T" "$T/cap/note.md" alpha "Decided: Postgres, v2!")"
+  case "$out" in "captured: raw/STAMP-decided-postgres-v2.md in ~/wikis/alpha"*"exit 0"*"STAMP-decided-postgres-v2.md -rw-r--r-- "*) ok "and the helper names it by the clock and the slug, and dates it" ;; *) bad "and the helper names it by the clock and the slug, and dates it" "$out" ;; esac
+  csame "a note that came with its Captured line, kept as it is" helper "$T" "$T/cap/dated.md" alpha dated
+  csame "a note in a file" helper "$T/cap" /dev/null alpha from-file --file note.md
+  csame "a copy, named for the file" helper "$T/cap" /dev/null alpha --copy Two.Dots.TXT
+  csame "a copy with a slug of its own" helper "$T" /dev/null alpha given --copy "$T/cap/Two.Dots.TXT"
+  csame "a copy of a file with no extension" helper "$T/cap" /dev/null alpha --copy noext
+  csame "of one whose name starts with a dot" helper "$T/cap" /dev/null alpha --copy .env
+  csame "of one whose name ends with a dot" helper "$T/cap" /dev/null alpha --copy end.
+  csame "and of one that can be run, which the copy can too" helper "$T/cap" /dev/null alpha --copy run.sh
+  csame "a wiki named by its path" helper "$T" "$T/cap/note.md" "$FD/alpha" by-path
+  # shellcheck disable=SC2088
+  csame "by a path from home" helper "$T" "$T/cap/note.md" "~/wikis/./alpha" by-home
+  csame "and by a path from here, with dots" helper "$FD/alpha/wiki" "$T/cap/note.md" ../../alpha by-dots
+  csame "a slug with letters that aren't ASCII, in a UTF-8 locale" helper "$T" "$T/cap/note.md" alpha "$(printf 'Caf\303\251 \303\211cole')"
+  csame "and with a byte that isn't UTF-8" helper "$T" "$T/cap/note.md" alpha "$(printf 'caf\351 au lait')"
+  csame "capture refuses, the same from both: no wiki" helper "$T" "$T/cap/note.md"
+  csame "a folder that isn't a wiki" helper "$T" "$T/cap/note.md" nowiki slug
+  csame "no slug" helper "$T" "$T/cap/note.md" alpha
+  csame "a slug with no letters or digits" helper "$T" "$T/cap/note.md" alpha "!!!"
+  csame "an empty note" helper "$T" /dev/null alpha empty
+  csame "an empty file" helper "$T" /dev/null alpha empty --file "$T/cap/empty.md"
+  csame "a file that isn't there" helper "$T" /dev/null alpha gone --file "$T/cap/gone.md"
+  csame "a copy of one that isn't there" helper "$T" /dev/null alpha --copy "$T/cap/gone.md"
+  csame "--file and --copy together" helper "$T" /dev/null alpha both --file "$T/cap/note.md" --copy "$T/cap/noext"
+  csame "--file with nothing after it" helper "$T" /dev/null alpha slug --file
+  csame "an option it doesn't have" helper "$T" /dev/null alpha slug --nope
+  csame "a third name" helper "$T" "$T/cap/note.md" alpha one two
+  csame "an empty name, which the next one fills" helper "$T" "$T/cap/note.md" "" alpha filled
+  csame "a slug with a line break, which the Bash answers" bash "$T" "$T/cap/note.md" alpha "two
+lines"
+  if [ "$(id -u)" != 0 ]; then
+    chmod 000 "$T/cap/dated.md"
+    csame "a file it can't read, which the Bash answers" bash "$T" /dev/null alpha locked --file "$T/cap/dated.md"
+    csame "and a copy of one" helper "$T" /dev/null alpha --copy "$T/cap/dated.md"
+    chmod 644 "$T/cap/dated.md"
+    CLOCKED=1
+    csame "a raw folder it can't write in" helper "$T" "$T/cap/note.md" alpha sandboxed
+    lacks "and neither says captured" "captured:" crun "$T/bin/capture-spy" "$T" "$T/cap/note.md" alpha sandboxed
+    CLOCKED=""
+  else
+    skipped "capture where it can't read or write (running as root)"
+  fi
+  [ "$(crun "$T/bin/broken-helper" "$T" "$T/cap/note.md" alpha fallback)" = "$(crun "" "$T" "$T/cap/note.md" alpha fallback)" ] && ok "a helper that fails leaves capture to the Bash, with the note still on stdin" || bad "a helper that fails leaves capture to the Bash, with the note still on stdin"
+  printf '#!/bin/sh\n[ "$1" = protocol ] && { sed -n "s/^GO_PROTOCOL=//p" "%s"; exit 0; }\necho "captured"\n' "$W" > "$T/bin/odd-helper"; chmod +x "$T/bin/odd-helper"
+  [ "$(crun "$T/bin/odd-helper" "$T" "$T/cap/note.md" alpha odd)" = "$(crun "" "$T" "$T/cap/note.md" alpha odd)" ] && ok "and an answer with no line to print is passed over" || bad "and an answer with no line to print is passed over"
+  rm -rf "$T/cap" "$T/bin/capture-spy" "$T/bin/odd-helper" "$T"/capture.* "$T/capture-ran"
   rm -rf "${FD:?}/alpha" "$FD/Beta" "$FD/notes" "$FD/stray"
   rm -f "$CW/jobapp/wiki/canary.md" "$FD/stats.csv" "$CW/stats.csv"
 else

@@ -238,7 +238,7 @@ need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 # Raise GO_PROTOCOL, with the constant in cmd/llm-wiki/main.go, whenever a ported
 # command's arguments or output change. scripts/helper.sh builds releases and writes
 # helper.lock.
-GO_PROTOCOL=12
+GO_PROTOCOL=13
 HELPER_LOCK="$REPO/helper.lock"
 HELPER_DIR="${LLM_WIKI_HELPER_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/llm-wiki/helper}"
 
@@ -855,6 +855,24 @@ iso_epoch() {
 # --file reads the note from a file instead of stdin. Some agents approve a command
 # once and for all only when it has no pipe or heredoc (Antigravity, 2026-10-29).
 cmd_capture() {
+  local bin out tty="" nl=$'\n'
+  # The compiled helper saves the note too. Its first line says which answer follows,
+  # the line to print or what to refuse with. It fails only before it reads stdin, and
+  # then capture_note answers.
+  [ ! -t 0 ] || tty=--tty
+  # shellcheck disable=SC2086
+  if bin="$(go_helper)" && out="$("$bin" capture --wikis "$WIKIS_DIR" --home "$HOME" --pwd "$PWD" $tty -- "$@" 2>/dev/null)"; then
+    case "$out" in
+      "captured$nl"?*) printf '%s\n' "${out#*"$nl"}"; return 0 ;;
+      "refused$nl"?*) die "${out#*"$nl"}" ;;
+    esac
+  fi
+  capture_note "$@"
+}
+
+# capture_note: what capture does, in Bash. The slug is made under LC_ALL=C, so it
+# doesn't depend on the locale and the compiled helper can make the same one.
+capture_note() {
   local wiki="" slug="" copy="" file="" root stamp name ext stem n=2 tmp
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -882,7 +900,7 @@ cmd_capture() {
       [ ! -t 0 ] || die "capture reads the note from stdin, or from a file with --file NOTE"
     fi
   fi
-  slug="$(printf '%s' "$slug" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9][^a-z0-9]*/-/g; s/^-//; s/-$//')"
+  slug="$(printf '%s' "$slug" | LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C sed 's/[^a-z0-9][^a-z0-9]*/-/g; s/^-//; s/-$//')"
   [ -n "$slug" ] || die "that slug has no letters or digits"
   # The clock, to the second, in UTC. The name sets ingest order, so never round it.
   stamp="$(date -u +%Y-%m-%d-%H%M%S)"
