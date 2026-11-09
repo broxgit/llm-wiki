@@ -1572,6 +1572,9 @@ if [ -x "$T/bin/llm-wiki" ]; then
     [ "$a" = "$g" ] && ok "and with $name" || bad "and with $name" "$(diff <(printf '%s\n' "$a") <(printf '%s\n' "$g"))"
   }
   ssame "--day" --day 2026-01-15
+  # macOS's date took the seconds from the clock, so the day ran a few seconds into the next.
+  out="$(LLM_WIKI_NO_GO=1 "$W" standup --day 2026-01-15 2>&1)"
+  case "$out" in *"- 2026-01-15-120000-titled"*"2026-01-16: day only"*) bad "and a day ends at its last second, whatever second it is now" "$out" ;; *"- 2026-01-15-120000-titled"*) ok "and a day ends at its last second, whatever second it is now" ;; *) bad "and a day ends at its last second, whatever second it is now" "$out" ;; esac
   ssame "--since 2d" --since 2d
   ssame "--since lastweek" --since lastweek
   ssame "--format summary" "${SP[@]}" --format summary

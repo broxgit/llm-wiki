@@ -4444,7 +4444,9 @@ day_of_week() { # 1 is Monday
 }
 
 to_epoch() { # "YYYY-MM-DD HH:MM" in local time
-  if is_gnu_date; then date -d "$1" +%s; else date -j -f "%Y-%m-%d %H:%M" "$1" +%s; fi
+  # BSD date fills what the format leaves out from the clock, so name the seconds:
+  # without them the answer moved with the second it was asked in.
+  if is_gnu_date; then date -d "$1" +%s; else date -j -f "%Y-%m-%d %H:%M:%S" "$1:00" +%s; fi
 }
 
 epoch_to_utc_stamp() {
