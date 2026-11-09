@@ -4,6 +4,11 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-11-09: `wiki status` copes with a wiki that has no log.md
+
+- `wiki status` stopped with exit 2 and half a table at a wiki that had no `log.md`. It now shows every wiki and counts that one's ingests as none.
+- `wiki helper` and `wiki update` no longer list which commands the helper speeds up.
+
 ## 2026-11-09: `wiki open` lists what's waiting
 
 - `wiki open` lists what agents recorded as waiting on someone or due on a date, across your wikis, with the ones past their date first.

@@ -44,9 +44,15 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+      # go.mod says go 1.22, so go-version-file installs a 1.22 and every run then
+      # downloads the lock's compiler from proxy.golang.org. Install that one instead.
+      - name: Read the compiler helper.lock names
+        id: toolchain
+        run: echo "version=$(sed -n 's/^toolchain go//p' helper.lock)" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: ${{ steps.toolchain.outputs.version }}
+          cache: false
       - name: Build every platform and compare with helper.lock
         run: scripts/helper.sh check dist
       - uses: actions/upload-artifact@v4
@@ -114,10 +120,15 @@ jobs:
           ln -s /bin/bash "$RUNNER_TEMP/bash32/bash"
           echo "$RUNNER_TEMP/bash32" >> "$GITHUB_PATH"
       # With Go there, the smoke tests build the helper and compare it with the code
-      # it stands in for.
+      # it stands in for. It is the compiler helper.lock names, so building the release
+      # helper doesn't download one from proxy.golang.org, which failed once.
+      - name: Read the compiler helper.lock names
+        id: toolchain
+        run: echo "version=$(sed -n 's/^toolchain go//p' helper.lock)" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: ${{ steps.toolchain.outputs.version }}
+          cache: false
       - name: Smoke tests
         run: |
           bash --version | head -n 1
