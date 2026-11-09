@@ -6,6 +6,14 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 
 ## Next
 
+### Sessions record what they now lose
+
+- **Why:** the handbook's by-hand logging mostly doesn't happen, and some kinds of knowledge have nowhere to go. In the week to 2026-11-09 the report found 9 logged lookups against 25 page reads in the transcripts, no handoff was logged of seven sessions and three subagents, and the things waiting on the user lived only in a conversation. Agreed with the user on 2026-11-09. The rule for all of it: a hook where a hook can see the event, a line in a note where it can't, and no new step done from memory.
+- **Sketch:** two changes.
+  - **One handbook version.** A capture can carry `Verified: <page>` for a page checked and still true, so compile stamps its verified date where today a session that never compiles forgets it. `Waiting: <who> | <what>` and `Due: <YYYY-MM-DD> | <what>` for things waiting on someone, dated follow-ups and claims not yet tested: compile tallies them as it does `Feedback:` lines, a later note closes one, and `wiki status` prints what is open and what is past its date. A `Feedback:` kind `lesson`, for a mistake the agent caught itself, counted and proposed like a correction. A change git doesn't record (under `~/.claude`, a machine's settings, an installed tool) gets a capture with the machine named. Work the user puts off goes in the owning repository's `ROADMAP.md`, or in a capture where there is none.
+  - **The hooks.** A read of a wiki page logs itself in `stats.csv`, as `wiki find` and the MCP server's `wiki_read` already do, and the handbook's step to log each lookup by hand goes. The hook that fires when a session starts a sub-session or subagent writes the start of the handoff to `delegation-log.csv`; the outcome stays a judgment, added when the work is checked.
+- **Open:** whether hit and miss survive once reads log themselves, or the handbook stops asking for the judgment. Where the ledger for `Waiting:` and `Due:` lines lives, and how a note names the one it closes. Decided against: recording what a lookup saved, which would be a guess about a path not taken; counting approvals, since nothing follows from the count; and a registry of the sessions at work in a repository.
+
 ### Port wiki.sh to Go, one command at a time
 
 - **Why:** see the first step under Done. The aim is one binary that needs no Bash 3.2 workarounds and no Python.
@@ -71,6 +79,12 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### The report splits wiki use into lookups and upkeep (2026-11-09)
+
+- **Why:** `wiki report` gave one figure, "Wiki reads", and it left out the MCP tools, which pass relative paths, so sessions using them weren't counted. One number also mixed looking things up with keeping the wikis up to date.
+- **What changed:** each tool call that touches the wikis is a lookup or upkeep (`wiki_kind` in both Pythons, `classify` in `internal/tokens/class.go`): `wiki_read`, `wiki_search`, `wiki_start` and `wiki_list` are lookups, `wiki_capture`, `wiki_status` and `wiki_feedback` upkeep; a path call is upkeep for the edit tools and a lookup otherwise; a command is upkeep when any wiki subcommand in it is outside `find`, `start`, `which`, `news`, `tips`, `patterns`, `stats`, `report`, `standup` and `help`. The Wiki reads column is the total of both, and each table ends with the two shares. Protocol 12.
+- **Still untested:** the rule on a transcript with the wiki tools in Antigravity, and `wiki.sh` named as a file argument (`grep x wiki.sh docs/a.md`), which reads as a subcommand and counts as upkeep.
 
 ### Reminders for Gemini in Antigravity (2026-11-07)
 

@@ -56,7 +56,7 @@ type record struct {
 type part struct {
 	toolUse  bool
 	id       string
-	touches  bool     // a tool call that read or wrote a wiki
+	kind     kind     // a tool call that read or wrote a wiki: a lookup or upkeep
 	size     int      // estimated tokens: of the call's input, or of a result's text
 	pages    []string // wikis whose pages the call opened
 	wikiRead string   // the wiki named by an MCP wiki_read call, when it read a page
@@ -198,17 +198,17 @@ func (s *scanner) toolUse(p rawPart) part {
 	if len(input) > 0 {
 		out.size = pyjson.DumpsLen(map[string]any(input)) / 4
 	}
+	byPath := false
 	for _, k := range []string{"file_path", "notebook_path", "path"} {
 		if v, ok := input[k].(string); ok && s.inWikis(v) {
-			out.touches = true
+			byPath = true
 		}
 	}
-	if !out.touches {
-		cmd := text(input, "command")
-		out.touches = strings.Contains(cmd, s.wikis) || strings.Contains(cmd, s.wikisReal) ||
-			strings.Contains(cmd, "~/wikis") || strings.Contains(cmd, "wiki.sh") || wikiCommand.MatchString(cmd)
-	}
+	cmd := text(input, "command")
+	byCmd := strings.Contains(cmd, s.wikis) || strings.Contains(cmd, s.wikisReal) ||
+		strings.Contains(cmd, "~/wikis") || strings.Contains(cmd, "wiki.sh") || wikiCommand.MatchString(cmd)
 	name, _ := asString(p.Name)
+	out.kind = classify(name, byPath, byCmd, cmd)
 	if strings.HasSuffix(name, "wiki_read") && strings.HasPrefix(text(input, "path"), "wiki/") {
 		out.isRead = true
 		out.wikiRead = "None"

@@ -128,8 +128,8 @@ func RunGemini(o Options) (string, error) {
 						usage[[2]string{w, c.name}] = true
 					}
 				}
-				if j+1 < len(steps) && geminiTouches(sc, tc, o.Wikis) {
-					rw.wiki += int64(steps[j+1].size / 4)
+				if k := geminiKind(sc, tc, o.Wikis); k != kindNone && j+1 < len(steps) {
+					rw.add(k, int64(steps[j+1].size/4))
 				}
 			}
 		}
@@ -143,8 +143,8 @@ func RunGemini(o Options) (string, error) {
 	return table(rows, order, o.Exclude, tableWords{
 		none: "No Gemini conversations in this range.",
 		unit: "Conversations",
-		foot: func(_, _ int64) string {
-			return "\nGemini counts tokens its own way, so these don't add to Claude's.\n"
+		foot: func(t totals) string {
+			return "\n" + t.use() + "\nGemini counts tokens its own way, so these don't add to Claude's.\n"
 		},
 	}), nil
 }
@@ -336,10 +336,11 @@ func geminiCount(raw json.RawMessage) (int64, error) {
 	return n, nil
 }
 
-// geminiTouches is the Python's touches_wiki.
-func geminiTouches(sc *scanner, tc geminiCall, wikis string) bool {
-	return (tc.path != "" && sc.inWikis(tc.path)) || strings.Contains(tc.command, wikis) ||
-		strings.Contains(tc.command, "~/wikis") || strings.Contains(tc.command, "wiki.sh")
+// geminiKind is the Python's touches_wiki: what the call is to the wikis, if it touches them.
+func geminiKind(sc *scanner, tc geminiCall, wikis string) kind {
+	byPath := tc.path != "" && sc.inWikis(tc.path)
+	byCmd := strings.Contains(tc.command, wikis) || strings.Contains(tc.command, "~/wikis") || strings.Contains(tc.command, "wiki.sh")
+	return classify(tc.name, byPath, byCmd, tc.command)
 }
 
 // wikiPages finds the wikis a tool call's text opens. Python's \b takes any letter as

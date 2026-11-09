@@ -288,7 +288,7 @@ A wiki nobody opens may not be worth keeping.
 
 Once a week, Claude offers a short report on the wikis, at a stopping point. Ask for it any time with "give me my wiki report", or run `wiki report` to see the raw material.
 
-- **Tokens:** what Claude Code spent per project over the week, from its own session records, and roughly how much of that went into reading the wikis. The wiki share is an estimate, from the size of what sessions read. With Antigravity installed, Gemini's conversations get a table of their own, by the project their file paths point at. It isn't added to Claude's, since the two count tokens differently.
+- **Tokens:** what Claude Code spent per project over the week, from its own session records, and roughly how much of that went into the wikis. That share is an estimate, from the size of what sessions sent to the wikis and got back, split into lookups (reads, searches, session starts) and upkeep (captures, compiles, lints, syncs, status). With Antigravity installed, Gemini's conversations get a table of their own, by the project their file paths point at, with the same two shares. It isn't added to Claude's, since the two count tokens differently.
 - **What the wikis gained:** notes captured, notes compiled, pages created and updated, skills added.
 - **Wiki use:** how many sessions opened each wiki's pages, and which searches found nothing.
 - **Needs you:** what's waiting on a person. Open contradictions, proposed fixes nobody has answered, a pile of notes waiting to be compiled, pages unchecked for 90 days, and tips you muted. The report leads with this when there's anything in it.

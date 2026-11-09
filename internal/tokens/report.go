@@ -32,7 +32,7 @@ type Options struct {
 type row struct {
 	sessions           map[string]bool
 	newIn, cached, out int64
-	wiki               int64
+	lookup, upkeep     int64 // wiki use, in tokens, by kind
 }
 
 // Run reads the transcripts and returns the table.
@@ -127,7 +127,11 @@ func Run(o Options) (string, error) {
 				mainProject = x
 			}
 		}
-		wikiUses := map[string]string{}
+		type owned struct {
+			project string
+			kind    kind
+		}
+		wikiUses := map[string]owned{}
 		for _, r := range res.records {
 			if !r.inRange {
 				continue
@@ -154,8 +158,8 @@ func Run(o Options) (string, error) {
 			}
 			for _, c := range r.parts {
 				if !c.toolUse {
-					if owner, ok := wikiUses[c.id]; ok {
-						rows[owner].wiki += int64(c.size)
+					if o, ok := wikiUses[c.id]; ok {
+						rows[o.project].add(o.kind, int64(c.size))
 					}
 					continue
 				}
@@ -165,9 +169,9 @@ func Run(o Options) (string, error) {
 				for _, w := range c.pages {
 					usage[[2]string{w, r.session}] = true
 				}
-				if c.touches {
-					wikiUses[c.id] = p
-					rw.wiki += int64(c.size)
+				if c.kind != kindNone {
+					wikiUses[c.id] = owned{p, c.kind}
+					rw.add(c.kind, int64(c.size))
 				}
 			}
 		}
@@ -181,14 +185,18 @@ func Run(o Options) (string, error) {
 	return table(rows, order, o.Exclude, tableWords{
 		none: "No Claude Code sessions in this range.",
 		unit: "Sessions",
-		foot: func(newIn, wiki int64) string {
-			share := 0.0
-			if newIn != 0 {
-				share = 100 * float64(wiki) / float64(newIn)
-			}
-			return fmt.Sprintf("\nWiki reads are about %.1f%% of new input. New input is what entered a session's context for the first time; cache reads are that context read again on later turns.\n", share)
+		foot: func(t totals) string {
+			return fmt.Sprintf("\n%s New input is what entered a session's context for the first time; cache reads are that context read again on later turns.\n", t.use())
 		},
 	}), nil
+}
+
+func (r *row) add(k kind, n int64) {
+	if k == kindLookup {
+		r.lookup += n
+	} else {
+		r.upkeep += n
+	}
 }
 
 func writeUsage(path, wikis string, usage map[[2]string]bool) error {
@@ -222,7 +230,22 @@ func writeUsage(path, wikis string, usage map[[2]string]bool) error {
 type tableWords struct {
 	none string // when no project has anything to show
 	unit string // the second column's heading
-	foot func(newIn, wiki int64) string
+	foot func(t totals) string
+}
+
+// totals are the table's last row, as far as the sentence under it needs.
+type totals struct{ newIn, lookup, upkeep int64 }
+
+// use is the sentence on how much of the new input the wikis took.
+func (t totals) use() string {
+	pct := func(n int64) float64 {
+		if t.newIn == 0 {
+			return 0
+		}
+		return 100 * float64(n) / float64(t.newIn)
+	}
+	return fmt.Sprintf("Wiki use is about %.1f%% of new input: lookups %.1f%%, upkeep %.1f%%. Lookups are reads, searches and session starts; upkeep is captures, compiles, lints, syncs and status.",
+		pct(t.lookup+t.upkeep), pct(t.lookup), pct(t.upkeep))
 }
 
 func table(rows map[string]*row, order []string, exclude string, words tableWords) string {
@@ -259,18 +282,19 @@ func table(rows map[string]*row, order []string, exclude string, words tableWord
 	fmt.Fprintf(&b, "| Project | %s | New input | Cache reads | Output | Wiki reads (est.) |\n", words.unit)
 	b.WriteString("|---|---|---|---|---|---|\n")
 	var sessions int
-	var newIn, cached, out, wiki int64
+	var newIn, cached, out, lookup, upkeep int64
 	for _, p := range kept {
 		r := rows[p]
-		fmt.Fprintf(&b, "| %s | %d | %s | %s | %s | %s |\n", p, len(r.sessions), short(r.newIn), short(r.cached), short(r.out), short(r.wiki))
+		fmt.Fprintf(&b, "| %s | %d | %s | %s | %s | %s |\n", p, len(r.sessions), short(r.newIn), short(r.cached), short(r.out), short(r.lookup+r.upkeep))
 		sessions += len(r.sessions)
 		newIn += r.newIn
 		cached += r.cached
 		out += r.out
-		wiki += r.wiki
+		lookup += r.lookup
+		upkeep += r.upkeep
 	}
-	fmt.Fprintf(&b, "| all | %d | %s | %s | %s | %s |\n", sessions, short(newIn), short(cached), short(out), short(wiki))
-	b.WriteString(words.foot(newIn, wiki))
+	fmt.Fprintf(&b, "| all | %d | %s | %s | %s | %s |\n", sessions, short(newIn), short(cached), short(out), short(lookup+upkeep))
+	b.WriteString(words.foot(totals{newIn, lookup, upkeep}))
 	return b.String()
 }
 
