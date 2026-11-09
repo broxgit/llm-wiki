@@ -1308,6 +1308,33 @@ expect "inside a wiki, it uses that wiki" "sync: demo, the wiki this folder is i
 mkdir -p "$T/projects/nowiki" && git -C "$T/projects/nowiki" init -q
 out="$(cd "$T/projects/nowiki" && "$W" sync 2>&1)" && bad "a repository no wiki covers is an error" "$out" || case "$out" in *"no wiki covers nowiki. Run:"*"sync <wiki>"*) ok "a repository no wiki covers is an error that says what to run" ;; *) bad "a repository no wiki covers is an error that says what to run" "$out" ;; esac
 expect "outside any repository or wiki, it says to name one" "isn't in a repository or a wiki" bash -c "cd '$T' && '$W' sync"
+# A trip to the remote is most of a sync's time. With a commit to send and nobody
+# else's on the remote, sync pushes and doesn't pull.
+git -C "$WIKIS_DIR" add -A >/dev/null 2>&1; git -C "$WIKIS_DIR" commit -qm "smoke: before push first" >/dev/null 2>&1; git -C "$WIKIS_DIR" push -q >/dev/null 2>&1
+echo "one trip" > "$WIKIS_DIR/demo/raw/2026-01-05-000000-one-trip.md"
+out="$("$W" sync demo -m "demo: one trip" 2>&1)"
+case "$out" in *"pulled"*) bad "sync with a commit and a quiet remote pushes without pulling" "$out" ;; *"synced: pushed "*) ok "sync with a commit and a quiet remote pushes without pulling" ;; *) bad "sync with a commit and a quiet remote pushes without pulling" "$out" ;; esac
+check "and the remote has the commit" bash -c "git -C '$T/remote.git' log -1 --format=%s | grep -qx 'demo: one trip'"
+# A commit made by hand and never pushed goes out too, with nothing new to commit.
+echo "by hand" > "$WIKIS_DIR/demo/raw/2026-01-05-000001-by-hand.md"
+git -C "$WIKIS_DIR" add -A -- demo && git -C "$WIKIS_DIR" commit -qm "demo: by hand" -- demo
+out="$("$W" sync demo 2>&1)"
+case "$out" in *"nothing to commit in demo"*"synced: pushed "*) ok "sync pushes a commit left unpushed" ;; *) bad "sync pushes a commit left unpushed" "$out" ;; esac
+check "and the remote has that one" bash -c "git -C '$T/remote.git' log -1 --format=%s | grep -qx 'demo: by hand'"
+# Nothing to send: sync pulls, so a teammate's note still comes in, and it doesn't
+# say "synced: ", which the MCP servers read as "this note was pushed".
+git -C "$T/clone2" pull -q --no-rebase --no-edit >/dev/null 2>&1 || true
+printf 'x\n' > "$T/clone2/global/raw/2026-01-05-000002-quiet-day.md"
+git -C "$T/clone2" add -A && git -C "$T/clone2" commit -qm "global: quiet day" && git -C "$T/clone2" push -q
+out="$("$W" sync demo 2>&1)"
+case "$out" in *"synced: "*) bad "sync with nothing to send pulls and doesn't say synced" "$out" ;; *"up to date: pulled "*"nothing to push"*) ok "sync with nothing to send pulls and doesn't say synced" ;; *) bad "sync with nothing to send pulls and doesn't say synced" "$out" ;; esac
+check "and the teammate's note came in" test -f "$WIKIS_DIR/global/raw/2026-01-05-000002-quiet-day.md"
+# The remote moved and there is a commit to send: the push is refused, so pull, then push.
+printf 'x\n' > "$T/clone2/global/raw/2026-01-05-000003-moved.md"
+git -C "$T/clone2" add -A && git -C "$T/clone2" commit -qm "global: moved" && git -C "$T/clone2" push -q
+echo "after" > "$WIKIS_DIR/demo/raw/2026-01-05-000004-after.md"
+expect "sync pulls when the remote refuses the push, then pushes" "synced: pulled and pushed" "$W" sync demo -m "demo: after"
+check "and both sides' commits are on the remote" bash -c "git -C '$T/remote.git' log -5 --format=%s | grep -qx 'global: moved' && git -C '$T/remote.git' log -5 --format=%s | grep -qx 'demo: after'"
 fi
 
 if section "Index and lint"; then
@@ -1545,6 +1572,9 @@ if [ -x "$T/bin/llm-wiki" ]; then
     [ "$a" = "$g" ] && ok "and with $name" || bad "and with $name" "$(diff <(printf '%s\n' "$a") <(printf '%s\n' "$g"))"
   }
   ssame "--day" --day 2026-01-15
+  # macOS's date took the seconds from the clock, so the day ran a few seconds into the next.
+  out="$(LLM_WIKI_NO_GO=1 "$W" standup --day 2026-01-15 2>&1)"
+  case "$out" in *"- 2026-01-15-120000-titled"*"2026-01-16: day only"*) bad "and a day ends at its last second, whatever second it is now" "$out" ;; *"- 2026-01-15-120000-titled"*) ok "and a day ends at its last second, whatever second it is now" ;; *) bad "and a day ends at its last second, whatever second it is now" "$out" ;; esac
   ssame "--since 2d" --since 2d
   ssame "--since lastweek" --since lastweek
   ssame "--format summary" "${SP[@]}" --format summary
@@ -1675,10 +1705,12 @@ fi
 if section "Sync takes turns"; then
 # Another session's sync holds the collection's lock: this one waits, then runs.
 L="$(git -C "$WIKIS_DIR" rev-parse --absolute-git-dir)/llm-wiki-sync.lock"
+echo "wait" > "$WIKIS_DIR/demo/raw/2026-01-04-000000-wait.md"
 mkdir "$L"; ( sleep 2; rmdir "$L" ) &
 out="$("$W" sync demo -m "demo: wait test" 2>&1)"
 case "$out" in *"waiting for another session's sync"*"synced:"*) ok "sync waits for another session's sync, then runs" ;; *) bad "sync waits for another session's sync, then runs" "$out" ;; esac
 check "and leaves no lock behind" test ! -d "$L"
+echo "stale" > "$WIKIS_DIR/demo/raw/2026-01-04-000001-stale.md"
 mkdir "$L"; touch -t 202001010000 "$L"
 expect "a lock older than five minutes is stale" "synced:" "$W" sync demo -m "demo: stale lock"
 # A note that came in and also sits here uncommitted, identical: set aside, pull again.

@@ -1360,7 +1360,7 @@ sync_default_wiki() {
 }
 
 cmd_sync() {
-  local wiki="" msg="" root repo path top err
+  local wiki="" msg="" root repo path top err ahead
   while [ $# -gt 0 ]; do
     case "$1" in
       -m) need_value "$@"; msg="${2:-}"; shift 2 ;;
@@ -1402,6 +1402,15 @@ cmd_sync() {
     echo "synced: pushed $(tilde "$repo") to origin for the first time"
     return 0
   fi
+  # Each trip to the remote is most of a second, and they are nearly all of a sync's
+  # time. So push first when there is something to push, and pull only when the
+  # remote refuses it: someone else pushed. With nothing to push, pull and stop.
+  # A count we can't read is taken as something to push.
+  ahead="$(git -C "$repo" rev-list --count '@{u}..HEAD' 2>/dev/null || echo 1)"
+  if [ "$ahead" != 0 ] && git -C "$repo" push -q 2>/dev/null; then
+    echo "synced: pushed $(tilde "$repo")"
+    return 0
+  fi
   # A merge, never a rebase or a stash: a rebase refuses to run while another
   # wiki has uncommitted notes, and a merge doesn't mind them.
   if ! err="$(git -C "$repo" pull -q --no-rebase --no-edit 2>&1)"; then
@@ -1430,6 +1439,11 @@ cmd_sync() {
       fi
       die "the pull failed. If uncommitted changes in another wiki clash with what came in, run $WIKI_CMD sync for that wiki first."
     fi
+  fi
+  if [ "$ahead" = 0 ]; then
+    # No "synced: " here: nothing left this machine in this run.
+    echo "up to date: pulled $(tilde "$repo"), and there was nothing to push"
+    return 0
   fi
   if ! git -C "$repo" push -q 2>/dev/null; then
     # Someone pushed in between: pull and push once more.
@@ -4430,7 +4444,9 @@ day_of_week() { # 1 is Monday
 }
 
 to_epoch() { # "YYYY-MM-DD HH:MM" in local time
-  if is_gnu_date; then date -d "$1" +%s; else date -j -f "%Y-%m-%d %H:%M" "$1" +%s; fi
+  # BSD date fills what the format leaves out from the clock, so name the seconds:
+  # without them the answer moved with the second it was asked in.
+  if is_gnu_date; then date -d "$1" +%s; else date -j -f "%Y-%m-%d %H:%M:%S" "$1:00" +%s; fi
 }
 
 epoch_to_utc_stamp() {

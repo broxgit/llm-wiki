@@ -4,6 +4,11 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-11-09: `wiki sync` makes one trip to the remote
+
+- `wiki sync` pushes first and pulls only when the remote has moved, so a sync takes about half the time.
+- With nothing to push it pulls and says `up to date`. It says `synced:` only when something was pushed.
+
 ## 2026-11-09: `wiki status` copes with a wiki that has no log.md
 
 - `wiki status` stopped with exit 2 and half a table at a wiki that had no `log.md`. It now shows every wiki and counts that one's ingests as none.
