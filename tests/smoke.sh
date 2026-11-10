@@ -3892,13 +3892,20 @@ class H(BaseHTTPRequestHandler):
             if k in T: body, code = {"key": k, "fields": T[k]}, 200
         self.send_response(code); self.send_header("Content-Type", "application/json"); self.end_headers()
         self.wfile.write(json.dumps(body).encode())
-s = HTTPServer(("127.0.0.1", 0), H)
+import socketserver
+class S(HTTPServer):
+    # HTTPServer's own bind looks the host's name up, which can take seconds on a Mac.
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = "localhost", self.server_address[1]
+s = S(("127.0.0.1", 0), H)
 open(D + "/port", "w").write(str(s.server_address[1]))
 s.serve_forever()
 PY
 python3 "$J/server.py" "$J" &
 JPID=$!
-i=0; while [ ! -s "$J/port" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+i=0; while [ ! -s "$J/port" ] && [ "$i" -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
+check "the stand-in Jira server started" test -s "$J/port"
 JW="$T/jwikis"
 WIKIS_DIR="$JW" "$W" new jdemo >/dev/null 2>&1
 cat > "$JW/jdemo/open.md" <<'OPEN'
@@ -4067,13 +4074,20 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self): self.handle_one("GET")
     def do_POST(self): self.handle_one("POST")
     def do_PUT(self): self.handle_one("PUT")
-s = HTTPServer(("127.0.0.1", 0), H)
+import socketserver
+class S(HTTPServer):
+    # HTTPServer's own bind looks the host's name up, which can take seconds on a Mac.
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = "localhost", self.server_address[1]
+s = S(("127.0.0.1", 0), H)
 open(D + "/port", "w").write(str(s.server_address[1]))
 s.serve_forever()
 PY
 python3 "$C/server.py" "$C" &
 CPID=$!
-i=0; while [ ! -s "$C/port" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+i=0; while [ ! -s "$C/port" ] && [ "$i" -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
+check "the stand-in Confluence server started" test -s "$C/port"
 CW="$T/cwikis"
 WIKIS_DIR="$CW" "$W" new cdemo >/dev/null 2>&1
 mkdir -p "$CW/cdemo/wiki/concepts" "$CW/cdemo/wiki/how-to"
