@@ -382,7 +382,7 @@ Run `wiki` with no arguments for the full list. The ones you're likely to use:
 | `wiki unlock <name>` | Free a stuck compile lock. |
 | `wiki capture <wiki> <slug>` | Save a note piped in, named from the clock. Mostly for agents. |
 | `wiki mcp` | A local MCP server over your wikis, for sessions with no file access, such as the desktop app's Chat tab. `wiki setup chat` adds it there. |
-| `wiki extensions` | Commands of your own: `wiki <name>` runs an executable named `wiki-<name>` in your extensions folder. [Extensions](extensions.md) shows how to write one. |
+| `wiki extensions` | Commands of your own, and optional ones that ship with llm-wiki, such as `wiki jira`. `wiki extensions add <name>` turns one on. [Extensions](extensions.md) has both. |
 | `wiki news` | What's new in llm-wiki since you last looked. `wiki update` prints it too, and `wiki status` says when there's something new. `--all` prints everything. |
 | `wiki setup microsoft-copilot` | A Microsoft 365 Copilot agent that reads a wiki repository on GitHub. [Set up with another agent](other-agents.md) has what it needs. |
 | `wiki helper`, `wiki helper fetch`, `wiki helper auto on\|off` | Which compiled helper `report` and `standup` are using, and download the one released for your version. `wiki update` does that too, and so does session start, in the background, unless you turn `auto` off. Nothing needs it: without one they run slower. |

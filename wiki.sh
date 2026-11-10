@@ -184,8 +184,10 @@ Usage: $WIKI_CMD <command> [options]
                        access. An MCP client starts it. --print gives its config entry.
   news [--all]         What's new in llm-wiki since you last looked.
   obsidian [--no-open] Browse the wikis in Obsidian: write the vault's starter settings and open it.
-  extensions [path]    Commands of your own: $WIKI_CMD <name> runs an executable named
+  extensions [path | add <name> | remove <name>]
+                       Commands of your own: $WIKI_CMD <name> runs an executable named
                        wiki-<name> in the extensions folder. Lists them, or prints the folder.
+                       add turns on one that ships with llm-wiki, such as jira. remove turns it off.
   tour [--clean] [--dir DIR]
                        A hands-on tour for your agent, on a made-up project in a sandbox.
                        Ask your agent to run it and follow what it prints.
@@ -4055,6 +4057,30 @@ setup_obsidian() {
   setup_mark obsidian
 }
 
+# One question for each extension that ships with llm-wiki, so a new one is offered
+# once on each machine and is otherwise off.
+setup_extensions() {
+  local f n d
+  for f in "$EXT_SHIPPED"/wiki-*; do
+    [ -f "$f" ] || continue
+    n="${f##*/wiki-}"
+    ext_shipped "$n" >/dev/null || continue
+    if [ "$SETUP_MODE" = new ] && { setup_done "extension.$n" || ext_on "$n"; }; then continue; fi
+    section "Extension: $n"
+    d="$(ext_about "$f")"
+    echo "${d:-An optional command, $WIKI_CMD $n.}"
+    echo "It is optional, and off unless you turn it on. $WIKI_CMD extensions add $n does the same later."
+    if ask_yn "Turn on $WIKI_CMD $n?" "$(ext_on "$n" && echo y || echo n)"; then
+      ext_set "$n" on
+      echo "  on. $WIKI_CMD $n --help says how to set it up."
+    else
+      ext_set "$n" off
+      echo "  off"
+    fi
+    setup_mark "extension.$n"
+  done
+}
+
 setup_helper() {
   setup_due helper || return 0
   if [ ! -f "$HELPER_LOCK" ] || [ -z "$(helper_platform)" ]; then setup_mark helper; return 0; fi
@@ -5836,22 +5862,46 @@ EOF
 #   LLM_WIKI_EXTENSION  the contract's version. Raise EXT_API only when one of these changes.
 EXT_DIR="${LLM_WIKI_EXTENSIONS_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/llm-wiki/extensions}"
 EXT_API=1
+# Extensions that ship with llm-wiki sit beside wiki.sh and are off until turned on:
+# `extensions add <name>` writes the name to EXT_ON, on this machine. They are found
+# through $REPO on every call, so a plugin update that moves the folder loses nothing.
+# A file of the same name in the user's own folder wins over a shipped one.
+EXT_SHIPPED="$REPO/extensions"
+EXT_ON="${XDG_CONFIG_HOME:-$HOME/.config}/llm-wiki/extensions-on"
 # Commands that COMMANDS leaves out, and that are still not an extension's to take.
 EXT_RESERVED="relay help"
 
 ext_name_ok() { case "$1" in "" | [!a-z]* | *[!a-z0-9-]*) return 1 ;; esac; }
 is_builtin() { case " $COMMANDS $EXT_RESERVED " in *" $1 "*) return 0 ;; esac; return 1; }
+ext_on() { [ -f "$EXT_ON" ] && grep -qxF -- "$1" "$EXT_ON"; }
+# ext_set <name> on|off
+ext_set() {
+  if [ "$2" = on ]; then
+    mkdir -p "$(dirname "$EXT_ON")"
+    [ -f "$EXT_ON" ] || : > "$EXT_ON"
+    ensure_line "$EXT_ON" "$1"
+  elif [ -f "$EXT_ON" ]; then
+    { grep -vxF -- "$1" "$EXT_ON" || true; } > "$EXT_ON.tmp" && mv "$EXT_ON.tmp" "$EXT_ON"
+  fi
+}
+# ext_shipped <name>: the file of one that ships with llm-wiki.
+ext_shipped() { ext_name_ok "$1" && ! is_builtin "$1" && [ -f "$EXT_SHIPPED/wiki-$1" ] && printf '%s\n' "$EXT_SHIPPED/wiki-$1"; }
 # ext_file <name>: the extension's file, whether or not it can run.
-ext_file() { ext_name_ok "$1" && ! is_builtin "$1" && [ -f "$EXT_DIR/wiki-$1" ] && printf '%s\n' "$EXT_DIR/wiki-$1"; }
+ext_file() {
+  ext_name_ok "$1" && ! is_builtin "$1" || return 1
+  if [ -f "$EXT_DIR/wiki-$1" ]; then printf '%s\n' "$EXT_DIR/wiki-$1"
+  elif ext_on "$1" && [ -f "$EXT_SHIPPED/wiki-$1" ]; then printf '%s\n' "$EXT_SHIPPED/wiki-$1"
+  else return 1; fi
+}
 # ext_about <file>: its one-line description, from a `wiki-extension:` comment near the top.
 ext_about() { head -n 10 "$1" 2>/dev/null | LC_ALL=C tr -d '\000' | LC_ALL=C sed -n 's/^[#\/ ]*wiki-extension:[ ]*//p' | head -n 1; }
 # extension_names: the ones `wiki <name>` would run.
 extension_names() {
-  local f
-  for f in "$EXT_DIR"/wiki-*; do
-    [ -x "$f" ] && ext_file "${f##*/wiki-}" >/dev/null || continue
-    printf '%s\n' "${f##*/wiki-}"
-  done
+  local f n
+  for f in "$EXT_DIR"/wiki-* "$EXT_SHIPPED"/wiki-*; do printf '%s\n' "${f##*/wiki-}"; done | LC_ALL=C sort -u \
+    | while IFS= read -r n; do
+        if f="$(ext_file "$n")" && [ -x "$f" ]; then printf '%s\n' "$n"; fi
+      done
 }
 run_extension() {
   local f="$1"
@@ -5864,8 +5914,24 @@ cmd_extensions() {
   local f n d any=0
   case "${1:-}" in
     "") ;;
-    path) printf '%s\n' "$EXT_DIR"; return 0 ;;
-    *) die "extensions takes path, or nothing" ;;
+    path) [ $# -eq 1 ] || die "extensions path takes nothing more"; printf '%s\n' "$EXT_DIR"; return 0 ;;
+    add | remove)
+      [ $# -eq 2 ] || die "usage: $WIKI_CMD extensions $1 <name>"
+      if ! ext_shipped "$2" >/dev/null; then
+        [ ! -f "$EXT_DIR/wiki-$2" ] || die "$2 is a file of your own, $(tilde "$EXT_DIR/wiki-$2"). It is on while it is there."
+        die "no extension called $2 ships with llm-wiki. $WIKI_CMD extensions lists them."
+      fi
+      if [ "$1" = add ]; then
+        ext_set "$2" on
+        setup_mark "extension.$2"
+        echo "on: $2. $WIKI_CMD $2 --help says how to set it up."
+      else
+        ext_set "$2" off
+        echo "off: $2"
+      fi
+      return 0
+      ;;
+    *) die "extensions takes path, add <name>, remove <name>, or nothing" ;;
   esac
   for f in "$EXT_DIR"/wiki-*; do
     [ -f "$f" ] || continue
@@ -5881,6 +5947,16 @@ cmd_extensions() {
       d="$(ext_about "$f")"
       printf '%-14s %s\n' "$n" "${d:-(no description)}"
     fi
+  done
+  for f in "$EXT_SHIPPED"/wiki-*; do
+    [ -f "$f" ] || continue
+    n="${f##*/wiki-}"
+    ext_name_ok "$n" && ! is_builtin "$n" || continue
+    [ ! -f "$EXT_DIR/wiki-$n" ] || continue
+    any=1
+    d="$(ext_about "$f")"
+    if ext_on "$n"; then printf '%-14s %s\n' "$n" "${d:-(no description)}"
+    else printf '%-14s off. %s Turn it on: %s extensions add %s\n' "$n" "${d:-}" "$WIKI_CMD" "$n"; fi
   done
   [ "$any" = 1 ] || echo "No extensions on this machine."
   echo
@@ -5936,7 +6012,10 @@ cmd_complete() {
     sync) [ "$i" -eq 2 ] && wiki_names; echo -m ;;
     index) [ "$i" -eq 2 ] && wiki_names; echo --check ;;
     lint) wiki_names; echo --all ;;
-    extensions) [ "$i" -eq 2 ] && echo path ;;
+    extensions)
+      [ "$i" -eq 2 ] && printf 'path\nadd\nremove\n'
+      if [ "$i" -eq 3 ]; then for k in "$EXT_SHIPPED"/wiki-*; do [ ! -f "$k" ] || printf '%s\n' "${k##*/wiki-}"; done; fi
+      ;;
     log)
       if [ "$i" -eq 2 ]; then wiki_names
       elif [ "$i" -eq 3 ]; then printf 'ingest\nlint\nrestructure\nresolve\n'
@@ -6996,6 +7075,11 @@ setup_pending() {
   setup_done delegation.mode || echo delegation.mode
   setup_done feedback || echo feedback
   if [ -d "$(obsidian_dir)" ] && [ "$(obsidian_state)" != ours ]; then setup_done obsidian || echo obsidian; fi
+  for k in "$EXT_SHIPPED"/wiki-*; do
+    [ -f "$k" ] || continue
+    k="${k##*/wiki-}"
+    if ext_shipped "$k" >/dev/null && ! ext_on "$k" && ! setup_done "extension.$k"; then echo "extension.$k"; fi
+  done
   if [ -f "$HELPER_LOCK" ] && [ -n "$(helper_platform)" ]; then setup_done helper || echo helper; fi
   case "$(chat_state)" in
     old) echo chat ;;
@@ -7412,6 +7496,10 @@ setup_list() {
     case "$pending" in *" obsidian "*) printf '  <- new' ;; esac
     printf '\n'
   fi
+  k="$(extension_names | tr '\n' ' ')"
+  printf '%-19s on: %s' "extensions" "${k:-none}"
+  case "$pending" in *" extension."*) printf '  <- new' ;; esac
+  printf '\n'
   printf '%-19s %s\n' "compile" "$(compile_auto_on && echo "in the background at session start" || echo "by sessions (background compile is off)")"
   printf '%-19s %s' "helper" "$(cmd_helper | head -n 1 | sed 's/^helper: //'), fetched at session start: $(helper_auto_on && echo on || echo off)"
   case "$pending" in *" helper "*) printf '  <- new' ;; esac
@@ -7717,7 +7805,7 @@ Usage: $WIKI_CMD setup [--new | --list | <section> | <setting>]
   setup            Walk through every setting. Enter keeps what you have.
   setup --new      Only what's missing, out of date, or added since you last ran it.
   setup --list     Print current values without asking anything.
-  setup <section>  Just one section: collection, collections, tools, git, claude, permissions, antigravity, codex, cursor, upgrade, delegation, feedback, chat, obsidian, journal.
+  setup <section>  Just one section: collection, collections, tools, git, claude, permissions, antigravity, codex, cursor, upgrade, delegation, feedback, chat, obsidian, extensions, journal.
   setup chat --yes Add the Chat tab's server without asking, for an agent the user told to. The app must be closed.
   setup microsoft-copilot --repo OWNER/REPO
                    Set up a Microsoft 365 Copilot agent that reads a wiki repository on GitHub. --help for its options.
@@ -7726,7 +7814,7 @@ Usage: $WIKI_CMD setup [--new | --list | <section> | <setting>]
 EOF
         return 0
         ;;
-      collection | collections | tools | git | claude | plugin | permissions | antigravity | codex | cursor | upgrade | skills | completion | journal | delegation | feedback | helper | obsidian | chat | git.identity) what="$a" ;;
+      collection | collections | tools | git | claude | plugin | permissions | antigravity | codex | cursor | upgrade | skills | completion | journal | delegation | feedback | helper | obsidian | extensions | chat | git.identity) what="$a" ;;
       journal.*)
         [ -n "$(journal_field "${a#journal.}" 2)" ] || die "no journal setting called ${a#journal.}. Settings: $JOURNAL_KEYS"
         what="$a"
@@ -7757,6 +7845,7 @@ EOF
     feedback) SETUP_MODE=all; setup_feedback ;;
     helper) SETUP_MODE=all; setup_helper ;;
     obsidian) SETUP_MODE=all; setup_obsidian ;;
+    extensions) SETUP_MODE=all; setup_extensions ;;
     chat) SETUP_MODE=all; setup_chat ;;
     git.identity)
       in_git_repo "$WIKIS_DIR" || die "$(tilde "$WIKIS_DIR") isn't a git repo yet. Run: $WIKI_CMD setup git"
@@ -7794,6 +7883,7 @@ EOF
       setup_journal
       setup_helper
       setup_obsidian
+      setup_extensions
       ;;
   esac
   case "$what" in
@@ -7936,6 +8026,7 @@ if [ "$cmd" = cover ]; then
 fi
 # Not a command of wiki.sh's own: an extension's, if there is one by that name.
 if ext="$(ext_file "$cmd")"; then run_extension "$ext" "$@"; fi
+if ext_shipped "$cmd" >/dev/null; then die "$cmd is an extension, and it is off. Turn it on: $WIKI_CMD extensions add $cmd"; fi
 want_git=0
 want_all=0
 want_print=0

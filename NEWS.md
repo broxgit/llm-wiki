@@ -4,6 +4,12 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-11-14: a Jira extension
+
+- `wiki jira` says where the Jira tickets your open items name stand. `wiki jira check --close` notes the finished ones as done. It never writes to Jira.
+- Extensions that ship with llm-wiki are off until `wiki extensions add <name>`. `wiki setup --new` asks about a new one once.
+- Do: to use it, run `wiki extensions add jira`, then `wiki jira --help` for the three settings.
+
 ## 2026-11-13: commands of your own, as extensions
 
 - `wiki <name>` runs an executable named `wiki-<name>` in your extensions folder, with the collection and the wiki command handed to it.

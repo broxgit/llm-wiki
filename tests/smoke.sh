@@ -62,6 +62,7 @@ read -r -d '' PARTS <<'TABLE' || true
 2 | News |
 2 | What moved to llm-relay |
 2 | Extensions | Collection
+2 | Jira extension | Collection
 3 | Tour |
 4 | The released helper | Session hook
 TABLE
@@ -3786,7 +3787,8 @@ fi
 if section "Extensions"; then
 # An extension is an executable named wiki-<name> in a folder on this machine.
 XD="$HOME/.local/share/llm-wiki/extensions"
-expect "with none, extensions says so" "No extensions on this machine" "$W" extensions
+lacks "with none of your own, extensions lists only what ships" "(no description)" "$W" extensions
+check "and the message for an empty machine is still there" grep -q 'No extensions on this machine' "$W"
 expect "and names the folder they go in" "wiki-<name>" "$W" extensions
 check "extensions path prints the folder" test "$("$W" extensions path)" = "$XD"
 refuse "extensions takes nothing else" "$W" extensions install
@@ -3811,7 +3813,7 @@ expect "extensions lists it with its description" "Says hello, for the smoke tes
 expect "the first word completes to it" "hello" "$W" __complete 1 he
 expect "and to extensions" "extensions" "$W" __complete 1 ex
 expect "extensions completes to path" "path" "$W" __complete 2 extensions ""
-expect "the usage names the command" "extensions [path]" "$W" --help
+expect "the usage names the command" "extensions [path | add <name> | remove <name>]" "$W" --help
 # A command of llm-wiki's own always wins.
 printf '#!/bin/sh\necho HIJACK\n' > "$XD/wiki-news"
 printf '#!/bin/sh\necho HIJACK\n' > "$XD/wiki-relay"
@@ -3838,6 +3840,130 @@ chmod +x "$T/ext2/wiki-there"
 expect "LLM_WIKI_EXTENSIONS_DIR names another folder" "elsewhere" env LLM_WIKI_EXTENSIONS_DIR="$T/ext2" "$W" there
 check "the docs say what an extension is given" grep -q 'LLM_WIKI_EXTENSION' "$REPO/docs/extensions.md"
 rm -rf "$XD"
+fi
+
+if section "Jira extension"; then
+# An extension that ships with llm-wiki is off until turned on, on each machine.
+expect "a shipped extension is listed as off" "jira           off." "$W" extensions
+expect "with how to turn it on" "extensions add jira" "$W" extensions
+refuse "and doesn't run while it is off" "$W" jira --help
+expect "the error says how to turn it on" "extensions add jira" "$W" jira check
+lacks "completion leaves it out while it is off" "jira" "$W" __complete 1 ""
+expect "setup --list marks it as new" "on: none  <- new" bash -c "'$W' setup --list | grep '^extensions'"
+expect "setup --new would ask about it" "Turn on" bash -c "printf 'n\n' | LLM_WIKI_TEST_TTY=1 '$W' setup extensions"
+lacks "a no is remembered" "<- new" bash -c "'$W' setup --list | grep '^extensions'"
+refuse "it is still off" "$W" jira --help
+refuse "extensions add refuses a name that doesn't ship" "$W" extensions add nosuch
+refuse "and needs a name" "$W" extensions add
+expect "extensions add turns it on" "on: jira" "$W" extensions add jira
+expect "and it runs" "Usage: " "$W" jira --help
+expect "setup --list names it" "on: jira" bash -c "'$W' setup --list | grep '^extensions'"
+expect "completion offers it" "jira" "$W" __complete 1 ji
+expect "extensions add completes to shipped names" "jira" "$W" __complete 3 extensions add ""
+lacks "the list no longer says off" "off." "$W" extensions
+expect "setup extensions keeps a yes" "on." bash -c "printf 'y\n' | LLM_WIKI_TEST_TTY=1 '$W' setup extensions"
+mkdir -p "$HOME/.local/share/llm-wiki/extensions"
+printf '#!/bin/sh\necho MINE\n' > "$HOME/.local/share/llm-wiki/extensions/wiki-jira"
+chmod +x "$HOME/.local/share/llm-wiki/extensions/wiki-jira"
+expect "a file of your own wins over a shipped one" "MINE" "$W" jira
+rm -rf "$HOME/.local/share/llm-wiki/extensions"
+
+# A stand-in for Jira: two tickets, one done, and a record of each sign-in.
+J="$T/jira"
+mkdir -p "$J"
+cat > "$J/server.py" <<'PY'
+import json, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+D = sys.argv[1]
+T = {"PROJ-1": {"summary": "Release propm", "status": {"name": "Done", "statusCategory": {"key": "done"}}, "resolutiondate": "2026-11-08T10:00:00.000+0000"},
+     "PROJ-2": {"summary": "Second step", "status": {"name": "In Progress", "statusCategory": {"key": "indeterminate"}}, "resolutiondate": None}}
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_GET(self):
+        auth = self.headers.get("Authorization", "")
+        open(D + "/auth.log", "a").write(auth + "\n")
+        body, code = {}, 404
+        if "bad" in auth: code = 401
+        elif self.path == "/rest/api/2/myself": body, code = {"displayName": "Smoke Tester"}, 200
+        elif self.path.startswith("/rest/api/2/issue/"):
+            k = self.path.split("/")[-1].split("?")[0]
+            if k in T: body, code = {"key": k, "fields": T[k]}, 200
+        self.send_response(code); self.send_header("Content-Type", "application/json"); self.end_headers()
+        self.wfile.write(json.dumps(body).encode())
+s = HTTPServer(("127.0.0.1", 0), H)
+open(D + "/port", "w").write(str(s.server_address[1]))
+s.serve_forever()
+PY
+python3 "$J/server.py" "$J" &
+JPID=$!
+i=0; while [ ! -s "$J/port" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+JW="$T/jwikis"
+WIKIS_DIR="$JW" "$W" new jdemo >/dev/null 2>&1
+cat > "$JW/jdemo/open.md" <<'OPEN'
+# Open
+
+## Release PROJ-1 to production
+- kind: waiting
+- who: Katherine
+- status: open
+- from: 2026-11-09 raw/a.md
+
+## Ship PROJ-2 after PROJ-1
+- kind: waiting
+- who: Katherine
+- status: open
+- from: 2026-11-09 raw/a.md
+
+## Old PROJ-1 cleanup
+- kind: waiting
+- who: user
+- status: done 2026-11-01
+- from: 2026-10-30 raw/b.md
+
+## Read the UTF-8 report
+- kind: due
+- due: 2026-12-01
+- status: open
+- from: 2026-11-09 raw/a.md
+OPEN
+jira() { WIKIS_DIR="$JW" JIRA_URL="http://127.0.0.1:$(cat "$J/port")" JIRA_EMAIL=me@example.com JIRA_API_TOKEN=smoke-token "$W" jira "$@"; }
+expect "with no address, jira says what to set" "no Jira address" env WIKIS_DIR="$JW" "$W" jira
+expect "with no token, it says that" "no API token" env WIKIS_DIR="$JW" JIRA_URL=http://127.0.0.1:1 "$W" jira
+out="$(jira check 2>&1)"
+case "$out" in *"== jdemo"*"Release PROJ-1 to production"*"PROJ-1       Done, resolved 2026-11-08"*) ok "jira says a ticket an open item names is done" ;; *) bad "jira says a ticket an open item names is done" "$out" ;; esac
+case "$out" in *"PROJ-2       In Progress"*) ok "and where one that isn't done stands" ;; *) bad "and where one that isn't done stands" "$out" ;; esac
+case "$out" in *"1 open item(s) have every ticket done"*"jira check --close"*) ok "an item counts as done only when all its tickets are" ;; *) bad "an item counts as done only when all its tickets are" "$out" ;; esac
+case "$out" in *"Old PROJ-1"* | *"UTF-8"*) bad "closed items and words that only look like keys are left out" "$out" ;; *) ok "closed items and words that only look like keys are left out" ;; esac
+check "nothing was written by a plain check" test -z "$(find "$JW/jdemo/raw" -name '*jira-done*' 2>/dev/null)"
+check "with an email, the sign-in is Jira Cloud's" grep -qxF "Basic $(printf 'me@example.com:smoke-token' | base64)" "$J/auth.log"
+: > "$J/auth.log"
+WIKIS_DIR="$JW" JIRA_URL="http://127.0.0.1:$(cat "$J/port")" JIRA_API_TOKEN=smoke-token "$W" jira >/dev/null 2>&1
+check "without one, the token is a Data Center access token" grep -qxF "Bearer smoke-token" "$J/auth.log"
+printf 'url = http://127.0.0.1:%s\nemail = me@example.com  # cloud\ntoken_cmd = echo file-token\n' "$(cat "$J/port")" > "$HOME/.config/llm-wiki/jira"
+: > "$J/auth.log"
+expect "settings come from the file too, the token from a command" "Signed in as Smoke Tester" env WIKIS_DIR="$JW" "$W" jira config
+check "and that token was the one sent" grep -qxF "Basic $(printf 'me@example.com:file-token' | base64)" "$J/auth.log"
+lacks "config never prints the token" "file-token" env WIKIS_DIR="$JW" "$W" jira config
+rm "$HOME/.config/llm-wiki/jira"
+expect "a sign-in Jira refuses is said plainly" "refused the sign-in" env WIKIS_DIR="$JW" JIRA_URL="http://127.0.0.1:$(cat "$J/port")" JIRA_API_TOKEN=bad "$W" jira
+refuse "and fails" env WIKIS_DIR="$JW" JIRA_URL="http://127.0.0.1:$(cat "$J/port")" JIRA_API_TOKEN=bad "$W" jira
+expect "projects limits which keys count" "No open item names a ticket." env JIRA_PROJECTS=OPS WIKIS_DIR="$JW" JIRA_URL="http://127.0.0.1:$(cat "$J/port")" JIRA_API_TOKEN=smoke-token "$W" jira
+expect "show gives a ticket's status and summary" "In Progress  Second step" jira show proj-2
+refuse "show fails for a ticket Jira doesn't know" jira show NOPE-9
+refuse "jira refuses an option it doesn't know" jira check --force
+refuse "and a wiki that isn't there" jira check nosuchwiki
+expect "check --close notes the item as done" "jdemo: noted 1 item(s) as done" jira check --close
+note="$(ls "$JW/jdemo/raw"/*-jira-done.md 2>/dev/null | head -n 1)"
+check "the note has the Done line the compile matches" grep -qxF "Done: Release PROJ-1 to production" "$note"
+check "and names its source" grep -q "PROJ-1 \"Release propm\": Done, resolved 2026-11-08. http://127.0.0.1:" "$note"
+lacks "and no Done line for the item still waiting" "Done: Ship" cat "$note"
+expect "a second --close doesn't note it again" "already noted, waiting for a compile" jira check --close
+check "so there is one note" test "$(find "$JW/jdemo/raw" -name '*jira-done*' | wc -l | tr -d ' ')" = 1
+kill "$JPID" 2>/dev/null
+wait "$JPID" 2>/dev/null
+expect "extensions remove turns it off" "off: jira" "$W" extensions remove jira
+refuse "and it no longer runs" "$W" jira --help
+check "the docs say how to set it up" grep -q 'token_cmd' "$REPO/docs/extensions.md"
 fi
 
 if section "Tour"; then
