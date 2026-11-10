@@ -4,6 +4,11 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-11-13: commands of your own, as extensions
+
+- `wiki <name>` runs an executable named `wiki-<name>` in your extensions folder, with the collection and the wiki command handed to it.
+- `wiki extensions` lists them, and `wiki extensions path` prints the folder. `docs/extensions.md` shows how to write one.
+
 ## 2026-11-12: browse your wikis in Obsidian
 
 - `wiki obsidian` writes starter settings for one vault over the whole collection and opens it. `wiki setup --new` asks once where Obsidian is installed.

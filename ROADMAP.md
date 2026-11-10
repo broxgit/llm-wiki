@@ -12,6 +12,12 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 - **Sketch:** the MCP server is in the helper, and still runs `wiki.sh` for `start`, `status` and `sync`, which are most of what `wiki.sh` is. `capture` and `feedback add` are in the helper. The table of `status` is in the helper now; the rest of `status` reads the machine's setup and stays Bash. `start` and `sync` stay in Bash, decided on 2026-11-09 after reading both. `start` launches the background compile and the helper fetch by running `wiki.sh`, so a Go `start` would still need it, and the rest of it is the machine's setup that the `status` port left in Bash: the collection rules, matched as shell patterns, the tips file, the feedback reminder, the `command -v` checks and the compile lock. Porting only its read-only middle would change nothing for the server. `sync` commits through the secret-scan hook, which is Bash, and calls `index` and the lock. Neither would be faster: the remote is most of their time. To get to one binary, port what they lean on first: the launcher of `compile`, the lock, `index` and the hook. Small and separate: `chat_state`, `chat_write` and `mcp --print` still need `python3`, so `wiki setup chat` does too. `find` is ported as it was: index lines, then one line from each of five pages, in the order of their paths. Ranked section results would be new, so they are a change of their own. Still Bash in routing: choosing the collection (`collection_for`, which runs at the top of every command, the core ones included), `wiki_root`, `repo_map` and the `links.md` lookups. Each port prints what the old code prints, checked by the smoke tests, and adds nothing.
 - **Open:** whether the desktop app's Chat tab itself runs the helper's server as it ran the Python one: the smoke tests and the Claude CLI can't show that. And when the ported commands may drop their old Bash and Python. The helper now reaches people through `wiki update`, but that has to prove itself first. The core commands (`start`, `capture`, `lock`, `sync`, `index`) stay in Bash until then, so a session can never break over a missing binary.
 
+### Extensions: integrations outside wiki.sh
+
+- **Why:** Obsidian, Jira, Confluence, CI and git hosting are each optional, and each one built into `wiki.sh` is code every user carries. Teams also want to add their own. Decided on 2026-11-10: integrations become extensions, home-grown ones are supported as far as they can be, and the features stay agent-agnostic, with a thin layer for each agent.
+- **Sketch:** the command seam is done (see Done). Next, build one real extension in this repository on that seam alone, Jira or Confluence, and note every place it needs more: being called after a capture, a sync or a compile, adding lines to `wiki status`, a setup question, a rule in the handbook. Build a second the same way. What both needed is the interface for events, and only then is it written down as a contract. After that: CI (Jenkins, GitLab CI and GitHub Actions as separate extensions over one shared prompt), and moving `wiki obsidian` out.
+- **Open:** how a team shares extensions. They are per machine on purpose, so a pull can't add a command. A shared collection could carry them behind a step that asks each person once, on each machine, whether to trust each one. Where extensions that ship with llm-wiki live, and whether `wiki update` installs them. How an extension adds a handbook rule without `wiki upgrade` dropping it, and what that costs in context. Whether the helper needs to know about extensions at all.
+
 ### Know whether sessions capture and compile
 
 - **Why:** `wiki stats` measures lookups only. Saving and compiling are the parts that failed in the first week (50 of 109 notes never compiled), and nothing measures them now.
@@ -72,6 +78,12 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Extensions: the command seam (2026-11-10)
+
+- **Why:** the first step of "Extensions" under Next. It is the cheapest seam and commits to the least.
+- **What changed:** `wiki <name>` runs an executable named `wiki-<name>` from `~/.local/share/llm-wiki/extensions` (`LLM_WIKI_EXTENSIONS_DIR` names another folder), with its arguments as typed and its exit code passed on. It is given `LLM_WIKI`, a path to run the wiki command by, `WIKIS_DIR`, the collection the call is for, and `LLM_WIKI_EXTENSION`, the contract's version, 1. A command of `wiki.sh`'s own always wins, the hidden ones and `relay` included. `wiki extensions` lists them with the `wiki-extension:` comment as a description, and says why one is ignored: a built-in's name, a name that isn't lowercase letters, digits and dashes, or a file that isn't executable. Tab completion offers them. `docs/extensions.md` is the contract. Bash only: the helper doesn't dispatch commands.
+- **Still untested:** an extension written by anyone else, one in a compiled language, and the plugin's stable `wiki` command running one.
 
 ### Browse the wikis in Obsidian (2026-11-10)
 
