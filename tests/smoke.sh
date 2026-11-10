@@ -1257,10 +1257,32 @@ check "a long kind is cut at 60 characters" test "$(tail -n 1 "$LD" | cut -d, -f
 agent_call h-1 mcp__other__run '{"description":"not a handoff"}'
 agent_call h-1 Bash '{"command":"echo Agent start_session"}'
 check "other tools add no row, and the header was written once" bash -c "test \"\$(grep -c . '$LD')\" = 5 && test \"\$(grep -c '^date,project' '$LD')\" = 1"
+# A call a reminder stops is made again. Only the one let through is a handoff.
+mkdir -p "$T/no-state/llm-wiki/reminders"
+printf 'before\ttool\tAgent\tSay which model, and why.\trem\n' > "$T/no-state/llm-wiki/reminders/h-2.tsv"
+out="$(agent_call h-2 Agent '{"description":"Stopped once","model":"haiku"}')"
+case "$out" in *'"permissionDecision": "deny"'*"Say which model, and why."*) ok "an Agent call a reminder stops is refused once" ;; *) bad "an Agent call a reminder stops is refused once" "$out" ;; esac
+check "and writes no row yet" test "$(grep -c 'Stopped once' "$LD")" = 0
+agent_call h-2 Agent '{"description":"Stopped once","model":"haiku"}'
+check "made again it goes through, and is one row" test "$(grep -c "^$today,rem,Stopped once,haiku,,started\$" "$LD")" = 1
 rm -rf "$T/no-state"
 "$W" delegation ask >/dev/null
 out="$("$W" delegation 2>&1)"
-case "$out" in *"OPEN"*"Fix the build (opus)"*"1     0      0       0     1"*"4 handoff(s)"*"no outcome recorded yet"*) ok "wiki delegation counts a started row as open, not as ok" ;; *) bad "wiki delegation counts a started row as open, not as ok" "$out" ;; esac
+case "$out" in *"OPEN"*"Fix the build (opus)"*"1     0      0       0     1"*"5 handoff(s)"*"no outcome recorded yet"*) ok "wiki delegation counts a started row as open, not as ok" ;; *) bad "wiki delegation counts a started row as open, not as ok" "$out" ;; esac
+# An outcome goes in the row the hook wrote: the oldest open one for the project and model.
+expect "an outcome closes the handoff the hook saw start" "logged: test run on sonnet (low), ok, for rem, the handoff started $today" "$W" delegation log "test run" sonnet low ok --project rem
+is "in its row, with the kind the agent gave" "$today,rem,test run,sonnet,low,ok" "$(sed -n 2p "$LD")"
+check "and adds no row" test "$(grep -c . "$LD")" = 6
+"$W" delegation log "file sweep" flash medium fixed --project rem >/dev/null
+is "a row the hook wrote with no model takes an outcome on any model" "$today,rem,file sweep,flash,medium,fixed" "$(sed -n 4p "$LD")"
+"$W" delegation log "test run" sonnet low ok --project other >/dev/null
+is "an outcome with no open row for its project is a row of its own" "$today,other,test run,sonnet,low,ok" "$(tail -n 1 "$LD")"
+"$W" delegation log "a redo" gpt high redone --project rem >/dev/null
+is "the next goes in the next open row it fits, oldest first" "$today,rem,a redo,gpt,high,redone" "$(sed -n 5p "$LD")"
+"$W" delegation log "a redo" gpt high redone --project rem >/dev/null
+is "and one on a model no open row names is a row of its own" "$today,rem,a redo,gpt,high,redone" "$(tail -n 1 "$LD")"
+out="$("$W" delegation 2>&1)"
+case "$out" in *"a redo (gpt)"*"2     0      0       2     0"*"test run (sonnet)"*"2     2      0       0     0"*"2 handoff(s)"*) ok "and the table counts each handoff once" ;; *) bad "and the table counts each handoff once" "$out" ;; esac
 rm -f "$LD" "$LS"; [ ! -f "$LD.keep" ] || mv "$LD.keep" "$LD"
 touch -t 202001010000 "$RD/old-session.tsv"
 hook "$T/projects/rem" '{"session_id":"s-2","source":"startup"}' >/dev/null

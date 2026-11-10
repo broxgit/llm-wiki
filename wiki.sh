@@ -6393,7 +6393,7 @@ apply_delegation_ignore() {
 
 # deleg_log <kind> <model> <effort> <ok|fixed|redone> [--project NAME]: one handoff.
 deleg_log() {
-  local project="" top
+  local project="" top began
   [ $# -ge 4 ] || die "usage: $WIKI_CMD delegation log <kind> <model> <effort> <ok|fixed|redone> [--project NAME]"
   local kind="$1" model="$2" effort="$3" result="$4"
   shift 4
@@ -6405,6 +6405,16 @@ deleg_log() {
     if [ -n "$top" ]; then project="$(repo_name "$top")"; else project=-; fi
   fi
   [ -s "$DELEG_LOG" ] || printf 'date,project,kind,model,effort,result\n' > "$DELEG_LOG"
+  # The plugin's hook wrote a "started" row when the handoff began. The outcome goes in
+  # that row, the oldest one open for this project and model, or the handoff would be
+  # counted twice and stay open. The hook knows no model when the call names none.
+  began="$(DP="$project" DM="$model" awk -F, 'NR > 1 && NF == 6 && $6 == "started" && $2 == ENVIRON["DP"] && ($4 == ENVIRON["DM"] || $4 == "") { print NR " " $1; exit }' "$DELEG_LOG")"
+  if [ -n "$began" ]; then
+    DN="${began%% *}" DK="$kind" DM="$model" DE="$effort" DR="$result" awk -F, 'NR == ENVIRON["DN"] { print $1 "," $2 "," ENVIRON["DK"] "," ENVIRON["DM"] "," ENVIRON["DE"] "," ENVIRON["DR"]; next } { print }' "$DELEG_LOG" > "$DELEG_LOG.tmp" \
+      && mv "$DELEG_LOG.tmp" "$DELEG_LOG" || die "$(cant_write "$DELEG_LOG")"
+    echo "logged: $kind on $model ($effort), $result, for $project, the handoff started $(printf '%s' "${began#* }")"
+    return 0
+  fi
   printf '%s,%s,%s,%s,%s,%s\n' "$(date -u +%Y-%m-%d)" "$project" "$kind" "$model" "$effort" "$result" >> "$DELEG_LOG"
   echo "logged: $kind on $model ($effort), $result, for $project"
 }

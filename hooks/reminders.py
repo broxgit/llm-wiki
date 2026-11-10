@@ -265,15 +265,18 @@ def main():
         # Not a tool the reminders cover; a read of a wiki page is a lookup.
         log_lookup(((call.get("tool_input") or {}).get("file_path")), os.path.join(sys.argv[1], session + ".reads"))
         return
-    if is_handoff(tool):
+    hits = hits_for(call, os.path.join(sys.argv[1], session))
+    stopped = bool(hits) and any(when == "before" for _, when, _, _ in hits)
+    # A call that is stopped once is made again, and that one is the handoff: logged
+    # here, it left two rows for one.
+    if is_handoff(tool) and not stopped:
         try:
             log_handoff(call)
         except Exception:
             pass
-    hits = hits_for(call, os.path.join(sys.argv[1], session))
     if not hits:
         return
-    if any(when == "before" for _, when, _, _ in hits):
+    if stopped:
         reply = {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": deny_reason(hits)}
     else:
         reply = {"hookEventName": "PreToolUse", "additionalContext": HEADING + rules_of(hits)}
