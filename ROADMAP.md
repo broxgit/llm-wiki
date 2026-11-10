@@ -77,7 +77,8 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 - **Why:** the wikis are plain markdown, and Obsidian gives search, links and a graph over them. Opened as a vault with Obsidian's defaults, though, the collection's `git status` is never clean, links come out as `[[wikilinks]]` that lint can't follow, pasted files land outside any wiki, and editing a property rewrites `sources: [a, b]` one item a line, which lint and the waiting-notes count read as no sources at all.
 - **What changed:** `wiki obsidian` writes starter settings for one vault over the collection (names checked against Obsidian 1.12.7's own code) and opens it once Obsidian knows the folder. `.obsidian/` and `.trash/` are ignored in new collections and added by `wiki upgrade`. Lint, `compiled_stems` and the helper's `internal/status` read a list with one item a line. Lint reports wikilinks. Handbook v33 keeps lint from giving frontmatter to a note the user made. `wiki setup` asks once where Obsidian has run.
-- **Still untested:** all of it in a real vault. In particular that editing a property rewrites the lists as expected, that the `raw/` filter hides raw notes from the graph, and the link that opens the vault.
+- **Tested in a real vault (Obsidian 1.12.7, 2026-11-10, a copy of two wikis):** opening the folder keeps the starter settings; removing a tag in the properties panel rewrote every list in the frontmatter one item a line, indented two spaces, and lint and pending read the page as before; the graph showed about as many nodes as there are pages outside `raw/` (142, against 262 raw notes); `wiki obsidian` opened the vault once Obsidian listed it.
+- **Still untested:** that a link made in Obsidian comes out as a relative markdown link, where a pasted image lands, and where a new note lands. The settings for those were read from Obsidian's code, not tried.
 
 ### Repeated operational work gets counted (2026-11-10)
 
