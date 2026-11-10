@@ -56,7 +56,7 @@ Before you rely on the result, check it the way criterion 3 promised: run the te
 
 ## The log
 
-Where the plugin's hook runs (Claude Code with the llm-wiki plugin), the start of each handoff is logged for you, as a row with the result `started`. When you have checked the work, record the outcome: `wiki.sh delegation log <kind> <model> <effort> <ok|fixed|redone>`. Where there is no hook, the same command logs it all. Without the script, append one line to `delegation-log.csv` in the collection's top folder. Create it with this header if it's missing:
+Where the plugin's hook runs (Claude Code with the llm-wiki plugin), the start of each handoff is logged for you, as a row with the result `started`. When you have checked the work, record the outcome: `wiki.sh delegation log <kind> <model> <effort> <ok|fixed|redone>`. It goes in the `started` row, the oldest one open for the project and model, and replaces the hook's kind with yours, so record each handoff once, in the order they began. Where there is no hook, the same command logs it all. Without the script, append one line to `delegation-log.csv` in the collection's top folder. Create it with this header if it's missing:
 
 ```
 date,project,kind,model,effort,result

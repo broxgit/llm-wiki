@@ -4,6 +4,13 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v31 (2026-11-09)
+
+A handoff's outcome closes the row its start left.
+
+- `wiki.sh delegation log` puts the outcome in the `started` row the plugin's hook wrote, the oldest one open for the project and model, where it used to add a second row and leave the first open for good. `rules/delegation.md` says so, and asks for one outcome a handoff, in the order they began.
+- Do: run `wiki upgrade --all`.
+
 ## v30 (2026-11-09)
 
 The handbook describes the faster `wiki sync`. Nothing else changed.
