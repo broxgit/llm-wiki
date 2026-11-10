@@ -61,6 +61,22 @@ The desktop app's Chat tab can't take the tour, because it can't run commands.
 
 Every wiki is plain markdown. Read pages in any editor, on GitHub, or in Obsidian.
 
+### Browsing in Obsidian
+
+`wiki obsidian` sets up one vault over the whole collection and opens it. The first time, Obsidian has to be shown the folder: choose "Open folder as vault" and pick your wikis folder. After that the command opens it.
+
+It writes the vault's starter settings to `.obsidian/app.json`, unless that file already has settings of yours, in which case it prints them for you to copy:
+
+- Links are plain relative markdown links, not `[[wikilinks]]`, so lint can check them.
+- A pasted image goes in an `attachments` folder beside the page, inside the wiki, where sync picks it up.
+- Raw notes are left out of search and the graph, which they would crowd. They stay in the file list. To see them everywhere, clear "Excluded files" in Obsidian's Files and links settings.
+
+The settings stay on each machine, since git ignores `.obsidian/`, so run it once on each.
+
+Agents maintain the pages, so read in Obsidian and ask an agent for changes. Nothing you do there breaks a wiki, but a change you type has no source, and a later compile or check may correct it. A new note you make there is reported by lint, and an agent offers to file it as a capture. If an agent rewrites a page while you have it open with unsaved typing, Obsidian asks which to keep.
+
+Don't use the Obsidian Git plugin on the collection. It commits on a timer and can pull with a rebase. `wiki sync` already does the committing and pushing.
+
 ## Many repositories
 
 The goal: a session working in repository A that needs a client from repository D finds what any earlier session learned about that client.

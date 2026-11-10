@@ -183,6 +183,7 @@ Usage: $WIKI_CMD <command> [options]
   mcp [--print]        A local MCP server over the wikis, for sessions with no file
                        access. An MCP client starts it. --print gives its config entry.
   news [--all]         What's new in llm-wiki since you last looked.
+  obsidian [--no-open] Browse the wikis in Obsidian: write the vault's starter settings and open it.
   tour [--clean] [--dir DIR]
                        A hands-on tour for your agent, on a made-up project in a sandbox.
                        Ask your agent to run it and follow what it prints.
@@ -238,7 +239,7 @@ need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 # Raise GO_PROTOCOL, with the constant in cmd/llm-wiki/main.go, whenever a ported
 # command's arguments or output change. scripts/helper.sh builds releases and writes
 # helper.lock.
-GO_PROTOCOL=14
+GO_PROTOCOL=15
 HELPER_LOCK="$REPO/helper.lock"
 HELPER_DIR="${LLM_WIKI_HELPER_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/llm-wiki/helper}"
 
@@ -1674,6 +1675,7 @@ for line in open(lagfile).read().splitlines():
 link = re.compile(r"\]\(([^)\s#]+\.md)(?:#[^)]*)?\)")
 cite = re.compile(r"(?<![\w/.-])([a-z0-9][a-z0-9._-]*):((?:wiki|skills)/[^\s)`'\",;]+?\.md)")
 entry = re.compile(r"^- \[(.*?)\]\((.*?)\)")
+wikilink = re.compile(r"\[\[([^\[\]|#]+)(?:[|#][^\[\]]*)?\]\]")
 total = 0
 
 def body_and_front(text):
@@ -1681,10 +1683,21 @@ def body_and_front(text):
     if not m:
         return text, None
     fm = {}
+    key = None
     for line in m.group(1).splitlines():
+        # A list with one item a line, which is how Obsidian rewrites `key: [a, b]`
+        # when a property is edited there. Read as the one-line form.
+        item = re.match(r"\s*- +(.*)", line)
+        if item and key is not None:
+            v = item.group(1).strip().strip('"').strip("'")
+            fm[key] = (fm[key][:-1] + ", " if fm[key] else "[") + v + "]"
+            continue
+        key = None
         k, sep, v = line.partition(":")
         if sep and not line.startswith((" ", "\t")):
             fm[k.strip()] = v.strip().strip('"').strip("'")
+            if not v.strip():
+                key = k.strip()
     return text[m.end():], fm
 
 for root in roots:
@@ -1741,6 +1754,11 @@ for root in roots:
             m = re.match(r"^> \*\*(Check|Conflict):\*\*", line)
             if m and not source and not fence:
                 add("open " + m.group(1), rel)
+            # Obsidian's own link form. Nothing here follows it, so it isn't checked
+            # and doesn't count as a link to the page it names.
+            if not fence:
+                for w in wikilink.findall(re.sub(r"`[^`]*`", "", line)):
+                    add("wikilink: write it as a relative markdown link", f"{rel} -> [[{w}]]")
     # The index against the pages.
     ipath = os.path.join(root, "index.md")
     listed = {}
@@ -1824,7 +1842,12 @@ compiled_stems() {
   local r="$1"
   {
     sed -n 's#^- source: raw/##p' "$r/log.md" 2>/dev/null
-    grep -rh --include='*.md' '^sources:' "$r/wiki" 2>/dev/null | grep -o 'raw/[^],"[:space:]]*' | sed 's#^raw/##' || true
+    # The sources: line, and the list items under it when the list is one a line,
+    # which is how Obsidian rewrites it. grep finds the pages, so links are followed
+    # as they always were.
+    grep -rl --include='*.md' '^sources:' "$r/wiki" 2>/dev/null | tr '\n' '\0' \
+      | xargs -0 awk '/^sources:/ { print; on = 1; next } on && /^[ \t]*- / { print; next } { on = 0 }' /dev/null 2>/dev/null \
+      | grep -o 'raw/[^],"[:space:]]*' | sed 's#^raw/##' || true
   } | sed 's/\.[A-Za-z0-9]*$//'
   [ ! -d "$r/wiki/sources" ] || ls "$r/wiki/sources" 2>/dev/null | sed -n 's/\.md$//p'
 }
@@ -2185,7 +2208,7 @@ git_init_collection() {
     install_hook "$WIKIS_DIR"
     return 0
   fi
-  [ -f "$WIKIS_DIR/.gitignore" ] || printf '.DS_Store\n.compile-lock\n' > "$WIKIS_DIR/.gitignore"
+  [ -f "$WIKIS_DIR/.gitignore" ] || printf '.DS_Store\n.compile-lock\n.obsidian/\n.trash/\n' > "$WIKIS_DIR/.gitignore"
   git -C "$WIKIS_DIR" init -q
   install_hook "$WIKIS_DIR"
   apply_journal_commit
@@ -2722,6 +2745,7 @@ upgrade_one() {
     printf '.compile-lock\n' >> "$root/.gitignore"
     echo ".gitignore: added .compile-lock"
   fi
+  [ ! -f "$root/.gitignore" ] || ignore_obsidian "$root/.gitignore"
   r="$(wiki_repo "$root")"
   [ -z "$r" ] || install_hook "$r"
   echo "done:     $(tilde "$root")"
@@ -2740,6 +2764,7 @@ cmd_upgrade_all() {
     upgrade_one "$d"
   done
   [ "$found" = 1 ] || echo "(no wikis to upgrade)"
+  [ ! -f "$WIKIS_DIR/.gitignore" ] || ignore_obsidian "$WIKIS_DIR/.gitignore"
   ensure_shared_conventions
   echo "== journal"
   write_journal_config
@@ -3905,6 +3930,129 @@ setup_feedback() {
   setup_mark feedback
 }
 
+# ---- obsidian ---------------------------------------------------------------
+# The wikis are plain markdown, so Obsidian can browse them: one vault over the whole
+# collection, for search, links and the graph. Agents still maintain the pages. This
+# only gives Obsidian settings under which browsing can't break a wiki.
+
+# obsidian_dir: where Obsidian keeps its own state, obsidian.json among it. There once
+# Obsidian has run on this machine.
+obsidian_dir() {
+  case "$(uname -s)" in
+    Darwin) printf '%s\n' "$HOME/Library/Application Support/obsidian" ;;
+    *) printf '%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/obsidian" ;;
+  esac
+}
+
+# obsidian_settings: the vault's app.json. The names are Obsidian's own (1.12):
+# markdown links, relative, so lint can follow a link made there; pasted files beside
+# the page, inside the wiki, so sync commits them; a new note in the open folder;
+# links kept right through a rename; raw notes out of search and the graph, which
+# hundreds of unlinked files would crowd. A filter in slashes is a regular expression.
+obsidian_settings() {
+  cat <<'EOF2'
+{
+  "useMarkdownLinks": true,
+  "newLinkFormat": "relative",
+  "attachmentFolderPath": "./attachments",
+  "newFileLocation": "current",
+  "alwaysUpdateLinks": true,
+  "userIgnoreFilters": [
+    "/(^|/)raw//"
+  ]
+}
+EOF2
+}
+
+# obsidian_state: none (no settings file), empty (Obsidian's own, nothing chosen),
+# ours, or theirs.
+obsidian_state() {
+  local f="$WIKIS_DIR/.obsidian/app.json"
+  [ -f "$f" ] || { echo none; return 0; }
+  if [ "$(cat "$f" 2>/dev/null)" = "$(obsidian_settings)" ]; then echo ours
+  elif [ -z "$(tr -d ' \t\r\n{}' < "$f" 2>/dev/null)" ]; then echo empty
+  else echo theirs; fi
+}
+
+# obsidian_url <folder>: the link that opens a vault Obsidian already knows.
+obsidian_url() {
+  local LC_ALL=C s="$1" i c out=""
+  for ((i = 0; i < ${#s}; i++)); do
+    c="${s:i:1}"
+    case "$c" in
+      [a-zA-Z0-9._~/-]) out="$out$c" ;;
+      *) out="$out$(printf '%%%02X' "'$c")" ;;
+    esac
+  done
+  printf 'obsidian://open?path=%s\n' "$out"
+}
+
+# obsidian [--no-open]: write the vault's starter settings, unless it has its own,
+# and open the collection in Obsidian.
+cmd_obsidian() {
+  local open=1 f="$WIKIS_DIR/.obsidian/app.json" dir
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --no-open) open=0 ;;
+      -h | --help)
+        cat <<EOF
+Usage: $WIKI_CMD obsidian [--no-open]
+
+Browse the wikis in Obsidian, as one vault over $(tilde "$WIKIS_DIR"). Writes the vault's
+starter settings, unless it has settings of its own, then opens it. The settings make
+links plain markdown, keep pasted files inside the wiki, and leave raw notes out of
+search and the graph. Agents maintain the pages: read there, and tell an agent what
+to change.
+
+  --no-open  Write the settings and stop.
+EOF
+        return 0
+        ;;
+      *) die "obsidian options: --no-open" ;;
+    esac
+    shift
+  done
+  [ -d "$WIKIS_DIR" ] || die "no wikis at $(tilde "$WIKIS_DIR")"
+  case "$(obsidian_state)" in
+    none | empty)
+      mkdir -p "$WIKIS_DIR/.obsidian" 2>/dev/null && obsidian_settings > "$f" 2>/dev/null || die "$(cant_write "$f")"
+      echo "wrote: $(tilde "$f")"
+      ;;
+    ours) echo "settings: already in $(tilde "$f")" ;;
+    theirs)
+      echo "kept: $(tilde "$f") has settings of your own, so it is left as it is. The ones recommended for wikis:"
+      obsidian_settings | sed 's/^/  /'
+      ;;
+  esac
+  [ ! -f "$WIKIS_DIR/.gitignore" ] || ignore_obsidian "$WIKIS_DIR/.gitignore"
+  [ "$open" = 1 ] || return 0
+  dir="$(obsidian_dir)"
+  # Obsidian opens a link only for a vault it knows, and answers any other with an
+  # error box. Its list is in obsidian.json.
+  if grep -qF "\"path\":\"$WIKIS_DIR\"" "$dir/obsidian.json" 2>/dev/null \
+    && { { command -v open >/dev/null 2>&1 && open "$(obsidian_url "$WIKIS_DIR")" 2>/dev/null; } \
+      || { command -v xdg-open >/dev/null 2>&1 && xdg-open "$(obsidian_url "$WIKIS_DIR")" >/dev/null 2>&1; }; }; then
+    echo "opened: $(tilde "$WIKIS_DIR") in Obsidian"
+  else
+    echo "Open it once by hand: in Obsidian, choose \"Open folder as vault\" and pick $(tilde "$WIKIS_DIR"). After that, $WIKI_CMD obsidian opens it."
+  fi
+}
+
+# Asked only where Obsidian has run, and until the vault has settings.
+setup_obsidian() {
+  [ -d "$(obsidian_dir)" ] || return 0
+  if [ "$SETUP_MODE" = new ] && { setup_done obsidian || [ "$(obsidian_state)" = ours ]; }; then return 0; fi
+  section "Obsidian"
+  echo "Obsidian is on this machine. It can browse the wikis as one vault over $(tilde "$WIKIS_DIR"): search, links, the graph."
+  echo "Starter settings keep that safe: links stay plain markdown, pasted files stay inside the wiki, and raw notes"
+  echo "stay out of search and the graph. Agents still maintain the pages. Settings: $(obsidian_state)."
+  if ask_yn "Write the starter settings?" n; then
+    cmd_obsidian --no-open | sed 's/^/  /'
+    echo "  To open it: $WIKI_CMD obsidian"
+  fi
+  setup_mark obsidian
+}
+
 setup_helper() {
   setup_due helper || return 0
   if [ ! -f "$HELPER_LOCK" ] || [ -z "$(helper_platform)" ]; then setup_mark helper; return 0; fi
@@ -4452,6 +4600,18 @@ journal_get() {
     fi
   fi
   journal_default "$key"
+}
+
+# ignore_obsidian <.gitignore>: keep what Obsidian writes out of git, for someone who
+# opens the wikis as a vault. .obsidian/ holds its settings, and workspace.json in it
+# changes every few seconds. .trash/ is where it puts deleted files when set to.
+ignore_obsidian() {
+  local line
+  for line in .obsidian/ .trash/; do
+    grep -qxF -- "$line" "$1" 2>/dev/null && continue
+    ensure_line "$1" "$line"
+    echo ".gitignore: added $line"
+  done
 }
 
 # Add a line to a file unless it is already there. Copes with a missing final newline.
@@ -5666,7 +5826,7 @@ EOF
 # Tab completion. `completion zsh|bash` prints a small script for the shell, which
 # asks `__complete` for candidates on every Tab. The candidates live here, so a
 # plugin update can't leave completion stale.
-COMMANDS="setup init new update start collections deps permissions seed harvest capture lock compile helper log sync index lint pending cover which status find stale patterns open skills tips report stats feedback news tour mcp delegation upgrade unlock claude link journal standup completion"
+COMMANDS="setup init new update start collections deps permissions seed harvest capture lock compile helper log sync index lint pending cover which status find stale patterns open skills tips report stats feedback news obsidian tour mcp delegation upgrade unlock claude link journal standup completion"
 RANGES="lastworkday yesterday today week lastweek 7d 14d 30d"
 
 wiki_names() {
@@ -5723,6 +5883,7 @@ cmd_complete() {
     tips) printf -- '--mute\n--unmute\n' ;;
     report) printf -- '--since\n' ;;
     news) printf -- '--all\n' ;;
+    obsidian) printf -- '--no-open\n' ;;
     stats) printf '%s\n' $RANGES ;;
     delegation)
       if [ "$i" -eq 2 ]; then printf 'off\nask\nauto\nlog\n'
@@ -6767,6 +6928,7 @@ setup_pending() {
   if in_git_repo "$WIKIS_DIR"; then setup_done git.identity || echo git.identity; fi
   setup_done delegation.mode || echo delegation.mode
   setup_done feedback || echo feedback
+  if [ -d "$(obsidian_dir)" ] && [ "$(obsidian_state)" != ours ]; then setup_done obsidian || echo obsidian; fi
   if [ -f "$HELPER_LOCK" ] && [ -n "$(helper_platform)" ]; then setup_done helper || echo helper; fi
   case "$(chat_state)" in
     old) echo chat ;;
@@ -7178,6 +7340,11 @@ setup_list() {
   printf '%-19s %s' "feedback" "$(feedback_mode)"
   case "$pending" in *" feedback "*) printf '  <- new' ;; esac
   printf '\n'
+  if [ -d "$(obsidian_dir)" ]; then
+    printf '%-19s %s' "obsidian" "vault settings: $(obsidian_state)"
+    case "$pending" in *" obsidian "*) printf '  <- new' ;; esac
+    printf '\n'
+  fi
   printf '%-19s %s\n' "compile" "$(compile_auto_on && echo "in the background at session start" || echo "by sessions (background compile is off)")"
   printf '%-19s %s' "helper" "$(cmd_helper | head -n 1 | sed 's/^helper: //'), fetched at session start: $(helper_auto_on && echo on || echo off)"
   case "$pending" in *" helper "*) printf '  <- new' ;; esac
@@ -7483,7 +7650,7 @@ Usage: $WIKI_CMD setup [--new | --list | <section> | <setting>]
   setup            Walk through every setting. Enter keeps what you have.
   setup --new      Only what's missing, out of date, or added since you last ran it.
   setup --list     Print current values without asking anything.
-  setup <section>  Just one section: collection, collections, tools, git, claude, permissions, antigravity, codex, cursor, upgrade, delegation, feedback, chat, journal.
+  setup <section>  Just one section: collection, collections, tools, git, claude, permissions, antigravity, codex, cursor, upgrade, delegation, feedback, chat, obsidian, journal.
   setup chat --yes Add the Chat tab's server without asking, for an agent the user told to. The app must be closed.
   setup microsoft-copilot --repo OWNER/REPO
                    Set up a Microsoft 365 Copilot agent that reads a wiki repository on GitHub. --help for its options.
@@ -7492,7 +7659,7 @@ Usage: $WIKI_CMD setup [--new | --list | <section> | <setting>]
 EOF
         return 0
         ;;
-      collection | collections | tools | git | claude | plugin | permissions | antigravity | codex | cursor | upgrade | skills | completion | journal | delegation | feedback | helper | chat | git.identity) what="$a" ;;
+      collection | collections | tools | git | claude | plugin | permissions | antigravity | codex | cursor | upgrade | skills | completion | journal | delegation | feedback | helper | obsidian | chat | git.identity) what="$a" ;;
       journal.*)
         [ -n "$(journal_field "${a#journal.}" 2)" ] || die "no journal setting called ${a#journal.}. Settings: $JOURNAL_KEYS"
         what="$a"
@@ -7522,6 +7689,7 @@ EOF
     delegation) SETUP_MODE=all; setup_delegation ;;
     feedback) SETUP_MODE=all; setup_feedback ;;
     helper) SETUP_MODE=all; setup_helper ;;
+    obsidian) SETUP_MODE=all; setup_obsidian ;;
     chat) SETUP_MODE=all; setup_chat ;;
     git.identity)
       in_git_repo "$WIKIS_DIR" || die "$(tilde "$WIKIS_DIR") isn't a git repo yet. Run: $WIKI_CMD setup git"
@@ -7558,6 +7726,7 @@ EOF
       setup_completion
       setup_journal
       setup_helper
+      setup_obsidian
       ;;
   esac
   case "$what" in
@@ -7673,6 +7842,7 @@ case "$cmd" in
   lock) cmd_lock "$@"; exit 0 ;;
   compile) cmd_compile "$@"; exit 0 ;;
   helper) cmd_helper "$@"; exit 0 ;;
+  obsidian) cmd_obsidian "$@"; exit 0 ;;
   log) cmd_log "$@"; exit 0 ;;
   sync) cmd_sync "$@"; exit 0 ;;
   index) cmd_index "$@"; exit 0 ;;

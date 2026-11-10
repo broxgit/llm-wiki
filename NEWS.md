@@ -4,6 +4,13 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-11-12: browse your wikis in Obsidian
+
+- `wiki obsidian` writes starter settings for one vault over the whole collection and opens it. `wiki setup --new` asks once where Obsidian is installed.
+- Editing a property in Obsidian rewrites a page's lists one item a line. Lint and the waiting-notes count read that form now.
+- Lint reports `[[wikilinks]]`, which it can't follow.
+- Do: run `wiki obsidian` if you want to browse there. Read in Obsidian, and ask an agent to change a page.
+
 ## 2026-11-11: a reminder to record releases and deploys
 
 - When an agent runs a release or deploy command, such as `gh release create` or `terraform apply`, the plugin reminds it once a session to record the job.
