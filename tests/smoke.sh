@@ -61,6 +61,7 @@ read -r -d '' PARTS <<'TABLE' || true
 3 | Update | Two clones merge index.md and log.md
 2 | News |
 2 | What moved to llm-relay |
+2 | Extensions | Collection
 3 | Tour |
 4 | The released helper | Session hook
 TABLE
@@ -3780,6 +3781,63 @@ lacks "the usage doesn't list it" "relay run" "$W" --help
 lacks "and setup --help doesn't" "copilot-cowork" "$W" setup --help
 lacks "and setup --list doesn't" "copilot-cowork" "$W" setup --list
 check "the relay's files are gone" test ! -e "$REPO/scripts/relay.sh" -a ! -e "$REPO/cowork"
+fi
+
+if section "Extensions"; then
+# An extension is an executable named wiki-<name> in a folder on this machine.
+XD="$HOME/.local/share/llm-wiki/extensions"
+expect "with none, extensions says so" "No extensions on this machine" "$W" extensions
+expect "and names the folder they go in" "wiki-<name>" "$W" extensions
+check "extensions path prints the folder" test "$("$W" extensions path)" = "$XD"
+refuse "extensions takes nothing else" "$W" extensions install
+mkdir -p "$XD"
+cat > "$XD/wiki-hello" <<'EXT'
+#!/bin/sh
+# wiki-extension: Says hello, for the smoke test.
+printf 'args:'; for a in "$@"; do printf ' [%s]' "$a"; done; printf '\n'
+printf 'api=%s dir=%s\n' "$LLM_WIKI_EXTENSION" "$WIKIS_DIR"
+printf 'nested: '; "$LLM_WIKI" extensions path
+[ "${1:-}" != fail ] || exit 7
+EXT
+chmod +x "$XD/wiki-hello"
+out="$("$W" hello one "two words" --all -x 2>&1)"
+case "$out" in *"args: [one] [two words] [--all] [-x]"*) ok "wiki <name> runs the extension with its arguments as given" ;; *) bad "wiki <name> runs the extension with its arguments as given" "$out" ;; esac
+case "$out" in *"api=1 dir=$WIKIS_DIR"*) ok "and tells it the contract's version and the collection" ;; *) bad "and tells it the contract's version and the collection" "$out" ;; esac
+case "$out" in *"nested: $XD"*) ok "and how to run the wiki command" ;; *) bad "and how to run the wiki command" "$out" ;; esac
+"$W" hello fail >/dev/null 2>&1
+code=$?
+[ "$code" -eq 7 ] && ok "the extension's exit code is the command's" || bad "the extension's exit code is the command's" "exit $code"
+expect "extensions lists it with its description" "Says hello, for the smoke test." "$W" extensions
+expect "the first word completes to it" "hello" "$W" __complete 1 he
+expect "and to extensions" "extensions" "$W" __complete 1 ex
+expect "extensions completes to path" "path" "$W" __complete 2 extensions ""
+expect "the usage names the command" "extensions [path]" "$W" --help
+# A command of llm-wiki's own always wins.
+printf '#!/bin/sh\necho HIJACK\n' > "$XD/wiki-news"
+printf '#!/bin/sh\necho HIJACK\n' > "$XD/wiki-relay"
+chmod +x "$XD/wiki-news" "$XD/wiki-relay"
+lacks "an extension can't take a built-in command's name" "HIJACK" "$W" news
+lacks "or a hidden one's" "HIJACK" "$W" relay
+expect "and extensions says it is ignored" "ignored: news is a command of llm-wiki's own" "$W" extensions
+rm "$XD/wiki-news" "$XD/wiki-relay"
+printf '#!/bin/sh\necho ran\n' > "$XD/wiki-asleep"
+refuse "a file that isn't executable doesn't run" "$W" asleep
+expect "and the error says how to fix it" "chmod +x" "$W" asleep
+expect "and so does the list" "not executable" "$W" extensions
+lacks "completion leaves it out" "asleep" "$W" __complete 1 ""
+rm "$XD/wiki-asleep"
+printf '#!/bin/sh\necho ran\n' > "$XD/wiki-Bad_Name"
+chmod +x "$XD/wiki-Bad_Name"
+refuse "a name that isn't lowercase letters, digits and dashes doesn't run" "$W" Bad_Name
+expect "and is listed as ignored" "ignored: a name is lowercase letters, digits and dashes" "$W" extensions
+rm "$XD/wiki-Bad_Name"
+refuse "an unknown command still fails" "$W" nosuchcommand
+mkdir -p "$T/ext2"
+printf '#!/bin/sh\necho elsewhere\n' > "$T/ext2/wiki-there"
+chmod +x "$T/ext2/wiki-there"
+expect "LLM_WIKI_EXTENSIONS_DIR names another folder" "elsewhere" env LLM_WIKI_EXTENSIONS_DIR="$T/ext2" "$W" there
+check "the docs say what an extension is given" grep -q 'LLM_WIKI_EXTENSION' "$REPO/docs/extensions.md"
+rm -rf "$XD"
 fi
 
 if section "Tour"; then

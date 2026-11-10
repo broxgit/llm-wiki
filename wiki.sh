@@ -184,6 +184,8 @@ Usage: $WIKI_CMD <command> [options]
                        access. An MCP client starts it. --print gives its config entry.
   news [--all]         What's new in llm-wiki since you last looked.
   obsidian [--no-open] Browse the wikis in Obsidian: write the vault's starter settings and open it.
+  extensions [path]    Commands of your own: $WIKI_CMD <name> runs an executable named
+                       wiki-<name> in the extensions folder. Lists them, or prints the folder.
   tour [--clean] [--dir DIR]
                        A hands-on tour for your agent, on a made-up project in a sandbox.
                        Ask your agent to run it and follow what it prints.
@@ -5822,11 +5824,75 @@ EOF
   esac
 }
 
+# ---- extensions -------------------------------------------------------------
+# An extension is a command of its own that `wiki <name>` runs: an executable named
+# wiki-<name> in the extensions folder, as git runs git-<name>. It keeps an integration
+# (a tracker, a publisher, a CI job) out of wiki.sh, and lets someone add their own.
+# A command of wiki.sh's own always wins. The folder is on this machine and outside
+# every collection, so nothing a pull brings in can become a command.
+# What an extension is given is the whole contract, and docs/extensions.md states it:
+#   LLM_WIKI            the wiki command, as a path it can run
+#   WIKIS_DIR           the collection this call is for, which the commands it runs use too
+#   LLM_WIKI_EXTENSION  the contract's version. Raise EXT_API only when one of these changes.
+EXT_DIR="${LLM_WIKI_EXTENSIONS_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/llm-wiki/extensions}"
+EXT_API=1
+# Commands that COMMANDS leaves out, and that are still not an extension's to take.
+EXT_RESERVED="relay help"
+
+ext_name_ok() { case "$1" in "" | [!a-z]* | *[!a-z0-9-]*) return 1 ;; esac; }
+is_builtin() { case " $COMMANDS $EXT_RESERVED " in *" $1 "*) return 0 ;; esac; return 1; }
+# ext_file <name>: the extension's file, whether or not it can run.
+ext_file() { ext_name_ok "$1" && ! is_builtin "$1" && [ -f "$EXT_DIR/wiki-$1" ] && printf '%s\n' "$EXT_DIR/wiki-$1"; }
+# ext_about <file>: its one-line description, from a `wiki-extension:` comment near the top.
+ext_about() { head -n 10 "$1" 2>/dev/null | LC_ALL=C tr -d '\000' | LC_ALL=C sed -n 's/^[#\/ ]*wiki-extension:[ ]*//p' | head -n 1; }
+# extension_names: the ones `wiki <name>` would run.
+extension_names() {
+  local f
+  for f in "$EXT_DIR"/wiki-*; do
+    [ -x "$f" ] && ext_file "${f##*/wiki-}" >/dev/null || continue
+    printf '%s\n' "${f##*/wiki-}"
+  done
+}
+run_extension() {
+  local f="$1"
+  shift
+  [ -x "$f" ] || die "the extension ${f##*/wiki-} isn't executable. Run: chmod +x $f"
+  LLM_WIKI="$REPO/wiki.sh" LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" LLM_WIKI_EXTENSION="$EXT_API" exec "$f" "$@"
+}
+
+cmd_extensions() {
+  local f n d any=0
+  case "${1:-}" in
+    "") ;;
+    path) printf '%s\n' "$EXT_DIR"; return 0 ;;
+    *) die "extensions takes path, or nothing" ;;
+  esac
+  for f in "$EXT_DIR"/wiki-*; do
+    [ -f "$f" ] || continue
+    any=1
+    n="${f##*/wiki-}"
+    if ! ext_name_ok "$n"; then
+      printf '%-14s ignored: a name is lowercase letters, digits and dashes\n' "$n"
+    elif is_builtin "$n"; then
+      printf "%-14s ignored: %s is a command of llm-wiki's own\\n" "$n" "$n"
+    elif [ ! -x "$f" ]; then
+      printf '%-14s not executable. Run: chmod +x %s\n' "$n" "$f"
+    else
+      d="$(ext_about "$f")"
+      printf '%-14s %s\n' "$n" "${d:-(no description)}"
+    fi
+  done
+  [ "$any" = 1 ] || echo "No extensions on this machine."
+  echo
+  echo "An extension is an executable named wiki-<name> in $(tilde "$EXT_DIR")."
+  echo "$WIKI_CMD <name> runs it. docs/extensions.md says what it is given."
+}
+
 # ---- completion -------------------------------------------------------------
 # Tab completion. `completion zsh|bash` prints a small script for the shell, which
 # asks `__complete` for candidates on every Tab. The candidates live here, so a
 # plugin update can't leave completion stale.
-COMMANDS="setup init new update start collections deps permissions seed harvest capture lock compile helper log sync index lint pending cover which status find stale patterns open skills tips report stats feedback news obsidian tour mcp delegation upgrade unlock claude link journal standup completion"
+COMMANDS="setup init new update start collections deps permissions seed harvest capture lock compile helper log sync index lint pending cover which status find stale patterns open skills tips report stats feedback news obsidian extensions tour mcp delegation upgrade unlock claude link journal standup completion"
 RANGES="lastworkday yesterday today week lastweek 7d 14d 30d"
 
 wiki_names() {
@@ -5852,7 +5918,7 @@ cmd_complete() {
   shift
   local cmd="${1:-}" prev=""
   [ "$i" -gt 1 ] && prev="$(eval "printf '%s' \"\${$((i - 1)):-}\"")"
-  if [ "$i" -le 1 ]; then printf '%s\n' $COMMANDS; return 0; fi
+  if [ "$i" -le 1 ]; then printf '%s\n' $COMMANDS; extension_names; return 0; fi
   case "$prev" in
     --since) printf '%s\n' $RANGES; return 0 ;;
     --format) printf 'standup\nsummary\ndetailed\n'; return 0 ;;
@@ -5870,6 +5936,7 @@ cmd_complete() {
     sync) [ "$i" -eq 2 ] && wiki_names; echo -m ;;
     index) [ "$i" -eq 2 ] && wiki_names; echo --check ;;
     lint) wiki_names; echo --all ;;
+    extensions) [ "$i" -eq 2 ] && echo path ;;
     log)
       if [ "$i" -eq 2 ]; then wiki_names
       elif [ "$i" -eq 3 ]; then printf 'ingest\nlint\nrestructure\nresolve\n'
@@ -7843,6 +7910,7 @@ case "$cmd" in
   compile) cmd_compile "$@"; exit 0 ;;
   helper) cmd_helper "$@"; exit 0 ;;
   obsidian) cmd_obsidian "$@"; exit 0 ;;
+  extensions) cmd_extensions "$@"; exit 0 ;;
   log) cmd_log "$@"; exit 0 ;;
   sync) cmd_sync "$@"; exit 0 ;;
   index) cmd_index "$@"; exit 0 ;;
@@ -7866,6 +7934,8 @@ if [ "$cmd" = cover ]; then
   cmd_cover "$@"
   exit 0
 fi
+# Not a command of wiki.sh's own: an extension's, if there is one by that name.
+if ext="$(ext_file "$cmd")"; then run_extension "$ext" "$@"; fi
 want_git=0
 want_all=0
 want_print=0
