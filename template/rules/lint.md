@@ -20,7 +20,7 @@ Check for:
 - Citations to other wikis (`name:path`) whose page doesn't exist
 - Pages here whose lesson holds beyond this project, as `AGENTS.md` describes under Ownership. Report each, and offer to move the general part to the shared wiki, leaving a citation. Moving is restructuring, so ask first
 - In the shared wiki: pages that depend on a project page, such as an example that only links into one project. The shared page should stand on its own
-- Patterns: run `wiki.sh patterns`. Report ready entries nobody has proposed, accepted ones that still get sightings (marked `AGAIN`), and the same rule tallied in two wikis. Ask before moving an entry to the wiki that owns it
+- Patterns: run `wiki.sh patterns`. Report ready entries nobody has proposed, accepted ones that still get sightings (marked `AGAIN`), and the same rule tallied in two wikis. Ask before moving an entry to the wiki that owns it. Remove `watching` entries of kind `procedure` or `toil` with a single sighting (no `xN`) last seen more than 180 days ago, and log each as `- fixed:`
 - Stale pages: no `verified` date, or one more than 180 days old. If the owning repository is at hand, also pages whose `commit` is far behind its HEAD
 
 Report findings first. Fix mechanical problems (links, index lines, frontmatter) without asking. Re-verify stale pages against the code when you can, and stamp the ones that still hold. Ask before merging pages, deleting pages, or resolving conflicts.

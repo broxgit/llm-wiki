@@ -20,6 +20,7 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 
 ## Later
 
+- **Find repeated work in transcripts.** Scan the transcripts on disk (`~/.claude/projects`, Antigravity's) for command sequences repeated across sessions, and report them as candidate toil. Look at this only if handbook v32 still misses repeats.
 - **Merge requests in standups.** Reviews and MRs opened live in GitHub or GitLab, not in git history. Pulling them in would need an API token and a host per remote.
 - **Backfill from more places.** The desktop app's Chat tab and claude.ai aren't on disk, so they're out of reach without an agent that has chat search. (The desktop Code tab is in `~/.claude/projects`, and Gemini's Antigravity conversations are read since 2026-10-29.)
 - **A hosted MCP server,** so web agents can search everything and save notes. A claude.ai Project covers reading for now. Build this only if saving notes from the web keeps coming up: it puts private notes behind a public URL, so it needs sign-in and a security review first.
@@ -72,6 +73,12 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Repeated operational work gets counted (2026-11-10)
+
+- **Why:** `rules/patterns.md` turns repeated work into a script or a skill at three sightings, and for repeated work it almost never fired: across every wiki there were no `toil` entries and two `procedure` entries, each seen once. llm-relay had been released by hand 14 times with nothing recorded. A line was written only when the agent knew the job had been done before, which a new session never does, and "work the user asks for as routine" read as exempting every release.
+- **What changed:** handbook v32 records an operational job from its first run, names the line after the job so sightings add up, counts each separate request, and has lint drop a job seen once and not again for 180 days. The plugin's tool-call hook gives a built-in reminder, once a session, on a command that looks like a release or a deploy (`builtin_reminders` in `wiki.sh` lists them).
+- **Still untested:** whether agents now record these jobs. About a week after release, run `wiki patterns` and count the `toil` and `procedure` entries, looking for noise (coding tasks logged as jobs) and split counts (one job under two wordings). Fewer than two operational entries across the wikis means the wording didn't work.
 
 ### The Go port: wiki feedback add (2026-11-09)
 

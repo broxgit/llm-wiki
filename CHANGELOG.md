@@ -4,6 +4,16 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v32 (2026-11-11)
+
+Repeated operational work gets counted, so it can become a script or a skill.
+
+- An agent records an operational job, such as a release, a deploy, setting up an environment, a data pull or regenerating files, with a `Feedback: toil` or `Feedback: procedure` line from its first run. It used to record one only when it knew the job had been done before, which a new session never does. Writing code is not such a job.
+- The line starts with the job's name, such as `Release llm-relay:`, and reuses the wording `wiki.sh patterns` shows for the same job, in an entry or in a note not compiled yet, so the sightings add up.
+- Each separate request is a sighting, even in one session. Only a single command you ask for, like running the tests again, is not a repeat.
+- A compile with nobody to answer leaves a ready pattern for the next session to propose. Lint removes a job seen once and not again for 180 days.
+- Do: run `wiki upgrade --all`.
+
 ## v31 (2026-11-09)
 
 A handoff's outcome closes the row its start left.

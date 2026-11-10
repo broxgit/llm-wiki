@@ -674,8 +674,34 @@ reminders_of() {
     }' "$f"
 }
 
+# builtin_reminders: the reminders every session gets, whatever its wikis say, as
+# reminders_of prints them, with "-" for the wiki. Today one rule: a release or a deploy
+# is an operational job, to record from its first run (rules/patterns.md). An agent that
+# has to remember that mostly doesn't: llm-relay was released by hand 14 times with
+# nothing recorded. One pattern a line, text the command contains.
+OPS_RULE='This looks like an operational job, such as a release or a deploy. When it is done, add a `Feedback: toil` or `Feedback: procedure` line to your next capture, the first run included. Start the rule with the job'"'"'s name, and run `wiki.sh patterns` first, to reuse the wording of an entry for the same job.'
+builtin_reminders() {
+  local pat
+  while IFS= read -r pat; do
+    [ -n "$pat" ] || continue
+    printf 'on\tbash\t%s\t%s\t-\n' "$pat" "$OPS_RULE"
+  done <<'EOF2'
+gh release create
+git tag v
+git tag -a
+git push*--tags
+npm publish
+cargo publish
+twine upload
+docker push
+terraform apply
+kubectl apply
+helm upgrade
+EOF2
+}
+
 # session_reminders <wiki root>: the reminders a session in that wiki works under: its
-# shared wikis' first, then its own.
+# shared wikis' first, then its own, then the built-in ones.
 session_reminders() {
   local wiki="$1" line spath
   while IFS= read -r line; do
@@ -691,6 +717,7 @@ session_reminders() {
 $(grep '^- [^:]*: ' "$wiki/links.md" 2>/dev/null || true)
 EOF2
   reminders_of "$wiki"
+  builtin_reminders
 }
 
 # start [<repo or folder>]: everything session start needs, in one call. Finds the

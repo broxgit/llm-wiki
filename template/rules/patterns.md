@@ -1,6 +1,6 @@
 # Patterns
 
-Read this when the user corrects your work, when you catch a mistake of your own, when review comments land on code an agent helped write, when you catch yourself repeating work, or when compile finds `Feedback:` lines.
+Read this when the user corrects your work, when you catch a mistake of your own, when review comments land on code an agent helped write, when you finish an operational job likely to come up again, or when compile finds `Feedback:` lines.
 
 The goal: the user never gives the same correction twice. When feedback repeats, turn it into something that prevents it next time.
 
@@ -12,10 +12,12 @@ Add a `Feedback:` line to your next capture when:
 - **correction**: the user corrects your work or your approach.
 - **lesson**: you catch a mistake of your own, with no one correcting you, that a rule would have prevented. It is counted and proposed at the same thresholds as a correction.
 - **ask**: the user asks for something the wiki shows they have asked for before.
-- **procedure**: you carry out a multi-step procedure that you, or a note in some wiki, have carried out before, in this repository or another, or the user tells you that you keep doing one. It needs judgment on each run, so its fix is a skill.
+- **procedure**: an operational job that needs judgment on each run, or one the user tells you that you keep doing. Its fix is a skill.
 - **toil**: the same commands, edits, or lookups, step for step, every time. No judgment needed, so its fix is a script. When a procedure is mostly toil, use `procedure`: the skill can call a script for the mechanical part.
 
-Work the user asks for as routine, like running the tests again, is not a repeat. Repeats inside one task, like four screens built from one pattern, count as one sighting.
+Record `procedure` and `toil` from the first run. When you finish an operational job, such as a release, a deploy, setting up an environment, a data pull, or regenerating files, and its steps would be the same next time, add the line even if you have never done it before: a later session can't count a run nobody wrote down. Writing or changing code is not such a job. Start the rule with the job's name, a verb and what it acts on, such as `Release llm-relay:`. Use `here` for a job tied to one repository, and `everywhere` only for the same job done across repositories. When sightings disagree on the kind, keep `procedure`. Where the plugin's hooks run, a reminder says this when a command looks like a release or a deploy. Record the job without it too: it knows only a few commands.
+
+A single command the user asks for, like running the tests again, is not a repeat. A multi-step job is, whoever starts it, and each separate request is a sighting, even in one session. Repeats within one request, like four screens built from one pattern, count as one.
 
 One line per item:
 
@@ -36,10 +38,10 @@ Feedback: review | here | Wrap returned errors with %w and context. No bare `ret
 Feedback: lesson | here | Run the migration check before pushing a schema change.
 Feedback: correction | go-common | Services using go-common's HTTP middleware get request metrics from it. Don't add metrics for those.
 Feedback: procedure | everywhere | Bump a shared proto across the repos that consume it.
-Feedback: toil | here | After changing an interface, regenerate mocks and fix imports.
+Feedback: toil | here | Release llm-relay: tag main, hash the tarball, update the tap formula, check it with brew.
 ```
 
-Capture the note in the wiki that owns the scope: this wiki for `here`, the named wiki for a library, the shared wiki for `everywhere`. Feedback with two owners makes two notes, one in each wiki. A note can carry several lines. Before choosing the wording, read the owning wiki's `patterns.md`. If an entry already covers it, use that entry's rule text. Leave out who said it unless it matters to the rule. "Off the record" applies.
+Capture the note in the wiki that owns the scope: this wiki for `here`, the named wiki for a library, the shared wiki for `everywhere`. Feedback with two owners makes two notes, one in each wiki. A note can carry several lines. Before choosing the wording, run `wiki.sh patterns`, which lists each wiki's entries and the `Feedback:` lines in notes not compiled yet, or read the owning wiki's `patterns.md`. If an entry or a waiting line already covers it, use its rule text. Leave out who said it unless it matters to the rule. "Off the record" applies.
 
 ## The ledger
 
@@ -72,7 +74,7 @@ An entry is ready when it is `watching` and one of these holds:
 
 `wiki.sh patterns` lists ready entries across every wiki.
 
-Propose in your reply at the stopping point where the entry became ready, never in the middle of work. Set the entry to `proposed` in the same compile that made it ready, then send the proposal in that reply. One short question per pattern, with the evidence and the fix you suggest:
+Propose in your reply at the stopping point where the entry became ready, never in the middle of work. Set the entry to `proposed` in the same compile that made it ready, then send the proposal in that reply. A compile with no user to answer, such as one running in the background, leaves the entry `watching`: the next session that sees it ready in `wiki.sh patterns` sets it and asks. One short question per pattern, with the evidence and the fix you suggest:
 
 > Reviewers flagged bare `return err` in 3 merge requests since Oct 9: billing-api !412, orders-api !87, billing-api !431. Add it to billing-api's conventions, so I check for it before calling code done?
 

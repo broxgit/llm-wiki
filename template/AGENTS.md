@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Handbook version 31.
+Handbook version 32.
 
 This folder is a knowledge base maintained by an LLM agent. Any agent working here follows this file. It needs no vendor features. Plain markdown, plain files.
 
@@ -61,7 +61,7 @@ The user should not have to tell you when to use the wiki. Decide for yourself w
 - a problem solved, with the cause and the fix
 - a research finding, with its source
 
-Finished work is not a capture by itself where a commit records it. The code and its history show what changed. Note only what they don't show: why it was built that way, what was tried and dropped, what will trip up the next session. A change git doesn't record is a capture: one under `~/.claude` or another tool's settings, a machine's configuration, or an installed tool. Name the machine. Work the user puts off goes in the owning repository's `ROADMAP.md`, or its equivalent, when it has one. Otherwise capture it with a `Waiting:` or `Due:` line.
+Finished work is not a capture by itself where a commit records it. The code and its history show what changed. Note only what they don't show: why it was built that way, what was tried and dropped, what will trip up the next session. An operational job likely to come up again, such as a release or a deploy, gets a `Feedback:` line, because git doesn't show that it was a repeat. A change git doesn't record is a capture: one under `~/.claude` or another tool's settings, a machine's configuration, or an installed tool. Name the machine. Work the user puts off goes in the owning repository's `ROADMAP.md`, or its equivalent, when it has one. Otherwise capture it with a `Waiting:` or `Due:` line.
 
 Capture at stopping points, not as you go. A stopping point is where a piece of work is done: you are about to report it finished, or the user moves on. In a long working session that is rarely more than one or two notes an hour, each covering everything since the last. Skip small talk, guesses, passing opinions, and work still in flux. When unsure whether something is a decision or a correction, capture it. When unsure whether it is only a record of work done, don't.
 
@@ -69,7 +69,7 @@ Capture at stopping points, not as you go. A stopping point is where a piece of 
 
 **Lint.** Due when the log shows 10 or more ingests since the last lint. Every compile ends by checking, so you don't have to remember.
 
-**Feedback.** The user should never give the same correction twice. When the user corrects your work, you catch a mistake of your own that a rule would have prevented, review comments land on code an agent helped write, or you repeat a procedure or mechanical work, add a `Feedback:` line to your next capture. `rules/patterns.md` has the format and where the note goes. When `patterns.md` shows a pattern is ready, propose a fix at a stopping point: a convention, a note in a library's wiki, a skill, or a small tool.
+**Feedback.** The user should never give the same correction twice. When the user corrects your work, you catch a mistake of your own that a rule would have prevented, review comments land on code an agent helped write, or you finish an operational job likely to come up again, such as a release, the first run included, add a `Feedback:` line to your next capture. `rules/patterns.md` has the format and where the note goes. When `patterns.md` shows a pattern is ready, propose a fix at a stopping point: a convention, a note in a library's wiki, a skill, or a small tool.
 
 **Open items.** When something can't move until someone acts, or should be looked at on a date, add a `Waiting:` or `Due:` line to your next capture. `rules/open.md` has the format. When a session ends with items waiting on the user, say what they are in your last reply.
 

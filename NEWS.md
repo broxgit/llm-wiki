@@ -4,6 +4,11 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-11-11: a reminder to record releases and deploys
+
+- When an agent runs a release or deploy command, such as `gh release create` or `terraform apply`, the plugin reminds it once a session to record the job.
+- After three recorded runs of the same job, the agent offers to script it.
+
 ## 2026-11-09: `wiki delegation` counts each handoff once
 
 - A handoff that a reminder stopped once was logged twice. It is logged once, when it goes through.
