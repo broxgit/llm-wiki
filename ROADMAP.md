@@ -26,7 +26,6 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 - **A hosted MCP server,** so web agents can search everything and save notes. A claude.ai Project covers reading for now. Build this only if saving notes from the web keeps coming up: it puts private notes behind a public URL, so it needs sign-in and a security review first.
 - **Team digest.** A weekly roll-up across several people's journals, for a lead. Needs a shared, opt-in journal location.
 - **Review flow for teams.** Agents push straight to the collection. A team may want a weekly digest of changes, or pull requests.
-- **Obsidian.** Add `.obsidian/` to the template's `.gitignore` if anyone opens wikis as vaults.
 - **Microsoft 365 Copilot through gitlab.com.** Parked on 2026-11-03; the code is on the `microsoft-copilot-gitlab` branch. It worked once, signed in as an account in a paid company group, but GitLab's server follows the signed-in account, so the agent could read everything that account can. A dedicated Reporter account should fix that, but a free one, owning its own free group with MCP access on, gets a 403: "MCP server not enabled for any of your groups". Revive this if GitLab explains that denial, or if an account in a group that counts can be limited to one project. Until then, the GitHub route is the way: code can stay on GitLab, with only the wikis the agent reads on GitHub.
 - **Terse page style.** Held on 2026-11-02. Measured on one sample page, terse plain-word notes used 56% of the tokens of default prose, but wiki reads were about 1.9% of a week's new input tokens, so the saving is under 1%. It would mean rewriting every page or keeping two styles, and teammates read the pages too. If token savings become a goal, look at long sessions first: most of the volume is cache reads. If it ever comes back, test answer quality first, and skip abbreviations and JSON, which saved nothing more in the same test.
 
@@ -73,6 +72,14 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Browse the wikis in Obsidian (2026-11-10)
+
+- **Why:** the wikis are plain markdown, and Obsidian gives search, links and a graph over them. Opened as a vault with Obsidian's defaults, though, the collection's `git status` is never clean, links come out as `[[wikilinks]]` that lint can't follow, pasted files land outside any wiki, and editing a property rewrites `sources: [a, b]` one item a line, which lint and the waiting-notes count read as no sources at all.
+- **What changed:** `wiki obsidian` writes starter settings for one vault over the collection (names checked against Obsidian 1.12.7's own code) and opens it once Obsidian knows the folder. `.obsidian/` and `.trash/` are ignored in new collections and added by `wiki upgrade`. Lint, `compiled_stems` and the helper's `internal/status` read a list with one item a line. Lint reports wikilinks. Handbook v33 keeps lint from giving frontmatter to a note the user made. `wiki setup` asks once where Obsidian has run.
+- **Tested in a real vault (Obsidian 1.12.7, 2026-11-10, a copy of two wikis):** opening the folder keeps the starter settings; removing a tag in the properties panel rewrote every list in the frontmatter one item a line, indented two spaces, and lint and pending read the page as before; the graph showed about as many nodes as there are pages outside `raw/` (142, against 262 raw notes); `wiki obsidian` opened the vault once Obsidian listed it.
+- **Also tried there:** a link picked from Obsidian's `[[` suggestions was written as `[go-port-status](decisions/go-port-status.md)`; a note made with a page open landed in that page's folder; a pasted image landed in `attachments/` beside the note. Lint reported the new note as having no frontmatter, missing from the index and an orphan, and nothing else.
+- **Still untested:** `wiki obsidian` on Linux, and the setup question in a real terminal.
 
 ### Repeated operational work gets counted (2026-11-10)
 

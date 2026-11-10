@@ -23,7 +23,9 @@ Check for:
 - Patterns: run `wiki.sh patterns`. Report ready entries nobody has proposed, accepted ones that still get sightings (marked `AGAIN`), and the same rule tallied in two wikis. Ask before moving an entry to the wiki that owns it. Remove `watching` entries of kind `procedure` or `toil` with a single sighting (no `xN`) last seen more than 180 days ago, and log each as `- fixed:`
 - Stale pages: no `verified` date, or one more than 180 days old. If the owning repository is at hand, also pages whose `commit` is far behind its HEAD
 
-Report findings first. Fix mechanical problems (links, index lines, frontmatter) without asking. Re-verify stale pages against the code when you can, and stamp the ones that still hold. Ask before merging pages, deleting pages, or resolving conflicts.
+Report findings first. Fix mechanical problems (links, index lines, frontmatter) without asking. A `[[wikilink]]` is one: rewrite it as a relative markdown link to the page it names.
+
+A page with no frontmatter that no log entry names is the user's, such as a note made in Obsidian. It has no source, so don't add frontmatter to it or list it in the index: that would make it a page nobody checked. Report it, and offer to move its text into `raw/` as a capture, so the next compile files it properly. Re-verify stale pages against the code when you can, and stamp the ones that still hold. Ask before merging pages, deleting pages, or resolving conflicts.
 
 Outside a lint run, fix a broken link or a stale claim when you trip over one while you hold the lock.
 

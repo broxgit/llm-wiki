@@ -81,8 +81,14 @@ func compiled(dir string) (map[string]bool, error) {
 		if err != nil {
 			return nil, err
 		}
+		// The sources: line, and the list items under it when the list is one a line,
+		// which is how Obsidian rewrites it: the awk in compiled_stems.
+		inList := false
 		for _, line := range lines {
-			if !strings.HasPrefix(string(line), "sources:") {
+			if strings.HasPrefix(string(line), "sources:") {
+				inList = true
+			} else if !inList || !listItem(string(line)) {
+				inList = false
 				continue
 			}
 			for _, name := range rawNames(string(line)) {
@@ -185,6 +191,11 @@ func readDir(dir string) ([]string, error) {
 
 // rawNames is grep -o 'raw/[^],"[:space:]]*' | sed 's#^raw/##' under LC_ALL=C: each
 // raw/ in the line, and what follows it up to a bracket, a comma, a quote or a space.
+// listItem is awk's /^[ \t]*- /.
+func listItem(line string) bool {
+	return strings.HasPrefix(strings.TrimLeft(line, " \t"), "- ")
+}
+
 func rawNames(line string) []string {
 	var names []string
 	for {

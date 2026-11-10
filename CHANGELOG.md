@@ -4,6 +4,15 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v33 (2026-11-12)
+
+A note you make in Obsidian is yours until a compile files it.
+
+- Lint used to add frontmatter to any page that lacked it, which would have made a note typed in Obsidian an official page with no source. A page with no frontmatter that no log entry names is now reported, with an offer to move its text into `raw/` as a capture.
+- Lint reports `[[wikilinks]]`, which nothing here follows, and an agent rewrites them as relative markdown links.
+- `wiki.sh upgrade` adds `.obsidian/` and `.trash/` to each `.gitignore`, the collection's included, so opening the wikis as a vault leaves `git status` clean.
+- Do: run `wiki upgrade --all`.
+
 ## v32 (2026-11-11)
 
 Repeated operational work gets counted, so it can become a script or a skill.

@@ -1,2 +1,4 @@
 .DS_Store
 .compile-lock
+.obsidian/
+.trash/

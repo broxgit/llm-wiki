@@ -201,6 +201,7 @@ build_helper() {
 
 if section "Collection"; then
 expect "init --git makes the first commit" "first commit made" "$W" init --git
+check "and a new collection ignores what Obsidian writes" bash -c "grep -qxF .obsidian/ '$WIKIS_DIR/.gitignore' && grep -qxF .trash/ '$WIKIS_DIR/.gitignore'"
 "$W" journal set day_starts 00:00 >/dev/null
 check "the collection is a git repo" git -C "$WIKIS_DIR" rev-parse --is-inside-work-tree
 check "the shared wiki starts with a conventions page" grep -q '^## For agents' "$WIKIS_DIR/global/wiki/conventions.md"
@@ -1403,7 +1404,55 @@ printf -- '---\ntitle: Cited\nsummary: Cites raw files.\nsources: [raw/2026-01-0
 out="$("$W" lint lintdemo 2>&1)"
 case "$out" in *"missing source file"*"cited.md -> raw/2026-01-01-000001-gone.md"*) ok "lint reports a sources: entry with no raw file" ;; *) bad "lint reports a sources: entry with no raw file" "$out" ;; esac
 case "$out" in *"-> raw/2026-01-01-000000-waiting.md"*) bad "and only the missing one" "$out" ;; *) ok "and only the missing one" ;; esac
+# Obsidian rewrites a page's lists one item a line when a property is edited there.
+# Read a line at a time, such a page had no sources: lint stopped checking them, and
+# the notes it compiled counted as waiting again.
+printf -- '---\ntitle: Cited\nsummary: Cites raw files.\ntags:\n  - one\n  - two\nsources:\n  - raw/2026-01-01-000000-waiting.md\n  - "raw/2026-01-01-000001-gone.md"\nupdated: 2026-01-01\nverified: 2026-10-01\n---\n\nBody, with [[Zebra]], [[zebra|a name]] and `[[ -f x ]]`.\n\n```\n[[ -n "$in_a_fence" ]]\n```\n- raw/2026-01-01-000002-body.md\n' > "$L/wiki/concepts/cited.md"
+out="$("$W" lint lintdemo 2>&1)"
+case "$out" in *"missing source file"*"cited.md -> raw/2026-01-01-000001-gone.md"*) ok "lint reads sources: written one a line, as Obsidian rewrites it" ;; *) bad "lint reads sources: written one a line, as Obsidian rewrites it" "$out" ;; esac
+case "$out" in *"-> raw/2026-01-01-000000-waiting.md"* | *"frontmatter missing"*"cited.md"*) bad "and finds nothing else wrong with that frontmatter" "$out" ;; *) ok "and finds nothing else wrong with that frontmatter" ;; esac
+case "$out" in *"notes waiting"*) bad "and the note such a page names is compiled, to lint" "$out" ;; *) ok "and the note such a page names is compiled, to lint" ;; esac
+expect "and to pending, in the Bash" "nothing waiting" env LLM_WIKI_NO_GO=1 "$W" pending lintdemo
+expect "and with whatever helper there is" "nothing waiting" "$W" pending lintdemo
+printf 'Captured: 2026-01-01\n\nA line in a page, not in its sources.\n' > "$L/raw/2026-01-01-000002-body.md"
+expect "a list item below the sources is not one of them" "000002-body" env LLM_WIKI_NO_GO=1 "$W" pending lintdemo
+rm "$L/raw/2026-01-01-000002-body.md"
+case "$out" in *"wikilink"*"cited.md -> [[Zebra]]"*"cited.md -> [[zebra]]"*) ok "lint reports wikilinks, which it can't follow" ;; *) bad "lint reports wikilinks, which it can't follow" "$out" ;; esac
+case "$out" in *"-f x"* | *"in_a_fence"*) bad "and not double brackets in code" "$out" ;; *) ok "and not double brackets in code" ;; esac
+printf -- '---\ntitle: Cited\nsummary:\nupdated: 2026-01-01\nverified: 2026-10-01\n---\n\nBody.\n' > "$L/wiki/concepts/cited.md"
+expect "an empty key is still a missing one" "frontmatter missing summary" "$W" lint lintdemo
 rm "$L/wiki/concepts/cited.md"
+check "the template's own ignore file covers Obsidian" grep -qxF .obsidian/ "$L/.gitignore"
+check "and lint leaves a note the user made as theirs" grep -q 'no log entry names' "$REPO/template/rules/lint.md"
+# wiki obsidian, on a collection of its own.
+OB="$T/ob"
+WIKIS_DIR="$OB" "$W" new one >/dev/null 2>&1
+printf '.DS_Store\n' > "$OB/.gitignore"
+ob() { WIKIS_DIR="$OB" "$W" "$@"; }
+out="$(ob upgrade --all 2>&1)"
+case "$out" in *".gitignore: added .obsidian/"*".gitignore: added .trash/"*) ok "upgrade adds Obsidian's folders to a collection's ignore file" ;; *) bad "upgrade adds Obsidian's folders to a collection's ignore file" "$out" ;; esac
+lacks "and only once" ".gitignore: added" ob upgrade --all
+expect "obsidian writes the vault's starter settings" "wrote: " ob obsidian --no-open
+check "and they are JSON, with markdown links" python3 -c "import json, sys; d = json.load(open(sys.argv[1])); assert d['useMarkdownLinks'] is True and d['newLinkFormat'] == 'relative' and d['userIgnoreFilters']" "$OB/.obsidian/app.json"
+expect "a second run says they are there" "settings: already in" ob obsidian --no-open
+out="$(ob obsidian 2>&1)"
+case "$out" in *"Open it once by hand"*) ok "a vault Obsidian doesn't know yet is opened by hand, the first time" ;; *) bad "a vault Obsidian doesn't know yet is opened by hand, the first time" "$out" ;; esac
+printf '{}\n' > "$OB/.obsidian/app.json"
+expect "the empty file Obsidian makes is replaced" "wrote: " ob obsidian --no-open
+printf '{"vimMode": true}\n' > "$OB/.obsidian/app.json"
+expect "settings of your own are kept, and the recommended ones printed" "useMarkdownLinks" ob obsidian --no-open
+check "and the file is as it was" grep -qx '{"vimMode": true}' "$OB/.obsidian/app.json"
+refuse "obsidian refuses an option it doesn't know" ob obsidian --open
+lacks "Obsidian's folder is not a wiki, to status" ".obsidian" ob status
+lacks "nor with the Bash alone" ".obsidian" env LLM_WIKI_NO_GO=1 WIKIS_DIR="$OB" "$W" status
+lacks "with no Obsidian on the machine, setup has nothing to ask" "obsidian" ob setup --list
+mkdir -p "$HOME/Library/Application Support/obsidian" "${XDG_CONFIG_HOME:-$HOME/.config}/obsidian"
+expect "where Obsidian has run, setup --new would ask" "theirs  <- new" bash -c "WIKIS_DIR='$OB' '$W' setup --list | grep '^obsidian'"
+rm "$OB/.obsidian/app.json"
+expect "setup obsidian writes the settings on a yes" "wrote: " bash -c "printf 'y\n' | WIKIS_DIR='$OB' LLM_WIKI_TEST_TTY=1 '$W' setup obsidian"
+out="$(ob setup --list | grep '^obsidian')"
+case "$out" in *"ours"*) case "$out" in *"<- new"*) bad "and it isn't asked again" "$out" ;; *) ok "and it isn't asked again" ;; esac ;; *) bad "and it isn't asked again" "$out" ;; esac
+rm -rf "$HOME/Library/Application Support/obsidian" "${XDG_CONFIG_HOME:-$HOME/.config}/obsidian"
 printf '\n- [Ghost](wiki/concepts/ghost.md): gone\n' >> "$L/index.md"
 expect "lint reports an index line with no page" "index line with no page" "$W" lint lintdemo
 expect "lint --all covers every wiki" "== global" "$W" lint --all
@@ -2893,6 +2942,10 @@ goes"
   printf '# Log\n\n## 2026-01-01 ingest | a\n- source: raw/2026-01-01-a.md\n- source: raw/2026-01-01-e.tar.gz\n' > "$FD/st-due/log.md"
   printf -- '---\nsources: [raw/2026-01-01-b.md, "raw/2026-01-01-c.txt"]\n---\nsources: raw/2026-01-01-zz.md\n' > "$FD/st-due/wiki/p.md"
   printf 'An old summary page.\n' > "$FD/st-due/wiki/sources/2026-01-01-d.md"
+  # Sources one a line, as Obsidian rewrites them. k and l are compiled. m is a list
+  # item after the list ended, so it waits, as it would have before.
+  for n in k.md l.md m.md; do printf 'x\n' > "$FD/st-due/raw/2026-01-01-$n"; done
+  printf -- '---\ntitle: q\nsources:\n  - raw/2026-01-01-k.md\n\t- "raw/2026-01-01-l.md"\nupdated: 2026-01-01\n- raw/2026-01-01-m.md\n---\n' > "$FD/st-due/wiki/q.md"
   sw st-lint "$TV"
   { printf '# Log\n\n## 2026-01-01 ingest | old\n## 2026-01-02 lint | lint\n'; for n in 1 2 3 4 5 6 7 8 9 10; do printf '## 2026-01-03 ingest | %s\n' "$n"; done; } > "$FD/st-lint/log.md"
   sw st-pat "$TV"
@@ -2910,7 +2963,7 @@ goes"
 
   ssame "status, helper and Bash: every kind of row and to-do, with the other collection's notes" helper
   out="$(srun "$T/bin/llm-wiki")"
-  expect "and the helper counts the notes waiting, less those compiled" "st-due                     v$TV       6        free  <- compile due" printf '%s' "$out"
+  expect "and the helper counts the notes waiting, less those compiled" "st-due                     v$TV       7        free  <- compile due" printf '%s' "$out"
   expect "and the patterns ready and not working, and the ingests since a lint" "st-pat                     v$TV       0        free  <- 1 pattern(s) ready  <- 1 accepted fix(es) not working" printf '%s' "$out"
   expect "and the lock" "st-lock                    v$TV       0        held by s-1 since 2026-01-01" printf '%s' "$out"
   expect "and what a wiki covers, a last line with no line feed and all" "free  covers: web api$(printf '\r') last" printf '%s' "$out"
