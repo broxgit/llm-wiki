@@ -1,0 +1,323 @@
+#!/usr/bin/env python3
+# wiki-extension: Check the Jira tickets your open items wait on, and close the ones that are done.
+"""wiki jira: an llm-wiki extension. Standard library only.
+
+It reads each wiki's open.md (the ledger rules/open.md describes), finds the open
+entries that name a Jira ticket, and asks Jira for each ticket's status. It never
+writes to Jira. With --close it saves a note with a `Done:` line for each entry
+whose tickets are all done, through `wiki capture` and `wiki sync`.
+"""
+import base64
+import datetime
+import json
+import os
+import re
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+
+CMD = os.environ.get("LLM_WIKI_CMD", "wiki")
+CONFIG = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "llm-wiki", "jira")
+KEY = re.compile(r"(?<![A-Za-z0-9-])([A-Z][A-Z0-9]{1,9}-[0-9]+)(?![A-Za-z0-9-])")
+
+USAGE = f"""Usage: {CMD} jira [check] [--close] [<wiki>]
+       {CMD} jira show <KEY>...
+       {CMD} jira config
+
+  check    For every open item that names a ticket, such as PROJ-123, say where the
+           ticket stands. The default. It reads Jira and changes nothing.
+           --close saves a note with a Done: line for each item whose tickets are all
+           done, and syncs the wiki. The next compile closes the item.
+  show     One line for each ticket: its status and summary.
+  config   What is set, and whether Jira accepts the sign-in.
+
+Settings go in {CONFIG}, one `name = value` a line:
+  url        https://your-company.atlassian.net, or your own server's address
+  email      your Atlassian account's email. Jira Cloud only: leave it out for Data Center.
+  token_cmd  a command that prints your API token, such as
+             security find-generic-password -s jira -w
+  projects   optional: PROJ, OPS. Only keys in these projects count as tickets.
+The environment wins over the file: JIRA_URL, JIRA_EMAIL, JIRA_API_TOKEN, JIRA_PROJECTS.
+Keep the token out of the file. With an email the sign-in is Jira Cloud's (email and
+API token); without one the token is sent as a Data Center personal access token.
+"""
+
+
+def die(msg):
+    sys.stdout.flush()
+    print(f"error: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def settings():
+    conf = {}
+    try:
+        with open(CONFIG, encoding="utf-8") as f:
+            for line in f:
+                line = line.split("#", 1)[0].strip()
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    conf[k.strip()] = v.strip()
+    except FileNotFoundError:
+        pass
+    for k, env in (("url", "JIRA_URL"), ("email", "JIRA_EMAIL"), ("projects", "JIRA_PROJECTS")):
+        if os.environ.get(env):
+            conf[k] = os.environ[env]
+    conf["url"] = conf.get("url", "").rstrip("/")
+    conf["projects"] = [p.strip().upper() for p in conf.get("projects", "").split(",") if p.strip()]
+    return conf
+
+
+def token(conf):
+    """The API token and where it came from. Never printed."""
+    if os.environ.get("JIRA_API_TOKEN"):
+        return os.environ["JIRA_API_TOKEN"], "JIRA_API_TOKEN"
+    if conf.get("token_cmd"):
+        try:
+            out = subprocess.run(conf["token_cmd"], shell=True, capture_output=True, text=True, timeout=30)
+        except subprocess.TimeoutExpired:
+            die("token_cmd took more than 30 seconds")
+        if out.returncode != 0 or not out.stdout.strip():
+            die(f"token_cmd printed no token (exit {out.returncode}). Run it yourself to see why.")
+        return out.stdout.strip(), "token_cmd"
+    return "", ""
+
+
+class Jira:
+    def __init__(self, conf):
+        if not conf["url"]:
+            die(f"no Jira address. Set url in {CONFIG}, or JIRA_URL. {CMD} jira --help has the settings.")
+        if not conf["url"].startswith(("https://", "http://")):
+            die(f"url has to start with https:// (it is {conf['url']})")
+        tok, _ = token(conf)
+        if not tok:
+            die(f"no API token. Set token_cmd in {CONFIG}, or JIRA_API_TOKEN. {CMD} jira --help has the settings.")
+        self.url = conf["url"]
+        if conf.get("email"):
+            auth = "Basic " + base64.b64encode(f"{conf['email']}:{tok}".encode()).decode()
+        else:
+            auth = "Bearer " + tok
+        self.headers = {"Authorization": auth, "Accept": "application/json"}
+
+    def get(self, path):
+        """The JSON at path, or None where Jira says there is no such thing."""
+        req = urllib.request.Request(self.url + path, headers=self.headers)
+        try:
+            with urllib.request.urlopen(req, timeout=15) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None
+            if e.code in (401, 403):
+                die(f"Jira refused the sign-in ({e.code}) at {self.url}. Check the email and the token: {CMD} jira config shows what is set.")
+            die(f"Jira answered {e.code} for {path}")
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            die(f"can't reach {self.url}: {getattr(e, 'reason', e)}")
+        except ValueError:
+            die(f"{self.url} didn't answer with JSON. Is url the address of Jira itself?")
+
+    def ticket(self, key):
+        """{key, status, done, resolved, summary}, or None for no such ticket."""
+        d = self.get(f"/rest/api/2/issue/{key}?fields=summary,status,resolutiondate")
+        if d is None:
+            return None
+        f = d.get("fields") or {}
+        st = f.get("status") or {}
+        return {
+            "key": key,
+            "status": st.get("name") or "?",
+            "done": ((st.get("statusCategory") or {}).get("key") == "done"),
+            "resolved": (f.get("resolutiondate") or "")[:10],
+            "summary": f.get("summary") or "",
+        }
+
+
+def keys_in(text, projects):
+    out = []
+    for k in KEY.findall(text):
+        if projects and k.split("-")[0] not in projects:
+            continue
+        if k not in out:
+            out.append(k)
+    return out
+
+
+def open_items(wikis_dir, only):
+    """[(wiki, heading)] for every open entry in every wiki's open.md."""
+    items = []
+    try:
+        names = sorted(os.listdir(wikis_dir))
+    except OSError:
+        die(f"no wikis at {wikis_dir}")
+    if only and only not in names:
+        die(f"no wiki called {only}")
+    for name in names:
+        root = os.path.join(wikis_dir, name)
+        if name.startswith(".") or (only and name != only):
+            continue
+        if not (os.path.isfile(os.path.join(root, "AGENTS.md")) and os.path.isfile(os.path.join(root, "index.md"))):
+            continue
+        try:
+            with open(os.path.join(root, "open.md"), encoding="utf-8", errors="replace") as f:
+                lines = f.read().splitlines()
+        except OSError:
+            continue
+        heading, status = None, ""
+        for line in lines + ["## "]:
+            if line.startswith("## "):
+                if heading and status == "open":
+                    items.append((name, heading))
+                heading, status = line[3:].strip(), ""
+            elif line.startswith("- status:"):
+                status = line.split(":", 1)[1].strip()
+    return items
+
+
+def describe(t):
+    if t is None:
+        return "not found"
+    if t["done"]:
+        return t["status"] + (f", resolved {t['resolved']}" if t["resolved"] else "")
+    return t["status"]
+
+
+def already_noted(root, heading):
+    """A note from an earlier --close that no compile has taken yet."""
+    raw = os.path.join(root, "raw")
+    want = f"Done: {heading}"
+    try:
+        names = [n for n in os.listdir(raw) if n.endswith("-jira-done.md")]
+    except OSError:
+        return False
+    for n in names:
+        try:
+            with open(os.path.join(raw, n), encoding="utf-8", errors="replace") as f:
+                if want in f.read().splitlines():
+                    return True
+        except OSError:
+            pass
+    return False
+
+
+def cmd_check(args):
+    close = "--close" in args
+    rest = [a for a in args if a != "--close"]
+    if any(a.startswith("-") for a in rest) or len(rest) > 1:
+        die(f"check takes --close and a wiki's name. {CMD} jira --help")
+    conf = settings()
+    wikis_dir = os.environ.get("WIKIS_DIR") or die("WIKIS_DIR isn't set. Run this as: wiki jira")
+    named = [(w, h, keys_in(h, conf["projects"])) for w, h in open_items(wikis_dir, rest[0] if rest else None)]
+    named = [n for n in named if n[2]]
+    if not named:
+        print("No open item names a ticket." + ("" if conf["projects"] else " A ticket is a key such as PROJ-123 in the item's heading."))
+        return 0
+    jira = Jira(conf)
+    seen = {}
+    ready = {}
+    last = None
+    n_done = 0
+    for wiki, heading, keys in named:
+        tickets = []
+        for k in keys:
+            if k not in seen:
+                seen[k] = jira.ticket(k)
+            tickets.append(seen[k])
+        found = [t for t in tickets if t is not None]
+        if not found:
+            continue
+        if wiki != last:
+            print(f"== {wiki}")
+            last = wiki
+        print(f"  {heading}")
+        for k, t in zip(keys, tickets):
+            if t is not None:
+                print(f"      {k:<12} {describe(t)}")
+        if all(t["done"] for t in found):
+            n_done += 1
+            ready.setdefault(wiki, []).append((heading, found))
+    if last is None:
+        print("No open item names a ticket Jira knows.")
+        return 0
+    print()
+    if not n_done:
+        print("None of them is done yet.")
+        return 0
+    if not close:
+        print(f"{n_done} open item(s) have every ticket done. To close them: {CMD} jira check --close")
+        return 0
+    wiki_cmd = os.environ.get("LLM_WIKI") or die("LLM_WIKI isn't set. Run this as: wiki jira")
+    now = datetime.datetime.now(datetime.timezone.utc)
+    for wiki, entries in ready.items():
+        root = os.path.join(wikis_dir, wiki)
+        todo = [(h, ts) for h, ts in entries if not already_noted(root, h)]
+        if not todo:
+            print(f"{wiki}: already noted, waiting for a compile.")
+            continue
+        note = [f"# Jira: tickets done, as of {now:%Y-%m-%d}", "",
+                f"Source: {jira.url}, read by `wiki jira` on {now:%Y-%m-%d %H:%M} UTC.", ""]
+        for h, ts in todo:
+            for t in ts:
+                note.append(f"- {t['key']} \"{t['summary']}\": {describe(t)}. {jira.url}/browse/{t['key']}")
+        note.append("")
+        note += [f"Done: {h}" for h, _ in todo]
+        r = subprocess.run([wiki_cmd, "capture", wiki, "jira-done"], input="\n".join(note) + "\n", text=True)
+        if r.returncode != 0:
+            die(f"couldn't save the note in {wiki}")
+        r = subprocess.run([wiki_cmd, "sync", wiki, "-m", f"Jira: {len(todo)} open item(s) done"])
+        if r.returncode != 0:
+            die(f"saved the note in {wiki}, but the sync failed. Run: {CMD} sync {wiki}")
+        print(f"{wiki}: noted {len(todo)} item(s) as done. The next compile closes them.")
+    return 0
+
+
+def cmd_show(args):
+    if not args:
+        die(f"show needs a ticket key, such as PROJ-123")
+    jira = Jira(settings())
+    missing = 0
+    for k in args:
+        t = jira.ticket(k.upper())
+        if t is None:
+            missing = 1
+            print(f"{k.upper():<12} not found, or not yours to see")
+        else:
+            print(f"{t['key']:<12} {describe(t)}  {t['summary']}")
+    return missing
+
+
+def cmd_config(args):
+    if args:
+        die("config takes no arguments")
+    conf = settings()
+    _, where = token(conf)
+    print(f"file      {CONFIG}{'' if os.path.isfile(CONFIG) else ' (not there yet)'}")
+    print(f"url       {conf['url'] or 'not set'}")
+    print(f"email     {conf.get('email') or 'not set, so the token is sent as a Data Center personal access token'}")
+    print(f"token     {'from ' + where if where else 'not set'}")
+    print(f"projects  {', '.join(conf['projects']) or 'any'}")
+    if not conf["url"] or not where:
+        print(f"\nNot ready. {CMD} jira --help has the settings.")
+        return 1
+    me = Jira(conf).get("/rest/api/2/myself")
+    if me is None:
+        die(f"{conf['url']} has no Jira API at /rest/api/2. Is url the address of Jira itself?")
+    print(f"\nSigned in as {me.get('displayName') or me.get('name') or me.get('emailAddress') or '?'}.")
+    return 0
+
+
+def main(argv):
+    if argv and argv[0] in ("-h", "--help", "help"):
+        print(USAGE, end="")
+        return 0
+    if argv and argv[0] == "show":
+        return cmd_show(argv[1:])
+    if argv and argv[0] == "config":
+        return cmd_config(argv[1:])
+    if argv and argv[0] == "check":
+        argv = argv[1:]
+    return cmd_check(argv)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
