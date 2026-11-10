@@ -4,6 +4,12 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-11-15: a Confluence extension
+
+- `wiki confluence publish <wiki>` copies a wiki's pages into a Confluence space, one way, for people who read there. Unchanged pages are left alone.
+- It never overwrites a page it didn't make, and deletes nothing. `--dry-run` says what would change.
+- Do: to use it, run `wiki extensions add confluence`, then `wiki confluence --help`. Publish only to a space whose readers may see the whole wiki.
+
 ## 2026-11-14: a Jira extension
 
 - `wiki jira` says where the Jira tickets your open items name stand. `wiki jira check --close` notes the finished ones as done. It never writes to Jira.
