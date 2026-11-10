@@ -112,16 +112,32 @@ def hits_for(call, base):
         if matches(kind, pattern, tool, tool_input, cwd):
             hits.append((number, when, rule, wiki))
     if hits:
+        # A built-in rule has a row for each command it knows. Given once, it is done
+        # for the session: a release that tags and then publishes hears it once.
+        given = {rule for _, _, rule, wiki in hits if wiki == "-"}
+        done = [number for number, _, _, _ in hits]
+        for number, row in enumerate(rows):
+            parts = row.split("\t")
+            if len(parts) == 5 and parts[4] == "-" and parts[3] in given and number not in done and str(number) not in seen:
+                done.append(number)
         with open(base + ".seen", "a", encoding="utf-8") as f:
-            f.write("".join("%d\n" % number for number, _, _, _ in hits))
+            f.write("".join("%d\n" % number for number in done))
     return hits
 
 
 def rules_of(hits):
-    return "\n".join("- %s (from the wiki %s, wiki/conventions.md)" % (rule, wiki) for _, _, rule, wiki in hits)
+    """One line a rule. A rule given by two patterns in one call is said once. The wiki
+    "-" marks a built-in reminder, which comes from the handbook and not from a page."""
+    lines = []
+    for _, _, rule, wiki in hits:
+        source = "the handbook, rules/patterns.md" if wiki == "-" else "the wiki %s, wiki/conventions.md" % wiki
+        line = "- %s (from %s)" % (rule, source)
+        if line not in lines:
+            lines.append(line)
+    return "\n".join(lines)
 
 
-HEADING = "A reminder from the user's wiki that applies to the call you just made:\n"
+HEADING = "A reminder that applies to the call you just made:\n"
 
 
 def deny_reason(hits):

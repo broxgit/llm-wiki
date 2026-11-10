@@ -1121,7 +1121,8 @@ out="$("$W" __reminders "$RM" 2>&1)"
 case "$out" in *"before${TAB}bash${TAB}git push${TAB}Before a push, make sure the hooks ran.${TAB}rem"*) ok "a reminder line is read, without its citation" ;; *) bad "a reminder line is read, without its citation" "$out" ;; esac
 case "$out" in *"on${TAB}edit${TAB}payments/*${TAB}Money is in cents.${TAB}rem"*) ok "or its citation in round brackets, which pages also use" ;; *) bad "or its citation in round brackets, which pages also use" "$out" ;; esac
 case "$out" in "on${TAB}bash${TAB}npm publish${TAB}Ask first.${TAB}global"*) ok "the shared wiki's reminders come first" ;; *) bad "the shared wiki's reminders come first" "$out" ;; esac
-check "five are read: one shared, four of its own" test "$(printf '%s\n' "$out" | grep -c .)" = 5
+check "five are read: one shared, four of its own" test "$(printf '%s\n' "$out" | grep -vc "$TAB-\$")" = 5
+case "$out" in *"on${TAB}bash${TAB}gh release create${TAB}This looks like an operational job"*"${TAB}-") ok "and the built-in ones come last, with - for the wiki" ;; *) bad "and the built-in ones come last, with - for the wiki" "$out" ;; esac
 case "$out" in *"not a reminder"* | *"inside a fence"*) bad "a line that isn't a reminder, or sits in a code fence, is left out" "$out" ;; *) ok "a line that isn't a reminder, or sits in a code fence, is left out" ;; esac
 out="$("$W" lint rem 2>&1)"
 case "$out" in *"reminder line not understood: 2"*"sometimes bash"*) ok "lint names the line it couldn't read" ;; *) bad "lint names the line it couldn't read" "$out" ;; esac
@@ -1135,7 +1136,7 @@ check "its Python parses" python3 -c "import ast, sys; ast.parse(open(sys.argv[1
 out="$(tool_call '{"session_id":"s-1","tool_name":"Bash","tool_input":{"command":"git push"}}')"
 [ -z "$out" ] && ok "with no session started, a tool call gets nothing" || bad "with no session started, a tool call gets nothing" "$out"
 hook "$T/projects/rem" '{"session_id":"s-1","source":"startup"}' >/dev/null
-check "session start writes the session's reminders" test "$(grep -c . "$RD/s-1.tsv")" = 5
+check "session start writes the session's reminders" test "$(grep -vc "$TAB-\$" "$RD/s-1.tsv")" = 5
 push='{"session_id":"s-1","cwd":"'"$T/projects/rem"'","tool_name":"Bash","tool_input":{"command":"cd x && git push origin main"}}'
 out="$(tool_call "$push")"
 case "$out" in *'"permissionDecision": "deny"'*"make sure the hooks ran"*"from the wiki rem"*) ok "a before reminder stops the call once, with the rule" ;; *) bad "a before reminder stops the call once, with the rule" "$out" ;; esac
@@ -1158,6 +1159,21 @@ out="$(tool_call '{"session_id":"s-1","tool_name":"Bash","tool_input":{"command"
 # any command holding one of them would match.
 out="$(tool_call '{"session_id":"s-1","tool_name":"Bash","tool_input":{"command":"git status"}}')"
 [ -z "$out" ] && ok "a bracket in a pattern is a bracket, not a set of letters" || bad "a bracket in a pattern is a bracket, not a set of letters" "$out"
+# The built-in reminder: a release or a deploy is an operational job, recorded from its
+# first run. Left to memory, 14 releases of llm-relay went by with nothing written down.
+hook "$T/projects/rem" '{"session_id":"s-ops","source":"startup"}' >/dev/null
+out="$(tool_call '{"session_id":"s-ops","tool_name":"Bash","tool_input":{"command":"git tag -l"}}')"
+[ -z "$out" ] && ok "listing tags is not a release" || bad "listing tags is not a release" "$out"
+out="$(tool_call '{"session_id":"s-ops","tool_name":"Bash","tool_input":{"command":"git tag -a v1.2.0 -m x && git tag v1.2.0-rc"}}')"
+case "$out" in *'"additionalContext"'*"operational job"*"Feedback: toil"*"from the handbook, rules/patterns.md"*) ok "a release command gets the reminder to record the job" ;; *) bad "a release command gets the reminder to record the job" "$out" ;; esac
+case "$out" in *permissionDecision*) bad "and it doesn't stop the call" "$out" ;; *) ok "and it doesn't stop the call" ;; esac
+check "a command two of its patterns match hears it once" test "$(printf '%s' "$out" | grep -o 'operational job' | grep -c .)" = 1
+out="$(tool_call '{"session_id":"s-ops","tool_name":"Bash","tool_input":{"command":"gh release create v1.2.0"}}')"
+[ -z "$out" ] && ok "and the rest of the release doesn't hear it again" || bad "and the rest of the release doesn't hear it again" "$out"
+mkdir -p "$T/projects/plain"
+"$W" new plain >/dev/null 2>&1
+hook "$T/projects/plain" '{"session_id":"s-plain","source":"startup"}' >/dev/null
+expect "a wiki with no reminders of its own still gets it" "operational job" tool_call '{"session_id":"s-plain","tool_name":"Bash","tool_input":{"command":"terraform apply -auto-approve"}}'
 expect "and matches the command that holds it" "Read retry.conf first" tool_call '{"session_id":"s-1","tool_name":"Bash","tool_input":{"command":"[ -f retry.conf ] && cat retry.conf"}}'
 check "a question mark is itself too" python3 -B -c "
 import io, sys
@@ -2172,6 +2188,10 @@ check "and AGENTS.md points to it" grep -q 'rules/open.md' "$REPO/template/AGENT
 check "and the empty ledger ships" grep -q '^# Open items' "$REPO/template/open.md"
 check "and compile says how to stamp Verified: lines" grep -q 'Verified:' "$REPO/template/rules/compile.md"
 check "and the lesson kind is in the patterns rules" grep -q '\*\*lesson\*\*' "$REPO/template/rules/patterns.md"
+check "and an operational job is recorded from the first run" grep -q 'from the first run' "$REPO/template/rules/patterns.md"
+check "and each separate request is a sighting" grep -q 'each separate request is a sighting' "$REPO/template/rules/patterns.md"
+check "and AGENTS.md says the first run counts" grep -q 'the first run included' "$REPO/template/AGENTS.md"
+check "and lint drops a job seen once and not again" grep -q 'single sighting' "$REPO/template/rules/lint.md"
 # feedback add, from the compiled helper and from the Bash: the same stdout, stderr and
 # exit code, and the same notes, by name, permissions and text. The clock in a name or
 # a note is written STAMP or WHEN, since the two run a moment apart.
