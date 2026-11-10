@@ -42,6 +42,34 @@ projects = PROJ, OPS
 
 To have agents check for themselves, add a line to a wiki's `wiki/conventions.md`: "Before treating an open item that names a ticket as still waiting, run `wiki jira check`."
 
+### Confluence
+
+`wiki confluence publish <wiki>` copies one wiki into a Confluence space, for people who read there and use neither git nor Obsidian. It goes one way. The wiki's index becomes a page called `<wiki> wiki`, and each page under `wiki/` becomes a child of it, named `<wiki>: <title>` because Confluence allows one title per space.
+
+- **Only what changed is written.** A page whose text is the same as last time is left alone, so its history in Confluence stays short.
+- **A page it didn't make is never overwritten.** Its own pages carry the label `llm-wiki`. If a title is already taken by someone else's page, that page is reported, the rest are published, and the command fails so you notice.
+- **Nothing is deleted.** A page that has left the wiki is reported and stays in Confluence until you remove it there.
+- **Links between pages** point at the published pages. A link to a raw note or a file has nothing to point at there, so only its text is kept. Images in the wiki aren't uploaded.
+- **Every page starts with a note** that it is a copy and that changes made in Confluence are overwritten.
+
+`wiki confluence publish <wiki> --dry-run` says what would change and writes nothing. `wiki confluence render <file.md>` prints one file as Confluence would be sent it, and `wiki confluence config` shows what is set and tests the sign-in.
+
+Settings go in `~/.config/llm-wiki/confluence`:
+
+```
+url = https://your-company.atlassian.net/wiki
+space = ENG
+parent = 123456
+space.payments = PAY
+```
+
+- `space` is the key of the space to publish into. `space.<wiki>` and `parent.<wiki>` set it for one wiki. `parent` is optional: the id of a page to publish under.
+- `url`, `email` and `token_cmd` are as for Jira, and fall back to the Jira extension's settings, so on Atlassian Cloud one sign-in serves both.
+
+Everyone who can read the space can read what you publish, and a wiki holds whatever its sessions noted. Publish a wiki only to a space whose readers may see all of it, and run the dry run first. An agent should ask before publishing.
+
+It uses Confluence's first REST API, the only one Data Center has. Atlassian marks it deprecated on Cloud, where it still answers.
+
 ## Write one
 
 An extension is an executable file named `wiki-<name>`, in any language, in the extensions folder. `wiki extensions path` prints the folder:

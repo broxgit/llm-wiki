@@ -63,6 +63,7 @@ read -r -d '' PARTS <<'TABLE' || true
 2 | What moved to llm-relay |
 2 | Extensions | Collection
 2 | Jira extension | Collection
+2 | Confluence extension | Collection
 3 | Tour |
 4 | The released helper | Session hook
 TABLE
@@ -3850,7 +3851,7 @@ refuse "and doesn't run while it is off" "$W" jira --help
 expect "the error says how to turn it on" "extensions add jira" "$W" jira check
 lacks "completion leaves it out while it is off" "jira" "$W" __complete 1 ""
 expect "setup --list marks it as new" "on: none  <- new" bash -c "'$W' setup --list | grep '^extensions'"
-expect "setup --new would ask about it" "Turn on" bash -c "printf 'n\n' | LLM_WIKI_TEST_TTY=1 '$W' setup extensions"
+expect "setup --new would ask about it" "Turn on" bash -c "printf 'n\nn\n' | LLM_WIKI_TEST_TTY=1 '$W' setup extensions"
 lacks "a no is remembered" "<- new" bash -c "'$W' setup --list | grep '^extensions'"
 refuse "it is still off" "$W" jira --help
 refuse "extensions add refuses a name that doesn't ship" "$W" extensions add nosuch
@@ -3860,8 +3861,9 @@ expect "and it runs" "Usage: " "$W" jira --help
 expect "setup --list names it" "on: jira" bash -c "'$W' setup --list | grep '^extensions'"
 expect "completion offers it" "jira" "$W" __complete 1 ji
 expect "extensions add completes to shipped names" "jira" "$W" __complete 3 extensions add ""
-lacks "the list no longer says off" "off." "$W" extensions
-expect "setup extensions keeps a yes" "on." bash -c "printf 'y\n' | LLM_WIKI_TEST_TTY=1 '$W' setup extensions"
+lacks "the list no longer says off" "jira           off." "$W" extensions
+expect "setup extensions keeps a yes" "on." bash -c "printf 'n\ny\n' | LLM_WIKI_TEST_TTY=1 '$W' setup extensions"
+refuse "and a no for another leaves that one off" "$W" confluence --help
 mkdir -p "$HOME/.local/share/llm-wiki/extensions"
 printf '#!/bin/sh\necho MINE\n' > "$HOME/.local/share/llm-wiki/extensions/wiki-jira"
 chmod +x "$HOME/.local/share/llm-wiki/extensions/wiki-jira"
@@ -3890,13 +3892,20 @@ class H(BaseHTTPRequestHandler):
             if k in T: body, code = {"key": k, "fields": T[k]}, 200
         self.send_response(code); self.send_header("Content-Type", "application/json"); self.end_headers()
         self.wfile.write(json.dumps(body).encode())
-s = HTTPServer(("127.0.0.1", 0), H)
+import socketserver
+class S(HTTPServer):
+    # HTTPServer's own bind looks the host's name up, which can take seconds on a Mac.
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = "localhost", self.server_address[1]
+s = S(("127.0.0.1", 0), H)
 open(D + "/port", "w").write(str(s.server_address[1]))
 s.serve_forever()
 PY
 python3 "$J/server.py" "$J" &
 JPID=$!
-i=0; while [ ! -s "$J/port" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+i=0; while [ ! -s "$J/port" ] && [ "$i" -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
+check "the stand-in Jira server started" test -s "$J/port"
 JW="$T/jwikis"
 WIKIS_DIR="$JW" "$W" new jdemo >/dev/null 2>&1
 cat > "$JW/jdemo/open.md" <<'OPEN'
@@ -3964,6 +3973,199 @@ wait "$JPID" 2>/dev/null
 expect "extensions remove turns it off" "off: jira" "$W" extensions remove jira
 refuse "and it no longer runs" "$W" jira --help
 check "the docs say how to set it up" grep -q 'token_cmd' "$REPO/docs/extensions.md"
+fi
+
+if section "Confluence extension"; then
+expect "the Confluence extension ships turned off" "confluence     off." "$W" extensions
+"$W" extensions add confluence >/dev/null
+expect "and runs once it is on" "Usage: " "$W" confluence --help
+refuse "with no command it fails, with the usage" "$W" confluence
+refuse "and refuses a command it doesn't know" "$W" confluence delete
+
+# The markdown converter, on a page with one of everything.
+C="$T/confluence"
+mkdir -p "$C"
+cat > "$C/page.md" <<'MD'
+---
+title: Demo
+updated: 2026-11-01
+---
+
+# Demo
+
+Some **bold**, *em*, `a <b>`, an [ext](https://example.com/a?b=1&c=2) and a snake_case_word.
+
+1. One
+   - nested
+2. Two
+
+- Bullet
+
+> **Check:** wrong.
+
+| A | B |
+|---|---|
+| 1 < 2 | x \| y |
+
+```sh
+echo "]]>" && true
+```
+MD
+out="$("$W" confluence render "$C/page.md" 2>&1)"
+check "render gives markup that parses" python3 -c "import sys, xml.dom.minidom; xml.dom.minidom.parseString('<r xmlns:ac=\"a\" xmlns:ri=\"r\">' + sys.argv[1] + '</r>')" "$out"
+case "$out" in *"<strong>bold</strong>"*"<em>em</em>"*"<code>a &lt;b&gt;</code>"*'<a href="https://example.com/a?b=1&amp;c=2">ext</a>'*"snake_case_word"*) ok "inline markdown is converted, and markup in text is escaped" ;; *) bad "inline markdown is converted, and markup in text is escaped" "$out" ;; esac
+case "$out" in *"<ol><li>One<ul><li>nested</li></ul></li><li>Two</li></ol><ul><li>Bullet</li></ul>"*) ok "lists nest, and a bulleted list after a numbered one is its own" ;; *) bad "lists nest, and a bulleted list after a numbered one is its own" "$out" ;; esac
+case "$out" in *"<blockquote><p><strong>Check:</strong> wrong.</p></blockquote>"*"<th>A</th><th>B</th>"*"<td>1 &lt; 2</td><td>x | y</td>"*) ok "block quotes and tables are converted" ;; *) bad "block quotes and tables are converted" "$out" ;; esac
+case "$out" in *'ac:name="code"><ac:parameter ac:name="language">sh</ac:parameter>'*'echo "]]]]><![CDATA[>" && true'*) ok "a code fence becomes a code macro, with its text kept whole" ;; *) bad "a code fence becomes a code macro, with its text kept whole" "$out" ;; esac
+case "$out" in *"<h1>Demo</h1>"* | *"title: Demo"*) bad "the frontmatter and the page's own title are left out" "$out" ;; *) ok "the frontmatter and the page's own title are left out" ;; esac
+expect "and the page says it is a copy" "Changes made here are overwritten" "$W" confluence render "$C/page.md"
+expect "with its dates" "Updated 2026-11-01" "$W" confluence render "$C/page.md"
+
+# A stand-in for Confluence: pages in memory, written out after every change.
+cat > "$C/server.py" <<'PY'
+import json, sys, urllib.parse
+from http.server import BaseHTTPRequestHandler, HTTPServer
+D = sys.argv[1]
+P = {"900": {"id": "900", "title": "Team home", "space": "ENG", "parent": "", "labels": [], "n": 1, "msg": "", "body": ""},
+     "901": {"id": "901", "title": "cdemo: Taken", "space": "ENG", "parent": "900", "labels": [], "n": 1, "msg": "", "body": "by hand"}}
+NEXT = [1000]
+def view(p):
+    return {"id": p["id"], "title": p["title"], "version": {"number": p["n"], "message": p["msg"]},
+            "metadata": {"labels": {"results": [{"name": l} for l in p["labels"]]}}, "_links": {"webui": "/spaces/%s/pages/%s" % (p["space"], p["id"])}}
+def save():
+    json.dump(P, open(D + "/state.json", "w"), indent=1)
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def reply(self, code, body):
+        self.send_response(code); self.send_header("Content-Type", "application/json"); self.end_headers()
+        self.wfile.write(json.dumps(body).encode())
+    def body(self):
+        return json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"null")
+    def handle_one(self, method):
+        if "bad" in self.headers.get("Authorization", ""): return self.reply(401, {"message": "no"})
+        u = urllib.parse.urlparse(self.path); q = urllib.parse.parse_qs(u.query); parts = u.path.strip("/").split("/")
+        if method != "GET": open(D + "/writes.log", "a").write(method + " " + u.path + "\n")
+        if parts[:2] != ["rest", "api"]: return self.reply(404, {"message": "not here"})
+        if method == "GET" and parts[2:] == ["user", "current"]: return self.reply(200, {"displayName": "Smoke Tester"})
+        if method == "GET" and parts[2:] == ["content"]:
+            if q.get("spaceKey", [""])[0] == "NOPE": return self.reply(404, {"message": "No space with key NOPE"})
+            return self.reply(200, {"results": [view(p) for p in P.values() if p["space"] == q["spaceKey"][0] and p["title"] == q["title"][0]]})
+        if method == "GET" and len(parts) == 6 and parts[4:] == ["child", "page"]:
+            kids = [view(p) for p in P.values() if p["parent"] == parts[3]]
+            start = int(q.get("start", ["0"])[0])
+            return self.reply(200, {"results": kids[start:start + 100]})
+        if method == "POST" and parts[2:] == ["content"]:
+            b = self.body()
+            if any(p["space"] == b["space"]["key"] and p["title"] == b["title"] for p in P.values()):
+                return self.reply(400, {"message": "A page with this title already exists: " + b["title"]})
+            i = str(NEXT[0]); NEXT[0] += 1
+            P[i] = {"id": i, "title": b["title"], "space": b["space"]["key"], "parent": (b.get("ancestors") or [{"id": ""}])[0]["id"],
+                    "labels": [], "n": 1, "msg": b.get("version", {}).get("message", ""), "body": b["body"]["storage"]["value"]}
+            save(); return self.reply(200, view(P[i]))
+        if method == "POST" and len(parts) == 5 and parts[4] == "label":
+            P[parts[3]]["labels"] += [l["name"] for l in self.body()]
+            save(); return self.reply(200, {})
+        if method == "PUT" and len(parts) == 4 and parts[3] in P:
+            b = self.body(); p = P[parts[3]]
+            if b["version"]["number"] != p["n"] + 1: return self.reply(409, {"message": "Version must be incremented"})
+            p.update(title=b["title"], n=b["version"]["number"], msg=b["version"].get("message", ""), body=b["body"]["storage"]["value"])
+            save(); return self.reply(200, view(p))
+        self.reply(404, {"message": "not here"})
+    def do_GET(self): self.handle_one("GET")
+    def do_POST(self): self.handle_one("POST")
+    def do_PUT(self): self.handle_one("PUT")
+import socketserver
+class S(HTTPServer):
+    # HTTPServer's own bind looks the host's name up, which can take seconds on a Mac.
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = "localhost", self.server_address[1]
+s = S(("127.0.0.1", 0), H)
+open(D + "/port", "w").write(str(s.server_address[1]))
+s.serve_forever()
+PY
+python3 "$C/server.py" "$C" &
+CPID=$!
+i=0; while [ ! -s "$C/port" ] && [ "$i" -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
+check "the stand-in Confluence server started" test -s "$C/port"
+CW="$T/cwikis"
+WIKIS_DIR="$CW" "$W" new cdemo >/dev/null 2>&1
+mkdir -p "$CW/cdemo/wiki/concepts" "$CW/cdemo/wiki/how-to"
+printf -- '---\ntitle: Alpha\n---\n\n# Alpha\n\nSee [the steps](../how-to/beta.md) and [a note](../../raw/x.md).\n' > "$CW/cdemo/wiki/concepts/alpha.md"
+printf -- '---\ntitle: Beta\n---\n\nSteps.\n' > "$CW/cdemo/wiki/how-to/beta.md"
+printf -- '---\ntitle: Alpha\n---\n\nAnother Alpha.\n' > "$CW/cdemo/wiki/how-to/alpha.md"
+printf -- '---\ntitle: Taken\n---\n\nA title someone used.\n' > "$CW/cdemo/wiki/concepts/taken.md"
+printf '# Index\n\n- [Alpha](wiki/concepts/alpha.md)\n' > "$CW/cdemo/index.md"
+conf() { WIKIS_DIR="$CW" CONFLUENCE_URL="http://127.0.0.1:$(cat "$C/port")" CONFLUENCE_EMAIL=me@example.com CONFLUENCE_API_TOKEN=smoke-token "$W" confluence "$@"; }
+state() { python3 -c "
+import json, sys
+P = json.load(open(sys.argv[1]))
+$2" "$C/state.json"; }
+expect "config tests the sign-in" "Signed in as Smoke Tester" conf config
+expect "and says when no space is set" "No space is set" conf config
+expect "publish needs a space" "no space to publish cdemo into" conf publish cdemo
+refuse "and a wiki that is there" env CONFLUENCE_SPACE=ENG WIKIS_DIR="$CW" CONFLUENCE_URL="http://127.0.0.1:$(cat "$C/port")" CONFLUENCE_API_TOKEN=smoke-token "$W" confluence publish nosuch
+expect "a space Confluence doesn't know is said plainly" "can't read the space NOPE" env CONFLUENCE_SPACE=NOPE WIKIS_DIR="$CW" CONFLUENCE_URL="http://127.0.0.1:$(cat "$C/port")" CONFLUENCE_API_TOKEN=smoke-token "$W" confluence publish cdemo
+export CONFLUENCE_SPACE=ENG
+out="$(conf publish cdemo --dry-run 2>&1)"
+case "$out" in *"Would publish 5 page(s) of cdemo to the space ENG"*"would create: cdemo wiki"*"would create: cdemo: Beta"*"5 to create, 0 to update, 0 unchanged"*) ok "a dry run says what would be created" ;; *) bad "a dry run says what would be created" "$out" ;; esac
+check "and writes nothing" test ! -e "$C/writes.log"
+out="$(conf publish cdemo 2>&1)"
+code=$?
+case "$out" in *"created: cdemo wiki"*"created: cdemo: Beta"*"cdemo: 4 created, 0 updated, 0 unchanged."*) ok "publish creates the index and the pages" ;; *) bad "publish creates the index and the pages" "$out" ;; esac
+case "$out" in *"not published: cdemo: Taken: A page with this title already exists"*) ok "a title someone else used is reported, and the rest still go" ;; *) bad "a title someone else used is reported, and the rest still go" "$out" ;; esac
+[ "$code" -eq 1 ] && ok "and publish fails, so it is noticed" || bad "and publish fails, so it is noticed" "exit $code"
+case "$out" in *"/spaces/ENG/pages/1000"*) ok "it ends with the address of the wiki's page" ;; *) bad "it ends with the address of the wiki's page" "$out" ;; esac
+check "the index is the parent of the pages" state x "
+top = [p for p in P.values() if p['title'] == 'cdemo wiki'][0]
+kids = sorted(p['title'] for p in P.values() if p['parent'] == top['id'])
+assert kids == ['cdemo: Alpha (concepts/alpha)', 'cdemo: Alpha (how-to/alpha)', 'cdemo: Beta'], kids"
+check "every page it made carries its label" state x "
+assert all(p['labels'] == ['llm-wiki'] for p in P.values() if int(p['id']) >= 1000)"
+check "a link between pages points at the page's title in Confluence" state x "
+a = [p for p in P.values() if p['title'] == 'cdemo: Alpha (concepts/alpha)'][0]['body']
+assert '<ri:page ri:content-title=\"cdemo: Beta\"/><ac:link-body>the steps</ac:link-body>' in a, a
+assert 'raw/x.md' not in a and 'a note' in a, a"
+check "the page someone else made is as it was" state x "assert P['901']['body'] == 'by hand' and P['901']['n'] == 1"
+: > "$C/writes.log"
+expect "a second publish finds nothing changed" "0 created, 0 updated, 4 unchanged" conf publish cdemo
+check "and writes only its try at the taken title" test "$(grep -c . "$C/writes.log")" = 1
+printf -- '---\ntitle: Beta\n---\n\nSteps, revised.\n' > "$CW/cdemo/wiki/how-to/beta.md"
+expect "a changed page is updated, and only it" "0 created, 1 updated, 3 unchanged" conf publish cdemo
+check "as the page's next version" state x "
+b = [p for p in P.values() if p['title'] == 'cdemo: Beta'][0]
+assert b['n'] == 2 and 'revised' in b['body'], b"
+rm "$CW/cdemo/wiki/how-to/beta.md" "$CW/cdemo/wiki/concepts/taken.md"
+out="$(conf publish cdemo 2>&1)"
+code=$?
+case "$out" in *"no longer in the wiki, left in Confluence: cdemo: Beta"*) ok "a page gone from the wiki is reported and left in Confluence" ;; *) bad "a page gone from the wiki is reported and left in Confluence" "$out" ;; esac
+[ "$code" -eq 0 ] && ok "and with no title taken, publish succeeds" || bad "and with no title taken, publish succeeds" "exit $code: $out"
+check "nothing was deleted" state x "assert any(p['title'] == 'cdemo: Beta' for p in P.values())"
+WIKIS_DIR="$CW" "$W" new other >/dev/null 2>&1
+printf 'space.other = ENG\nparent.other = 900\nspace = ENG\n' > "$HOME/.config/llm-wiki/confluence"
+expect "parent puts a wiki's pages under a page you name" "created: other wiki" conf publish other
+check "under that page" state x "assert [p for p in P.values() if p['title'] == 'other wiki'][0]['parent'] == '900'"
+printf 'url = https://acme.atlassian.net\nemail = j@example.com\ntoken_cmd = echo jira-token\n' > "$HOME/.config/llm-wiki/jira"
+out="$(env -u CONFLUENCE_SPACE WIKIS_DIR="$CW" "$W" confluence config 2>&1 || true)"
+case "$out" in *"url       https://acme.atlassian.net/wiki"*"email     j@example.com"*"token     from token_cmd"*) ok "the sign-in falls back to the Jira extension's settings" ;; *) bad "the sign-in falls back to the Jira extension's settings" "$out" ;; esac
+case "$out" in *jira-token*) bad "and the token is never printed" "$out" ;; *) ok "and the token is never printed" ;; esac
+rm "$HOME/.config/llm-wiki/jira" "$HOME/.config/llm-wiki/confluence"
+WIKIS_DIR="$CW" "$W" new "team" >/dev/null 2>&1
+python3 - "$C" <<'PY3'
+import json, sys, urllib.request
+port = open(sys.argv[1] + "/port").read()
+req = urllib.request.Request("http://127.0.0.1:%s/rest/api/content" % port, method="POST", headers={"Content-Type": "application/json"},
+    data=json.dumps({"title": "team wiki", "space": {"key": "ENG"}, "body": {"storage": {"value": "ours, by hand"}}}).encode())
+urllib.request.urlopen(req).read()
+PY3
+expect "a page with the wiki's own title that someone else made stops the publish" "that llm-wiki didn't make" conf publish team
+refuse "and it fails" conf publish team
+expect "a sign-in Confluence refuses is said plainly" "refused the sign-in" env WIKIS_DIR="$CW" CONFLUENCE_URL="http://127.0.0.1:$(cat "$C/port")" CONFLUENCE_API_TOKEN=bad "$W" confluence publish cdemo
+unset CONFLUENCE_SPACE
+kill "$CPID" 2>/dev/null
+wait "$CPID" 2>/dev/null
+"$W" extensions remove confluence >/dev/null
+check "the docs say who can read what is published" grep -q 'Everyone who can read the space' "$REPO/docs/extensions.md"
 fi
 
 if section "Tour"; then

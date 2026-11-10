@@ -1,0 +1,599 @@
+#!/usr/bin/env python3
+# wiki-extension: Publish a wiki's pages to a Confluence space, as a read-only copy.
+"""wiki confluence: an llm-wiki extension. Standard library only.
+
+It publishes one wiki at a time, one way: the wiki's index becomes a page called
+"<wiki> wiki", and every page under wiki/ becomes a child of it. Pages it made carry
+the label llm-wiki and a hash of their source in the version comment, so an unchanged
+page isn't written again and a page someone else made is never overwritten. Nothing
+is read back from Confluence into the wiki, and nothing is deleted there.
+
+It uses Confluence's first REST API (/rest/api/content), the only one Data Center has.
+Atlassian marks it deprecated on Cloud, where it still answers.
+"""
+import base64
+import hashlib
+import json
+import os
+import posixpath
+import re
+import subprocess
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from xml.sax.saxutils import escape, quoteattr
+
+CMD = os.environ.get("LLM_WIKI_CMD", "wiki")
+CONFIG_DIR = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "llm-wiki")
+CONFIG = os.path.join(CONFIG_DIR, "confluence")
+LABEL = "llm-wiki"
+
+USAGE = f"""Usage: {CMD} confluence publish <wiki> [--dry-run]
+       {CMD} confluence render <file.md>
+       {CMD} confluence config
+
+  publish  Copy a wiki's pages into a Confluence space: its index as a page called
+           "<wiki> wiki", and each page under wiki/ as a child of it. Pages that
+           haven't changed are left alone. A page it didn't make is never overwritten,
+           and nothing is deleted. --dry-run says what would change and writes nothing.
+  render   Print one markdown file as Confluence would be sent it.
+  config   What is set, and whether Confluence accepts the sign-in.
+
+Settings go in {CONFIG}, one `name = value` a line:
+  url        https://your-company.atlassian.net/wiki, or your own server's address
+  email      your Atlassian account's email. Cloud only: leave it out for Data Center.
+  token_cmd  a command that prints your API token
+  space      the key of the space to publish into, such as ENG
+  parent     optional: the id of a page to publish under
+  space.<wiki>, parent.<wiki>   the same, for one wiki
+url, email and token_cmd fall back to the Jira extension's settings where they are
+missing. The environment wins over both: CONFLUENCE_URL, CONFLUENCE_EMAIL,
+CONFLUENCE_API_TOKEN, CONFLUENCE_SPACE.
+
+Everyone who can read the space can read what you publish. Publish a wiki only to a
+space whose readers may see everything in it.
+"""
+
+
+def die(msg):
+    sys.stdout.flush()
+    print(f"error: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+# ---- settings ----------------------------------------------------------------
+
+def read_conf(path):
+    conf = {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.split("#", 1)[0].strip()
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    conf[k.strip()] = v.strip()
+    except FileNotFoundError:
+        pass
+    return conf
+
+
+def settings():
+    conf = read_conf(CONFIG)
+    jira = read_conf(os.path.join(CONFIG_DIR, "jira"))
+    for k in ("email", "token_cmd"):
+        if not conf.get(k) and jira.get(k):
+            conf[k] = jira[k]
+    if not conf.get("url") and jira.get("url"):
+        # Cloud serves Confluence under /wiki on the site Jira is on.
+        u = jira["url"].rstrip("/")
+        conf["url"] = u + "/wiki" if u.endswith(".atlassian.net") else ""
+    for k, env in (("url", "CONFLUENCE_URL"), ("email", "CONFLUENCE_EMAIL"), ("space", "CONFLUENCE_SPACE")):
+        if os.environ.get(env):
+            conf[k] = os.environ[env]
+    conf["url"] = conf.get("url", "").rstrip("/")
+    return conf
+
+
+def token(conf):
+    """The API token and where it came from. Never printed."""
+    for env in ("CONFLUENCE_API_TOKEN", "JIRA_API_TOKEN"):
+        if os.environ.get(env):
+            return os.environ[env], env
+    if conf.get("token_cmd"):
+        try:
+            out = subprocess.run(conf["token_cmd"], shell=True, capture_output=True, text=True, timeout=30)
+        except subprocess.TimeoutExpired:
+            die("token_cmd took more than 30 seconds")
+        if out.returncode != 0 or not out.stdout.strip():
+            die(f"token_cmd printed no token (exit {out.returncode}). Run it yourself to see why.")
+        return out.stdout.strip(), "token_cmd"
+    return "", ""
+
+
+# ---- Confluence ----------------------------------------------------------------
+
+class Refused(Exception):
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+class Confluence:
+    def __init__(self, conf):
+        if not conf["url"]:
+            die(f"no Confluence address. Set url in {CONFIG}, or CONFLUENCE_URL. {CMD} confluence --help has the settings.")
+        if not conf["url"].startswith(("https://", "http://")):
+            die(f"url has to start with https:// (it is {conf['url']})")
+        tok, _ = token(conf)
+        if not tok:
+            die(f"no API token. Set token_cmd in {CONFIG}, or CONFLUENCE_API_TOKEN. {CMD} confluence --help has the settings.")
+        self.url = conf["url"]
+        if conf.get("email"):
+            auth = "Basic " + base64.b64encode(f"{conf['email']}:{tok}".encode()).decode()
+        else:
+            auth = "Bearer " + tok
+        self.headers = {"Authorization": auth, "Accept": "application/json", "Content-Type": "application/json"}
+
+    def call(self, method, path, body=None):
+        """The JSON Confluence answers with. Raises Refused for a 400, 404 or 409."""
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(self.url + path, data=data, headers=self.headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                raw = r.read()
+                return json.loads(raw) if raw.strip() else {}
+        except urllib.error.HTTPError as e:
+            text = e.read().decode("utf-8", "replace")
+            try:
+                msg = json.loads(text).get("message") or text
+            except ValueError:
+                msg = text
+            if e.code == 401:
+                die(f"Confluence refused the sign-in (401) at {self.url}. Check the email and the token: {CMD} confluence config shows what is set.")
+            if e.code in (400, 403, 404, 409):
+                raise Refused(e.code, " ".join(msg.split())[:300])
+            die(f"Confluence answered {e.code} for {method} {path.split('?')[0]}: {' '.join(msg.split())[:200]}")
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            die(f"can't reach {self.url}: {getattr(e, 'reason', e)}")
+        except ValueError:
+            die(f"{self.url} didn't answer with JSON. Is url the address of Confluence itself? On Cloud it ends in /wiki.")
+
+    def find(self, space, title):
+        q = urllib.parse.urlencode({"spaceKey": space, "title": title, "type": "page", "expand": "version,metadata.labels"})
+        res = self.call("GET", "/rest/api/content?" + q).get("results") or []
+        return res[0] if res else None
+
+    def children(self, page_id):
+        out, start = [], 0
+        while True:
+            d = self.call("GET", f"/rest/api/content/{page_id}/child/page?expand=version,metadata.labels&limit=100&start={start}")
+            res = d.get("results") or []
+            out += res
+            if len(res) < 100:
+                return out
+            start += len(res)
+
+    def create(self, space, title, body, parent, digest):
+        page = {"type": "page", "title": title, "space": {"key": space},
+                "body": {"storage": {"value": body, "representation": "storage"}},
+                "version": {"number": 1, "message": f"{LABEL} {digest}"}}
+        if parent:
+            page["ancestors"] = [{"id": str(parent)}]
+        made = self.call("POST", "/rest/api/content", page)
+        self.call("POST", f"/rest/api/content/{made['id']}/label", [{"prefix": "global", "name": LABEL}])
+        return made
+
+    def update(self, page, title, body, digest):
+        n = int((page.get("version") or {}).get("number") or 1) + 1
+        return self.call("PUT", f"/rest/api/content/{page['id']}", {
+            "id": page["id"], "type": "page", "title": title,
+            "body": {"storage": {"value": body, "representation": "storage"}},
+            "version": {"number": n, "message": f"{LABEL} {digest}"}})
+
+
+def ours(page):
+    labels = (((page.get("metadata") or {}).get("labels") or {}).get("results")) or []
+    return any(l.get("name") == LABEL for l in labels)
+
+
+def digest_of(page):
+    m = re.match(rf"{LABEL} ([0-9a-f]+)$", ((page.get("version") or {}).get("message") or "").strip())
+    return m.group(1) if m else ""
+
+
+# ---- markdown to Confluence's storage format -----------------------------------
+# The subset the handbook's pages use: headings, paragraphs, lists, fenced code,
+# tables, block quotes, rules, and inline code, emphasis, links and images.
+
+INLINE = re.compile(
+    r"(`+)(.+?)\1"                                                       # 1,2 code
+    r"|!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)"          # 3,4 image
+    r"|\[((?:[^\[\]]|\[[^\[\]]*\])*)\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)"  # 5,6 link
+    r"|\*\*(?=\S)(.+?)(?<=\S)\*\*"                                       # 7 strong
+    r"|(?<![A-Za-z0-9*])\*(?=[^\s*])(.+?)(?<=[^\s*])\*(?![A-Za-z0-9*])"  # 8 em
+    r"|(?<![A-Za-z0-9_])_(?=[^\s_])(.+?)(?<=[^\s_])_(?![A-Za-z0-9_])"    # 9 em
+    r"|~~(?=\S)(.+?)(?<=\S)~~"                                           # 10 strike
+    r"|(https?://[^\s<>()\[\]]*[^\s<>()\[\].,;:!?'\"])"                  # 11 bare URL
+)
+
+
+def cdata(text):
+    return "<![CDATA[" + text.replace("]]>", "]]]]><![CDATA[>") + "]]>"
+
+
+class Renderer:
+    def __init__(self, source_path="", titles=None):
+        """source_path: the page's path inside its wiki. titles: path -> Confluence title."""
+        self.dir = posixpath.dirname(source_path)
+        self.titles = titles or {}
+
+    def link(self, inner, url):
+        if re.match(r"(?i)(https?|mailto):", url):
+            return f"<a href={quoteattr(url)}>{inner}</a>"
+        target = url.split("#", 1)[0]
+        if target:
+            path = posixpath.normpath(posixpath.join(self.dir, urllib.parse.unquote(target)))
+            if path in self.titles:
+                return (f"<ac:link><ri:page ri:content-title={quoteattr(self.titles[path])}/>"
+                        f"<ac:link-body>{inner}</ac:link-body></ac:link>")
+        # A heading on this page, a raw note, a file, another wiki: nothing to link to there.
+        return inner
+
+    def inline(self, text):
+        out, pos = [], 0
+        for m in INLINE.finditer(text):
+            out.append(escape(text[pos:m.start()]))
+            pos = m.end()
+            if m.group(1):
+                out.append(f"<code>{escape(m.group(2).strip())}</code>")
+            elif m.group(4):
+                src = m.group(4)
+                if re.match(r"(?i)https?:", src):
+                    out.append(f"<ac:image ac:alt={quoteattr(m.group(3))}><ri:url ri:value={quoteattr(src)}/></ac:image>")
+                else:
+                    out.append(f"<em>{escape(m.group(3) or posixpath.basename(src))} (image not published)</em>")
+            elif m.group(6):
+                out.append(self.link(self.inline(m.group(5)), m.group(6)))
+            elif m.group(7):
+                out.append(f"<strong>{self.inline(m.group(7))}</strong>")
+            elif m.group(8) or m.group(9):
+                out.append(f"<em>{self.inline(m.group(8) or m.group(9))}</em>")
+            elif m.group(10):
+                out.append(f"<del>{self.inline(m.group(10))}</del>")
+            else:
+                out.append(f"<a href={quoteattr(m.group(11))}>{escape(m.group(11))}</a>")
+        out.append(escape(text[pos:]))
+        return "".join(out)
+
+    def blocks(self, lines):
+        out, i, n = [], 0, len(lines)
+        para = []
+
+        def flush():
+            if para:
+                out.append("<p>" + self.inline(" ".join(s.strip() for s in para)) + "</p>")
+                del para[:]
+
+        while i < n:
+            line = lines[i]
+            fence = re.match(r"\s{0,3}(```+|~~~+)\s*([A-Za-z0-9_+#.-]*)", line)
+            if fence:
+                flush()
+                mark, lang, code = fence.group(1), fence.group(2), []
+                i += 1
+                while i < n and not re.match(rf"\s{{0,3}}{re.escape(mark[0])}{{{len(mark)},}}\s*$", lines[i]):
+                    code.append(lines[i])
+                    i += 1
+                i += 1
+                param = f'<ac:parameter ac:name="language">{escape(lang)}</ac:parameter>' if lang else ""
+                out.append(f'<ac:structured-macro ac:name="code">{param}'
+                           f"<ac:plain-text-body>{cdata(chr(10).join(code))}</ac:plain-text-body></ac:structured-macro>")
+                continue
+            if not line.strip():
+                flush()
+                i += 1
+                continue
+            h = re.match(r"\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$", line)
+            if h:
+                flush()
+                out.append(f"<h{len(h.group(1))}>{self.inline(h.group(2))}</h{len(h.group(1))}>")
+                i += 1
+                continue
+            if re.match(r"\s{0,3}([-*_])(\s*\1){2,}\s*$", line):
+                flush()
+                out.append("<hr/>")
+                i += 1
+                continue
+            if re.match(r"\s{0,3}>", line):
+                flush()
+                quote = []
+                while i < n and re.match(r"\s{0,3}>", lines[i]):
+                    quote.append(re.sub(r"^\s{0,3}> ?", "", lines[i]))
+                    i += 1
+                out.append("<blockquote>" + self.blocks(quote) + "</blockquote>")
+                continue
+            if "|" in line and i + 1 < n and re.match(r"\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$", lines[i + 1]) and "|" in lines[i + 1]:
+                flush()
+                rows = [line]
+                i += 2
+                while i < n and "|" in lines[i] and lines[i].strip():
+                    rows.append(lines[i])
+                    i += 1
+                out.append(self.table(rows))
+                continue
+            if re.match(r"\s*([-*+]|\d+[.)])\s+", line):
+                flush()
+                item = []
+                first = re.match(r"(\s*)([-*+]|\d+[.)])\s+", line)
+                while i < n:
+                    # A bulleted item after a numbered one, or the reverse, starts a new list.
+                    m = re.match(r"(\s*)([-*+]|\d+[.)])\s+", lines[i])
+                    if (m and item and len(m.group(1).expandtabs(4)) <= len(first.group(1).expandtabs(4))
+                            and m.group(2)[0].isdigit() != first.group(2)[0].isdigit()):
+                        break
+                    if not lines[i].strip():
+                        # A blank line ends the list unless an indented line or another item follows.
+                        j = i
+                        while j < n and not lines[j].strip():
+                            j += 1
+                        if j < n and (re.match(r"\s+\S", lines[j]) or re.match(r"([-*+]|\d+[.)])\s+", lines[j])):
+                            item.append("")
+                            i += 1
+                            continue
+                        break
+                    if not re.match(r"\s*([-*+]|\d+[.)])\s+", lines[i]) and not re.match(r"\s+\S", lines[i]) and item and not item[-1].strip():
+                        break
+                    item.append(lines[i])
+                    i += 1
+                out.append(self.list(item))
+                continue
+            para.append(line)
+            i += 1
+        flush()
+        return "".join(out)
+
+    def table(self, rows):
+        def cells(row):
+            row = row.strip()
+            row = row[1:] if row.startswith("|") else row
+            row = row[:-1] if row.endswith("|") and not row.endswith("\\|") else row
+            return [c.strip().replace("\\|", "|") for c in re.split(r"(?<!\\)\|", row)]
+        out = ["<table><tbody><tr>"]
+        out += [f"<th>{self.inline(c)}</th>" for c in cells(rows[0])]
+        out.append("</tr>")
+        for row in rows[1:]:
+            out.append("<tr>" + "".join(f"<td>{self.inline(c)}</td>" for c in cells(row)) + "</tr>")
+        out.append("</tbody></table>")
+        return "".join(out)
+
+    def list(self, lines):
+        """One list: the items at the indent of its first line, each with what is under it."""
+        first = re.match(r"(\s*)([-*+]|\d+[.)])\s+", lines[0])
+        indent = len(first.group(1).expandtabs(4))
+        tag = "ol" if first.group(2)[0].isdigit() else "ul"
+        items, cur = [], None
+        for line in lines:
+            m = re.match(r"(\s*)([-*+]|\d+[.)])\s+(.*)", line)
+            if m and len(m.group(1).expandtabs(4)) <= indent:
+                cur = [m.group(3)]
+                items.append(cur)
+            elif cur is not None:
+                cur.append(line)
+        out = [f"<{tag}>"]
+        for item in items:
+            head, rest = [item[0]], item[1:]
+            while rest and rest[0].strip() and not re.match(r"\s*([-*+]|\d+[.)])\s+", rest[0]) and not re.match(r"\s*(```|~~~)", rest[0]):
+                head.append(rest.pop(0).strip())
+            # What is left belongs to the item: take off the indent it shares.
+            pad = min((len(l) - len(l.lstrip()) for l in rest if l.strip()), default=0)
+            body = self.blocks([l[pad:] for l in rest]) if any(l.strip() for l in rest) else ""
+            out.append("<li>" + self.inline(" ".join(head)) + body + "</li>")
+        out.append(f"</{tag}>")
+        return "".join(out)
+
+
+def split_front(text):
+    """(frontmatter as a dict of its plain `key: value` lines, the body's lines)"""
+    lines = text.splitlines()
+    front = {}
+    if lines and lines[0].strip() == "---":
+        for j in range(1, len(lines)):
+            if lines[j].strip() == "---":
+                for l in lines[1:j]:
+                    m = re.match(r"([A-Za-z_][\w-]*):\s*(.*)$", l)
+                    if m:
+                        front[m.group(1)] = m.group(2).strip().strip("\"'")
+                return front, lines[j + 1:]
+    return front, lines
+
+
+def title_of(front, body, fallback):
+    if front.get("title"):
+        return front["title"]
+    for l in body:
+        m = re.match(r"#\s+(.*?)\s*#*\s*$", l)
+        if m:
+            return re.sub(r"[*_`]", "", m.group(1))
+        if l.strip():
+            break
+    return fallback
+
+
+def render(text, wiki="", source_path="", titles=None):
+    front, body = split_front(text)
+    # Confluence shows the title itself, so the page's own first heading goes.
+    k = 0
+    while k < len(body) and not body[k].strip():
+        k += 1
+    if k < len(body) and re.match(r"#\s+", body[k]):
+        body = body[k + 1:]
+    banner = ('<ac:structured-macro ac:name="info"><ac:rich-text-body><p>'
+              + (f"This page is a copy of <code>{escape(source_path)}</code> in the <strong>{escape(wiki)}</strong> wiki, " if wiki else "This page is a copy, ")
+              + "published by llm-wiki. Changes made here are overwritten: ask an agent to change the wiki."
+              + "</p></ac:rich-text-body></ac:structured-macro>")
+    meta = " · ".join(f"{k.capitalize()} {escape(front[k])}" for k in ("updated", "verified") if front.get(k))
+    return banner + (f"<p><em>{meta}</em></p>" if meta else "") + Renderer(source_path, titles).blocks(body)
+
+
+# ---- commands ------------------------------------------------------------------
+
+def wiki_pages(root, wiki):
+    """[(path in the wiki, title, text)], the index first."""
+    def read(p):
+        with open(p, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    pages = []
+    top = os.path.join(root, "wiki")
+    for d, dirs, files in os.walk(top):
+        dirs[:] = sorted(x for x in dirs if not x.startswith("."))
+        for name in sorted(files):
+            if not name.endswith(".md") or name.startswith("."):
+                continue
+            full = os.path.join(d, name)
+            rel = os.path.relpath(full, root).replace(os.sep, "/")
+            text = read(full)
+            front, body = split_front(text)
+            pages.append((rel, title_of(front, body, name[:-3]), text))
+    seen = {}
+    for rel, title, _ in pages:
+        seen.setdefault(title.lower(), []).append(rel)
+    out = [("index.md", f"{wiki} wiki", read(os.path.join(root, "index.md")))]
+    for rel, title, text in pages:
+        # Confluence wants one title per space, so each carries its wiki's name.
+        full = f"{wiki}: {title}"
+        if len(seen[title.lower()]) > 1:
+            full += f" ({rel[len('wiki/'):-3]})"
+        out.append((rel, full[:255], text))
+    return out
+
+
+def cmd_publish(args):
+    dry = "--dry-run" in args
+    rest = [a for a in args if a != "--dry-run"]
+    if len(rest) != 1 or rest[0].startswith("-"):
+        die(f"usage: {CMD} confluence publish <wiki> [--dry-run]")
+    wiki = rest[0]
+    wikis_dir = os.environ.get("WIKIS_DIR") or die("WIKIS_DIR isn't set. Run this as: wiki confluence")
+    root = os.path.join(wikis_dir, wiki)
+    if "/" in wiki or not (os.path.isfile(os.path.join(root, "AGENTS.md")) and os.path.isfile(os.path.join(root, "index.md"))):
+        die(f"no wiki called {wiki}")
+    conf = settings()
+    space = conf.get(f"space.{wiki}") or conf.get("space")
+    parent = conf.get(f"parent.{wiki}") or conf.get("parent") or ""
+    if not space:
+        die(f"no space to publish {wiki} into. Set space, or space.{wiki}, in {CONFIG}. {CMD} confluence --help has the settings.")
+    pages = wiki_pages(root, wiki)
+    titles = {rel: title for rel, title, _ in pages}
+    c = Confluence(conf)
+    print(f"{'Would publish' if dry else 'Publishing'} {len(pages)} page(s) of {wiki} to the space {space} at {c.url}")
+
+    made = changed = same = 0
+    problems = []
+    root_title = pages[0][1]
+    try:
+        top = c.find(space, root_title)
+    except Refused as e:
+        die(f"can't read the space {space}: {e.message}")
+    if top is not None and not ours(top):
+        die(f"the space {space} already has a page called \"{root_title}\" that llm-wiki didn't make. Rename it, or publish to another space.")
+    existing = {}
+    if top is not None:
+        for p in c.children(top["id"]):
+            existing[p.get("title", "")] = p
+
+    def put(rel, title, text, page, parent_id):
+        nonlocal made, changed, same
+        body = render(text, wiki, rel, titles)
+        digest = hashlib.sha256((title + "\n" + body).encode()).hexdigest()[:16]
+        if page is not None:
+            if not ours(page):
+                problems.append(f"{title}: a page of that name is there and llm-wiki didn't make it. Left alone.")
+                return page
+            if digest_of(page) == digest:
+                same += 1
+                return page
+            changed += 1
+            print(f"  {'would update' if dry else 'updated'}: {title}")
+            return page if dry else (c.update(page, title, body, digest) or page)
+        made += 1
+        print(f"  {'would create' if dry else 'created'}: {title}")
+        if dry:
+            return None
+        return c.create(space, title, body, parent_id, digest)
+
+    try:
+        top = put("index.md", root_title, pages[0][2], top, parent)
+    except Refused as e:
+        die(f"couldn't publish \"{root_title}\": {e.message}")
+    for rel, title, text in pages[1:]:
+        try:
+            put(rel, title, text, existing.get(title), top["id"] if top else None)
+        except Refused as e:
+            made -= 1 if title not in existing else 0
+            changed -= 1 if title in existing else 0
+            problems.append(f"{title}: {e.message}")
+    gone = sorted(t for t, p in existing.items() if t not in titles.values() and ours(p))
+
+    print(f"{wiki}: {made} {'to create' if dry else 'created'}, {changed} {'to update' if dry else 'updated'}, {same} unchanged.")
+    for t in gone:
+        print(f"  no longer in the wiki, left in Confluence: {t}")
+    for p in problems:
+        print(f"  not published: {p}")
+    if top and not dry:
+        link = ((top.get("_links") or {}).get("webui")) or f"/pages/viewpage.action?pageId={top['id']}"
+        print(f"{c.url}{link}")
+    return 1 if problems else 0
+
+
+def cmd_render(args):
+    if len(args) != 1:
+        die(f"usage: {CMD} confluence render <file.md>")
+    try:
+        with open(args[0], encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError as e:
+        die(f"can't read {args[0]}: {e.strerror}")
+    print(render(text, "", os.path.basename(args[0])))
+    return 0
+
+
+def cmd_config(args):
+    if args:
+        die("config takes no arguments")
+    conf = settings()
+    _, where = token(conf)
+    print(f"file      {CONFIG}{'' if os.path.isfile(CONFIG) else ' (not there yet)'}")
+    print(f"url       {conf['url'] or 'not set'}")
+    print(f"email     {conf.get('email') or 'not set, so the token is sent as a Data Center personal access token'}")
+    print(f"token     {'from ' + where if where else 'not set'}")
+    print(f"space     {conf.get('space') or 'not set'}")
+    for k in sorted(conf):
+        if k.startswith(("space.", "parent")):
+            print(f"{k:<9} {conf[k]}")
+    if not conf["url"] or not where:
+        print(f"\nNot ready. {CMD} confluence --help has the settings.")
+        return 1
+    try:
+        me = Confluence(conf).call("GET", "/rest/api/user/current")
+    except Refused as e:
+        die(f"{conf['url']} has no Confluence API at /rest/api ({e.code}). Is url the address of Confluence itself? On Cloud it ends in /wiki.")
+    print(f"\nSigned in as {me.get('displayName') or me.get('username') or '?'}.")
+    if not conf.get("space"):
+        print(f"No space is set, so publish has nowhere to go yet.")
+    return 0
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        print(USAGE, end="")
+        return 0 if argv else 1
+    cmds = {"publish": cmd_publish, "render": cmd_render, "config": cmd_config}
+    if argv[0] not in cmds:
+        die(f"confluence takes publish, render or config. {CMD} confluence --help")
+    return cmds[argv[0]](argv[1:])
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
