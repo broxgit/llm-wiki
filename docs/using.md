@@ -377,6 +377,37 @@ Up to three wikis are read in full, and any more are named for the agent to open
 
 In a folder that is no repository and holds none, the session uses the shared wiki, says so, and the agent asks whether you want llm-wiki used for that work.
 
+### It asks once, and remembers
+
+The first time a session starts in a folder like that, the agent asks: do folders like this one always work this way? Say yes and it records a pattern, after showing it to you. The next session in a folder of that kind uses the pattern, tells you which one it recognised, and asks nothing. If it is wrong, say so and the agent changes it.
+
+Patterns are lines in `workflows.md` in your shared wiki, so your other machines have them too:
+
+```
+- in `~/repos/*-[0-9]*`: the wikis of the repositories inside.
+- in `~/notes`: `global`.
+- in `~/scratch/*`: no wiki.
+```
+
+A pattern is a full path that may hold `*`, `?` and `[...]`. A `*` stops at a slash, so `~/repos/*` covers the folders directly inside `~/repos` and nothing deeper. The first line that fits wins. A pattern can say three things:
+
+| It says | A session in a matching folder uses |
+|---|---|
+| `inside` | the wikis of the repositories cloned directly inside it |
+| a wiki's name | that wiki |
+| `none` | no wiki. llm-wiki stays out of that session |
+
+You can manage them yourself:
+
+```
+wiki workflows                                  # list them
+wiki workflows add '~/repos/*-[0-9]*' inside    # add one, or change it
+wiki workflows remove '~/scratch/*'
+wiki workflows check ~/repos/INFRA-17937        # what a session there would be told
+```
+
+Patterns only apply outside a git repository. Inside one, the repository's wiki is the session's.
+
 ## All commands
 
 Run `wiki` with no arguments for the full list. The ones you're likely to use:
@@ -396,6 +427,7 @@ Run `wiki` with no arguments for the full list. The ones you're likely to use:
 | `wiki upgrade --all` | Bring every wiki's handbook up to the template's. |
 | `wiki new <name>` | Create a wiki. Usually the agent does this. |
 | `wiki cover <wiki> <repo>...` | One wiki for several repositories. |
+| `wiki workflows [add\|remove\|check]` | Where sessions outside a repository belong. |
 | `wiki unlock <name>` | Free a stuck compile lock. |
 | `wiki capture <wiki> <slug>` | Save a note piped in, named from the clock. Mostly for agents. |
 | `wiki mcp` | A local MCP server over your wikis, for sessions with no file access, such as the desktop app's Chat tab. `wiki setup chat` adds it there. |

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Handbook version 33.
+Handbook version 34.
 
 This folder is a knowledge base maintained by an LLM agent. Any agent working here follows this file. It needs no vendor features. Plain markdown, plain files.
 
@@ -19,6 +19,7 @@ This file holds what every session needs. The rest is in `rules/`. Read a rules 
 | record feedback, update `patterns.md`, propose a fix, or check code against conventions | `rules/patterns.md` |
 | record something waiting on someone or due on a date, or close it | `rules/open.md` |
 | hand a task to a sub-agent on another model, or suggest doing so | `rules/delegation.md` |
+| are told at session start that the folder matched no pattern, or the user says a pattern is wrong | `rules/workflows.md` |
 
 ## Layout
 
