@@ -187,10 +187,12 @@ Usage: $WIKI_CMD <command> [options]
                        access. An MCP client starts it. --print gives its config entry.
   news [--all]         What's new in llm-wiki since you last looked.
   obsidian [--no-open] Browse the wikis in Obsidian: write the vault's starter settings and open it.
-  extensions [path | add <name> | remove <name> | log <name> | tick | every ...]
+  extensions [path | add <name> | remove <name> | setup <name> | log <name> | tick | every ...]
                        Commands of your own: $WIKI_CMD <name> runs an executable named
                        wiki-<name> in the extensions folder. Lists them, or prints the folder.
                        add turns on one that ships with llm-wiki, such as jira. remove turns it off.
+                       setup asks for what an extension needs before it can work, such as
+                       a sign-in. wiki status says when one that is on isn't ready.
                        log shows how an extension's last runs for events ended. tick runs
                        the tick event now, for cron on a machine with no sessions.
                        every [<time>] says or sets how long passes between ticks: 90m, 4h,
@@ -2626,6 +2628,12 @@ EOF2
   done <<EOF2
 $(ext_failures)
 EOF2
+  while IFS="$TAB" read -r k d; do
+    [ -n "$k" ] || continue
+    todo_add "extension $k: on, but not ready: $d"
+  done <<EOF2
+$(ext_unready)
+EOF2
   n="$(news_unseen)"
   [ "$n" -eq 0 ] || todo_add "llm-wiki: $n new thing(s) to read about. Run: $WIKI_CMD news"
   n="$(TIP_REPO="$PWD" tips_due | wc -l | tr -d ' ')"
@@ -4171,10 +4179,21 @@ setup_extensions() {
     section "Extension: $n"
     d="$(ext_about "$f")"
     echo "${d:-An optional command, $WIKI_CMD $n.}"
+    d="$(ext_needs "$f")"
+    if [ -n "$d" ]; then
+      # Not marked as asked: it is offered again once the machine has what it needs.
+      echo "  ${M_WARN}It needs $d, which isn't on this machine, so it can't be turned on here. Do: install $d, then $(typed "$WIKI_CMD setup extensions")"
+      continue
+    fi
     echo "It is optional, and off unless you turn it on. $WIKI_CMD extensions add $n does the same later."
     if ask_yn "Turn on $WIKI_CMD $n?" "$(ext_on "$n" && echo y || echo n)"; then
       ext_set "$n" on
-      echo "  ${M_OK}on. $WIKI_CMD $n --help says how to set it up."
+      echo "  ${M_OK}on. $WIKI_CMD $n --help has its commands."
+      if ext_has_setup "$f"; then
+        echo
+        ext_setup "$n"
+        echo "To go through this again: $(typed "$WIKI_CMD extensions setup $n")"
+      fi
     else
       ext_set "$n" off
       echo "  off"
@@ -5665,9 +5684,13 @@ cmd_pages() {
     esac
   done
   [ -n "$wiki" ] || die "usage: $WIKI_CMD pages <wiki> [--data]"
-  root="$(wiki_root "$wiki")"
+  root="$(resolve "$wiki")"
+  is_wiki "$root" || die "$(tilde "$root") is not a wiki. $WIKI_CMD status lists the wikis here."
   [ "$data" = 0 ] || style_off
-  [ -d "$root/wiki" ] || return 0
+  if [ ! -d "$root/wiki" ]; then
+    [ "$data" = 1 ] || echo "No pages yet."
+    return 0
+  fi
   (cd "$root" && LC_ALL=C find wiki -type f -name '*.md' ! -path '*/.*' | LC_ALL=C sort | tr '\n' '\0' | LC_ALL=C xargs -0 awk '
     function val(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); if (s ~ /^".*"$/ || s ~ /^\047.*\047$/) s = substr(s, 2, length(s) - 2); gsub(/\t/, " ", s); return s }
     function flush(   t, n, parts) {
@@ -5691,7 +5714,7 @@ cmd_pages() {
       if ($0 ~ /^# /) { head = $0; sub(/^#[ \t]+/, "", head); sub(/[ \t#]+$/, "", head); gsub(/[*_`]/, "", head); gsub(/\t/, " ", head) }
     }
     END { flush() }
-  ' /dev/null) | if [ "$data" = 1 ]; then cat; else awk -F '\t' '{ printf "%-44s %s\n", $1, $4 }'; fi
+  ' /dev/null) | if [ "$data" = 1 ]; then cat; else awk -F '\t' '{ printf "%-44s %s\n", $1, $4 } END { if (NR == 0) print "No pages yet." }'; fi
 }
 
 cmd_open() {
@@ -5702,9 +5725,10 @@ cmd_open() {
       # For a program: plain whatever the terminal is.
       style_off
       [ $# -le 2 ] || die "usage: $WIKI_CMD open --data [<wiki>]"
-      [ -d "$WIKIS_DIR" ] || die "no wikis at $(tilde "$WIKIS_DIR")"
+      [ -d "$WIKIS_DIR" ] || die "no wikis at $(tilde "$WIKIS_DIR"). Run: $WIKI_CMD init"
       if [ -n "${2:-}" ]; then
-        d="$(wiki_root "$2")" || exit 1
+        d="$(resolve "$2")"
+        is_wiki "$d" || die "$(tilde "$d") is not a wiki. $WIKI_CMD status lists the wikis here."
         open_data "$d"
         return 0
       fi
@@ -6103,8 +6127,16 @@ EOF
 #   wiki-<name> --wiki-event tick          from session start, once in each ext_every
 # Exit 0 is done, 75 is "not now, try at the next event", anything else is a failure,
 # which `wiki status` reports. What it prints goes to a log, never to the session.
+# Version 3 adds setup. An extension that needs settings before it can work says so with
+# a `wiki-setup:` comment near its top, and then answers two calls:
+#   wiki-<name> --wiki-ready   exit 0 when it has what it needs. Otherwise one line saying
+#                              what is missing, and exit 1. No network, no questions, fast.
+#   wiki-<name> --wiki-setup   ask the person for what it needs, at a terminal.
+# So an extension that is on and not set up is never silent: setup walks the person
+# through it, `wiki status` lists it with its fix, and no event runs it until it is ready.
 EXT_DIR="${LLM_WIKI_EXTENSIONS_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/llm-wiki/extensions}"
-EXT_API=2
+EXT_API=3
+EXT_READY_SECONDS="${LLM_WIKI_READY_SECONDS:-5}"
 EXT_STATE="${XDG_STATE_HOME:-$HOME/.local/state}/llm-wiki/extensions"
 # How often the tick comes is a setting on each machine, `extensions every`: a length
 # of time such as 90m, 4h, 2d or 3w. There is one for all extensions and, where it is
@@ -6228,6 +6260,8 @@ ext_run() {
   dir="$EXT_STATE/$n"
   key="$ev${wiki:+-$wiki}"
   mkdir -p "$dir" 2>/dev/null || return 0
+  # Not set up, or missing what it is written in: `wiki status` says so, with the fix.
+  if ! ext_ready "$n" >/dev/null; then echo "$n: not set up"; return 0; fi
   # A run that died without tidying up: nothing lasts past the time limit.
   [ -z "$(find "$dir/$key.running" -maxdepth 0 -mmin "+$((EXT_EVENT_SECONDS / 60 + 2))" 2>/dev/null)" ] || rmdir "${dir:?}/${key:?}.running" 2>/dev/null || true
   mkdir "$dir/$key.running" 2>/dev/null || { echo "$n: already running"; return 0; }
@@ -6256,6 +6290,17 @@ ext_run() {
       case "$code" in 0) state=ok ;; 75) state=later ;; *) state="failed (exit $code)" ;; esac
     fi
     printf '%s\t%s\n' "$state" "$(date -u +%Y-%m-%dT%H:%MZ)" > "$dir/$key.status"
+    if [ "$state" = later ]; then
+      # "Not now" is no failure once. Counted, so that a site that is never reached, such
+      # as a mistyped address, is said after three. And a tick is tried again sooner.
+      t="$(cat "$dir/$key.laters" 2>/dev/null || echo 0)"
+      case "$t" in '' | *[!0-9]*) t=0 ;; esac
+      echo "$((t + 1))" > "$dir/$key.laters"
+      if [ "$ev" = tick ]; then rm -f "${dir:?}/tick.stamp"; : > "$dir/tick.retry"; fi
+    else
+      rm -f "${dir:?}/${key:?}.laters"
+      [ "$ev" != tick ] || rm -f "${dir:?}/tick.retry"
+    fi
     echo "$n: $state"
     [ "$ev" = sync ] || break
   done
@@ -6299,6 +6344,8 @@ ext_tick() {
     mkdir -p "$EXT_STATE/$n" 2>/dev/null || continue
     every="${LLM_WIKI_TICK_MINUTES:-$(dur_minutes "$(ext_every "$n")")}"
     [ -z "$(find "$EXT_STATE/$n/tick.stamp" -mmin "-$every" 2>/dev/null)" ] || continue
+    # After a run that said "not now", wait half an hour: offline, every session start would try.
+    [ -z "$(find "$EXT_STATE/$n/tick.retry" -mmin -30 2>/dev/null)" ] || continue
     : 2>/dev/null > "$EXT_STATE/$n/tick.stamp" || continue
     ext_launch "$n" tick
   done
@@ -6315,13 +6362,109 @@ ext_failures() {
     key="${f##*/}"; key="${key%.status}"
     state="$(cut -f 1 "$f" 2>/dev/null | head -n 1)"
     case "$state" in failed* | stopped*) printf '%s\t%s\t%s\n' "$n" "$key" "$state" ;; esac
+    state="$(cat "$EXT_STATE/$n/$key.laters" 2>/dev/null || echo 0)"
+    case "$state" in '' | *[!0-9]*) state=0 ;; esac
+    [ "$state" -lt 3 ] || printf '%s\t%s\t%s\n' "$n" "$key" "couldn't be made, $state times in a row"
   done
 }
 
+# ext_needs <file>: the program its first line names, when that program isn't on this
+# machine, such as python3. Nothing when the file can run.
+ext_needs() {
+  local line prog
+  line="$(head -n 1 "$1" 2>/dev/null | LC_ALL=C tr -d '\000\r')"
+  case "$line" in
+    '#!'*) ;;
+    *) return 0 ;;
+  esac
+  line="${line#\#!}"
+  # shellcheck disable=SC2086
+  set -- $line
+  prog="${1:-}"
+  case "$prog" in */env) prog="${2:-}" ;; esac
+  [ -n "$prog" ] || return 0
+  command -v "$prog" >/dev/null 2>&1 || printf '%s\n' "${prog##*/}"
+}
+
+# ext_has_setup <file>: it says, in a `wiki-setup:` comment, that it answers the two calls.
+ext_has_setup() { head -n 10 "$1" 2>/dev/null | LC_ALL=C tr -d '\000' | LC_ALL=C grep -q '^[#/ ]*wiki-setup:'; }
+
+# ext_ready <name>: whether the extension can work on this machine. Fails, printing why
+# and what to do, when the program it is written in is missing or when it says itself
+# that it isn't set up. The answer is kept beside its logs, for `wiki status`.
+ext_ready() {
+  local n="$1" f dir need msg="" pid t out
+  f="$(ext_file "$n")" && [ -x "$f" ] || return 0
+  dir="$EXT_STATE/$n"
+  mkdir -p "$dir" 2>/dev/null || return 0
+  need="$(ext_needs "$f")"
+  if [ -n "$need" ]; then
+    msg="it needs $need, which isn't on this machine. Do: install $need"
+  elif ext_has_setup "$f"; then
+    out="$dir/ready.out"
+    (
+      LLM_WIKI="$REPO/wiki.sh" LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" LLM_WIKI_EXTENSION="$EXT_API" exec "$f" --wiki-ready
+    ) </dev/null > "$out" 2>/dev/null &
+    pid=$!
+    t=0
+    while kill -0 "$pid" 2>/dev/null; do
+      if [ "$t" -ge $((EXT_READY_SECONDS * 10)) ]; then kill "$pid" 2>/dev/null || true; msg="it didn't say whether it is set up. Run: $WIKI_CMD extensions setup $n"; break; fi
+      sleep 0.1
+      t=$((t + 1))
+    done
+    if [ -z "$msg" ] && ! wait "$pid" 2>/dev/null; then
+      msg="$(head -n 1 "$out" 2>/dev/null | LC_ALL=C tr -d '\000\t' | cut -c 1-200)"
+      # Not ${msg:-...}: bash 3.2 can't parse an apostrophe inside one, in double quotes.
+      [ -n "$msg" ] || msg="it isn't set up"
+      msg="$msg. Run: $WIKI_CMD extensions setup $n"
+    fi
+    rm -f "${dir:?}/ready.out"
+  fi
+  if [ -z "$msg" ]; then
+    echo ready > "$dir/ready"
+    return 0
+  fi
+  printf 'no\t%s\n' "$msg" > "$dir/ready"
+  printf '%s\n' "$msg"
+  return 1
+}
+
+# ext_unready: "<name> <why, with its fix>" for each extension that is on and can't work.
+# One that last said it was ready isn't asked again here: events ask before they run it.
+ext_unready() {
+  local n msg
+  for n in $(extension_names); do
+    [ "$(cat "$EXT_STATE/$n/ready" 2>/dev/null)" != ready ] || continue
+    msg="$(ext_ready "$n")" || printf '%s\t%s\n' "$n" "$msg"
+  done
+}
+
+# ext_setup <name>: its own questions, at this terminal, then whether it is ready.
+ext_setup() {
+  local n="$1" f msg
+  ext_must_be_on "$n"
+  f="$(ext_file "$n")"
+  [ -x "$f" ] || die "the extension $n isn't executable. Run: chmod +x $f"
+  msg="$(ext_needs "$f")"
+  [ -z "$msg" ] || die "$n needs $msg, which isn't on this machine. Do: install $msg"
+  if ! ext_has_setup "$f"; then
+    echo "$n has nothing to set up."
+    return 0
+  fi
+  LLM_WIKI="$REPO/wiki.sh" LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" LLM_WIKI_EXTENSION="$EXT_API" "$f" --wiki-setup || true
+  if msg="$(ext_ready "$n")"; then
+    echo "${M_OK}$n is set up."
+  else
+    echo "${M_WARN}$n isn't set up yet: $msg"
+  fi
+}
+
 run_extension() {
-  local f="$1"
+  local f="$1" need
   shift
   [ -x "$f" ] || die "the extension ${f##*/wiki-} isn't executable. Run: chmod +x $f"
+  need="$(ext_needs "$f")"
+  [ -z "$need" ] || die "$WIKI_CMD ${f##*/wiki-} needs $need, which isn't on this machine. Do: install $need"
   LLM_WIKI="$REPO/wiki.sh" LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" LLM_WIKI_EXTENSION="$EXT_API" exec "$f" "$@"
 }
 
@@ -6332,8 +6475,29 @@ ext_runs_on() {
   [ -z "$e" ] || printf ' (runs on: %s)' "$e"
 }
 
+# ext_must_be_on <name>: fails, saying how to turn it on, for one that ships and is off.
+ext_must_be_on() {
+  ext_file "$1" >/dev/null && return 0
+  if ext_shipped "$1" >/dev/null; then die "$1 is off. Turn it on: $WIKI_CMD extensions add $1"; fi
+  die "no extension called $1 is on. $WIKI_CMD extensions lists them."
+}
+
+# ext_notes <file>: what is wrong with how it asks for events or setup, one a line. A
+# word that is no event, or a comment too far down to be read, is otherwise silent.
+ext_notes() {
+  local w line
+  for w in $(ext_events "$1"); do
+    case "$w" in
+      sync | tick) ;;
+      *) printf 'no event is called %s, so it is never run for it. The events are sync and tick.\n' "$w" ;;
+    esac
+  done
+  line="$(LC_ALL=C grep -an '^[#/ ]*wiki-\(events\|setup\|extension\):' "$1" 2>/dev/null | awk -F: '$1 > 10 { print $1; exit }')"
+  [ -z "$line" ] || printf 'its wiki- comment on line %s is past the first ten lines, so it is not read. Move it up.\n' "$line"
+}
+
 cmd_extensions() {
-  local f n d any=0
+  local f n d any=0 bad=0
   case "${1:-}" in
     "") ;;
     path) [ $# -eq 1 ] || die "extensions path takes nothing more"; printf '%s\n' "$EXT_DIR"; return 0 ;;
@@ -6346,16 +6510,24 @@ cmd_extensions() {
       if [ "$1" = add ]; then
         ext_set "$2" on
         setup_mark "extension.$2"
-        echo "on: $2. $WIKI_CMD $2 --help says how to set it up."
+        echo "${M_OK}on: $2. $WIKI_CMD $2 --help has its commands."
+        d="$(ext_ready "$2")" || echo "${M_WARN}$2 isn't set up yet: $d"
+      elif ! ext_on "$2"; then
+        echo "$2 is already off."
       else
         ext_set "$2" off
-        echo "off: $2"
+        echo "off: $2. Its settings are kept, for when you turn it on again."
       fi
+      return 0
+      ;;
+    setup)
+      [ $# -eq 2 ] || die "usage: $WIKI_CMD extensions setup <name>"
+      ext_setup "$2"
       return 0
       ;;
     log)
       [ $# -eq 2 ] || die "usage: $WIKI_CMD extensions log <name>"
-      ext_file "$2" >/dev/null || die "no extension called $2 is on. $WIKI_CMD extensions lists them."
+      ext_must_be_on "$2"
       any=0
       for f in "$EXT_STATE/$2"/*.status; do
         [ -f "$f" ] || continue
@@ -6363,19 +6535,30 @@ cmd_extensions() {
         d="${f##*/}"; d="${d%.status}"
         printf '== %s: %s, %s\n' "$d" "$(cut -f 1 "$f")" "$(cut -f 2 "$f")"
         sed 's/^/  /' "${f%.status}.log" 2>/dev/null || true
+        case "$(cut -f 1 "$f")" in ok) ;; *) bad=1 ;; esac
       done
       [ "$any" = 1 ] || echo "$2 hasn't been run for an event yet."
+      [ "$bad" = 0 ] || echo "Once that is fixed, run it again with: $WIKI_CMD extensions tick"
       return 0
       ;;
     tick)
       [ $# -eq 1 ] || die "extensions tick takes nothing more"
       any=0
+      bad=0
       for n in $(ext_wanting tick); do
         any=1
         mkdir -p "$EXT_STATE/$n" 2>/dev/null && : > "$EXT_STATE/$n/tick.stamp"
-        ext_run "$n" tick
+        d="$(ext_run "$n" tick)"
+        case "$d" in
+          *": failed"* | *": stopped"*) bad=1; printf '%s. %s extensions log %s shows why.\n' "$d" "$WIKI_CMD" "$n" ;;
+          *": later") printf '%s: it could not run now. %s extensions log %s says why.\n' "$d" "$WIKI_CMD" "$n" ;;
+          *": not set up") printf '%s. Run: %s extensions setup %s\n' "$d" "$WIKI_CMD" "$n" ;;
+          *) printf '%s\n' "$d" ;;
+        esac
       done
       [ "$any" = 1 ] || echo "No extension that is on asks for the tick event."
+      # For cron: a run that failed fails the command.
+      [ "$bad" = 0 ] || return 1
       return 0
       ;;
     every)
@@ -6399,6 +6582,7 @@ cmd_extensions() {
           echo "tick: every $(ext_every)"
           ;;
         *)
+          if ext_shipped "$1" >/dev/null && ! ext_file "$1" >/dev/null; then die "$1 is off. Turn it on: $WIKI_CMD extensions add $1"; fi
           ext_file "$1" >/dev/null || die "$1 isn't a length of time, or an extension that is on. $EXT_EVERY_HINT"
           case "${2:-}" in
             "") ;;
@@ -6414,21 +6598,23 @@ cmd_extensions() {
       esac
       return 0
       ;;
-    *) die "extensions takes path, add <name>, remove <name>, log <name>, tick, every, or nothing" ;;
+    *) die "extensions takes path, add <name>, remove <name>, setup <name>, log <name>, tick, every, or nothing" ;;
   esac
   for f in "$EXT_DIR"/wiki-*; do
     [ -f "$f" ] || continue
     any=1
     n="${f##*/wiki-}"
     if ! ext_name_ok "$n"; then
-      printf '%-14s ignored: a name is lowercase letters, digits and dashes\n' "$n"
+      printf '%-14s ignored: a name is lowercase letters, digits and dashes. Rename %s\n' "$n" "$(tilde "$f")"
     elif is_builtin "$n"; then
-      printf "%-14s ignored: %s is a command of llm-wiki's own\\n" "$n" "$n"
+      printf "%-14s ignored: %s is a command of llm-wiki's own. Rename %s\\n" "$n" "$n" "$(tilde "$f")"
     elif [ ! -x "$f" ]; then
       printf '%-14s not executable. Run: chmod +x %s\n' "$n" "$f"
     else
       d="$(ext_about "$f")"
       printf '%-14s %s%s\n' "$n" "${d:-(no description)}" "$(ext_runs_on "$f")"
+      d="$(ext_ready "$n")" || printf '%-14s %snot ready: %s\n' "" "$M_WARN" "$d"
+      ext_notes "$f" | while IFS= read -r d; do printf '%-14s %s%s\n' "" "$M_WARN" "$d"; done
     fi
   done
   for f in "$EXT_SHIPPED"/wiki-*; do
@@ -6438,7 +6624,9 @@ cmd_extensions() {
     [ ! -f "$EXT_DIR/wiki-$n" ] || continue
     any=1
     d="$(ext_about "$f")"
-    if ext_on "$n"; then printf '%-14s %s%s\n' "$n" "${d:-(no description)}" "$(ext_runs_on "$f")"
+    if ext_on "$n"; then
+      printf '%-14s %s%s\n' "$n" "${d:-(no description)}" "$(ext_runs_on "$f")"
+      d="$(ext_ready "$n")" || printf '%-14s %snot ready: %s\n' "" "$M_WARN" "$d"
     else printf '%-14s off. %s Turn it on: %s extensions add %s\n' "$n" "${d:-}" "$WIKI_CMD" "$n"; fi
   done
   [ "$any" = 1 ] || echo "No extensions on this machine."
@@ -6499,8 +6687,8 @@ cmd_complete() {
     open) [ "$i" -eq 2 ] && echo --data; [ "$i" -eq 3 ] && wiki_names ;;
     pages) [ "$i" -eq 2 ] && wiki_names; echo --data ;;
     extensions)
-      [ "$i" -eq 2 ] && printf 'path\nadd\nremove\nlog\ntick\nevery\n'
-      if [ "$i" -eq 3 ] && { [ "${2:-}" = log ] || [ "${2:-}" = every ]; }; then extension_names; return 0; fi
+      [ "$i" -eq 2 ] && printf 'path\nadd\nremove\nsetup\nlog\ntick\nevery\n'
+      if [ "$i" -eq 3 ] && { [ "${2:-}" = log ] || [ "${2:-}" = every ] || [ "${2:-}" = setup ]; }; then extension_names; return 0; fi
       if [ "$i" -eq 4 ] && [ "${2:-}" = every ]; then echo default; return 0; fi
       if [ "$i" -eq 3 ]; then for k in "$EXT_SHIPPED"/wiki-*; do [ ! -f "$k" ] || printf '%s\n' "${k##*/wiki-}"; done; fi
       ;;
@@ -7713,6 +7901,7 @@ setup_identity() {
     while :; do
       ask "Name for commits in this repo" ""
       [ -n "$ANSWER" ] && break
+      echo "  Commits need a name."
     done
     git -C "$WIKIS_DIR" config user.name "$ANSWER"
   fi
@@ -8527,6 +8716,17 @@ fi
 # Not a command of wiki.sh's own: an extension's, if there is one by that name.
 if ext="$(ext_file "$cmd")"; then run_extension "$ext" "$@"; fi
 if ext_shipped "$cmd" >/dev/null; then die "$cmd is an extension, and it is off. Turn it on: $WIKI_CMD extensions add $cmd"; fi
+if ! is_builtin "$cmd"; then
+  case "$cmd" in
+    -*) ;;
+    *)
+      if [ -f "$EXT_DIR/wiki-$cmd" ]; then
+        die "$cmd can't be a command: an extension's name is lowercase letters, digits and dashes. Rename $(tilde "$EXT_DIR/wiki-$cmd")"
+      fi
+      die "no command called $cmd. $WIKI_CMD --help lists the commands, and $WIKI_CMD extensions lists yours."
+      ;;
+  esac
+fi
 want_git=0
 want_all=0
 want_print=0

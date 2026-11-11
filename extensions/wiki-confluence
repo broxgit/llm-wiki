@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # wiki-extension: Publish a wiki's pages to a Confluence space, as a read-only copy.
 # wiki-events: sync tick
+# wiki-setup: yes
 """wiki confluence: an llm-wiki extension. Standard library only.
 
 It publishes one wiki at a time, one way: the wiki's index becomes a page called
@@ -159,9 +160,195 @@ def token(conf):
         except subprocess.TimeoutExpired:
             die("token_cmd took more than 30 seconds")
         if out.returncode != 0 or not out.stdout.strip():
-            die(f"token_cmd printed no token (exit {out.returncode}). Run it yourself to see why.")
+            die(f"token_cmd printed no token (exit {out.returncode}). Run it yourself to see why: {conf['token_cmd']}")
         return out.stdout.strip(), conf["_from"]["token_cmd"]
     return "", ""
+
+
+TOKEN_ENV = ("CONFLUENCE_API_TOKEN", "ATLASSIAN_API_TOKEN", "JIRA_API_TOKEN")
+
+
+# ---- talking to a person: docs/conventions.md ---------------------------------------
+
+def style_on(fd=1):
+    o = os.environ.get("LLM_WIKI_STYLE", "")
+    if o in ("on", "off"):
+        return o == "on"
+    return os.isatty(fd) and not os.environ.get("NO_COLOR") and os.environ.get("TERM", "dumb") != "dumb"
+
+
+def sgr(code, text, fd=1):
+    return "\033[%sm%s\033[0m" % (code, text) if style_on(fd) else text
+
+
+def typed(text):
+    return sgr("36", text)
+
+
+def done(text):
+    """A line saying something was done: the tick in front, where style is on."""
+    if not style_on():
+        return text
+    loc = os.environ.get("LC_ALL") or os.environ.get("LC_CTYPE") or os.environ.get("LANG") or ""
+    return sgr("32", "\u2713" if "utf" in loc.lower() else "+") + " " + text
+
+
+def warn(text):
+    """A line that leaves something for the person: the warning mark in front."""
+    return (sgr("1;33", "!") + " " if style_on() else "") + text
+
+
+def read_line():
+    """One line from standard input, a byte at a time, so nothing meant for whoever
+    reads next is taken. None when the input has ended."""
+    buf = b""
+    while True:
+        c = os.read(0, 1)
+        if not c:
+            return buf.decode(errors="replace") if buf else None
+        if c == b"\n":
+            return buf.decode(errors="replace")
+        buf += c
+
+
+def ask(prompt, default=""):
+    """Enter keeps the value in brackets, and - clears it."""
+    sys.stdout.write(f"{prompt} [{default or 'none'}]: ")
+    sys.stdout.flush()
+    line = read_line()
+    if line is None:
+        print()
+        return default
+    line = line.strip()
+    return default if line == "" else ("" if line == "-" else line)
+
+
+def ask_yn(prompt, default=False):
+    sys.stdout.write(f"{prompt} [{'Y/n' if default else 'y/N'}]: ")
+    sys.stdout.flush()
+    line = read_line()
+    if line is None:
+        print()
+        return default
+    line = line.strip().lower()
+    return default if line == "" else line.startswith("y")
+
+
+def set_conf(path, key, value):
+    """Set one `name = value` line in a settings file, or take it out when value is empty.
+    Every other line stays as it is."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except FileNotFoundError:
+        lines = []
+    kept = [l for l in lines if l.split("#", 1)[0].split("=", 1)[0].strip() != key or "=" not in l.split("#", 1)[0]]
+    if value:
+        kept.append(f"{key} = {value}")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(kept) + ("\n" if kept else ""))
+
+
+def has_token(conf):
+    """Whether a token is set to come from somewhere. The command isn't run to find out."""
+    return bool(conf.get("token_cmd")) or any(os.environ.get(n) for n in TOKEN_ENV)
+
+
+def atlassian_setup():
+    """Ask for the sign-in every Atlassian extension shares, and keep it in the shared file."""
+    shared = read_conf(SHARED)
+    conf = settings()
+    if conf["url"] and has_token(conf):
+        print(f"The Atlassian sign-in is already set: {conf['url']}" + (f", as {conf['email']}" if conf.get("email") else "") + ".")
+        if not ask_yn("Change it?", False):
+            return
+    print(f"Jira and Confluence share one Atlassian sign-in, kept in {SHARED}.")
+    print("Enter keeps the value in brackets.")
+    site = ask("Site, such as https://your-company.atlassian.net", shared.get("site", ""))
+    if site and not site.startswith(("https://", "http://")):
+        print("  " + warn(f"{site} isn't an address, so it wasn't saved. An address starts with https://"))
+    else:
+        set_conf(SHARED, "site", site.rstrip("/"))
+    email = ask("Email of your Atlassian account. Leave it empty on Data Center", shared.get("email", ""))
+    set_conf(SHARED, "email", email)
+    if has_token(settings()):
+        return
+    print()
+    print("The API token is kept out of this file. Create one at")
+    print("  https://id.atlassian.com/manage-profile/security/api-tokens")
+    print("or, on Data Center, a personal access token in your profile. Copy it.")
+    if sys.platform == "darwin":
+        print("Then put it in your keychain from the clipboard. In another terminal, run:")
+        print("  " + typed('security add-generic-password -a "$USER" -s atlassian -U -w "$(pbpaste)"'))
+        sys.stdout.write("Press Enter when that is done, or type skip to do it later: ")
+        sys.stdout.flush()
+        answer = read_line()
+        if answer is None:
+            print()
+        if answer is not None and answer.strip().lower() != "skip":
+            set_conf(SHARED, "token_cmd", "security find-generic-password -s atlassian -w")
+    else:
+        cmd = ask("A command that prints the token, such as: pass show atlassian", "")
+        set_conf(SHARED, "token_cmd", cmd)
+
+
+def sign_in_missing(conf):
+    """What the sign-in lacks, in a few words, or nothing."""
+    if not conf["url"]:
+        site = os.environ.get("ATLASSIAN_SITE") or read_conf(SHARED).get("site") or ""
+        if site:
+            return f"no Confluence address yet: {site} isn't on Atlassian Cloud, so Confluence's own address is needed"
+        return "no Confluence address yet"
+    if not has_token(conf):
+        return "no API token yet"
+    return ""
+
+
+def need_sign_in(conf):
+    msg = sign_in_missing(conf)
+    if msg:
+        die(f"Confluence isn't set up: {msg}. Run: {CMD} extensions setup confluence")
+
+
+def not_ready(conf):
+    """What publishing lacks, in a few words, or nothing."""
+    return sign_in_missing(conf) or ("" if conf.get("space") else "no space to publish into yet")
+
+
+def setup():
+    """Run by `wiki setup` and `wiki extensions setup confluence`, at a terminal."""
+    atlassian_setup()
+    own = read_conf(CONFIG)
+    if not settings()["url"]:
+        print("On Atlassian Cloud, Confluence is at the site's address with /wiki after it. This site isn't,")
+        print("so Confluence's own address is needed.")
+        url = ask("Confluence's address", own.get("url", ""))
+        if url and not url.startswith(("https://", "http://")):
+            print("  " + warn(f"{url} isn't an address, so it wasn't saved. An address starts with https://"))
+        else:
+            set_conf(CONFIG, "url", url.rstrip("/"))
+    conf = settings()
+    if sign_in_missing(conf):
+        print("  " + warn(f"Confluence can't sign in yet: {sign_in_missing(conf)}."))
+    else:
+        try:
+            me = Confluence(conf).call("GET", "/rest/api/user/current")
+            print("  " + done(f"Signed in to Confluence as {me.get('displayName') or me.get('username') or '?'}."))
+        except Refused as e:
+            print("  " + warn(f"{conf['url']} has no Confluence API at /rest/api ({e.code}). On Cloud the address ends in /wiki."))
+        except SystemExit:
+            print("  " + warn("The sign-in didn't work. The line above says why."))
+    print()
+    print("Everyone who can read a space can read what is published into it, and a wiki holds whatever")
+    print("its sessions noted. Choose a space whose readers may see all of it.")
+    space = ask("Key of the space to publish into, such as ENG", own.get("space", ""))
+    set_conf(CONFIG, "space", space)
+    print("A wiki named here is published by itself whenever a sync changes its pages. Any other is")
+    print(f"published only when you run {CMD} confluence publish <wiki>.")
+    auto = ask("Wikis to publish by themselves, such as payments, relay. Empty for none", own.get("auto", ""))
+    set_conf(CONFIG, "auto", auto)
+    return 0
 
 
 # ---- Confluence ----------------------------------------------------------------
@@ -530,10 +717,11 @@ def cmd_publish(args):
     if "/" in wiki or not (os.path.isfile(os.path.join(root, "AGENTS.md")) and os.path.isfile(os.path.join(root, "index.md"))):
         die(f"no wiki called {wiki}")
     conf = settings()
+    need_sign_in(conf)
     space = conf.get(f"space.{wiki}") or conf.get("space")
     parent = conf.get(f"parent.{wiki}") or conf.get("parent") or ""
     if not space:
-        die(f"no space to publish {wiki} into. Set space, or space.{wiki}, in {CONFIG}. {CMD} confluence --help has the settings.")
+        die(f"no space to publish {wiki} into. Run: {CMD} extensions setup confluence (or set space.{wiki} in {CONFIG})")
     wiki_cmd = os.environ.get("LLM_WIKI") or die("LLM_WIKI isn't set. Run this as: wiki confluence")
     pages = wiki_pages(wiki_cmd, root, wiki)
     titles = {rel: title for rel, title, _ in pages}
@@ -542,12 +730,16 @@ def cmd_publish(args):
 
     made = changed = same = 0
     problems = []
+
+    def taken(title):
+        return (f"{title}: a page of that name is already in the space, and llm-wiki didn't make it. "
+                "Rename that page in Confluence, or change this page's title in the wiki.")
     clashes = [0]
     root_title = pages[0][1]
     try:
         top = c.find(space, root_title)
     except Refused as e:
-        die(f"can't read the space {space}: {e.message}")
+        die(f"can't read the space {space}: {e.message}. Check space in {CONFIG}, or run: {CMD} extensions setup confluence")
     if top is not None and not ours(top):
         die(f"the space {space} already has a page called \"{root_title}\" that llm-wiki didn't make. Rename it, or publish to another space.")
     existing = {}
@@ -561,7 +753,7 @@ def cmd_publish(args):
         digest = hashlib.sha256((title + "\n" + body).encode()).hexdigest()[:16]
         if page is not None:
             if not ours(page):
-                problems.append(f"{title}: a page of that name is there and llm-wiki didn't make it. Left alone.")
+                problems.append(taken(title))
                 return page
             if digest_of(page) == digest:
                 same += 1
@@ -569,11 +761,18 @@ def cmd_publish(args):
             changed += 1
             print(f"  {'would update' if dry else 'updated'}: {title}")
             return page if dry else (c.update(page, title, body, digest) or page)
-        made += 1
-        print(f"  {'would create' if dry else 'created'}: {title}")
         if dry:
+            # A page of that name anywhere in the space stops the real run, so look now.
+            if c.find(space, title) is not None:
+                problems.append(taken(title))
+                return None
+            made += 1
+            print(f"  would create: {title}")
             return None
-        return c.create(space, title, body, parent_id, digest)
+        new = c.create(space, title, body, parent_id, digest)
+        made += 1
+        print(f"  created: {title}")
+        return new
 
     try:
         top = put("index.md", root_title, pages[0][2], top, parent)
@@ -583,9 +782,8 @@ def cmd_publish(args):
         try:
             put(rel, title, text, existing.get(title), top["id"] if top else None)
         except Refused as e:
-            made -= 1 if title not in existing else 0
             changed -= 1 if title in existing else 0
-            problems.append(f"{title}: {e.message}")
+            problems.append(taken(title) if "already exists" in e.message.lower() else f"{title}: {e.message}")
             # Someone else wrote the page between our read and our write.
             clashes[0] += 1 if e.code == 409 else 0
     gone = sorted(t for t, p in existing.items() if t not in titles.values() and ours(p))
@@ -627,11 +825,14 @@ def cmd_config(args):
     print(f"token     {'from ' + where if where else 'not set'}")
     print(f"space     {conf.get('space') or 'not set'}")
     print(f"auto      {', '.join(auto_wikis(conf)) or 'off'}")
+    for w in auto_wikis(conf):
+        if not is_wiki(w):
+            print(warn(f"auto names {w}, which isn't a wiki here. Take it out of auto in {CONFIG}."))
     for k in sorted(conf):
         if k.startswith(("space.", "parent")) and k != "_from":
             print(f"{k:<9} {conf[k]}")
     if not conf["url"] or not where:
-        print(f"\nNot ready. {CMD} confluence --help has the settings.")
+        print(f"\nNot set up: {sign_in_missing(conf)}. Run: {CMD} extensions setup confluence")
         return 1
     try:
         me = Confluence(conf).call("GET", "/rest/api/user/current")
@@ -639,8 +840,13 @@ def cmd_config(args):
         die(f"{conf['url']} has no Confluence API at /rest/api ({e.code}). Is url the address of Confluence itself? On Cloud it ends in /wiki.")
     print(f"\nSigned in as {me.get('displayName') or me.get('username') or '?'}.")
     if not conf.get("space"):
-        print(f"No space is set, so publish has nowhere to go yet.")
+        print(f"No space is set, so publish has nowhere to go yet. Run: {CMD} extensions setup confluence")
     return 0
+
+
+def is_wiki(name):
+    root = os.path.join(os.environ.get("WIKIS_DIR", ""), name)
+    return "/" not in name and os.path.isfile(os.path.join(root, "AGENTS.md")) and os.path.isfile(os.path.join(root, "index.md"))
 
 
 def auto_wikis(conf):
@@ -673,6 +879,10 @@ def on_event(args):
         # Catch up on a publish that a sync couldn't make. Unchanged pages cost a read.
         worst = 0
         for wiki in auto:
+            if not is_wiki(wiki):
+                print(f"auto names {wiki}, which isn't a wiki here. Take it out of auto in {CONFIG}.")
+                worst = 1
+                continue
             code = cmd_publish([wiki])
             worst = code if code == 1 or worst == 0 else worst
         return worst
@@ -682,6 +892,13 @@ def on_event(args):
 def main(argv):
     if argv and argv[0] == "--wiki-event":
         return on_event(argv[1:])
+    if argv and argv[0] == "--wiki-ready":
+        msg = not_ready(settings())
+        if msg:
+            print(msg)
+        return 1 if msg else 0
+    if argv and argv[0] == "--wiki-setup":
+        return setup()
     if not argv or argv[0] in ("-h", "--help", "help"):
         print(USAGE, end="")
         return 0 if argv else 1

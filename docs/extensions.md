@@ -14,9 +14,11 @@ wiki extensions add jira
 
 `wiki extensions` lists them, on or off. `wiki extensions remove jira` turns one off. `wiki setup --new` asks about a new one once.
 
+Turning one on is not the same as setting it up, and it says so. When you answer yes in `wiki setup`, the extension asks at once for what it needs. `wiki extensions setup jira` asks again at any time. Until an extension that is on has what it needs, `wiki status` lists it with that command, `wiki extensions` shows it as not ready, and no event runs it.
+
 ### Signing in to Atlassian
 
-The Jira and Confluence extensions share one sign-in, in `~/.config/llm-wiki/atlassian`:
+The Jira and Confluence extensions share one sign-in. `wiki extensions setup jira`, or `confluence`, asks for it, tests it, and says who it signed in as. It never asks for the token itself: it gives you the command that puts the token in your keychain from the clipboard. What it writes is `~/.config/llm-wiki/atlassian`:
 
 ```
 site = https://your-company.atlassian.net
@@ -63,7 +65,7 @@ projects = PROJ, OPS
 
 - `projects` is optional. Without it, any word shaped like a key is looked up, and the ones Jira doesn't know are skipped.
 
-To have it run by itself, add `auto_close = yes` to the settings. Once a day, or as often as `wiki extensions every jira <time>` says, in the background, it then does what `check --close` does: a ticket finishes in Jira, a note is saved, and the next compile closes the item, with no session asked and no tokens spent. `wiki extensions log jira` shows what the last run did.
+To have it run by itself, answer yes to "Close open items by themselves?" in its setup, or add `auto_close = yes` to the settings. Once a day, or as often as `wiki extensions every jira <time>` says, in the background, it then does what `check --close` does. Two steps follow, and only the first is its own: it saves a note saying the ticket finished, with no session asked; then the next compile closes the item. A compile is a session's work, or background compile's where `wiki compile on` has turned that on. Until one runs, `wiki open` still lists the item. `wiki extensions log jira` shows what the last run did.
 
 Without that, an agent can check for itself: add a line to a wiki's `wiki/conventions.md`, such as "Before treating an open item that names a ticket as still waiting, run `wiki jira check`."
 
@@ -115,7 +117,8 @@ A small one, saved there as `wiki-recent`:
 ```sh
 #!/bin/sh
 # wiki-extension: The five newest notes in a wiki.
-ls -t "$WIKIS_DIR/${1:?usage: wiki recent <wiki>}/raw" | head -n 5
+[ -n "${1:-}" ] || { echo "usage: wiki recent <wiki>" >&2; exit 1; }
+ls -t "$WIKIS_DIR/$1/raw" | head -n 5
 ```
 
 Make it executable, and it is a command:
@@ -138,7 +141,7 @@ Its arguments, exactly as typed after the name, and three environment variables:
 |---|---|
 | `LLM_WIKI` | The wiki command, as a path the extension can run: `"$LLM_WIKI" capture …`. |
 | `WIKIS_DIR` | The collection this call is for. Commands the extension runs through `$LLM_WIKI` use the same one. |
-| `LLM_WIKI_EXTENSION` | The version of this contract, `2` today. Version 2 added events, below. |
+| `LLM_WIKI_EXTENSION` | The version of this contract, `3` today. Version 2 added events and version 3 setup, both below. |
 
 The extension's exit code is the command's. Its output goes straight to the terminal.
 
@@ -171,7 +174,7 @@ An extension can ask to be run without anyone asking. That is how a job gets don
 A run is in the background. What it prints goes to a log, never into a session, and `wiki extensions log <name>` shows it. How it ends is its exit code:
 
 - **0**: done.
-- **75**: not now. Use it when the network is out of reach, as it is inside some agents' sandboxes. Nothing is reported, and the next event is the next chance. A `sync` event's paths are not kept for it, so an extension that must not miss a change should also catch up on `tick`.
+- **75**: not now. Use it when the network is out of reach, as it is inside some agents' sandboxes. Once, nothing is reported. A `tick` that ends this way is tried again at a session start half an hour or more later, not a whole interval later. Three in a row is no longer "not now": `wiki status` says the run couldn't be made, since an address typed wrong looks exactly like a network that is down. A `sync` event's paths are not kept for a run that ends this way, so an extension that must not miss a change should also catch up on `tick`.
 - **Anything else**: it failed, and `wiki status` says so until a run works.
 
 What else to know:
@@ -179,7 +182,8 @@ What else to know:
 - **One run at a time** for each extension and wiki. A sync that comes while a run is going adds its paths to the next run, which starts when the first ends.
 - **Five minutes at most.** A run still going then is stopped and counts as failed.
 - **A sync made during an event starts no event,** so two extensions can't set each other off.
-- **`wiki extensions tick`** runs the tick event now and prints how each run ended. Put it in cron on a machine where no sessions start.
+- **`wiki extensions tick`** runs the tick event now and prints how each run ended. It exits 1 when a run failed, so cron can tell. Put it in cron on a machine where no sessions start, and run it after fixing what `wiki extensions log <name>` showed.
+- **A word that is no event is said.** `wiki extensions` shows a line for `wiki-events: ticks`, and for a `wiki-` comment below the first ten lines, since either would otherwise never run and never say why.
 - **`wiki extensions every 4h`** makes the tick come every four hours on this machine, for every extension. The time is a number and a unit: `90m`, `4h`, `2d`, `3w`, from five minutes to a year. `wiki setup --new` asks once, when an extension that runs on tick is on.
 - **`wiki extensions every jira 2h`** gives one extension an interval of its own, which wins over the one for all. `wiki extensions every jira default` takes it away. `wiki extensions every` lists them.
 - **`wiki extensions`** shows which events each extension runs on.
@@ -187,6 +191,34 @@ What else to know:
 Being run for an event is not the same as acting on it. An extension that does something others can see, such as publishing, should act only where a setting of its own says so, and leave that setting off until someone turns it on.
 
 The Jira extension runs on `tick` and the Confluence extension on `sync` and `tick`. Each does nothing until its own setting says so: `auto_close` for Jira, `auto` for Confluence.
+
+## Setup
+
+An extension that needs something before it can work, such as a sign-in or a folder, shouldn't be on and silent. Say so with one more comment, and answer two calls:
+
+```sh
+#!/bin/sh
+# wiki-extension: Posts a line to the team channel when a wiki's pages change.
+# wiki-events: sync
+# wiki-setup: yes
+case "${1:-}" in
+  --wiki-ready) [ -n "$(cat "$HOME/.config/team-channel" 2>/dev/null)" ] && exit 0; echo "no channel address yet"; exit 1 ;;
+  --wiki-setup) printf 'Channel address: '; read -r a; [ -z "$a" ] || echo "$a" > "$HOME/.config/team-channel"; exit 0 ;;
+esac
+```
+
+| Call | What to do |
+|---|---|
+| `wiki-<name> --wiki-ready` | Exit 0 when the extension has what it needs. Otherwise print one line saying what is missing, in a few words and with no instructions, and exit 1. No network, no questions, and an answer within five seconds |
+| `wiki-<name> --wiki-setup` | Ask the person for what it needs, at their terminal, and save it. Say what each answer is for. Enter should keep what is there |
+
+llm-wiki does the rest:
+
+- `wiki setup` runs the setup right after someone turns the extension on, and `wiki extensions setup <name>` runs it again.
+- While `--wiki-ready` fails, `wiki status` has a To do line with what the extension printed and the command that sets it up, `wiki extensions` shows it as not ready, and no event runs it.
+- An extension with no `wiki-setup:` comment is always taken as ready.
+
+Something else is checked for every extension, with or without that comment: the program its first line names. One written in Python on a machine with no `python3` says so when it is run, in `wiki status`, and when setup would offer it.
 
 ## Rules
 
