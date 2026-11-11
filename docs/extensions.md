@@ -52,7 +52,7 @@ projects = PROJ, OPS
 - On a Mac, store the token from the clipboard: copy it, then run `security add-generic-password -a "$USER" -s jira -U -w "$(pbpaste)"`. Don't let `security` prompt for it: the prompt keeps only the first 128 characters, and an Atlassian token is longer.
 - `projects` is optional. Without it, any word shaped like a key is looked up, and the ones Jira doesn't know are skipped.
 
-To have it run by itself, add `auto_close = yes` to the settings. Once a day, in the background, it then does what `check --close` does: a ticket finishes in Jira, a note is saved, and the next compile closes the item, with no session asked and no tokens spent. `wiki extensions log jira` shows what the last run did.
+To have it run by itself, add `auto_close = yes` to the settings. Once a day, or as often as `wiki extensions every jira <time>` says, in the background, it then does what `check --close` does: a ticket finishes in Jira, a note is saved, and the next compile closes the item, with no session asked and no tokens spent. `wiki extensions log jira` shows what the last run did.
 
 Without that, an agent can check for itself: add a line to a wiki's `wiki/conventions.md`, such as "Before treating an open item that names a ticket as still waiting, run `wiki jira check`."
 
@@ -147,7 +147,7 @@ An extension can ask to be run without anyone asking. That is how a job gets don
 | Event | When it happens | How the extension is run |
 |---|---|---|
 | `sync` | After `wiki sync` left a wiki's files different, whether it committed them or pulled them in | `wiki-<name> --wiki-event sync <wiki>`, with `LLM_WIKI_CHANGED` naming a file that lists the changed paths, one a line, relative to the wiki |
-| `tick` | At session start, at most once a day for each extension | `wiki-<name> --wiki-event tick` |
+| `tick` | At session start, at most once in 24 hours for each extension, or in the time you set | `wiki-<name> --wiki-event tick` |
 
 A run is in the background. What it prints goes to a log, never into a session, and `wiki extensions log <name>` shows it. How it ends is its exit code:
 
@@ -161,6 +161,8 @@ What else to know:
 - **Five minutes at most.** A run still going then is stopped and counts as failed.
 - **A sync made during an event starts no event,** so two extensions can't set each other off.
 - **`wiki extensions tick`** runs the tick event now and prints how each run ended. Put it in cron on a machine where no sessions start.
+- **`wiki extensions every 4h`** makes the tick come every four hours on this machine, for every extension. The time is a number and a unit: `90m`, `4h`, `2d`, `3w`, from five minutes to a year. `wiki setup --new` asks once, when an extension that runs on tick is on.
+- **`wiki extensions every jira 2h`** gives one extension an interval of its own, which wins over the one for all. `wiki extensions every jira default` takes it away. `wiki extensions every` lists them.
 - **`wiki extensions`** shows which events each extension runs on.
 
 Being run for an event is not the same as acting on it. An extension that does something others can see, such as publishing, should act only where a setting of its own says so, and leave that setting off until someone turns it on.

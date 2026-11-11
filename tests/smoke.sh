@@ -3864,7 +3864,7 @@ expect "extensions lists it with its description" "Says hello, for the smoke tes
 expect "the first word completes to it" "hello" "$W" __complete 1 he
 expect "and to extensions" "extensions" "$W" __complete 1 ex
 expect "extensions completes to path" "path" "$W" __complete 2 extensions ""
-expect "the usage names the command" "extensions [path | add <name> | remove <name> | log <name> | tick]" "$W" --help
+expect "the usage names the command" "extensions [path | add <name> | remove <name> | log <name> | tick | every ...]" "$W" --help
 # A command of llm-wiki's own always wins.
 printf '#!/bin/sh\necho HIJACK\n' > "$XD/wiki-news"
 printf '#!/bin/sh\necho HIJACK\n' > "$XD/wiki-relay"
@@ -4397,6 +4397,56 @@ ew start >/dev/null 2>&1
 check "and not again within the interval" test "$(grep -c . "$REC/log")" = 1
 expect "extensions tick runs it now" "rec: ok" ew extensions tick
 check "whatever the interval" test "$(grep -c . "$REC/log")" = 2
+# How often the tick comes is a setting: one for all extensions, and one of its own for any.
+expect "the tick comes every 24 hours unless set" "tick: every 24h" ew extensions every
+expect "extensions every sets it, as a length of time" "tick: every 4h" ew extensions every 4h
+expect "in days" "tick: every 2d" ew extensions every 2d
+expect "or weeks" "tick: every 3w" ew extensions every 3w
+expect "or minutes" "tick: every 90m" ew extensions every 90m
+refuse "it wants a number and a unit" ew extensions every soon
+expect "and says so for a bare number" "such as 4h or 2d" ew extensions every 4
+refuse "which fails" ew extensions every 4
+refuse "no less than five minutes" ew extensions every 2m
+refuse "and no more than a year" ew extensions every 99w
+expect "a refused value changes nothing" "tick: every 90m" ew extensions every
+ew extensions every 4h >/dev/null
+age() { python3 -c "import os, sys, time; t = time.time() - float(sys.argv[2]) * 3600; os.utime(sys.argv[1], (t, t))" "$XS/rec/tick.stamp" "$1"; }
+age 3
+ew start >/dev/null 2>&1
+check "at every 4h, a tick 3 hours old isn't due" test "$(grep -c . "$REC/log")" = 2
+age 5
+ew start >/dev/null 2>&1
+check "and one 5 hours old is" test "$(grep -c . "$REC/log")" = 3
+ew extensions every 24h >/dev/null
+age 5
+ew start >/dev/null 2>&1
+check "back at every 24h, it isn't" test "$(grep -c . "$REC/log")" = 3
+# One extension's own interval wins over the one for all.
+expect "an extension can have an interval of its own" "rec: every 1h" ew extensions every rec 1h
+age 2
+ew start >/dev/null 2>&1
+check "and it wins: at 1h, a tick 2 hours old is due though the rest wait 24h" test "$(grep -c . "$REC/log")" = 4
+out="$(ew extensions every 2>&1)"
+case "$out" in *"tick: every 24h"*"rec: every 1h"*) ok "extensions every lists the one for all and each of its own" ;; *) bad "extensions every lists the one for all and each of its own" "$out" ;; esac
+expect "and one extension's on request" "rec: every 1h" ew extensions every rec
+expect "setup --list shows both" "every 24h; rec 1h" bash -c "WIKIS_DIR='$EW' '$W' setup --list | grep '^extensions'"
+expect "and so does the list of extensions" "every 24h; rec 1h" ew extensions
+ew extensions every 2d >/dev/null
+expect "changing the one for all leaves an extension's own alone" "rec: every 1h" ew extensions every rec
+ew extensions every 24h >/dev/null
+expect "default gives an extension back the one for all" "rec: every 24h, the same as the rest" ew extensions every rec default
+age 2
+ew start >/dev/null 2>&1
+check "and then a tick 2 hours old isn't due" test "$(grep -c . "$REC/log")" = 4
+refuse "an interval needs an extension that is on" ew extensions every nosuch 4h
+refuse "and a length of time it can read" ew extensions every rec often
+out="$(printf 'n\nn\n6h\n' | WIKIS_DIR="$EW" LLM_WIKI_TEST_TTY=1 "$W" setup extensions 2>&1)"
+case "$out" in *"Time between runs"*"tick: every 6h"*) ok "setup asks how often, and keeps the answer" ;; *) bad "setup asks how often, and keeps the answer" "$out" ;; esac
+out="$(printf 'n\nn\nsoon\n' | WIKIS_DIR="$EW" LLM_WIKI_TEST_TTY=1 "$W" setup extensions 2>&1)"
+case "$out" in *"isn't a length of time"*"tick: every 6h"*) ok "an answer that isn't a length of time changes nothing" ;; *) bad "an answer that isn't a length of time changes nothing" "$out" ;; esac
+ew extensions every 24h >/dev/null
+expect "completion offers every" "every" "$W" __complete 2 extensions ""
+expect "and the extensions that are on, after it" "rec" "$W" __complete 3 extensions every ""
 # How a run ends.
 lacks "a run that went fine leaves status alone" "extension rec" ew status
 echo 75 > "$REC/exit"
