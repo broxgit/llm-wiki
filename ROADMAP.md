@@ -79,6 +79,12 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### Terminal style for `wiki setup` and `wiki update` (2026-11-11)
+
+- **Why:** `docs/conventions.md` was applied to `wiki status` first. Brock decided llm-wiki restyles three commands and stops: these two are the other ones.
+- **What changed:** `section()` prints its heading bold, keeping the `== `. In `setup`, a line the step itself prints and that says something was written, turned on, added or already in place has the green tick after any indent; a failure, or something the person must do, has the bold yellow `!` with its command in cyan. `setup --list` has `<- new` in yellow, `(default)` dim and the command lines in cyan. `update` puts the tick or the `!` where its `- ` was, bolds its `== ` headings and a NEWS entry's title line, and prints the rest of an entry as written. Prompts keep their words, and the bracketed default isn't dimmed, since it says what Enter does. The helper block, the Go helper and every other command are as they were, and `upgrade`'s session note is still plain.
+- **Still untested:** how it renders in a real terminal. Left plain: lines that come from another command through a pipe (what `init`, `scaffold`, `install_hook`, `cmd_obsidian` and the like print, indented by setup, and what `upgrade --all` prints inside `update`), and the "Can't read" lines, which say nothing was changed and give no fix.
+
 ### Extensions: a wiki's content as data (2026-11-11)
 
 - **Why:** each extension parsed the wiki's files itself. Jira read `open.md` with its own parser, and Confluence walked `wiki/` and read frontmatter with its own. A change to either format would have broken them without a test failing, and every later extension would have written the same parsers again.

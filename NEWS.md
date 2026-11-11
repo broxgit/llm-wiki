@@ -9,6 +9,11 @@ Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title i
 - `wiki open --data` prints every open item, and `wiki pages <wiki> --data` every page with its title, one a line and tab separated.
 - They are for extensions and scripts, so they stop reading the wiki's files themselves. `wiki pages <wiki>` alone lists the pages for you.
 
+## 2026-11-22: colour in `wiki setup` and `wiki update` at a terminal
+
+- At a terminal, both have bold headings, a green tick on what was done, a yellow `!` on what is left for you, and cyan for the commands you type.
+- `wiki setup --list` shows `<- new` in yellow. The words are the same, and a pipe stays plain. These two and `status` have colour.
+
 ## 2026-11-21: one Atlassian sign-in for Jira and Confluence
 
 - The site, email and token command go in `~/.config/llm-wiki/atlassian`, and both extensions read them there.
