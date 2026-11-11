@@ -304,8 +304,22 @@ def need_sign_in(conf):
         die(f"Jira isn't set up: {msg}. Run: {CMD} extensions setup jira")
 
 
+def bold(text):
+    return sgr("1", text)
+
+
 def setup():
-    """Run by `wiki setup` and `wiki extensions setup jira`, at a terminal."""
+    """Run by `wiki setup` and `wiki extensions setup jira`, at a terminal. Every setting
+    is asked for here, with what it does."""
+    print(bold("Jira, for your wikis"))
+    print("It reads Jira and never writes to it. When a note in a wiki says something is waiting on a")
+    print("ticket, such as \"Release PROJ-123\", it can tell you where the ticket stands, and close the")
+    print("item once the ticket is finished.")
+    print()
+    print("Enter keeps the value in brackets, and a dash, -, clears it. You can run this again at any")
+    print(f"time to change an answer: {typed(CMD + ' extensions setup jira')}")
+    print()
+    print(bold("== Step 1 of 2: sign in"))
     atlassian_setup()
     conf = settings()
     if sign_in_missing(conf):
@@ -320,13 +334,41 @@ def setup():
         except SystemExit:
             print("  " + warn("The sign-in didn't work. The line above says why."))
     print()
+    print(bold("== Step 2 of 2: what it does"))
     own = read_conf(CONFIG)
+    print("A ticket is a key in an open item's heading, such as PROJ-123. Naming your projects keeps a")
+    print("word that only looks like a key, such as UTF-8, from being looked up.")
     projects = ask("Projects whose keys count as tickets, such as PROJ, OPS. Empty for any", own.get("projects", ""))
     set_conf(CONFIG, "projects", projects)
+    print()
     print("With this on, a ticket that finishes is noted in the wiki, checked in the background with")
     print("nobody asking, and the next compile closes the open item that names it. It only ever reads Jira.")
     auto = ask_yn("Close open items by themselves?", auto_on(own))
     set_conf(CONFIG, "auto_close", "yes" if auto else "")
+    print()
+    print("Jira sorts every status into to do, in progress or done, and done is what finished means")
+    print("here. If your real finish line is one status, such as Released, name it and only that counts.")
+    states = ask("Statuses that mean a ticket is finished. Empty for whatever Jira counts as done", own.get("done_statuses", ""))
+    set_conf(CONFIG, "done_statuses", states)
+
+    conf = settings()
+    print()
+    print(bold("What is set"))
+    missing = sign_in_missing(conf)
+    print("  Sign-in      " + (f"not set up: {missing}" if missing else conf["url"] + (f", as {conf['email']}" if conf.get("email") else "")))
+    print("  Tickets      " + ("keys in " + ", ".join(conf["projects"]) if conf["projects"] else "any key, such as PROJ-123"))
+    print("  Finished is  " + (", ".join(conf["done_statuses"]) if conf["done_statuses"] else "whatever Jira counts as done"))
+    print("  By itself    " + ("on: finished tickets close their items, checked in the background" if auto_on(conf) else "off: nothing happens until you run it"))
+    print()
+    print(bold("What happens now"))
+    if auto_on(conf):
+        print("  Once a day, in the background, the tickets your open items name are checked.")
+        print(f"  {CMD} extensions every jira 4h makes that every four hours.")
+        print(f"  To see what the last run did: {typed(CMD + ' extensions log jira')}")
+    else:
+        print(f"  Nothing by itself. To see where the tickets stand: {typed(CMD + ' jira')}")
+        print(f"  To close the finished ones: {typed(CMD + ' jira check --close')}")
+    print(f"  Every setting is in {CONFIG}, and {CMD} jira --help lists them.")
     return 0
 
 
@@ -397,6 +439,8 @@ class Jira:
 ABANDONED = re.compile(r"(?i)won.?t (do|fix)|duplicate|cancel|declined|rejected|abandon|can(no|.)?t reproduce"
                        r"|invalid|obsolete|incomplete|not a bug|withdrawn|not planned")
 OWN = "Jira: "
+# A note this extension saved. A second in the same second is named <stamp>-jira-done-2.md.
+OWN_NOTE = re.compile(r"-jira-done(-\d+)?\.md$")
 
 
 def state_of(t, done_names):
@@ -469,7 +513,7 @@ def waiting_notes(wiki_cmd, root, wiki):
             names = []
     lines = set()
     for n in names:
-        if not n.endswith("-jira-done.md"):
+        if not OWN_NOTE.search(n):
             continue
         try:
             with open(os.path.join(raw, n), encoding="utf-8", errors="replace") as f:
@@ -507,7 +551,7 @@ def cmd_check(args):
     # What to look at: open entries that name a ticket, and entries this extension
     # closed lately, in case their ticket was reopened.
     def ours(e):
-        return any("-jira-done.md" in f for f in e["from"])
+        return any(OWN_NOTE.search(f) for f in e["from"])
     watched = [(w, e) for w, es in books for e in es if keys(e)
                and (e["status"] == "open" or (recently_done(e["status"]) and ours(e) and not e["heading"].startswith(OWN)))]
     if not watched:
