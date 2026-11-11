@@ -2,7 +2,7 @@
 
 An extension is a command of your own that `wiki <name>` runs. It is how an integration, such as a tracker, a publisher or a CI job, lives outside `wiki.sh`, and how you add one for your team.
 
-This is the foundation only. An extension can add a command today. It can't yet be called when a note is captured or a wiki is compiled, and it can't add rules to the handbook. Those come once a couple of real extensions show what they need.
+An extension can add a command, and it can ask to be run when a wiki changes or once a day, with nobody asking. It can't add rules to the handbook.
 
 ## Extensions that ship with llm-wiki
 
@@ -106,11 +106,44 @@ Its arguments, exactly as typed after the name, and three environment variables:
 |---|---|
 | `LLM_WIKI` | The wiki command, as a path the extension can run: `"$LLM_WIKI" capture …`. |
 | `WIKIS_DIR` | The collection this call is for. Commands the extension runs through `$LLM_WIKI` use the same one. |
-| `LLM_WIKI_EXTENSION` | The version of this contract, `1` today. It rises only if one of these changes. |
+| `LLM_WIKI_EXTENSION` | The version of this contract, `2` today. Version 2 added events, below. |
 
 The extension's exit code is the command's. Its output goes straight to the terminal.
 
 To save knowledge, run `"$LLM_WIKI" capture <wiki> <slug>` with the note on stdin, then `"$LLM_WIKI" sync <wiki>`. Don't write into `raw/` or `wiki/` yourself: capture names the note and sync takes its turn with other sessions.
+
+## Events
+
+An extension can ask to be run without anyone asking. That is how a job gets done with no session, and no tokens, spent on it. Name the events in a comment in the first ten lines:
+
+```sh
+#!/bin/sh
+# wiki-extension: Posts a line to the team channel when a wiki's pages change.
+# wiki-events: sync
+```
+
+| Event | When it happens | How the extension is run |
+|---|---|---|
+| `sync` | After `wiki sync` left a wiki's files different, whether it committed them or pulled them in | `wiki-<name> --wiki-event sync <wiki>`, with `LLM_WIKI_CHANGED` naming a file that lists the changed paths, one a line, relative to the wiki |
+| `tick` | At session start, at most once a day for each extension | `wiki-<name> --wiki-event tick` |
+
+A run is in the background. What it prints goes to a log, never into a session, and `wiki extensions log <name>` shows it. How it ends is its exit code:
+
+- **0**: done.
+- **75**: not now. Use it when the network is out of reach, as it is inside some agents' sandboxes. Nothing is reported, and the next event is the next chance. A `sync` event's paths are not kept for it, so an extension that must not miss a change should also catch up on `tick`.
+- **Anything else**: it failed, and `wiki status` says so until a run works.
+
+What else to know:
+
+- **One run at a time** for each extension and wiki. A sync that comes while a run is going adds its paths to the next run, which starts when the first ends.
+- **Five minutes at most.** A run still going then is stopped and counts as failed.
+- **A sync made during an event starts no event,** so two extensions can't set each other off.
+- **`wiki extensions tick`** runs the tick event now and prints how each run ended. Put it in cron on a machine where no sessions start.
+- **`wiki extensions`** shows which events each extension runs on.
+
+Being run for an event is not the same as acting on it. An extension that does something others can see, such as publishing, should act only where a setting of its own says so, and leave that setting off until someone turns it on.
+
+The Jira and Confluence extensions don't use events yet.
 
 ## Rules
 
