@@ -8030,13 +8030,13 @@ setup_claude() {
     current) echo "${M_OK}$(tilde "$CLAUDE_FILE") has the current wiki line. Every session finds its wiki." ;;
     old)
       echo "$(tilde "$CLAUDE_FILE") has an older wiki line."
-      if ask_yn "Replace it with the current one?" y; then cmd_claude | head -n 1 | sed 's/^/  /'; fi
+      if ask_yn "Replace it with the current one?" y; then cmd_claude | sed -n '1s/^/  /p'; fi
       ;;
     unreadable) echo "Can't read $(tilde "$CLAUDE_FILE") from this shell, so there's no telling whether it has the wiki line." ;;
     missing)
       echo "One line in $(tilde "$CLAUDE_FILE") lets every Claude Code session find its wiki."
       echo "Other agents: put the same line in their user-level instruction file."
-      if ask_yn "Add it?" y; then cmd_claude | head -n 1 | sed 's/^/  /'; fi
+      if ask_yn "Add it?" y; then cmd_claude | sed -n '1s/^/  /p'; fi
       ;;
   esac
 }
@@ -8195,7 +8195,7 @@ setup_list() {
   case "$pending" in *" extension."* | *" extensions.every "*) printf '%s' "$new_note" ;; esac
   printf '\n'
   printf '%-19s %s\n' "compile" "$(compile_auto_on && echo "in the background at session start" || echo "by sessions (background compile is off)")"
-  printf '%-19s %s' "helper" "$(cmd_helper | head -n 1 | sed 's/^helper: //' | { if [ "$STYLE" = yes ]; then sed -E "s/(Run: |own: )(.*)\$/\1${S_CYAN}\2${S_OFF}/"; else cat; fi; }), fetched at session start: $(helper_auto_on && echo on || echo off)"
+  printf '%-19s %s' "helper" "$(cmd_helper | sed -n '1s/^helper: //p' | { if [ "$STYLE" = yes ]; then sed -E "s/(Run: |own: )(.*)\$/\1${S_CYAN}\2${S_OFF}/"; else cat; fi; }), fetched at session start: $(helper_auto_on && echo on || echo off)"
   case "$pending" in *" helper "*) printf '%s' "$new_note" ;; esac
   printf '\n'
   case "$(chat_state)" in none) ;; unreadable) unknown_state chat "$CLAUDE_DESKTOP_CONFIG" ;; *) echo "chat                server $(chat_state)" ;; esac

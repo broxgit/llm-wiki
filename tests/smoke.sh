@@ -3910,6 +3910,9 @@ rm -rf "$HOME/.cursor" "$HOME/.claude/plugins/installed_plugins.json"
 # One text, two scripts: the guide's block is the one wiki.sh runs.
 doc="$(sed -n '/^# --- style helpers/,/^# --- end of style helpers/p' "$REPO/docs/conventions.md")"
 [ -n "$blk" ] && [ "$blk" = "$doc" ] && ok "the helper block in wiki.sh is the block in docs/conventions.md, byte for byte" || bad "the helper block in wiki.sh is the block in docs/conventions.md, byte for byte"
+# A step of setup piped a two-line message into head -n 1. When head left first, the second
+# line's write failed and setup stopped midway: seen once in CI, on Linux.
+lacks "setup doesn't pipe a message of several lines into head" "cmd_claude | head" cat "$W"
 case "$(head -n 1 "$REPO/docs/conventions.md")" in "Conventions version "[0-9]*) ok "the guide's first line gives its version" ;; *) bad "the guide's first line gives its version" ;; esac
 v="$(head -n 1 "$REPO/docs/conventions.md" | sed 's/^Conventions version \([0-9]*\).*/\1/')"
 case "$blk" in "# --- style helpers: docs/conventions.md, version $v. "*) ok "and the helper block names the same version" ;; *) bad "and the helper block names the same version" "$v" ;; esac
