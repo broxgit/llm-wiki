@@ -24,7 +24,19 @@ wiki extensions add jira
       PROJ-123     Done, resolved 2026-11-08
 ```
 
-`wiki jira check --close` then saves a note with a `Done:` line for each item whose tickets are all done, and syncs the wiki. The next compile closes the item. `wiki jira show PROJ-123` prints one ticket, and `wiki jira config` shows what is set and tests the sign-in.
+`wiki jira check --close` then saves a note and syncs the wiki, and the next compile applies it. It notes only a change that alters what someone should do:
+
+| The ticket | What is noted |
+|---|---|
+| Is done, with every other ticket the item names | `Done:`, which closes the item |
+| Was closed without the work: Won't Do, Duplicate, Cancelled and the like | The item stays open. A new item, waiting on you, says the ticket was dropped, so you decide what the first one should wait on now |
+| Is blocked: a status with "block" in its name, or Jira's flag | A new item saying so, once, for whoever was waiting. It closes by itself when the ticket is no longer blocked |
+| Was reopened after its item was closed this way | The item is opened again |
+| Moves between in development, in testing, ready for release | Nothing. `wiki jira check` shows where it stands |
+
+Jira sorts every status into to do, in progress or done, whatever a team calls it, and that grouping is what "done" means here. If your workflow puts a status such as Ready for Release in the done group, or your real finish line is one status, name what counts: `done_statuses = Released`.
+
+`wiki jira show PROJ-123` prints one ticket, and `wiki jira config` shows what is set and tests the sign-in.
 
 Settings go in `~/.config/llm-wiki/jira`:
 

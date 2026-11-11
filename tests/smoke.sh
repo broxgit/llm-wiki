@@ -3880,6 +3880,13 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 D = sys.argv[1]
 T = {"PROJ-1": {"summary": "Release propm", "status": {"name": "Done", "statusCategory": {"key": "done"}}, "resolutiondate": "2026-11-08T10:00:00.000+0000"},
      "PROJ-2": {"summary": "Second step", "status": {"name": "In Progress", "statusCategory": {"key": "indeterminate"}}, "resolutiondate": None}}
+def tk(summary, status, cat, **more):
+    return dict({"summary": summary, "status": {"name": status, "statusCategory": {"key": cat}}, "resolutiondate": None}, **more)
+T.update({"PROJ-3": tk("Dropped", "Closed", "done", resolution={"name": "Won't Do"}, resolutiondate="2026-11-09T10:00:00.000+0000"),
+          "PROJ-4": tk("Stuck", "Blocked", "indeterminate"),
+          "PROJ-5": tk("Flagged", "In Progress", "indeterminate", customfield_10021=[{"value": "Impediment"}]),
+          "PROJ-6": tk("Nearly out", "Ready for Release", "done"),
+          "PROJ-7": tk("Back again", "In Progress", "indeterminate")})
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def do_GET(self):
@@ -3888,6 +3895,7 @@ class H(BaseHTTPRequestHandler):
         body, code = {}, 404
         if "bad" in auth: code = 401
         elif self.path == "/rest/api/2/myself": body, code = {"displayName": "Smoke Tester"}, 200
+        elif self.path == "/rest/api/2/field": body, code = [{"id": "customfield_10000", "name": "Sprint"}, {"id": "customfield_10021", "name": "Flagged"}], 200
         elif self.path.startswith("/rest/api/2/issue/"):
             k = self.path.split("/")[-1].split("?")[0]
             if k in T: body, code = {"key": k, "fields": T[k]}, 200
@@ -3969,6 +3977,82 @@ check "and names its source" grep -q "PROJ-1 \"Release propm\": Done, resolved 2
 lacks "and no Done line for the item still waiting" "Done: Ship" cat "$note"
 expect "a second --close doesn't note it again" "already noted, waiting for a compile" jira check --close
 check "so there is one note" test "$(find "$JW/jdemo/raw" -name '*jira-done*' | wc -l | tr -d ' ')" = 1
+# What a ticket's state means. Only a change that alters what someone should do is noted.
+JS="$T/jstates"
+WIKIS_DIR="$JS" "$W" new sdemo >/dev/null 2>&1
+TODAY="$(date -u +%Y-%m-%d)"
+cat > "$JS/sdemo/open.md" <<OPEN
+# Open
+
+## Use PROJ-3 once it lands
+- kind: waiting
+- who: Katherine
+- status: open
+- from: 2026-11-10 raw/a.md
+
+## Wait for PROJ-4
+- kind: waiting
+- who: Katherine
+- status: open
+- from: 2026-11-10 raw/a.md
+
+## Wait for flagged PROJ-5
+- kind: waiting
+- who: user
+- status: open
+- from: 2026-11-10 raw/a.md
+
+## Jira: PROJ-5 is blocked, holding up "Wait for flagged PROJ-5"
+- kind: waiting
+- who: user
+- status: open
+- from: 2026-11-10 raw/2026-11-10-000000-jira-done.md
+
+## Cut over at PROJ-6
+- kind: waiting
+- who: user
+- status: open
+- from: 2026-11-10 raw/a.md
+
+## Jira: PROJ-2 is blocked, holding up "Old thing"
+- kind: waiting
+- who: user
+- status: open
+- from: 2026-11-10 raw/2026-11-10-000000-jira-done.md
+
+## Shipped PROJ-7
+- kind: waiting
+- who: Katherine
+- status: done $TODAY
+- from: 2026-11-10 raw/2026-11-10-000000-jira-done.md
+
+## Hand-closed PROJ-2
+- kind: waiting
+- who: user
+- status: done $TODAY
+- from: 2026-11-10 raw/b.md
+OPEN
+jst() { WIKIS_DIR="$JS" JIRA_URL="http://127.0.0.1:$(cat "$J/port")" JIRA_EMAIL=me@example.com JIRA_API_TOKEN=smoke-token "$W" jira "$@"; }
+out="$(jst check 2>&1)"
+case "$out" in *"PROJ-3       Closed as Won't Do, without the work done"*) ok "a ticket closed without the work is said to be so" ;; *) bad "a ticket closed without the work is said to be so" "$out" ;; esac
+case "$out" in *"PROJ-4       Blocked"*"PROJ-5       In Progress, flagged"*) ok "a blocked status and a flagged ticket both read as blocked" ;; *) bad "a blocked status and a flagged ticket both read as blocked" "$out" ;; esac
+case "$out" in *"1 open item(s) have every ticket done."*"4 other change(s) to note: 1 closed without the work, 1 blocked, 1 no longer so, 1 reopened."*) ok "check counts what would be noted, by kind" ;; *) bad "check counts what would be noted, by kind" "$out" ;; esac
+case "$out" in *"  Jira: PROJ"*) bad "items the extension opened itself aren't listed" "$out" ;; *) ok "items the extension opened itself aren't listed" ;; esac
+lacks "done_statuses decides what done means" "have every ticket done" env JIRA_DONE_STATUSES="Released, Deployed" WIKIS_DIR="$JS" JIRA_URL="http://127.0.0.1:$(cat "$J/port")" JIRA_API_TOKEN=smoke-token "$W" jira check
+expect "and config shows it" "done      released, deployed" env JIRA_DONE_STATUSES="Released, Deployed" WIKIS_DIR="$JS" JIRA_URL="http://127.0.0.1:$(cat "$J/port")" JIRA_API_TOKEN=smoke-token "$W" jira config
+expect "check --close notes each kind of change" "sdemo: noted 5 change(s): 1 done, 1 closed without the work, 1 blocked, 1 no longer so, 1 reopened." jst check --close
+note="$(ls "$JS/sdemo/raw"/*-jira-done.md 2>/dev/null | tail -n 1)"
+check "a ticket closed without the work leaves its item open and asks the user" grep -qxF "Waiting: user | Jira: PROJ-3 was closed as Won't Do, and \"Use PROJ-3 once it lands\" still waits on it" "$note"
+lacks "and doesn't close the item" "Done: Use PROJ-3" cat "$note"
+check "a blocked ticket opens an item for whoever was waiting" grep -qxF "Waiting: Katherine | Jira: PROJ-4 is blocked, holding up \"Wait for PROJ-4\"" "$note"
+lacks "once: a blocked ticket that already has its item gets no second" "PROJ-5 is blocked" cat "$note"
+check "an item about a block closes when the ticket is no longer blocked" grep -qxF "Done: Jira: PROJ-2 is blocked, holding up \"Old thing\"" "$note"
+check "a ticket reopened after its item closed opens the item again" grep -qxF "Waiting: Katherine | Shipped PROJ-7" "$note"
+lacks "but not an item someone else closed" "Hand-closed" cat "$note"
+lacks "and an item about a block isn't itself reported as blocked" "holding up \"Jira:" cat "$note"
+check "an item whose tickets are done still closes" grep -qxF "Done: Cut over at PROJ-6" "$note"
+check "the note says where each ticket stood" grep -q "PROJ-3 \"Dropped\": Closed as Won't Do, without the work done." "$note"
+expect "a second --close notes nothing again" "already noted, waiting for a compile" jst check --close
 # With auto_close, the tick event does the same with nobody asking.
 expect "jira asks for the tick event" "(runs on: tick)" "$W" extensions
 jtick() { WIKIS_DIR="$JW" JIRA_URL="http://127.0.0.1:$(cat "$J/port")" JIRA_EMAIL=me@example.com JIRA_API_TOKEN=smoke-token LLM_WIKI_EVENTS=wait "$W" extensions tick; }

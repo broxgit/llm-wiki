@@ -4,6 +4,13 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-11-18: Jira tells a dropped or blocked ticket from a finished one
+
+- A ticket closed as Won't Do, Duplicate or Cancelled no longer closes its item. The item stays open, and a new one asks you to decide.
+- A blocked or flagged ticket opens an item saying so, once. It closes by itself when the block clears.
+- A ticket reopened after its item was closed opens the item again.
+- `done_statuses = Released` in Jira's settings names what counts as done, where Jira's own grouping doesn't fit.
+
 ## 2026-11-17: Jira and Confluence with nobody asking
 
 - With `auto_close = yes` in Jira's settings, a ticket that finishes closes the open item that names it, checked once a day in the background.

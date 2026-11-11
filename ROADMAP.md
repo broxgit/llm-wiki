@@ -79,6 +79,13 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### Extensions: what a Jira ticket's state means (2026-11-11)
+
+- **Why:** the extension knew done from not done and nothing else. Jira's done group holds Won't Do, Duplicate and Cancelled too, so an item waiting on a ticket that was dropped was recorded as done, as if the work had happened. And a blocked prerequisite, which changes what to work on today, was never mentioned.
+- **What changed:** a ticket is done, abandoned, blocked or open. Abandoned is Jira's done group with a resolution or status that says the work didn't happen. Blocked is a status with "block" in its name, or the Flagged field, whose id is looked up once per run. `check --close` notes only what changes a decision. All tickets done: `Done:` for the item. Abandoned: the item stays open, and `Waiting: user | Jira: <KEY> was closed as <resolution>, and "<item>" still waits on it`. Blocked: `Waiting: <who> | Jira: <KEY> is blocked, holding up "<item>"`, once, and a `Done:` for that item when the ticket is no longer blocked. An item this extension closed in the last 60 days whose ticket is no longer done: `Waiting:` with its own heading, which opens it again. A move between in development, in testing and the like notes nothing. What has been noted is the wiki's own state, the open items and the notes `wiki pending` lists, so two machines agree and nothing is kept per machine. `done_statuses` names the statuses that count as done where the grouping doesn't fit. The note's file is still `*-jira-done.md`.
+- **Tried on a real Jira Cloud site, read only:** the Flagged field was found, and a closed ticket's resolution was read and counted as done.
+- **Still untested:** an abandoned, a blocked and a reopened ticket on a real site, and what a compile makes of the `Waiting:` lines. Whether "block" in a status name fits real workflows. The interval of the tick is still 24 hours for every extension, with no setting.
+
 ### Extensions: Jira and Confluence act on events (2026-11-11)
 
 - **Why:** events existed and no extension used them, so someone still had to run `wiki jira check --close` or `wiki confluence publish`.
