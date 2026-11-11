@@ -79,6 +79,12 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### One terminal style: the conventions guide and `wiki status` (2026-11-11)
+
+- **Why:** llm-relay 0.2.18 gave four commands colour and marks, and the two tools should look and behave alike, governed by one written guide.
+- **What changed:** `docs/conventions.md`, version 1: when style is on, the vocabulary, what never gets style, layout, the conventions beyond style (fixes, errors, exit codes 0, 1 and 75, flags, program output, voice), and the helpers in Bash and Python. `wiki.sh` has the helpers, `LLM_WIKI_STYLE=on|off`, `+` where the locale isn't UTF-8, a red `error:`, and `style_off` for every command an agent reads. `wiki status` is the first command restyled: its words are unchanged. A smoke test keeps the helper block the same as the guide's. The compiled helper is untouched and still prints plain text.
+- **Still untested:** how it renders in a real terminal, on a light theme, and in Windows Terminal. `setup`, `update` and the rest are next, then the copy in llm-relay.
+
 ### Extensions: how often the tick comes (2026-11-11)
 
 - **Why:** the tick came once in 24 hours for every extension, with no setting. For someone working through a chain of releases, a ticket that finished in the morning closed its item the next day. And one interval doesn't fit every extension: Jira's check is cheap, while Confluence's catch-up reads every page of each wiki it publishes.
