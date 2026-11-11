@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # wiki-extension: Publish a wiki's pages to a Confluence space, as a read-only copy.
+# wiki-events: sync tick
 """wiki confluence: an llm-wiki extension. Standard library only.
 
 It publishes one wiki at a time, one way: the wiki's index becomes a page called
@@ -7,6 +8,9 @@ It publishes one wiki at a time, one way: the wiki's index becomes a page called
 the label llm-wiki and a hash of their source in the version comment, so an unchanged
 page isn't written again and a page someone else made is never overwritten. Nothing
 is read back from Confluence into the wiki, and nothing is deleted there.
+
+With `auto = <wikis>` in its settings it publishes those wikis by itself: on the sync
+event when a page changed, and on the tick event to catch up on one it missed.
 
 It uses Confluence's first REST API (/rest/api/content), the only one Data Center has.
 Atlassian marks it deprecated on Cloud, where it still answers.
@@ -47,19 +51,33 @@ Settings go in {CONFIG}, one `name = value` a line:
   space      the key of the space to publish into, such as ENG
   parent     optional: the id of a page to publish under
   space.<wiki>, parent.<wiki>   the same, for one wiki
+  auto       optional: the wikis to publish by themselves, such as payments, relay.
+             Each is published in the background when a sync changes its pages.
 url, email and token_cmd fall back to the Jira extension's settings where they are
 missing. The environment wins over both: CONFLUENCE_URL, CONFLUENCE_EMAIL,
-CONFLUENCE_API_TOKEN, CONFLUENCE_SPACE.
+CONFLUENCE_API_TOKEN, CONFLUENCE_SPACE, CONFLUENCE_AUTO.
 
 Everyone who can read the space can read what you publish. Publish a wiki only to a
 space whose readers may see everything in it.
 """
 
 
+# True while llm-wiki runs this for an event, in the background, with nobody watching.
+EVENT = False
+
+
 def die(msg):
     sys.stdout.flush()
     print(f"error: {msg}", file=sys.stderr)
     sys.exit(1)
+
+
+def unreachable(msg):
+    """No network is not a failure during an event: 75 asks llm-wiki to try again later."""
+    if EVENT:
+        print(f"not now: {msg}")
+        sys.exit(75)
+    die(msg)
 
 
 # ---- settings ----------------------------------------------------------------
@@ -88,7 +106,7 @@ def settings():
         # Cloud serves Confluence under /wiki on the site Jira is on.
         u = jira["url"].rstrip("/")
         conf["url"] = u + "/wiki" if u.endswith(".atlassian.net") else ""
-    for k, env in (("url", "CONFLUENCE_URL"), ("email", "CONFLUENCE_EMAIL"), ("space", "CONFLUENCE_SPACE")):
+    for k, env in (("url", "CONFLUENCE_URL"), ("email", "CONFLUENCE_EMAIL"), ("space", "CONFLUENCE_SPACE"), ("auto", "CONFLUENCE_AUTO")):
         if os.environ.get(env):
             conf[k] = os.environ[env]
     conf["url"] = conf.get("url", "").rstrip("/")
@@ -156,7 +174,7 @@ class Confluence:
                 raise Refused(e.code, " ".join(msg.split())[:300])
             die(f"Confluence answered {e.code} for {method} {path.split('?')[0]}: {' '.join(msg.split())[:200]}")
         except (urllib.error.URLError, TimeoutError, OSError) as e:
-            die(f"can't reach {self.url}: {getattr(e, 'reason', e)}")
+            unreachable(f"can't reach {self.url}: {getattr(e, 'reason', e)}")
         except ValueError:
             die(f"{self.url} didn't answer with JSON. Is url the address of Confluence itself? On Cloud it ends in /wiki.")
 
@@ -491,6 +509,7 @@ def cmd_publish(args):
 
     made = changed = same = 0
     problems = []
+    clashes = [0]
     root_title = pages[0][1]
     try:
         top = c.find(space, root_title)
@@ -534,6 +553,8 @@ def cmd_publish(args):
             made -= 1 if title not in existing else 0
             changed -= 1 if title in existing else 0
             problems.append(f"{title}: {e.message}")
+            # Someone else wrote the page between our read and our write.
+            clashes[0] += 1 if e.code == 409 else 0
     gone = sorted(t for t, p in existing.items() if t not in titles.values() and ours(p))
 
     print(f"{wiki}: {made} {'to create' if dry else 'created'}, {changed} {'to update' if dry else 'updated'}, {same} unchanged.")
@@ -544,6 +565,8 @@ def cmd_publish(args):
     if top and not dry:
         link = ((top.get("_links") or {}).get("webui")) or f"/pages/viewpage.action?pageId={top['id']}"
         print(f"{c.url}{link}")
+    if problems and EVENT and clashes[0] == len(problems):
+        return 75
     return 1 if problems else 0
 
 
@@ -569,6 +592,7 @@ def cmd_config(args):
     print(f"email     {conf.get('email') or 'not set, so the token is sent as a Data Center personal access token'}")
     print(f"token     {'from ' + where if where else 'not set'}")
     print(f"space     {conf.get('space') or 'not set'}")
+    print(f"auto      {', '.join(auto_wikis(conf)) or 'off'}")
     for k in sorted(conf):
         if k.startswith(("space.", "parent")):
             print(f"{k:<9} {conf[k]}")
@@ -585,7 +609,45 @@ def cmd_config(args):
     return 0
 
 
+def auto_wikis(conf):
+    return [w.strip() for w in conf.get("auto", "").split(",") if w.strip()]
+
+
+def on_event(args):
+    """Run by llm-wiki for an event. Publishes only the wikis that auto names."""
+    global EVENT
+    EVENT = True
+    auto = auto_wikis(settings())
+    if not auto:
+        print("auto is empty, so nothing was published.")
+        return 0
+    if args[:1] == ["sync"] and len(args) > 1:
+        wiki = args[1]
+        if wiki not in auto:
+            print(f"{wiki} isn't in auto, so it wasn't published.")
+            return 0
+        try:
+            with open(os.environ.get("LLM_WIKI_CHANGED", ""), encoding="utf-8", errors="replace") as f:
+                paths = f.read().split("\n")
+        except OSError:
+            paths = ["index.md"]
+        if not any(p == "index.md" or p.startswith("wiki/") for p in paths):
+            print(f"no page of {wiki} changed, so nothing was published.")
+            return 0
+        return cmd_publish([wiki])
+    if args[:1] == ["tick"]:
+        # Catch up on a publish that a sync couldn't make. Unchanged pages cost a read.
+        worst = 0
+        for wiki in auto:
+            code = cmd_publish([wiki])
+            worst = code if code == 1 or worst == 0 else worst
+        return worst
+    return 0
+
+
 def main(argv):
+    if argv and argv[0] == "--wiki-event":
+        return on_event(argv[1:])
     if not argv or argv[0] in ("-h", "--help", "help"):
         print(USAGE, end="")
         return 0 if argv else 1

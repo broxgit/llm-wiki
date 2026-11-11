@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 # wiki-extension: Check the Jira tickets your open items wait on, and close the ones that are done.
+# wiki-events: tick
 """wiki jira: an llm-wiki extension. Standard library only.
 
 It reads each wiki's open.md (the ledger rules/open.md describes), finds the open
 entries that name a Jira ticket, and asks Jira for each ticket's status. It never
 writes to Jira. With --close it saves a note with a `Done:` line for each entry
 whose tickets are all done, through `wiki capture` and `wiki sync`.
+
+With `auto_close = yes` in its settings it does that by itself on the tick event, once
+a day, with no session asking.
 """
 import base64
 import datetime
@@ -38,16 +42,31 @@ Settings go in {CONFIG}, one `name = value` a line:
   token_cmd  a command that prints your API token, such as
              security find-generic-password -s jira -w
   projects   optional: PROJ, OPS. Only keys in these projects count as tickets.
-The environment wins over the file: JIRA_URL, JIRA_EMAIL, JIRA_API_TOKEN, JIRA_PROJECTS.
+  auto_close optional: yes. Then check --close runs by itself once a day, in the
+             background, and a finished ticket closes its item with nobody asking.
+The environment wins over the file: JIRA_URL, JIRA_EMAIL, JIRA_API_TOKEN, JIRA_PROJECTS,
+JIRA_AUTO_CLOSE.
 Keep the token out of the file. With an email the sign-in is Jira Cloud's (email and
 API token); without one the token is sent as a Data Center personal access token.
 """
+
+
+# True while llm-wiki runs this for an event, in the background, with nobody watching.
+EVENT = False
 
 
 def die(msg):
     sys.stdout.flush()
     print(f"error: {msg}", file=sys.stderr)
     sys.exit(1)
+
+
+def unreachable(msg):
+    """No network is not a failure during an event: 75 asks llm-wiki to try again later."""
+    if EVENT:
+        print(f"not now: {msg}")
+        sys.exit(75)
+    die(msg)
 
 
 def settings():
@@ -61,7 +80,7 @@ def settings():
                     conf[k.strip()] = v.strip()
     except FileNotFoundError:
         pass
-    for k, env in (("url", "JIRA_URL"), ("email", "JIRA_EMAIL"), ("projects", "JIRA_PROJECTS")):
+    for k, env in (("url", "JIRA_URL"), ("email", "JIRA_EMAIL"), ("projects", "JIRA_PROJECTS"), ("auto_close", "JIRA_AUTO_CLOSE")):
         if os.environ.get(env):
             conf[k] = os.environ[env]
     conf["url"] = conf.get("url", "").rstrip("/")
@@ -113,7 +132,7 @@ class Jira:
                 die(f"Jira refused the sign-in ({e.code}) at {self.url}. Check the email and the token: {CMD} jira config shows what is set.")
             die(f"Jira answered {e.code} for {path}")
         except (urllib.error.URLError, TimeoutError, OSError) as e:
-            die(f"can't reach {self.url}: {getattr(e, 'reason', e)}")
+            unreachable(f"can't reach {self.url}: {getattr(e, 'reason', e)}")
         except ValueError:
             die(f"{self.url} didn't answer with JSON. Is url the address of Jira itself?")
 
@@ -296,6 +315,7 @@ def cmd_config(args):
     print(f"email     {conf.get('email') or 'not set, so the token is sent as a Data Center personal access token'}")
     print(f"token     {'from ' + where if where else 'not set'}")
     print(f"projects  {', '.join(conf['projects']) or 'any'}")
+    print(f"auto      {'check --close runs by itself once a day' if auto_on(conf) else 'off'}")
     if not conf["url"] or not where:
         print(f"\nNot ready. {CMD} jira --help has the settings.")
         return 1
@@ -306,7 +326,25 @@ def cmd_config(args):
     return 0
 
 
+def auto_on(conf):
+    return conf.get("auto_close", "").lower() in ("yes", "true", "on", "1")
+
+
+def on_event(args):
+    """Run by llm-wiki for an event. Acts only where auto_close says so."""
+    global EVENT
+    EVENT = True
+    if args[:1] != ["tick"]:
+        return 0
+    if not auto_on(settings()):
+        print("auto_close is off, so nothing was checked.")
+        return 0
+    return cmd_check(["--close"])
+
+
 def main(argv):
+    if argv and argv[0] == "--wiki-event":
+        return on_event(argv[1:])
     if argv and argv[0] in ("-h", "--help", "help"):
         print(USAGE, end="")
         return 0

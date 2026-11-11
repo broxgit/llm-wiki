@@ -3969,6 +3969,20 @@ check "and names its source" grep -q "PROJ-1 \"Release propm\": Done, resolved 2
 lacks "and no Done line for the item still waiting" "Done: Ship" cat "$note"
 expect "a second --close doesn't note it again" "already noted, waiting for a compile" jira check --close
 check "so there is one note" test "$(find "$JW/jdemo/raw" -name '*jira-done*' | wc -l | tr -d ' ')" = 1
+# With auto_close, the tick event does the same with nobody asking.
+expect "jira asks for the tick event" "(runs on: tick)" "$W" extensions
+jtick() { WIKIS_DIR="$JW" JIRA_URL="http://127.0.0.1:$(cat "$J/port")" JIRA_EMAIL=me@example.com JIRA_API_TOKEN=smoke-token LLM_WIKI_EVENTS=wait "$W" extensions tick; }
+printf '\n## Announce PROJ-1\n- kind: waiting\n- who: user\n- status: open\n- from: 2026-11-10 raw/c.md\n' >> "$JW/jdemo/open.md"
+expect "with auto_close off, the tick does nothing" "jira: ok" jtick
+check "and says why in its log" grep -q "auto_close is off" "$HOME/.local/state/llm-wiki/extensions/jira/tick.log"
+check "and saves no note" test "$(find "$JW/jdemo/raw" -name '*jira-done*' | wc -l | tr -d ' ')" = 1
+expect "with auto_close on, the tick runs the check" "jira: ok" env JIRA_AUTO_CLOSE=yes WIKIS_DIR="$JW" JIRA_URL="http://127.0.0.1:$(cat "$J/port")" JIRA_EMAIL=me@example.com JIRA_API_TOKEN=smoke-token LLM_WIKI_EVENTS=wait "$W" extensions tick
+check "and notes the finished item as done" grep -rqxF "Done: Announce PROJ-1" "$JW/jdemo/raw"
+expect "config says auto is on" "check --close runs by itself" env JIRA_AUTO_CLOSE=yes WIKIS_DIR="$JW" JIRA_URL="http://127.0.0.1:$(cat "$J/port")" JIRA_API_TOKEN=smoke-token "$W" jira config
+expect "a Jira out of reach during an event is for later, not a failure" "jira: later" env JIRA_AUTO_CLOSE=yes WIKIS_DIR="$JW" JIRA_URL="http://127.0.0.1:1" JIRA_API_TOKEN=smoke-token LLM_WIKI_EVENTS=wait "$W" extensions tick
+lacks "so status says nothing" "extension jira" env WIKIS_DIR="$JW" "$W" status
+expect "a sign-in Jira refuses during an event is a failure" "jira: failed" env JIRA_AUTO_CLOSE=yes WIKIS_DIR="$JW" JIRA_URL="http://127.0.0.1:$(cat "$J/port")" JIRA_API_TOKEN=bad LLM_WIKI_EVENTS=wait "$W" extensions tick
+expect "and status says so" "extension jira: its last tick run failed" env WIKIS_DIR="$JW" "$W" status
 kill "$JPID" 2>/dev/null
 wait "$JPID" 2>/dev/null
 expect "extensions remove turns it off" "off: jira" "$W" extensions remove jira
@@ -4162,6 +4176,35 @@ PY3
 expect "a page with the wiki's own title that someone else made stops the publish" "that llm-wiki didn't make" conf publish team
 refuse "and it fails" conf publish team
 expect "a sign-in Confluence refuses is said plainly" "refused the sign-in" env WIKIS_DIR="$CW" CONFLUENCE_URL="http://127.0.0.1:$(cat "$C/port")" CONFLUENCE_API_TOKEN=bad "$W" confluence publish cdemo
+# With auto, a sync that changes a wiki's pages publishes it, with nobody asking.
+expect "confluence asks for the sync and tick events" "(runs on: sync, tick)" "$W" extensions
+CA="$T/cauto"
+WIKIS_DIR="$CA" "$W" init --git >/dev/null 2>&1
+WIKIS_DIR="$CA" "$W" new pub >/dev/null 2>&1
+mkdir -p "$CA/pub/wiki/concepts"
+printf -- '---\ntitle: Auto\n---\n\nFirst.\n' > "$CA/pub/wiki/concepts/auto.md"
+cauto() { WIKIS_DIR="$CA" CONFLUENCE_URL="http://127.0.0.1:$(cat "$C/port")" CONFLUENCE_EMAIL=me@example.com CONFLUENCE_API_TOKEN=smoke-token LLM_WIKI_EVENTS=wait "$W" "$@"; }
+cauto sync pub -m "a page" >/dev/null 2>&1
+check "with auto empty, a sync publishes nothing" state x "assert not any(p['title'] == 'pub wiki' for p in P.values())"
+printf -- '---\ntitle: Auto\n---\n\nSecond.\n' > "$CA/pub/wiki/concepts/auto.md"
+CONFLUENCE_AUTO=other cauto sync pub -m "a page" >/dev/null 2>&1
+check "nor for a wiki that auto doesn't name" state x "assert not any(p['title'] == 'pub wiki' for p in P.values())"
+printf -- '---\ntitle: Auto\n---\n\nThird.\n' > "$CA/pub/wiki/concepts/auto.md"
+CONFLUENCE_AUTO="other, pub" cauto sync pub -m "a page" >/dev/null 2>&1
+check "a sync that changes a page of a wiki in auto publishes it" state x "
+a = [p for p in P.values() if p['title'] == 'pub: Auto']
+assert a and 'Third.' in a[0]['body'], a"
+: > "$C/writes.log"
+echo "a note" | cauto capture pub note >/dev/null
+CONFLUENCE_AUTO=pub cauto sync pub >/dev/null 2>&1
+check "a sync that changed only notes reaches for nothing" test ! -s "$C/writes.log"
+check "and its log says why" grep -q "no page of pub changed" "$HOME/.local/state/llm-wiki/extensions/confluence/sync-pub.log"
+printf -- '---\ntitle: Auto\n---\n\nFourth.\n' > "$CA/pub/wiki/concepts/auto.md"
+expect "the tick catches up on a page no sync published" "confluence: ok" env CONFLUENCE_AUTO=pub WIKIS_DIR="$CA" CONFLUENCE_URL="http://127.0.0.1:$(cat "$C/port")" CONFLUENCE_EMAIL=me@example.com CONFLUENCE_API_TOKEN=smoke-token LLM_WIKI_EVENTS=wait "$W" extensions tick
+check "with the page as it is on disk" state x "assert 'Fourth.' in [p for p in P.values() if p['title'] == 'pub: Auto'][0]['body']"
+expect "config names the wikis in auto" "auto      pub" env CONFLUENCE_AUTO=pub WIKIS_DIR="$CA" CONFLUENCE_URL="http://127.0.0.1:$(cat "$C/port")" CONFLUENCE_API_TOKEN=smoke-token "$W" confluence config
+expect "a Confluence out of reach during an event is for later" "confluence: later" env CONFLUENCE_AUTO=pub WIKIS_DIR="$CA" CONFLUENCE_URL="http://127.0.0.1:1" CONFLUENCE_API_TOKEN=smoke-token LLM_WIKI_EVENTS=wait "$W" extensions tick
+lacks "so status says nothing" "extension confluence" env WIKIS_DIR="$CA" "$W" status
 unset CONFLUENCE_SPACE
 kill "$CPID" 2>/dev/null
 wait "$CPID" 2>/dev/null

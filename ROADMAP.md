@@ -15,7 +15,7 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 ### Extensions: integrations outside wiki.sh
 
 - **Why:** Obsidian, Jira, Confluence, CI and git hosting are each optional, and each one built into `wiki.sh` is code every user carries. Teams also want to add their own. Decided on 2026-11-10: integrations become extensions, home-grown ones are supported as far as they can be, and the features stay agent-agnostic, with a thin layer for each agent.
-- **Sketch:** the command seam, two extensions and events are done (see Done). Next: have Jira act on `tick` behind an `auto_close` setting, and Confluence on `sync` behind an `auto` list of wikis, each off by default; each is a few lines, since the commands exist. Then the two things both extensions needed that events don't give: one sign-in file per vendor, replacing Confluence reading Jira's settings, and a wiki's content as data (`wiki open --data`, `wiki pages <wiki> --data`), so an extension stops parsing `open.md` and frontmatter itself. After that: CI (Jenkins, GitLab CI and GitHub Actions as separate extensions over one shared prompt), and moving `wiki obsidian` out.
+- **Sketch:** the command seam, events, and two extensions that act on them are done (see Done). Next, the two things both extensions needed that events don't give: one sign-in file per vendor, replacing Confluence reading Jira's settings, and a wiki's content as data (`wiki open --data`, `wiki pages <wiki> --data`), so an extension stops parsing `open.md` and frontmatter itself. After that: CI (Jenkins, GitLab CI and GitHub Actions as separate extensions over one shared prompt), and moving `wiki obsidian` out.
 - **Open:** how a team shares extensions. They are per machine on purpose, so a pull can't add a command. A shared collection could carry them behind a step that asks each person once, on each machine, whether to trust each one. Where extensions that ship with llm-wiki live, and whether `wiki update` installs them. How an extension adds a handbook rule without `wiki upgrade` dropping it, and what that costs in context. Whether the helper needs to know about extensions at all.
 
 ### Know whether sessions capture and compile
@@ -78,6 +78,12 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Extensions: Jira and Confluence act on events (2026-11-11)
+
+- **Why:** events existed and no extension used them, so someone still had to run `wiki jira check --close` or `wiki confluence publish`.
+- **What changed:** the Jira extension asks for `tick`. With `auto_close = yes` in its settings it runs `check --close` once a day in the background, so a finished ticket becomes a `Done:` note and the next compile closes the item. The Confluence extension asks for `sync` and `tick`. With `auto = <wikis>` it publishes a named wiki when a sync changed `index.md` or a path under `wiki/`, and on `tick` it publishes each named wiki again to catch up, which costs a read for each unchanged page. Both settings are off by default and are per machine. During an event, a site that can't be reached exits 75, "not now", and so does a publish whose only problems were version clashes; a refused sign-in is a failure that `wiki status` lists. `config` in each shows whether auto is on.
+- **Still untested:** either one through a real session start, where the run has to outlive the session hook. Confluence auto-publish on a real site. Two machines with the same wiki in `auto`. A keychain `token_cmd` from a background run started by an agent, which may not be allowed to read the keychain.
 
 ### Extensions: events (2026-11-11)
 
