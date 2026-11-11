@@ -4349,7 +4349,7 @@ lacks "setup cut short before the token leaves no token command behind" "token_c
 expect "so the extension still says it has no token" "no API token yet" env HOME="$T/jhome5" WIKIS_DIR="$JW" "$W" status
 # Through wiki setup: a yes goes straight on to the extension's own questions.
 mkdir -p "$T/jhome4"
-out="$(printf 'n\ny\nhttp://127.0.0.1:%s\nme@example.com\n\nn\n6h\n' "$(cat "$J/port")" | env HOME="$T/jhome4" WIKIS_DIR="$JW" ATLASSIAN_API_TOKEN=smoke-token LLM_WIKI_TEST_TTY=1 "$W" setup extensions 2>&1)"
+out="$(printf 'n\ny\nhttp://127.0.0.1:%s\nme@example.com\n\nn\n\n6h\n' "$(cat "$J/port")" | env HOME="$T/jhome4" WIKIS_DIR="$JW" ATLASSIAN_API_TOKEN=smoke-token LLM_WIKI_TEST_TTY=1 "$W" setup extensions 2>&1)"
 case "$out" in *"Turn on"*"jira?"*"share one Atlassian sign-in"*"Signed in to Jira as Smoke Tester."*"jira is set up."*"To go through this again:"*"extensions setup jira"*"tick: every 6h"*) ok "wiki setup turns it on, asks its questions, and carries on with its own" ;; *) bad "wiki setup turns it on, asks its questions, and carries on with its own" "$out" ;; esac
 # With auto_close, the tick event does the same with nobody asking.
 expect "jira asks for the tick event" "(runs on: tick)" "$W" extensions
@@ -4430,7 +4430,8 @@ P = {"900": {"id": "900", "title": "Team home", "space": "ENG", "parent": "", "l
      "901": {"id": "901", "title": "cdemo: Taken", "space": "ENG", "parent": "900", "labels": [], "n": 1, "msg": "", "body": "by hand"}}
 NEXT = [1000]
 def view(p):
-    return {"id": p["id"], "title": p["title"], "version": {"number": p["n"], "message": p["msg"]},
+    return {"id": p["id"], "title": p["title"], "version": {"number": p["n"], "message": p["msg"], "when": p.get("when", "2026-11-01T00:00:00.000Z"), "by": {"displayName": "Ann Author"}},
+            "body": {"storage": {"value": p["body"]}},
             "metadata": {"labels": {"results": [{"name": l} for l in p["labels"]]}}, "_links": {"webui": "/spaces/%s/pages/%s" % (p["space"], p["id"])}}
 def save():
     json.dump(P, open(D + "/state.json", "w"), indent=1)
@@ -4447,6 +4448,21 @@ class H(BaseHTTPRequestHandler):
         if method != "GET": open(D + "/writes.log", "a").write(method + " " + u.path + "\n")
         if parts[:2] != ["rest", "api"]: return self.reply(404, {"message": "not here"})
         if method == "GET" and parts[2:] == ["user", "current"]: return self.reply(200, {"displayName": "Smoke Tester"})
+        if method == "POST" and parts[2:] == ["__set"]:
+            b = self.body(); P[b["id"]].update({k: v for k, v in b.items() if k != "id"})
+            save(); return self.reply(200, {})
+        if method == "GET" and parts[2:] == ["content", "search"]:
+            import re
+            m = re.search(r'space = "([^"]+)"', q.get("cql", [""])[0])
+            return self.reply(200, {"results": [view(p) for p in P.values() if m and p["space"] == m.group(1)]})
+        if method == "GET" and len(parts) == 6 and parts[4:] == ["state", "available"]:
+            return self.reply(200, {"spaceContentStates": [{"name": "In progress"}, {"name": "Verified"}], "customContentStates": []})
+        if method == "GET" and len(parts) == 5 and parts[4] == "state":
+            if parts[3] not in P: return self.reply(404, {"message": "no such page"})
+            return self.reply(200, {"contentState": {"name": P[parts[3]]["state"]}} if P[parts[3]].get("state") else {})
+        if method == "GET" and len(parts) == 4 and parts[3].isdigit():
+            if parts[3] not in P: return self.reply(404, {"message": "no such page"})
+            return self.reply(200, view(P[parts[3]]))
         if method == "GET" and parts[2:] == ["content"]:
             if q.get("spaceKey", [""])[0] == "NOPE": return self.reply(404, {"message": "No space with key NOPE"})
             return self.reply(200, {"results": [view(p) for p in P.values() if p["space"] == q["spaceKey"][0] and p["title"] == q["title"][0]]})
@@ -4468,7 +4484,9 @@ class H(BaseHTTPRequestHandler):
         if method == "PUT" and len(parts) == 4 and parts[3] in P:
             b = self.body(); p = P[parts[3]]
             if b["version"]["number"] != p["n"] + 1: return self.reply(409, {"message": "Version must be incremented"})
-            p.update(title=b["title"], n=b["version"]["number"], msg=b["version"].get("message", ""), body=b["body"]["storage"]["value"])
+            import datetime
+            p.update(title=b["title"], n=b["version"]["number"], msg=b["version"].get("message", ""), body=b["body"]["storage"]["value"],
+                     when=datetime.datetime.now(datetime.timezone.utc).isoformat())
             save(); return self.reply(200, view(p))
         self.reply(404, {"message": "not here"})
     def do_GET(self): self.handle_one("GET")
@@ -4502,23 +4520,18 @@ import json, sys
 P = json.load(open(sys.argv[1]))
 $2" "$C/state.json"; }
 expect "config tests the sign-in" "Signed in as Smoke Tester" conf config
-expect "and says when no space is set" "No space is set" conf config
+expect "and says when nothing is chosen yet" "Nothing is chosen yet: no pages to watch, and no space to publish into. Run: " conf config
 expect "publish needs a space" "no space to publish cdemo into" conf publish cdemo
 expect "and says the command that sets one" "extensions setup confluence" conf publish cdemo
 expect "with no sign-in, publish says that first" "Confluence isn't set up: no Confluence address yet. Run: " env WIKIS_DIR="$CW" "$W" confluence publish cdemo
-check "confluence says itself that it lacks a space" test "$(conf --wiki-ready 2>/dev/null; true)" = "" -o "$(env WIKIS_DIR="$CW" CONFLUENCE_URL=http://127.0.0.1:1 CONFLUENCE_API_TOKEN=x "$REPO/extensions/wiki-confluence" --wiki-ready)" = "no space to publish into yet"
+check "with a sign-in and nothing chosen, confluence says so itself" test "$(env WIKIS_DIR="$CW" CONFLUENCE_URL=http://127.0.0.1:1 CONFLUENCE_API_TOKEN=x "$REPO/extensions/wiki-confluence" --wiki-ready)" = "nothing chosen yet: no pages to watch, and no space to publish into"
 CH="$T/chome"
 mkdir -p "$CH"
 HOME="$CH" "$W" extensions add confluence >/dev/null 2>&1
 expect "status lists confluence while it has no sign-in" "extension confluence: on, but not ready: no Confluence address yet. Run: " env HOME="$CH" WIKIS_DIR="$CW" "$W" status
-out="$(printf 'http://127.0.0.1:%s
-me@example.com
-http://127.0.0.1:%s
-ENG
-cdemo
-' "$(cat "$C/port")" "$(cat "$C/port")" | env -u CONFLUENCE_SPACE HOME="$CH" WIKIS_DIR="$CW" ATLASSIAN_API_TOKEN=smoke-token "$W" extensions setup confluence 2>&1)"
+out="$(printf 'http://127.0.0.1:%s\nme@example.com\nhttp://127.0.0.1:%s\n\n\ny\nENG\ncdemo\n' "$(cat "$C/port")" "$(cat "$C/port")" | env -u CONFLUENCE_SPACE HOME="$CH" WIKIS_DIR="$CW" ATLASSIAN_API_TOKEN=smoke-token "$W" extensions setup confluence 2>&1)"
 case "$out" in *"Confluence's own address is needed"*"Signed in to Confluence as Smoke Tester."*"Key of the space to publish into"*"confluence is set up."*) ok "confluence's setup asks for its address where the site isn't Cloud, the space, and tests the sign-in" ;; *) bad "confluence's setup asks for its address where the site isn't Cloud, the space, and tests the sign-in" "$out" ;; esac
-case "$out" in *"Everyone who can read a space can read what is published into it"*) ok "and says who can read what is published, before asking for the space" ;; *) bad "and says who can read what is published, before asking for the space" "$out" ;; esac
+case "$out" in *"to everyone who can read that space"*"Set up publishing?"*"Key of the space to publish into"*) ok "and says who can read what is published, before asking whether to publish at all" ;; *) bad "and says who can read what is published, before asking whether to publish at all" "$out" ;; esac
 check "the space is saved" grep -qx "space = ENG" "$CH/.config/llm-wiki/confluence"
 check "and the wikis to publish by themselves" grep -qx "auto = cdemo" "$CH/.config/llm-wiki/confluence"
 lacks "status then has nothing to say about it" "extension confluence" env -u CONFLUENCE_SPACE HOME="$CH" WIKIS_DIR="$CW" ATLASSIAN_API_TOKEN=smoke-token "$W" status
@@ -4631,6 +4644,98 @@ expect "a space Confluence can't read ends with what to check" "Check space in" 
 expect "config names the wikis in auto" "auto      pub" env CONFLUENCE_AUTO=pub WIKIS_DIR="$CA" CONFLUENCE_URL="http://127.0.0.1:$(cat "$C/port")" CONFLUENCE_API_TOKEN=smoke-token "$W" confluence config
 expect "a Confluence out of reach during an event is for later" "confluence: later" env CONFLUENCE_AUTO=pub WIKIS_DIR="$CA" CONFLUENCE_URL="http://127.0.0.1:1" CONFLUENCE_API_TOKEN=smoke-token LLM_WIKI_EVENTS=wait "$W" extensions tick
 lacks "so status says nothing" "extension confluence" env WIKIS_DIR="$CA" "$W" status
+# Watching: a wiki hears when a Confluence page it names changes, or its status does.
+WW="$T/wwikis"
+WIKIS_DIR="$WW" "$W" new wdemo >/dev/null 2>&1
+cport="$(cat "$C/port")"
+wch() { env -u CONFLUENCE_SPACE WIKIS_DIR="$WW" CONFLUENCE_URL="http://127.0.0.1:$cport" CONFLUENCE_EMAIL=me@example.com CONFLUENCE_API_TOKEN=smoke-token "$W" confluence "$@"; }
+# cset <id> <field> <value>, and cput <id> <body>: change a page on the stand-in.
+cset() { python3 -c "
+import json, sys, urllib.request
+urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:$cport/rest/api/__set', method='POST', data=json.dumps({'id': sys.argv[1], sys.argv[2]: sys.argv[3]}).encode())).read()" "$@"; }
+cput() { python3 -c "
+import json, sys, urllib.request
+base = 'http://127.0.0.1:$cport/rest/api/content/' + sys.argv[1]
+p = json.load(urllib.request.urlopen(base))
+urllib.request.urlopen(urllib.request.Request(base, method='PUT', headers={'Content-Type': 'application/json'}, data=json.dumps({'title': p['title'], 'version': {'number': p['version']['number'] + 1}, 'body': {'storage': {'value': sys.argv[2]}}}).encode())).read()" "$@"; }
+body="$(for i in 1 2 3 4 5 6 7 8 9 10 11 12; do printf '<p>Line %s of the plan.</p>' "$i"; done)"
+cput 900 "<h1>Plan</h1>$body"
+expect "with a sign-in and nothing to watch, check says how to choose" "No wiki watches a page yet. Run: " wch check
+printf 'watch.wdemo = http://127.0.0.1/wiki/spaces/ENG/pages/900/Team+home\n' > "$HOME/.config/llm-wiki/confluence"
+out="$(wch check 2>&1)"
+case "$out" in *"== wdemo"*"Team home"*"version 2"*"first read"*"1 change(s) to note. To note them in the wiki: "*) ok "check reads a watched page, named by its address, and says it is new to the wiki" ;; *) bad "check reads a watched page, named by its address, and says it is new to the wiki" "$out" ;; esac
+check "and saves nothing" test -z "$(find "$WW/wdemo/raw" -name '*-confluence.md')"
+expect "check --save notes it in the wiki" "wdemo: noted 1 change(s). The next compile works them into the wiki." wch check --save
+note="$(ls "$WW/wdemo/raw"/*-confluence.md | tail -n 1)"
+check "the note has the page's title and address" grep -q "^- page: http://127.0.0.1:$cport/spaces/ENG/pages/900" "$note"
+check "its text, as plain text" grep -qx "Line 7 of the plan." "$note"
+check "and the line the next check reads the version from" grep -qx "Confluence-page: 900 | version 2 | status " "$note"
+out="$(wch check 2>&1)"
+case "$out" in *"Team home"*"unchanged"*"Nothing changed."*) ok "a second check finds nothing changed, from the wiki's own notes" ;; *) bad "a second check finds nothing changed, from the wiki's own notes" "$out" ;; esac
+lacks "and a second --save saves no second note" "noted" wch check --save
+cput 900 "<h1>Plan</h1>$(printf '%s' "$body" | sed 's/Line 7 of the plan/Line 7, rewritten/')"
+expect "a page whose text changed is said to be, with who and when" "changed by Ann Author on " wch check
+wch check --save >/dev/null 2>&1
+note="$(grep -l "What changed in the page's text" "$WW/wdemo/raw"/*.md | head -n 1)"
+check "the note then carries only what changed" grep -qx "+Line 7, rewritten." "$note"
+lacks "and not the lines that didn't" "Line 2 of the plan." cat "$note"
+cset 900 state Verified
+expect "a page whose status changed is said to be, though its text didn't" "status changed" wch check
+wch check --save >/dev/null 2>&1
+note="$(grep -l "change: status changed" "$WW/wdemo/raw"/*.md | head -n 1)"
+check "the note says the old status and the new" grep -qx -- "- status: Verified (was none)" "$note"
+lacks "and has no text, since none changed" "The page's text" cat "$note"
+# An open item whose heading links a page closes when the page's status means finished.
+printf '# Open\n\n## Sign off the plan http://127.0.0.1/wiki/spaces/ENG/pages/900/Team+home\n- kind: waiting\n- who: Katherine\n- status: open\n- from: 2026-11-10 raw/a.md\n\n## Read page 901 http://127.0.0.1/wiki/spaces/ENG/pages/901/x\n- kind: waiting\n- who: user\n- status: open\n- from: 2026-11-10 raw/a.md\n' > "$WW/wdemo/open.md"
+out="$(wch check 2>&1)"
+case "$out" in *"open item: Sign off the plan"*"its page is Verified, which means finished: the item closes"*) ok "an open item that links a finished page is said to close" ;; *) bad "an open item that links a finished page is said to close" "$out" ;; esac
+case "$out" in *"open item: Read page 901"*) bad "and not one whose page has no such status" "$out" ;; *) ok "and not one whose page has no such status" ;; esac
+wch check --save >/dev/null 2>&1
+check "check --save notes the item as done" grep -rqx "Done: Sign off the plan http://127.0.0.1/wiki/spaces/ENG/pages/900/Team+home" "$WW/wdemo/raw"
+expect "and not a second time, while the first waits for a compile" "already noted as done, waiting for a compile" wch check --save
+lacks "so nothing more is saved" "noted 1" wch check --save
+printf 'watch.wdemo = 900\ndone_states = Approved\n' > "$HOME/.config/llm-wiki/confluence"
+rm "$WW/wdemo/raw"/*-confluence.md
+lacks "done_states decides which statuses mean finished" "the item closes" wch check
+# A whole space, from now on.
+printf 'watch.wdemo = space:ENG\n' > "$HOME/.config/llm-wiki/confluence"
+expect "a space is watched from now on, and its old pages aren't read" "space ENG: watched from now on." wch check --save
+lacks "so the first check of a space notes nothing" "first read" wch check
+cput 901 "<p>Edited after the watch began.</p>"
+out="$(wch check 2>&1)"
+case "$out" in *"space ENG: 1 page(s) changed since "*"cdemo: Taken"*"first read"*) ok "a page changed in a watched space after that is found" ;; *) bad "a page changed in a watched space after that is found" "$out" ;; esac
+# What can't be read is said, with its fix, and fails the check.
+printf 'watch.wdemo = 99999, nope\nwatch.gone = 900\n' > "$HOME/.config/llm-wiki/confluence"
+out="$(wch check 2>&1)"
+code=$?
+case "$out" in *"99999 isn't a page you can read. Take it out of watch.wdemo in "*) ok "a page that can't be read is said, with what to change" ;; *) bad "a page that can't be read is said, with what to change" "$out" ;; esac
+case "$out" in *"nope isn't a page's address, an id, or space:KEY. Fix watch.wdemo in "*) ok "and a word that is no page" ;; *) bad "and a word that is no page" "$out" ;; esac
+case "$out" in *"watch.gone names a wiki that isn't here. Take it out of "*) ok "and a wiki that isn't here" ;; *) bad "and a wiki that isn't here" "$out" ;; esac
+[ "$code" -eq 1 ] && ok "and check fails, so a run by itself is noticed" || bad "and check fails, so a run by itself is noticed" "exit $code"
+# By itself: the tick event does check --save.
+printf 'watch.wdemo = 900\n' > "$HOME/.config/llm-wiki/confluence"
+cput 900 "<p>Changed for the tick.</p>"
+expect "with pages to watch, the tick event checks them by itself" "confluence: ok" env -u CONFLUENCE_SPACE WIKIS_DIR="$WW" CONFLUENCE_URL="http://127.0.0.1:$cport" CONFLUENCE_EMAIL=me@example.com CONFLUENCE_API_TOKEN=smoke-token LLM_WIKI_EVENTS=wait "$W" extensions tick
+check "and notes the change" grep -rq "Changed for the tick." "$WW/wdemo/raw"
+expect "config shows what is watched and which statuses mean finished" "watch     wdemo: 900" wch config
+expect "and that publishing is off" "Publishing is off: no space is set." wch config
+# The guided setup says what each choice does, checks each page as it is named, and ends with what is set.
+WH="$T/whome"
+mkdir -p "$WH"
+HOME="$WH" "$W" extensions add confluence >/dev/null 2>&1
+out="$(printf 'http://127.0.0.1:%s\n\nhttp://127.0.0.1:%s\nwdemo\n900, 99999, nope, space:ENG\nn\n\nn\n' "$cport" "$cport" | env -u CONFLUENCE_SPACE HOME="$WH" WIKIS_DIR="$WW" ATLASSIAN_API_TOKEN=smoke-token "$W" extensions setup confluence 2>&1)"
+case "$out" in *"It can do two separate things. Neither happens until you choose it here."*"Watch "*"Reads Confluence."*"Publish "*"Writes to Confluence."*) ok "setup opens by saying the two things it can do, and that neither happens unasked" ;; *) bad "setup opens by saying the two things it can do" "$out" ;; esac
+case "$out" in *"== Step 1 of 3: sign in"*"== Step 2 of 3: watch pages"*"== Step 3 of 3: publish (optional)"*) ok "in three numbered steps" ;; *) bad "in three numbered steps" "$out" ;; esac
+case "$out" in *"What it does "*"When it runs "*"What it costs "*"What it sends"*"Nothing. Watching only reads."*) ok "watching is explained before it is asked about: what it does, when, the cost, and that it sends nothing" ;; *) bad "watching is explained before it is asked about" "$out" ;; esac
+case "$out" in *"Your wikis: wdemo"*) ok "it lists your wikis to choose from" ;; *) bad "it lists your wikis to choose from" "$out" ;; esac
+case "$out" in *"Team home (version "*", Verified)"*"99999 isn't a page you can read, so it was left out."*"nope isn't a page's address, an id, or space:KEY, so it was left out."*"space ENG: every page in it, from now on"*) ok "each page is checked as it is named: its title and status, or why it was left out" ;; *) bad "each page is checked as it is named" "$out" ;; esac
+check "and only what could be read is saved" grep -qx "watch.wdemo = 900, space:ENG" "$WH/.config/llm-wiki/confluence"
+case "$out" in *"Statuses your Confluence offers: In progress, Verified"*) ok "it shows the statuses your Confluence has, before asking which mean finished" ;; *) bad "it shows the statuses your Confluence has" "$out" ;; esac
+case "$out" in *"What it sends"*"The wiki's pages, to everyone who can read that space."*"Set up publishing?"*"Publishing stays off. Nothing of yours goes to Confluence."*) ok "publishing is explained, then asked as a yes or no, and a no says nothing is sent" ;; *) bad "publishing is explained, then asked as a yes or no" "$out" ;; esac
+lacks "and a no saves no space" "space =" cat "$WH/.config/llm-wiki/confluence"
+case "$out" in *"What is set"*"Watching     wdemo hears about 1 page(s) and the space ENG"*"Finished is  Verified"*"Publishing   off"*"What happens now"*"confluence check"*) ok "it ends with what is set, a line for each choice, and what happens now" ;; *) bad "it ends with what is set and what happens now" "$out" ;; esac
+case "$out" in *"confluence is set up."*) ok "and with pages to watch, it is set up without a space" ;; *) bad "and with pages to watch, it is set up without a space" "$out" ;; esac
+rm "$HOME/.config/llm-wiki/confluence"
 unset CONFLUENCE_SPACE
 kill "$CPID" 2>/dev/null
 wait "$CPID" 2>/dev/null
