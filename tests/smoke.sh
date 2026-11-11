@@ -3812,6 +3812,100 @@ tick() { env "$@" LLM_WIKI_STYLE=on bash -c "$blk"$'\n''say_ok done' | strip; }
 [ "$(tick LC_ALL=en_US.UTF-8)" = "✓ done" ] && ok "a UTF-8 locale gets ✓" || bad "a UTF-8 locale gets ✓" "$(tick LC_ALL=en_US.UTF-8)"
 [ "$(tick LC_ALL=C)" = "+ done" ] && ok "a locale that isn't UTF-8 gets +" || bad "a locale that isn't UTF-8 gets +" "$(tick LC_ALL=C)"
 [ "$(tick LC_ALL= LC_CTYPE= LANG=)" = "+ done" ] && ok "no locale set gets +" || bad "no locale set gets +" "$(tick LC_ALL= LC_CTYPE= LANG=)"
+# wiki setup, in its forms. A mark goes in front of a line, after any indent. With the
+# codes stripped and the marks taken off, what a terminal shows is the piped words.
+nomarks() { strip | sed -E 's/(^|  )(✓|\+|!) /\1/'; }
+UTF="LANG=en_US.UTF-8"
+lplain="$(sty LLM_WIKI_STYLE=off "$W" setup --list 2>&1)"
+lstyled="$(sty LLM_WIKI_STYLE=on "$W" setup --list 2>&1)"
+case "$lstyled" in *"${ESC}[33m  <- new${ESC}[0m"*) ok "setup --list: the <- new markers are yellow" ;; *) bad "setup --list: the <- new markers are yellow" "$lstyled" ;; esac
+case "$lstyled" in *"${ESC}[2m  (default)${ESC}[0m"*) ok "setup --list: (default) is dim, an aside" ;; *) bad "setup --list: (default) is dim, an aside" "$lstyled" ;; esac
+case "$lstyled" in *"Change one:    ${ESC}[36m"*"git.identity${ESC}[0m"*) ok "setup --list: the commands on the Change one line are cyan" ;; *) bad "setup --list: the commands on the Change one line are cyan" "$lstyled" ;; esac
+case "$lstyled" in *"Or a section:  ${ESC}[36m"*"microsoft-copilot${ESC}[0m"*) ok "setup --list: the Or a section line is cyan" ;; *) bad "setup --list: the Or a section line is cyan" "$lstyled" ;; esac
+case "$lplain" in *"Run: "*) case "$lstyled" in *"Run: ${ESC}[36m"*) ok "setup --list: a Run: command is cyan" ;; *) bad "setup --list: a Run: command is cyan" "$lstyled" ;; esac ;; *) ok "setup --list: no Run: to be cyan on this machine" ;; esac
+[ "$(printf '%s\n' "$lstyled" | strip)" = "$lplain" ] && ok "setup --list: with the codes stripped, the words are the plain words" || bad "setup --list: with the codes stripped, the words are the plain words" "$(diff <(printf '%s\n' "$lstyled" | strip) <(printf '%s\n' "$lplain"))"
+case "$lplain" in *"${ESC}"*) bad "setup --list: off has no codes" ;; *) ok "setup --list: off has no codes" ;; esac
+case "$(sty -u LLM_WIKI_STYLE "$W" setup --list 2>&1)" in *"${ESC}"*) bad "setup --list: piped has no codes" ;; *) ok "setup --list: piped has no codes" ;; esac
+# A section: the heading is bold, a line that says something was done has the tick.
+fplain="$(printf 'off\n' | sty LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE=off "$W" setup feedback 2>&1)"
+fstyled="$(printf 'off\n' | sty LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE=on $UTF "$W" setup feedback 2>&1)"
+case "$fstyled" in *"${ESC}[1m== Feedback on llm-wiki${ESC}[0m"*) ok "setup <section>: the heading is bold, with its ==" ;; *) bad "setup <section>: the heading is bold, with its ==" "$fstyled" ;; esac
+case "$fstyled" in *"✓"*"feedback: off"*) bad "setup <section>: a no answer's off line has no tick" "$fstyled" ;; *"feedback: off"*) ok "setup <section>: a no answer's off line has no tick" ;; *) bad "setup <section>: a no answer's off line has no tick (no line)" "$fstyled" ;; esac
+fyes="$(printf 'notes\n' | sty LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE=on $UTF "$W" setup feedback 2>&1)"
+case "$fyes" in *"${ESC}[32m✓${ESC}[0m feedback: notes"*) ok "setup <section>: what was written has a green tick" ;; *) bad "setup <section>: what was written has a green tick" "$fyes" ;; esac
+printf 'off\n' | sty LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE=off "$W" setup feedback >/dev/null 2>&1
+case "$fstyled" in *"${ESC}[32m✓${ESC}[0m Done. "*) ok "setup <section>: the closing Done has the tick" ;; *) bad "setup <section>: the closing Done has the tick" "$fstyled" ;; esac
+case "$fstyled" in *"Feedback [off]: "*) ok "setup <section>: a prompt keeps its words, the default undimmed" ;; *) bad "setup <section>: a prompt keeps its words, the default undimmed" "$fstyled" ;; esac
+[ "$(printf '%s\n' "$fstyled" | nomarks)" = "$fplain" ] && ok "setup <section>: stripped, with the marks off, the words are the plain words" || bad "setup <section>: stripped, with the marks off, the words are the plain words" "$(diff <(printf '%s\n' "$fstyled" | nomarks) <(printf '%s\n' "$fplain"))"
+case "$fplain" in *"${ESC}"*) bad "setup <section>: off has no codes" ;; *) ok "setup <section>: off has no codes" ;; esac
+case "$(printf 'off\n' | sty -u LLM_WIKI_STYLE LLM_WIKI_TEST_TTY=1 "$W" setup feedback 2>&1)" in *"${ESC}"*) bad "setup <section>: piped has no codes" ;; *) ok "setup <section>: piped has no codes" ;; esac
+# A failure has the warning mark, and the command that fixes it is cyan.
+SG="$T/style-git"; mkdir -p "$SG"
+git -C "$SG" init -q && git -C "$SG" config user.name t && git -C "$SG" config --local user.email t@example.test
+git -C "$SG" commit -q --allow-empty -m x && git -C "$SG" remote add origin "$T/no-such-remote.git"
+gplain="$(printf '\ny\n' | sty WIKIS_DIR="$SG" LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE=off "$W" setup git.identity 2>&1)"
+gstyled="$(printf '\ny\n' | sty WIKIS_DIR="$SG" LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE=on $UTF "$W" setup git.identity 2>&1)"
+case "$gstyled" in *"  ${ESC}[1m${ESC}[33m!${ESC}[0m push failed:"*) ok "setup: a failure has the bold yellow warning mark" ;; *) bad "setup: a failure has the bold yellow warning mark" "$gstyled" ;; esac
+case "$gstyled" in *"Then run the test again: ${ESC}[36mwiki setup git.identity${ESC}[0m"* | *"Then run the test again: ${ESC}[36m"*"setup git.identity${ESC}[0m"*) ok "setup: the command that fixes it is cyan" ;; *) bad "setup: the command that fixes it is cyan" "$gstyled" ;; esac
+[ "$(printf '%s\n' "$gstyled" | nomarks)" = "$gplain" ] && ok "setup git.identity: stripped, with the marks off, the words are the plain words" || bad "setup git.identity: stripped, with the marks off, the words are the plain words" "$(diff <(printf '%s\n' "$gstyled" | nomarks) <(printf '%s\n' "$gplain"))"
+# A setting, and the whole walkthrough and --new, each on a fresh machine and the same answers.
+walk() { # walk <style> <args...>: setup on a new HOME with the answers all Enter
+  local st="$1"; shift
+  rm -rf "$SW/walk"; mkdir -p "$SW/walk/home"
+  printf '[user]\n\tname = t\n\temail = t@example.test\n' > "$SW/walk/home/.gitconfig"
+  printf '%.0s\n' $(seq 1 200) | env -u WIKIS_DIR HOME="$SW/walk/home" XDG_CONFIG_HOME="$SW/walk/home/.config" XDG_STATE_HOME="$SW/walk/state" \
+    PATH="/usr/bin:/bin" LLM_WIKI_NO_GO=1 LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE="$st" $UTF "$W" setup "$@" 2>&1
+}
+for form in "" "--new" "format"; do
+  wplain="$(walk off $form)"; wstyled="$(walk on $form)"
+  [ -n "$wplain" ] && [ "$(printf '%s\n' "$wstyled" | nomarks)" = "$wplain" ] && ok "setup ${form:-(everything)}: stripped, with the marks off, the words are the plain words" || bad "setup ${form:-(everything)}: stripped, with the marks off, the words are the plain words" "$(diff <(printf '%s\n' "$wstyled" | nomarks) <(printf '%s\n' "$wplain") | head -n 20)"
+  case "$wstyled" in *"${ESC}[1m== "*) ok "setup ${form:-(everything)}: headings are bold" ;; *) [ "$form" = format ] && ok "setup format has no heading to style" || bad "setup ${form:-(everything)}: headings are bold" "$wstyled" ;; esac
+  case "$wplain" in *"${ESC}"*) bad "setup ${form:-(everything)}: off has no codes" ;; *) ok "setup ${form:-(everything)}: off has no codes" ;; esac
+done
+# wiki update, with a wiki that has a remote, an old handbook and a NEWS entry to print.
+UW="$T/style-up"; mkdir -p "$UW"
+git init -q --bare "$UW/remote.git"
+mkdir -p "$UW/wikis"; "$W" new "$UW/wikis/demo" >/dev/null 2>&1
+git -C "$UW/wikis" init -q && git -C "$UW/wikis" config user.name t && git -C "$UW/wikis" config user.email t@example.test
+git -C "$UW/wikis" add -A && git -C "$UW/wikis" commit -qm start && git -C "$UW/wikis" remote add origin "$UW/remote.git" && git -C "$UW/wikis" push -q -u origin HEAD 2>/dev/null
+printf '# News\n\n## 2026-01-02: Second `entry`\n\nBody with `ticks`.\n\n- Do: run `wiki x`.\n' > "$UW/NEWS.md"
+up_prep() { set_version "$UW/wikis/demo/AGENTS.md" 1; git -C "$UW/wikis" commit -qam old; rm -rf "$UW/state"; }
+upd() { sty WIKIS_DIR="$UW/wikis" XDG_STATE_HOME="$UW/state" LLM_WIKI_NEWS_FILE="$UW/NEWS.md" LLM_WIKI_NO_GO=1 "$@" "$W" update --wikis-only </dev/null 2>&1; }
+up_prep; uplain="$(upd LLM_WIKI_STYLE=off)"
+up_prep; upstyled="$(upd LLM_WIKI_STYLE=on $UTF)"
+upmarks() { strip | sed -E 's/^(✓|\+|!) /- /'; }
+case "$upstyled" in *"${ESC}[1m== Collection "*"${ESC}[1m== What changed${ESC}[0m"*"${ESC}[1m== What's new in llm-wiki${ESC}[0m"*"${ESC}[1m== Next${ESC}[0m"*) ok "update: the headings are bold, with their ==" ;; *) bad "update: the headings are bold, with their ==" "$upstyled" ;; esac
+case "$upstyled" in *"${ESC}[32m✓${ESC}[0m pushed "*" commit(s)"*) ok "update: a step that succeeded has the tick in place of the dash" ;; *) bad "update: a step that succeeded has the tick in place of the dash" "$upstyled" ;; esac
+case "$upstyled" in *"${ESC}[1m${ESC}[33m!${ESC}[0m New settings to look at: ${ESC}[36m"*"setup --new${ESC}[0m"*) ok "update: what is left has the warning mark, its command cyan" ;; *) bad "update: what is left has the warning mark, its command cyan" "$upstyled" ;; esac
+case "$upstyled" in *"${ESC}[1m${ESC}[33m!${ESC}[0m Sessions already open"*"paste this into each:"*) ok "update: the note about open sessions has the warning mark" ;; *) bad "update: the note about open sessions has the warning mark" "$upstyled" ;; esac
+case "$upstyled" in *"${ESC}[1m## 2026-01-02: Second \`entry\`${ESC}[0m"*) ok "update: a NEWS title is bold" ;; *) bad "update: a NEWS title is bold" "$upstyled" ;; esac
+printf '%s\n' "$upstyled" | grep -qxF 'Body with `ticks`.' && printf '%s\n' "$upstyled" | grep -qxF -- '- Do: run `wiki x`.' && ok "update: a NEWS entry's body is printed exactly as written" || bad "update: a NEWS entry's body is printed exactly as written" "$upstyled"
+[ "$(printf '%s\n' "$upstyled" | upmarks)" = "$uplain" ] && ok "update: stripped, with the marks back to '- ', the words are the plain words" || bad "update: stripped, with the marks back to '- ', the words are the plain words" "$(diff <(printf '%s\n' "$upstyled" | upmarks) <(printf '%s\n' "$uplain"))"
+case "$uplain" in *"${ESC}"*) bad "update: off has no codes" ;; *) ok "update: off has no codes" ;; esac
+up_prep; case "$(upd -u LLM_WIKI_STYLE)" in *"${ESC}"*) bad "update: piped has no codes" ;; *) ok "update: piped has no codes" ;; esac
+# A push that fails says what to run, and the command is cyan.
+git -C "$UW/wikis" config remote.origin.pushurl "$UW/no-such-remote.git"
+up_prep; uplain="$(upd LLM_WIKI_STYLE=off)"
+up_prep; upstyled="$(upd LLM_WIKI_STYLE=on $UTF)"
+case "$upstyled" in *"${ESC}[1m${ESC}[33m!${ESC}[0m the push failed. Run: ${ESC}[36mgit -C "*" push${ESC}[0m"*) ok "update: a failed push has the warning mark and its Run: command is cyan" ;; *) bad "update: a failed push has the warning mark and its Run: command is cyan" "$upstyled" ;; esac
+[ "$(printf '%s\n' "$upstyled" | upmarks)" = "$uplain" ] && ok "update: the failed push's words are the plain words too" || bad "update: the failed push's words are the plain words too" "$(diff <(printf '%s\n' "$upstyled" | upmarks) <(printf '%s\n' "$uplain"))"
+# update in a clone, with the plugin installed too: it pulls, refreshes the plugin's copy, and says to restart.
+UU="$UW/src"; mkdir -p "$UU" "$UW/bin" "$HOME/.cursor"
+(cd "$REPO" && tar cf - --exclude .git --exclude tests .) | (cd "$UU" && tar xf -)
+git -C "$UU" init -q && git -C "$UU" add -A && git -C "$UU" commit -qm v1 && git clone -q "$UU" "$UW/clone"
+mkdir -p "$HOME/.claude/plugins"
+printf '{"version":2,"plugins":{"llm-wiki@mk":[{"scope":"user","installPath":"%s"}]}}\n' "$UW/clone" > "$HOME/.claude/plugins/installed_plugins.json"
+printf '#!/bin/sh\nexit 0\n' > "$UW/bin/claude" && chmod +x "$UW/bin/claude"
+cl() { rm -rf "$UW/state"; env XDG_STATE_HOME="$UW/state" LLM_WIKI_NEWS_FILE="$UW/NEWS.md" LLM_WIKI_NO_GO=1 PATH="$UW/bin:$PATH" "$@" "$UW/clone/wiki.sh" update </dev/null 2>&1; }
+cplain="$(cl LLM_WIKI_STYLE=off)"; cstyled="$(cl LLM_WIKI_STYLE=on $UTF)"
+case "$cstyled" in *"${ESC}[1m== Updating llm-wiki${ESC}[0m"*) ok "update in a clone: the first heading is bold" ;; *) bad "update in a clone: the first heading is bold" "$cstyled" ;; esac
+case "$cstyled" in *"${ESC}[32m✓${ESC}[0m pulled "*"${ESC}[32m✓${ESC}[0m updated the installed plugin's copy (llm-wiki@mk) too"*) ok "update in a clone: the pull and the plugin's refresh have the tick" ;; *) bad "update in a clone: the pull and the plugin's refresh have the tick" "$cstyled" ;; esac
+case "$cstyled" in *"${ESC}[1m${ESC}[33m!${ESC}[0m Quit and reopen the Claude app and Cursor"*) ok "update in a clone: the restart has the warning mark" ;; *) bad "update in a clone: the restart has the warning mark" "$cstyled" ;; esac
+[ "$(printf '%s\n' "$cstyled" | upmarks)" = "$cplain" ] && ok "update in a clone: the words are the plain words" || bad "update in a clone: the words are the plain words" "$(diff <(printf '%s\n' "$cstyled" | upmarks) <(printf '%s\n' "$cplain"))"
+printf '#!/bin/sh\nexit 1\n' > "$UW/bin/claude"
+cstyled="$(cl LLM_WIKI_STYLE=on $UTF)"
+case "$cstyled" in *"${ESC}[1m${ESC}[33m!${ESC}[0m couldn't update the installed plugin's copy (llm-wiki@mk): ${ESC}[36mclaude plugin update llm-wiki@mk${ESC}[0m"*) ok "update in a clone: a failed plugin refresh has the mark and its command in cyan" ;; *) bad "update in a clone: a failed plugin refresh has the mark and its command in cyan" "$cstyled" ;; esac
+rm -rf "$HOME/.cursor" "$HOME/.claude/plugins/installed_plugins.json"
 # One text, two scripts: the guide's block is the one wiki.sh runs.
 doc="$(sed -n '/^# --- style helpers/,/^# --- end of style helpers/p' "$REPO/docs/conventions.md")"
 [ -n "$blk" ] && [ "$blk" = "$doc" ] && ok "the helper block in wiki.sh is the block in docs/conventions.md, byte for byte" || bad "the helper block in wiki.sh is the block in docs/conventions.md, byte for byte"
