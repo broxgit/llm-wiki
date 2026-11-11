@@ -5,8 +5,15 @@
 
 It reads each wiki's open.md (the ledger rules/open.md describes), finds the open
 entries that name a Jira ticket, and asks Jira for each ticket's status. It never
-writes to Jira. With --close it saves a note with a `Done:` line for each entry
-whose tickets are all done, through `wiki capture` and `wiki sync`.
+writes to Jira. With --close it saves a note, through `wiki capture` and `wiki sync`,
+for the changes that alter what someone should do, and for no others:
+
+  every ticket done         Done: closes the entry
+  closed without the work   the entry stays open, and a Waiting: asks the user to decide
+  blocked or flagged        a Waiting: says so, once, and a Done: closes it when it clears
+  reopened after closing    a Waiting: opens the entry again
+
+A ticket moving between in development, in testing and the like saves nothing.
 
 With `auto_close = yes` in its settings it does that by itself on the tick event, once
 a day, with no session asking.
@@ -31,8 +38,10 @@ USAGE = f"""Usage: {CMD} jira [check] [--close] [<wiki>]
 
   check    For every open item that names a ticket, such as PROJ-123, say where the
            ticket stands. The default. It reads Jira and changes nothing.
-           --close saves a note with a Done: line for each item whose tickets are all
-           done, and syncs the wiki. The next compile closes the item.
+           --close saves a note for what changes what you should do, and syncs the
+           wiki: an item whose tickets are all done is closed; a ticket closed without
+           the work, or blocked, opens an item saying so; a ticket reopened after its
+           item closed opens the item again. The next compile applies it.
   show     One line for each ticket: its status and summary.
   config   What is set, and whether Jira accepts the sign-in.
 
@@ -44,8 +53,10 @@ Settings go in {CONFIG}, one `name = value` a line:
   projects   optional: PROJ, OPS. Only keys in these projects count as tickets.
   auto_close optional: yes. Then check --close runs by itself once a day, in the
              background, and a finished ticket closes its item with nobody asking.
+  done_statuses  optional: Released, Deployed. Then only a ticket in one of these
+             statuses counts as done, whatever Jira's own grouping says.
 The environment wins over the file: JIRA_URL, JIRA_EMAIL, JIRA_API_TOKEN, JIRA_PROJECTS,
-JIRA_AUTO_CLOSE.
+JIRA_AUTO_CLOSE, JIRA_DONE_STATUSES.
 Keep the token out of the file. With an email the sign-in is Jira Cloud's (email and
 API token); without one the token is sent as a Data Center personal access token.
 """
@@ -80,11 +91,12 @@ def settings():
                     conf[k.strip()] = v.strip()
     except FileNotFoundError:
         pass
-    for k, env in (("url", "JIRA_URL"), ("email", "JIRA_EMAIL"), ("projects", "JIRA_PROJECTS"), ("auto_close", "JIRA_AUTO_CLOSE")):
+    for k, env in (("url", "JIRA_URL"), ("email", "JIRA_EMAIL"), ("projects", "JIRA_PROJECTS"), ("auto_close", "JIRA_AUTO_CLOSE"), ("done_statuses", "JIRA_DONE_STATUSES")):
         if os.environ.get(env):
             conf[k] = os.environ[env]
     conf["url"] = conf.get("url", "").rstrip("/")
     conf["projects"] = [p.strip().upper() for p in conf.get("projects", "").split(",") if p.strip()]
+    conf["done_statuses"] = [p.strip().lower() for p in conf.get("done_statuses", "").split(",") if p.strip()]
     return conf
 
 
@@ -118,15 +130,18 @@ class Jira:
         else:
             auth = "Bearer " + tok
         self.headers = {"Authorization": auth, "Accept": "application/json"}
+        self.done_names = conf["done_statuses"]
+        self.flag_field = None
 
-    def get(self, path):
-        """The JSON at path, or None where Jira says there is no such thing."""
+    def get(self, path, soft=False):
+        """The JSON at path, or None where Jira says there is no such thing.
+        soft: None for any refusal too, for a read the run can do without."""
         req = urllib.request.Request(self.url + path, headers=self.headers)
         try:
             with urllib.request.urlopen(req, timeout=15) as r:
                 return json.load(r)
         except urllib.error.HTTPError as e:
-            if e.code == 404:
+            if e.code == 404 or soft:
                 return None
             if e.code in (401, 403):
                 die(f"Jira refused the sign-in ({e.code}) at {self.url}. Check the email and the token: {CMD} jira config shows what is set.")
@@ -137,19 +152,49 @@ class Jira:
             die(f"{self.url} didn't answer with JSON. Is url the address of Jira itself?")
 
     def ticket(self, key):
-        """{key, status, done, resolved, summary}, or None for no such ticket."""
-        d = self.get(f"/rest/api/2/issue/{key}?fields=summary,status,resolutiondate")
+        """The ticket and what its state means here, or None for no such ticket.
+        state is done, abandoned (closed without the work), blocked or open."""
+        if self.flag_field is None:
+            # "Flagged" is a custom field whose id differs from site to site.
+            fields = self.get("/rest/api/2/field", soft=True)
+            found = [f.get("id") for f in fields if f.get("name") == "Flagged"] if isinstance(fields, list) else []
+            self.flag_field = found[0] if found else ""
+        want = "summary,status,resolutiondate,resolution" + ("," + self.flag_field if self.flag_field else "")
+        d = self.get(f"/rest/api/2/issue/{key}?fields={want}")
         if d is None:
             return None
         f = d.get("fields") or {}
         st = f.get("status") or {}
-        return {
+        t = {
             "key": key,
             "status": st.get("name") or "?",
-            "done": ((st.get("statusCategory") or {}).get("key") == "done"),
+            "category": (st.get("statusCategory") or {}).get("key") or "",
+            "resolution": (f.get("resolution") or {}).get("name") or "",
             "resolved": (f.get("resolutiondate") or "")[:10],
+            "flagged": bool(f.get(self.flag_field)) if self.flag_field else False,
             "summary": f.get("summary") or "",
         }
+        t["state"] = state_of(t, self.done_names)
+        return t
+
+
+# A ticket Jira counts as done whose resolution or status says the work didn't happen.
+ABANDONED = re.compile(r"(?i)won.?t (do|fix)|duplicate|cancel|declined|rejected|abandon|can(no|.)?t reproduce"
+                       r"|invalid|obsolete|incomplete|not a bug|withdrawn|not planned")
+OWN = "Jira: "
+
+
+def state_of(t, done_names):
+    closed = t["category"] == "done"
+    if done_names and t["status"].lower() in done_names:
+        return "done"
+    if closed and (ABANDONED.search(t["resolution"]) or ABANDONED.search(t["status"])):
+        return "abandoned"
+    if closed and not done_names:
+        return "done"
+    if t["flagged"] or re.search(r"(?i)\bblock", t["status"]):
+        return "blocked"
+    return "open"
 
 
 def keys_in(text, projects):
@@ -162,9 +207,10 @@ def keys_in(text, projects):
     return out
 
 
-def open_items(wikis_dir, only):
-    """[(wiki, heading)] for every open entry in every wiki's open.md."""
-    items = []
+def ledger(wikis_dir, only):
+    """[(wiki, [entry])] for every wiki's open.md. An entry is its heading, status,
+    who, and the notes it came from."""
+    out = []
     try:
         names = sorted(os.listdir(wikis_dir))
     except OSError:
@@ -182,41 +228,69 @@ def open_items(wikis_dir, only):
                 lines = f.read().splitlines()
         except OSError:
             continue
-        heading, status = None, ""
-        for line in lines + ["## "]:
+        entries, cur = [], None
+        for line in lines:
             if line.startswith("## "):
-                if heading and status == "open":
-                    items.append((name, heading))
-                heading, status = line[3:].strip(), ""
-            elif line.startswith("- status:"):
-                status = line.split(":", 1)[1].strip()
-    return items
+                cur = {"heading": line[3:].strip(), "status": "", "who": "", "from": []}
+                entries.append(cur)
+            elif cur is not None and line.startswith("- "):
+                k, _, v = line[2:].partition(":")
+                if k == "from":
+                    cur["from"].append(v.strip())
+                elif k in ("status", "who"):
+                    cur[k] = v.strip()
+        if entries:
+            out.append((name, entries))
+    return out
 
 
 def describe(t):
     if t is None:
         return "not found"
-    if t["done"]:
+    if t["state"] == "done":
         return t["status"] + (f", resolved {t['resolved']}" if t["resolved"] else "")
+    if t["state"] == "abandoned":
+        return t["status"] + (f" as {t['resolution']}" if t["resolution"] else "") + ", without the work done"
+    if t["state"] == "blocked" and not re.search(r"(?i)\bblock", t["status"]):
+        return t["status"] + ", flagged"
     return t["status"]
 
 
-def already_noted(root, heading):
-    """A note from an earlier --close that no compile has taken yet."""
+def waiting_notes(wiki_cmd, root, wiki):
+    """The lines of this extension's notes that no compile has taken yet, so a change
+    is noted once. Notes stay in raw/ after a compile, so only the waiting ones count."""
+    names = None
+    if wiki_cmd:
+        r = subprocess.run([wiki_cmd, "pending", wiki], capture_output=True, text=True)
+        if r.returncode == 0:
+            names = [l.split()[0][len("raw/"):] for l in r.stdout.splitlines() if l.startswith("raw/")]
     raw = os.path.join(root, "raw")
-    want = f"Done: {heading}"
-    try:
-        names = [n for n in os.listdir(raw) if n.endswith("-jira-done.md")]
-    except OSError:
-        return False
+    if names is None:
+        try:
+            names = os.listdir(raw)
+        except OSError:
+            names = []
+    lines = set()
     for n in names:
+        if not n.endswith("-jira-done.md"):
+            continue
         try:
             with open(os.path.join(raw, n), encoding="utf-8", errors="replace") as f:
-                if want in f.read().splitlines():
-                    return True
+                lines.update(f.read().splitlines())
         except OSError:
             pass
-    return False
+    return lines
+
+
+def recently_done(status, days=60):
+    m = re.match(r"done (\d{4}-\d\d-\d\d)$", status)
+    if not m:
+        return False
+    try:
+        then = datetime.date.fromisoformat(m.group(1))
+    except ValueError:
+        return False
+    return (datetime.datetime.now(datetime.timezone.utc).date() - then).days <= days
 
 
 def cmd_check(args):
@@ -226,67 +300,141 @@ def cmd_check(args):
         die(f"check takes --close and a wiki's name. {CMD} jira --help")
     conf = settings()
     wikis_dir = os.environ.get("WIKIS_DIR") or die("WIKIS_DIR isn't set. Run this as: wiki jira")
-    named = [(w, h, keys_in(h, conf["projects"])) for w, h in open_items(wikis_dir, rest[0] if rest else None)]
-    named = [n for n in named if n[2]]
-    if not named:
+    wiki_cmd = os.environ.get("LLM_WIKI", "")
+    books = ledger(wikis_dir, rest[0] if rest else None)
+
+    def keys(e):
+        return keys_in(e["heading"], conf["projects"])
+
+    # What to look at: open entries that name a ticket, and entries this extension
+    # closed lately, in case their ticket was reopened.
+    def ours(e):
+        return any("-jira-done.md" in f for f in e["from"])
+    watched = [(w, e) for w, es in books for e in es if keys(e)
+               and (e["status"] == "open" or (recently_done(e["status"]) and ours(e) and not e["heading"].startswith(OWN)))]
+    if not watched:
         print("No open item names a ticket." + ("" if conf["projects"] else " A ticket is a key such as PROJ-123 in the item's heading."))
         return 0
     jira = Jira(conf)
     seen = {}
-    ready = {}
-    last = None
-    n_done = 0
-    for wiki, heading, keys in named:
-        tickets = []
-        for k in keys:
+
+    def tickets(e):
+        out = []
+        for k in keys(e):
             if k not in seen:
                 seen[k] = jira.ticket(k)
-            tickets.append(seen[k])
-        found = [t for t in tickets if t is not None]
+            if seen[k] is not None:
+                out.append(seen[k])
+        return out
+
+    notes = {}      # wiki -> [(kind, line, [tickets])]
+    counts = {}
+    last = None
+    shown = False
+    for wiki, e in watched:
+        found = tickets(e)
         if not found:
+            continue
+        h = e["heading"]
+        open_headings = {x["heading"] for w, es in books if w == wiki for x in es if x["status"] == "open"}
+        add = notes.setdefault(wiki, []).append
+        if e["status"] != "open":
+            # Closed by an earlier run, and a ticket is no longer done.
+            if any(t["state"] in ("open", "blocked") for t in found) and h not in open_headings:
+                add(("reopened", f"Waiting: {e['who'] or 'user'} | {h}", found))
+            continue
+        if h.startswith(OWN):
+            # An item an earlier run opened: it closes when what it says stops being so.
+            t = found[0]
+            if (" is blocked, holding up " in h and t["state"] != "blocked") or \
+               (" was closed as " in h and t["state"] != "abandoned"):
+                add(("cleared", f"Done: {h}", [t]))
             continue
         if wiki != last:
             print(f"== {wiki}")
             last = wiki
-        print(f"  {heading}")
-        for k, t in zip(keys, tickets):
-            if t is not None:
-                print(f"      {k:<12} {describe(t)}")
-        if all(t["done"] for t in found):
-            n_done += 1
-            ready.setdefault(wiki, []).append((heading, found))
-    if last is None:
+        shown = True
+        print(f"  {h}")
+        for t in found:
+            print(f"      {t['key']:<12} {describe(t)}")
+        if all(t["state"] == "done" for t in found):
+            add(("done", f"Done: {h}", found))
+            continue
+        for t in found:
+            if t["state"] == "abandoned":
+                item = f"{OWN}{t['key']} was closed as {t['resolution'] or t['status']}, and \"{h}\" still waits on it"
+                if item not in open_headings:
+                    add(("abandoned", f"Waiting: user | {item}", [t]))
+            elif t["state"] == "blocked":
+                item = f"{OWN}{t['key']} is blocked, holding up \"{h}\""
+                if item not in open_headings:
+                    add(("blocked", f"Waiting: {e['who'] or 'user'} | {item}", [t]))
+    if not shown and not any(notes.values()):
         print("No open item names a ticket Jira knows.")
         return 0
-    print()
-    if not n_done:
-        print("None of them is done yet.")
-        return 0
+
+    # Leave out what a waiting note already says.
+    todo = {}
+    stale = []
+    for wiki, lines in notes.items():
+        have = waiting_notes(wiki_cmd, os.path.join(wikis_dir, wiki), wiki) if lines else set()
+        fresh = [x for x in lines if x[1] not in have]
+        if lines and not fresh:
+            stale.append(wiki)
+        if fresh:
+            todo[wiki] = fresh
+            for kind, _, _ in fresh:
+                counts[kind] = counts.get(kind, 0) + 1
+    words = {"abandoned": "closed without the work", "blocked": "blocked", "cleared": "no longer so", "reopened": "reopened"}
+    others = [f"{counts[k]} {words[k]}" for k in ("abandoned", "blocked", "cleared", "reopened") if counts.get(k)]
+    if shown:
+        print()
     if not close:
-        print(f"{n_done} open item(s) have every ticket done. To close them: {CMD} jira check --close")
+        if counts.get("done"):
+            print(f"{counts['done']} open item(s) have every ticket done.")
+        if others:
+            print(f"{sum(counts[k] for k in words if counts.get(k))} other change(s) to note: {', '.join(others)}.")
+        if counts:
+            print(f"To note them: {CMD} jira check --close")
+        elif stale:
+            print("Everything that changed is already noted, waiting for a compile.")
+        else:
+            print("None of them is done yet.")
         return 0
-    wiki_cmd = os.environ.get("LLM_WIKI") or die("LLM_WIKI isn't set. Run this as: wiki jira")
+    for wiki in stale:
+        print(f"{wiki}: already noted, waiting for a compile.")
+    if not todo:
+        if not stale:
+            print("Nothing to note.")
+        return 0
+    if not wiki_cmd:
+        die("LLM_WIKI isn't set. Run this as: wiki jira")
     now = datetime.datetime.now(datetime.timezone.utc)
-    for wiki, entries in ready.items():
-        root = os.path.join(wikis_dir, wiki)
-        todo = [(h, ts) for h, ts in entries if not already_noted(root, h)]
-        if not todo:
-            print(f"{wiki}: already noted, waiting for a compile.")
-            continue
-        note = [f"# Jira: tickets done, as of {now:%Y-%m-%d}", "",
+    for wiki, fresh in todo.items():
+        note = [f"# Jira: what changed for open items, as of {now:%Y-%m-%d}", "",
                 f"Source: {jira.url}, read by `wiki jira` on {now:%Y-%m-%d %H:%M} UTC.", ""]
-        for h, ts in todo:
+        said = []
+        for _, _, ts in fresh:
             for t in ts:
-                note.append(f"- {t['key']} \"{t['summary']}\": {describe(t)}. {jira.url}/browse/{t['key']}")
+                if t["key"] not in said:
+                    said.append(t["key"])
+                    note.append(f"- {t['key']} \"{t['summary']}\": {describe(t)}. {jira.url}/browse/{t['key']}")
         note.append("")
-        note += [f"Done: {h}" for h, _ in todo]
+        note += [line for _, line, _ in fresh]
         r = subprocess.run([wiki_cmd, "capture", wiki, "jira-done"], input="\n".join(note) + "\n", text=True)
         if r.returncode != 0:
             die(f"couldn't save the note in {wiki}")
-        r = subprocess.run([wiki_cmd, "sync", wiki, "-m", f"Jira: {len(todo)} open item(s) done"])
+        r = subprocess.run([wiki_cmd, "sync", wiki, "-m", f"Jira: {len(fresh)} change(s) for open items"])
         if r.returncode != 0:
             die(f"saved the note in {wiki}, but the sync failed. Run: {CMD} sync {wiki}")
-        print(f"{wiki}: noted {len(todo)} item(s) as done. The next compile closes them.")
+        n_done = sum(1 for kind, _, _ in fresh if kind == "done")
+        if n_done == len(fresh):
+            print(f"{wiki}: noted {n_done} item(s) as done. The next compile closes them.")
+        else:
+            kinds = ([f"{n_done} done"] if n_done else []) + [f"{sum(1 for k, _, _ in fresh if k == kind)} {words[kind]}"
+                                                               for kind in ("abandoned", "blocked", "cleared", "reopened")
+                                                               if any(k == kind for k, _, _ in fresh)]
+            print(f"{wiki}: noted {len(fresh)} change(s): {', '.join(kinds)}. The next compile applies them.")
     return 0
 
 
@@ -316,6 +464,7 @@ def cmd_config(args):
     print(f"token     {'from ' + where if where else 'not set'}")
     print(f"projects  {', '.join(conf['projects']) or 'any'}")
     print(f"auto      {'check --close runs by itself once a day' if auto_on(conf) else 'off'}")
+    print(f"done      {', '.join(conf['done_statuses']) or 'what Jira counts as done'}")
     if not conf["url"] or not where:
         print(f"\nNot ready. {CMD} jira --help has the settings.")
         return 1
