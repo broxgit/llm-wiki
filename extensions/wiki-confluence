@@ -31,6 +31,8 @@ from xml.sax.saxutils import escape, quoteattr
 CMD = os.environ.get("LLM_WIKI_CMD", "wiki")
 CONFIG_DIR = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "llm-wiki")
 CONFIG = os.path.join(CONFIG_DIR, "confluence")
+# The sign-in every Atlassian extension shares.
+SHARED = os.path.join(CONFIG_DIR, "atlassian")
 LABEL = "llm-wiki"
 
 USAGE = f"""Usage: {CMD} confluence publish <wiki> [--dry-run]
@@ -53,9 +55,13 @@ Settings go in {CONFIG}, one `name = value` a line:
   space.<wiki>, parent.<wiki>   the same, for one wiki
   auto       optional: the wikis to publish by themselves, such as payments, relay.
              Each is published in the background when a sync changes its pages.
-url, email and token_cmd fall back to the Jira extension's settings where they are
-missing. The environment wins over both: CONFLUENCE_URL, CONFLUENCE_EMAIL,
-CONFLUENCE_API_TOKEN, CONFLUENCE_SPACE, CONFLUENCE_AUTO.
+The sign-in comes from {SHARED}, which every Atlassian
+extension reads: site, email and token_cmd. On Atlassian Cloud, Confluence is at the
+site's address with /wiki after it. On a server of your own, set url here. Where a
+value is in neither file, the Jira extension's settings are used, as they were before.
+The environment wins over the files: CONFLUENCE_URL, CONFLUENCE_EMAIL,
+CONFLUENCE_API_TOKEN, CONFLUENCE_SPACE, CONFLUENCE_AUTO, and for every Atlassian
+extension ATLASSIAN_SITE, ATLASSIAN_EMAIL and ATLASSIAN_API_TOKEN.
 
 Everyone who can read the space can read what you publish. Publish a wiki only to a
 space whose readers may see everything in it.
@@ -96,28 +102,57 @@ def read_conf(path):
     return conf
 
 
+def pick(*choices):
+    """The first value that is set, and where it came from."""
+    for value, where in choices:
+        if value:
+            return value, where
+    return "", ""
+
+
+def came_from(conf, key):
+    """For config: where a value came from, when it wasn't this extension's own file."""
+    where = conf["_from"].get(key, "")
+    return f"  (from {where})" if where and where != "this file" else ""
+
+
+def wiki_url(site):
+    """Cloud serves Confluence under /wiki on the site Jira is on. A server's address differs."""
+    site = (site or "").rstrip("/")
+    return site + "/wiki" if site.endswith(".atlassian.net") else ""
+
+
 def settings():
+    """This extension's settings. The sign-in comes, for each value, from the first of:
+    Confluence's environment, Atlassian's, Confluence's file, the file every Atlassian
+    extension shares, and last the Jira extension's file, which it read before there was one."""
     conf = read_conf(CONFIG)
+    shared = read_conf(SHARED)
     jira = read_conf(os.path.join(CONFIG_DIR, "jira"))
-    for k in ("email", "token_cmd"):
-        if not conf.get(k) and jira.get(k):
-            conf[k] = jira[k]
-    if not conf.get("url") and jira.get("url"):
-        # Cloud serves Confluence under /wiki on the site Jira is on.
-        u = jira["url"].rstrip("/")
-        conf["url"] = u + "/wiki" if u.endswith(".atlassian.net") else ""
-    for k, env in (("url", "CONFLUENCE_URL"), ("email", "CONFLUENCE_EMAIL"), ("space", "CONFLUENCE_SPACE"), ("auto", "CONFLUENCE_AUTO")):
-        if os.environ.get(env):
-            conf[k] = os.environ[env]
-    conf["url"] = conf.get("url", "").rstrip("/")
+    env = os.environ.get
+    src = {}
+    conf["url"], src["url"] = pick((env("CONFLUENCE_URL"), "CONFLUENCE_URL"), (wiki_url(env("ATLASSIAN_SITE")), "ATLASSIAN_SITE"),
+                                   (conf.get("url"), "this file"), (wiki_url(shared.get("site")), "the shared file"),
+                                   (wiki_url(jira.get("url")), "Jira's settings"))
+    conf["email"], src["email"] = pick((env("CONFLUENCE_EMAIL"), "CONFLUENCE_EMAIL"), (env("ATLASSIAN_EMAIL"), "ATLASSIAN_EMAIL"),
+                                       (conf.get("email"), "this file"), (shared.get("email"), "the shared file"),
+                                       (jira.get("email"), "Jira's settings"))
+    conf["token_cmd"], src["token_cmd"] = pick((conf.get("token_cmd"), "token_cmd"),
+                                               (shared.get("token_cmd"), "token_cmd in the shared file"),
+                                               (jira.get("token_cmd"), "token_cmd in Jira's settings"))
+    conf["_from"] = src
+    for k, name in (("space", "CONFLUENCE_SPACE"), ("auto", "CONFLUENCE_AUTO")):
+        if env(name):
+            conf[k] = env(name)
+    conf["url"] = conf["url"].rstrip("/")
     return conf
 
 
 def token(conf):
     """The API token and where it came from. Never printed."""
-    for env in ("CONFLUENCE_API_TOKEN", "JIRA_API_TOKEN"):
-        if os.environ.get(env):
-            return os.environ[env], env
+    for name in ("CONFLUENCE_API_TOKEN", "ATLASSIAN_API_TOKEN", "JIRA_API_TOKEN"):
+        if os.environ.get(name):
+            return os.environ[name], name
     if conf.get("token_cmd"):
         try:
             out = subprocess.run(conf["token_cmd"], shell=True, capture_output=True, text=True, timeout=30)
@@ -125,7 +160,7 @@ def token(conf):
             die("token_cmd took more than 30 seconds")
         if out.returncode != 0 or not out.stdout.strip():
             die(f"token_cmd printed no token (exit {out.returncode}). Run it yourself to see why.")
-        return out.stdout.strip(), "token_cmd"
+        return out.stdout.strip(), conf["_from"]["token_cmd"]
     return "", ""
 
 
@@ -141,12 +176,12 @@ class Refused(Exception):
 class Confluence:
     def __init__(self, conf):
         if not conf["url"]:
-            die(f"no Confluence address. Set url in {CONFIG}, or CONFLUENCE_URL. {CMD} confluence --help has the settings.")
+            die(f"no Confluence address. Set site in {SHARED}, or url in {CONFIG}, or CONFLUENCE_URL. {CMD} confluence --help has the settings.")
         if not conf["url"].startswith(("https://", "http://")):
             die(f"url has to start with https:// (it is {conf['url']})")
         tok, _ = token(conf)
         if not tok:
-            die(f"no API token. Set token_cmd in {CONFIG}, or CONFLUENCE_API_TOKEN. {CMD} confluence --help has the settings.")
+            die(f"no API token. Set token_cmd in {SHARED}, or CONFLUENCE_API_TOKEN. {CMD} confluence --help has the settings.")
         self.url = conf["url"]
         if conf.get("email"):
             auth = "Basic " + base64.b64encode(f"{conf['email']}:{tok}".encode()).decode()
@@ -587,14 +622,15 @@ def cmd_config(args):
         die("config takes no arguments")
     conf = settings()
     _, where = token(conf)
+    print(f"shared    {SHARED}{'' if os.path.isfile(SHARED) else ' (not there yet)'}")
     print(f"file      {CONFIG}{'' if os.path.isfile(CONFIG) else ' (not there yet)'}")
-    print(f"url       {conf['url'] or 'not set'}")
-    print(f"email     {conf.get('email') or 'not set, so the token is sent as a Data Center personal access token'}")
+    print(f"url       {conf['url'] or 'not set'}{came_from(conf, 'url')}")
+    print(f"email     {conf.get('email') or 'not set, so the token is sent as a Data Center personal access token'}{came_from(conf, 'email')}")
     print(f"token     {'from ' + where if where else 'not set'}")
     print(f"space     {conf.get('space') or 'not set'}")
     print(f"auto      {', '.join(auto_wikis(conf)) or 'off'}")
     for k in sorted(conf):
-        if k.startswith(("space.", "parent")):
+        if k.startswith(("space.", "parent")) and k != "_from":
             print(f"{k:<9} {conf[k]}")
     if not conf["url"] or not where:
         print(f"\nNot ready. {CMD} confluence --help has the settings.")

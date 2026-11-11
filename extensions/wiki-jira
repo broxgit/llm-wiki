@@ -29,7 +29,10 @@ import urllib.error
 import urllib.request
 
 CMD = os.environ.get("LLM_WIKI_CMD", "wiki")
-CONFIG = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "llm-wiki", "jira")
+CONFIG_DIR = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "llm-wiki")
+CONFIG = os.path.join(CONFIG_DIR, "jira")
+# The sign-in every Atlassian extension shares.
+SHARED = os.path.join(CONFIG_DIR, "atlassian")
 KEY = re.compile(r"(?<![A-Za-z0-9-])([A-Z][A-Z0-9]{1,9}-[0-9]+)(?![A-Za-z0-9-])")
 
 USAGE = f"""Usage: {CMD} jira [check] [--close] [<wiki>]
@@ -45,18 +48,23 @@ USAGE = f"""Usage: {CMD} jira [check] [--close] [<wiki>]
   show     One line for each ticket: its status and summary.
   config   What is set, and whether Jira accepts the sign-in.
 
-Settings go in {CONFIG}, one `name = value` a line:
-  url        https://your-company.atlassian.net, or your own server's address
-  email      your Atlassian account's email. Jira Cloud only: leave it out for Data Center.
+The sign-in goes in {SHARED}, which every Atlassian
+extension reads, one `name = value` a line:
+  site       https://your-company.atlassian.net, or your own server's address
+  email      your Atlassian account's email. Cloud only: leave it out for Data Center.
   token_cmd  a command that prints your API token, such as
-             security find-generic-password -s jira -w
+             security find-generic-password -s atlassian -w
+
+Jira's own settings go in {CONFIG}:
+  url, email, token_cmd   only where Jira's differ from the shared ones. They win.
   projects   optional: PROJ, OPS. Only keys in these projects count as tickets.
   auto_close optional: yes. Then check --close runs by itself once a day, in the
              background, and a finished ticket closes its item with nobody asking.
   done_statuses  optional: Released, Deployed. Then only a ticket in one of these
              statuses counts as done, whatever Jira's own grouping says.
-The environment wins over the file: JIRA_URL, JIRA_EMAIL, JIRA_API_TOKEN, JIRA_PROJECTS,
-JIRA_AUTO_CLOSE, JIRA_DONE_STATUSES.
+The environment wins over the files: JIRA_URL, JIRA_EMAIL, JIRA_API_TOKEN, JIRA_PROJECTS,
+JIRA_AUTO_CLOSE, JIRA_DONE_STATUSES, and for every Atlassian extension ATLASSIAN_SITE,
+ATLASSIAN_EMAIL and ATLASSIAN_API_TOKEN, which Jira's own names win over.
 Keep the token out of the file. With an email the sign-in is Jira Cloud's (email and
 API token); without one the token is sent as a Data Center personal access token.
 """
@@ -80,10 +88,10 @@ def unreachable(msg):
     die(msg)
 
 
-def settings():
+def read_conf(path):
     conf = {}
     try:
-        with open(CONFIG, encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             for line in f:
                 line = line.split("#", 1)[0].strip()
                 if "=" in line:
@@ -91,10 +99,41 @@ def settings():
                     conf[k.strip()] = v.strip()
     except FileNotFoundError:
         pass
-    for k, env in (("url", "JIRA_URL"), ("email", "JIRA_EMAIL"), ("projects", "JIRA_PROJECTS"), ("auto_close", "JIRA_AUTO_CLOSE"), ("done_statuses", "JIRA_DONE_STATUSES")):
-        if os.environ.get(env):
-            conf[k] = os.environ[env]
-    conf["url"] = conf.get("url", "").rstrip("/")
+    return conf
+
+
+def pick(*choices):
+    """The first value that is set, and where it came from."""
+    for value, where in choices:
+        if value:
+            return value, where
+    return "", ""
+
+
+def came_from(conf, key):
+    """For config: where a value came from, when it wasn't this extension's own file."""
+    where = conf["_from"].get(key, "")
+    return f"  (from {where})" if where and where != "this file" else ""
+
+
+def settings():
+    """This extension's settings. The sign-in comes, for each value, from the first of:
+    Jira's environment, Atlassian's, Jira's file, the file every Atlassian extension shares."""
+    conf = read_conf(CONFIG)
+    shared = read_conf(SHARED)
+    env = os.environ.get
+    src = {}
+    conf["url"], src["url"] = pick((env("JIRA_URL"), "JIRA_URL"), (env("ATLASSIAN_SITE"), "ATLASSIAN_SITE"),
+                                   (conf.get("url"), "this file"), (shared.get("site"), "the shared file"))
+    conf["email"], src["email"] = pick((env("JIRA_EMAIL"), "JIRA_EMAIL"), (env("ATLASSIAN_EMAIL"), "ATLASSIAN_EMAIL"),
+                                       (conf.get("email"), "this file"), (shared.get("email"), "the shared file"))
+    conf["token_cmd"], src["token_cmd"] = pick((conf.get("token_cmd"), "token_cmd"),
+                                               (shared.get("token_cmd"), "token_cmd in the shared file"))
+    conf["_from"] = src
+    for k, name in (("projects", "JIRA_PROJECTS"), ("auto_close", "JIRA_AUTO_CLOSE"), ("done_statuses", "JIRA_DONE_STATUSES")):
+        if env(name):
+            conf[k] = env(name)
+    conf["url"] = conf["url"].rstrip("/")
     conf["projects"] = [p.strip().upper() for p in conf.get("projects", "").split(",") if p.strip()]
     conf["done_statuses"] = [p.strip().lower() for p in conf.get("done_statuses", "").split(",") if p.strip()]
     return conf
@@ -102,8 +141,9 @@ def settings():
 
 def token(conf):
     """The API token and where it came from. Never printed."""
-    if os.environ.get("JIRA_API_TOKEN"):
-        return os.environ["JIRA_API_TOKEN"], "JIRA_API_TOKEN"
+    for name in ("JIRA_API_TOKEN", "ATLASSIAN_API_TOKEN"):
+        if os.environ.get(name):
+            return os.environ[name], name
     if conf.get("token_cmd"):
         try:
             out = subprocess.run(conf["token_cmd"], shell=True, capture_output=True, text=True, timeout=30)
@@ -111,19 +151,19 @@ def token(conf):
             die("token_cmd took more than 30 seconds")
         if out.returncode != 0 or not out.stdout.strip():
             die(f"token_cmd printed no token (exit {out.returncode}). Run it yourself to see why.")
-        return out.stdout.strip(), "token_cmd"
+        return out.stdout.strip(), conf["_from"]["token_cmd"]
     return "", ""
 
 
 class Jira:
     def __init__(self, conf):
         if not conf["url"]:
-            die(f"no Jira address. Set url in {CONFIG}, or JIRA_URL. {CMD} jira --help has the settings.")
+            die(f"no Jira address. Set site in {SHARED}, or url in {CONFIG}, or JIRA_URL. {CMD} jira --help has the settings.")
         if not conf["url"].startswith(("https://", "http://")):
             die(f"url has to start with https:// (it is {conf['url']})")
         tok, _ = token(conf)
         if not tok:
-            die(f"no API token. Set token_cmd in {CONFIG}, or JIRA_API_TOKEN. {CMD} jira --help has the settings.")
+            die(f"no API token. Set token_cmd in {SHARED}, or JIRA_API_TOKEN. {CMD} jira --help has the settings.")
         self.url = conf["url"]
         if conf.get("email"):
             auth = "Basic " + base64.b64encode(f"{conf['email']}:{tok}".encode()).decode()
@@ -458,9 +498,10 @@ def cmd_config(args):
         die("config takes no arguments")
     conf = settings()
     _, where = token(conf)
+    print(f"shared    {SHARED}{'' if os.path.isfile(SHARED) else ' (not there yet)'}")
     print(f"file      {CONFIG}{'' if os.path.isfile(CONFIG) else ' (not there yet)'}")
-    print(f"url       {conf['url'] or 'not set'}")
-    print(f"email     {conf.get('email') or 'not set, so the token is sent as a Data Center personal access token'}")
+    print(f"url       {conf['url'] or 'not set'}{came_from(conf, 'url')}")
+    print(f"email     {conf.get('email') or 'not set, so the token is sent as a Data Center personal access token'}{came_from(conf, 'email')}")
     print(f"token     {'from ' + where if where else 'not set'}")
     print(f"projects  {', '.join(conf['projects']) or 'any'}")
     print(f"auto      {'check --close runs by itself once a day' if auto_on(conf) else 'off'}")
