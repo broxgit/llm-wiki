@@ -4,6 +4,12 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-11-19: how often extensions run by themselves
+
+- `wiki extensions every 4h` sets how often extensions run by themselves: `90m`, `4h`, `2d`, `3w`. It was fixed at 24 hours, still the default.
+- `wiki extensions every jira 2h` gives one extension an interval of its own, which wins over the one for all.
+- `wiki setup --new` asks once, when such an extension is on.
+
 ## 2026-11-18: Jira tells a dropped or blocked ticket from a finished one
 
 - A ticket closed as Won't Do, Duplicate or Cancelled no longer closes its item. The item stays open, and a new one asks you to decide.

@@ -184,12 +184,15 @@ Usage: $WIKI_CMD <command> [options]
                        access. An MCP client starts it. --print gives its config entry.
   news [--all]         What's new in llm-wiki since you last looked.
   obsidian [--no-open] Browse the wikis in Obsidian: write the vault's starter settings and open it.
-  extensions [path | add <name> | remove <name> | log <name> | tick]
+  extensions [path | add <name> | remove <name> | log <name> | tick | every ...]
                        Commands of your own: $WIKI_CMD <name> runs an executable named
                        wiki-<name> in the extensions folder. Lists them, or prints the folder.
                        add turns on one that ships with llm-wiki, such as jira. remove turns it off.
                        log shows how an extension's last runs for events ended. tick runs
                        the tick event now, for cron on a machine with no sessions.
+                       every [<time>] says or sets how long passes between ticks: 90m, 4h,
+                       2d, 3w; 24h unless set. every <name> <time> is for one extension
+                       and wins over it; every <name> default takes that away.
   tour [--clean] [--dir DIR]
                        A hands-on tour for your agent, on a made-up project in a sandbox.
                        Ask your agent to run it and follow what it prints.
@@ -4104,6 +4107,18 @@ setup_extensions() {
     fi
     setup_mark "extension.$n"
   done
+  [ -n "$(ext_wanting tick)" ] || return 0
+  if [ "$SETUP_MODE" = new ] && setup_done extensions.every; then return 0; fi
+  section "Extensions: how often"
+  echo "An extension that works by itself is run from session start, in the background, at most once in"
+  echo "this long: $(ext_wanting tick | tr '\n' ' ')"
+  echo "Give a number and m, h, d or w, such as 4h or 2d. One extension can have its own, which wins:"
+  echo "$WIKI_CMD extensions every <name> <time>"
+  ask "Time between runs" "$(ext_every)"
+  if dur_minutes "$ANSWER" >/dev/null; then ext_every_set every "$((10#${ANSWER%[mhdw]}))${ANSWER#"${ANSWER%[mhdw]}"}"
+  else echo "  $ANSWER isn't a length of time, so it stays as it was"; fi
+  echo "  tick: every $(ext_every)"
+  setup_mark extensions.every
 }
 
 setup_helper() {
@@ -5889,13 +5904,71 @@ EOF
 # top, and is then run in the background, with nobody asking, as
 #   wiki-<name> --wiki-event sync <wiki>   after a sync changed that wiki, with
 #                                          LLM_WIKI_CHANGED naming a file of the paths
-#   wiki-<name> --wiki-event tick          from session start, once per EXT_TICK_MINUTES
+#   wiki-<name> --wiki-event tick          from session start, once in each ext_every
 # Exit 0 is done, 75 is "not now, try at the next event", anything else is a failure,
 # which `wiki status` reports. What it prints goes to a log, never to the session.
 EXT_DIR="${LLM_WIKI_EXTENSIONS_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/llm-wiki/extensions}"
 EXT_API=2
 EXT_STATE="${XDG_STATE_HOME:-$HOME/.local/state}/llm-wiki/extensions"
-EXT_TICK_MINUTES="${LLM_WIKI_TICK_MINUTES:-1440}"
+# How often the tick comes is a setting on each machine, `extensions every`: a length
+# of time such as 90m, 4h, 2d or 3w. There is one for all extensions and, where it is
+# set, one of an extension's own, which wins. LLM_WIKI_TICK_MINUTES overrides both, for
+# the smoke tests.
+EXT_TICK_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/llm-wiki/extensions-tick"
+EXT_EVERY_HINT="Use a number and m, h, d or w, such as 4h or 2d, from 5m to 52w."
+# dur_minutes <text>: the minutes in a length of time, or fails for one it can't read.
+dur_minutes() {
+  local n u
+  n="${1%[mhdw]}"
+  u="${1#"$n"}"
+  case "$n" in '' | *[!0-9]*) return 1 ;; esac
+  [ "${#n}" -le 6 ] || return 1
+  n=$((10#$n))
+  case "$u" in
+    m) ;;
+    h) n=$((n * 60)) ;;
+    d) n=$((n * 1440)) ;;
+    w) n=$((n * 10080)) ;;
+    *) return 1 ;;
+  esac
+  [ "$n" -ge 5 ] && [ "$n" -le 524160 ] || return 1
+  printf '%s\n' "$n"
+}
+# ext_every_own <name>: the interval set for that extension alone, or nothing.
+ext_every_own() {
+  local v
+  v="$(sed -n "s/^every\.$1=//p" "$EXT_TICK_FILE" 2>/dev/null | head -n 1)"
+  if dur_minutes "$v" >/dev/null 2>&1; then printf '%s\n' "$v"; fi
+}
+# ext_every [<name>]: the interval in force, for all or for that extension, as it was set.
+ext_every() {
+  local v=""
+  [ -z "${1:-}" ] || v="$(ext_every_own "$1")"
+  [ -n "$v" ] || v="$(sed -n 's/^every=//p' "$EXT_TICK_FILE" 2>/dev/null | head -n 1)"
+  dur_minutes "$v" >/dev/null 2>&1 || v=24h
+  printf '%s\n' "$v"
+}
+# ext_every_set <every | every.NAME> <length of time, or nothing to take it away>
+ext_every_set() {
+  local key="$1" val="$2"
+  mkdir -p "$(dirname "$EXT_TICK_FILE")" || return 1
+  {
+    printf '# How long passes between the runs extensions make by themselves, the tick event.\n'
+    printf '# every is for all of them, and every.<name> for one. Written by %s extensions every.\n' "$WIKI_CMD"
+    { grep -v '^#' "$EXT_TICK_FILE" 2>/dev/null || true; } | { grep -v "^$key=" || true; }
+    [ -z "$val" ] || printf '%s=%s\n' "$key" "$val"
+  } > "$EXT_TICK_FILE.new" && mv "$EXT_TICK_FILE.new" "$EXT_TICK_FILE"
+}
+# ext_every_all: "24h" and, for each extension that runs on tick with its own, "; jira 4h".
+ext_every_all() {
+  local n v out
+  out="$(ext_every)"
+  for n in $(ext_wanting tick); do
+    v="$(ext_every_own "$n")"
+    [ -z "$v" ] || out="$out; $n $v"
+  done
+  printf '%s\n' "$out"
+}
 EXT_EVENT_SECONDS="${LLM_WIKI_EVENT_SECONDS:-300}"
 # Extensions that ship with llm-wiki sit beside wiki.sh and are off until turned on:
 # `extensions add <name>` writes the name to EXT_ON, on this machine. They are found
@@ -6022,13 +6095,14 @@ ext_sync_event() {
 }
 
 # ext_tick: the tick event, for each extension that asks for it and hasn't had one
-# within EXT_TICK_MINUTES. Session start calls it, so it starts runs and returns.
+# within the interval. Session start calls it, so it starts runs and returns.
 ext_tick() {
-  local n
+  local n every
   [ -z "${LLM_WIKI_IN_EVENT:-}" ] && [ -z "${LLM_WIKI_BACKGROUND:-}" ] || return 0
   for n in $(ext_wanting tick); do
     mkdir -p "$EXT_STATE/$n" 2>/dev/null || continue
-    [ -z "$(find "$EXT_STATE/$n/tick.stamp" -mmin "-$EXT_TICK_MINUTES" 2>/dev/null)" ] || continue
+    every="${LLM_WIKI_TICK_MINUTES:-$(dur_minutes "$(ext_every "$n")")}"
+    [ -z "$(find "$EXT_STATE/$n/tick.stamp" -mmin "-$every" 2>/dev/null)" ] || continue
     : 2>/dev/null > "$EXT_STATE/$n/tick.stamp" || continue
     ext_launch "$n" tick
   done
@@ -6108,7 +6182,43 @@ cmd_extensions() {
       [ "$any" = 1 ] || echo "No extension that is on asks for the tick event."
       return 0
       ;;
-    *) die "extensions takes path, add <name>, remove <name>, log <name>, tick, or nothing" ;;
+    every)
+      shift
+      [ $# -le 2 ] || die "usage: $WIKI_CMD extensions every [<name>] [<time>]"
+      if [ $# -eq 0 ]; then
+        echo "tick: every $(ext_every)"
+        for n in $(ext_wanting tick); do
+          d="$(ext_every_own "$n")"
+          [ -z "$d" ] || echo "$n: every $d"
+        done
+        return 0
+      fi
+      # A length of time starts with a digit, and an extension's name never does.
+      case "$1" in
+        [0-9]*)
+          [ $# -eq 1 ] || die "usage: $WIKI_CMD extensions every [<name>] [<time>]"
+          dur_minutes "$1" >/dev/null || die "$1 isn't a length of time. $EXT_EVERY_HINT"
+          ext_every_set every "$((10#${1%[mhdw]}))${1#"${1%[mhdw]}"}"
+          setup_mark extensions.every
+          echo "tick: every $(ext_every)"
+          ;;
+        *)
+          ext_file "$1" >/dev/null || die "$1 isn't a length of time, or an extension that is on. $EXT_EVERY_HINT"
+          case "${2:-}" in
+            "") ;;
+            default) ext_every_set "every.$1" "" ;;
+            *)
+              dur_minutes "$2" >/dev/null || die "$2 isn't a length of time. $EXT_EVERY_HINT"
+              ext_every_set "every.$1" "$((10#${2%[mhdw]}))${2#"${2%[mhdw]}"}"
+              ;;
+          esac
+          if [ -n "$(ext_every_own "$1")" ]; then echo "$1: every $(ext_every "$1")"
+          else echo "$1: every $(ext_every "$1"), the same as the rest"; fi
+          ;;
+      esac
+      return 0
+      ;;
+    *) die "extensions takes path, add <name>, remove <name>, log <name>, tick, every, or nothing" ;;
   esac
   for f in "$EXT_DIR"/wiki-*; do
     [ -f "$f" ] || continue
@@ -6139,6 +6249,7 @@ cmd_extensions() {
   echo
   echo "An extension is an executable named wiki-<name> in $(tilde "$EXT_DIR")."
   echo "$WIKI_CMD <name> runs it. docs/extensions.md says what it is given."
+  [ -z "$(ext_wanting tick)" ] || echo "Runs on tick come every $(ext_every_all), from session start. $WIKI_CMD extensions every changes that."
 }
 
 # ---- completion -------------------------------------------------------------
@@ -6190,8 +6301,9 @@ cmd_complete() {
     index) [ "$i" -eq 2 ] && wiki_names; echo --check ;;
     lint) wiki_names; echo --all ;;
     extensions)
-      [ "$i" -eq 2 ] && printf 'path\nadd\nremove\nlog\ntick\n'
-      if [ "$i" -eq 3 ] && [ "${3:-}" = log ]; then extension_names; return 0; fi
+      [ "$i" -eq 2 ] && printf 'path\nadd\nremove\nlog\ntick\nevery\n'
+      if [ "$i" -eq 3 ] && { [ "${2:-}" = log ] || [ "${2:-}" = every ]; }; then extension_names; return 0; fi
+      if [ "$i" -eq 4 ] && [ "${2:-}" = every ]; then echo default; return 0; fi
       if [ "$i" -eq 3 ]; then for k in "$EXT_SHIPPED"/wiki-*; do [ ! -f "$k" ] || printf '%s\n' "${k##*/wiki-}"; done; fi
       ;;
     log)
@@ -7258,6 +7370,7 @@ setup_pending() {
     k="${k##*/wiki-}"
     if ext_shipped "$k" >/dev/null && ! ext_on "$k" && ! setup_done "extension.$k"; then echo "extension.$k"; fi
   done
+  if [ -n "$(ext_wanting tick)" ]; then setup_done extensions.every || echo extensions.every; fi
   if [ -f "$HELPER_LOCK" ] && [ -n "$(helper_platform)" ]; then setup_done helper || echo helper; fi
   case "$(chat_state)" in
     old) echo chat ;;
@@ -7675,8 +7788,10 @@ setup_list() {
     printf '\n'
   fi
   k="$(extension_names | tr '\n' ' ')"
+  k="${k% }"
   printf '%-19s on: %s' "extensions" "${k:-none}"
-  case "$pending" in *" extension."*) printf '  <- new' ;; esac
+  [ -z "$(ext_wanting tick)" ] || printf ' (by themselves every %s)' "$(ext_every_all)"
+  case "$pending" in *" extension."* | *" extensions.every "*) printf '  <- new' ;; esac
   printf '\n'
   printf '%-19s %s\n' "compile" "$(compile_auto_on && echo "in the background at session start" || echo "by sessions (background compile is off)")"
   printf '%-19s %s' "helper" "$(cmd_helper | head -n 1 | sed 's/^helper: //'), fetched at session start: $(helper_auto_on && echo on || echo off)"
