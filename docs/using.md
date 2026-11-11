@@ -360,6 +360,23 @@ Press Tab after `wiki` to fill in commands, wiki names, journal settings and the
 
 Safe. Saving a note adds one new file and touches nothing else, so any number of sessions can save at once. Compiling changes shared files, so a lock keeps it to one session per wiki. A session that finds the lock held skips compiling and carries on.
 
+## Starting a session in a folder of clones
+
+A session usually belongs to one repository, and its wiki is the one that covers it. Some people work differently: a folder for a ticket, which is not a repository itself, holding clones of the repositories the ticket touches.
+
+```
+~/repos/INFRA-17937/
+  CONTEXT.md
+  srebot/              a clone
+  srebot_deployment/   a clone
+```
+
+Start a session in that folder and it uses the wikis of the clones inside. It says so at the start, naming them, so you can say if that is wrong. A clone with no wiki yet is named too. Started inside one of the clones, a session uses that repository's wiki, as anywhere else.
+
+Up to three wikis are read in full, and any more are named for the agent to open when the work reaches them. Only the folders directly inside are looked at.
+
+In a folder that is no repository and holds none, the session uses the shared wiki, says so, and the agent asks whether you want llm-wiki used for that work.
+
 ## All commands
 
 Run `wiki` with no arguments for the full list. The ones you're likely to use:

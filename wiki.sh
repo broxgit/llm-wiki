@@ -787,8 +787,88 @@ EOF2
 # wiki's index, each shared wiki's index and For agents section, and what waits.
 # Agents without the plugin's hook made five or six calls for this, and skipped the
 # pull in every run of the first test with another agent (Gemini, 2026-10-29).
+# and_list <words>: "a", "a and b", "a, b and c".
+and_list() {
+  local out="" n=$# i=0 w
+  for w in "$@"; do
+    i=$((i + 1))
+    if [ "$i" -eq 1 ]; then out="$w"
+    elif [ "$i" -eq "$n" ]; then out="$out and $w"
+    else out="$out, $w"; fi
+  done
+  printf '%s' "$out"
+}
+
+# place <folder>: for a folder that is in no repository, which wikis a session there
+# should use. Some people start a session in a folder for a ticket, which holds clones
+# of the repositories the ticket touches. It looks one level down, at 30 folders at
+# most, so session start stays quick, and sets:
+#   PLACE_WIKIS  the wikis that cover those clones, each once, in the folder's order
+#   PLACE_HAVE   the clones a wiki covers
+#   PLACE_LACK   the clones no wiki covers yet
+place() {
+  local d n=0 name w
+  PLACE_WIKIS="" PLACE_HAVE="" PLACE_LACK=""
+  for d in "$1"/*/; do
+    d="${d%/}"
+    [ -d "$d" ] || continue
+    n=$((n + 1))
+    [ "$n" -le 30 ] || break
+    [ -e "$d/.git" ] || continue
+    name="$(repo_name "$d")"
+    w="$(which_wiki "$name" || true)"
+    if [ -n "$w" ] && is_wiki "$WIKIS_DIR/$w"; then
+      PLACE_HAVE="$PLACE_HAVE $name"
+      case " $PLACE_WIKIS " in *" $w "*) ;; *) PLACE_WIKIS="$PLACE_WIKIS $w" ;; esac
+    else
+      PLACE_LACK="$PLACE_LACK $name"
+    fi
+  done
+}
+
+# placeable <folder>: whether a folder is one a session could be working in. The home
+# folder, the collection and the temporary folder are where a hook or the MCP server
+# lands when it was given no folder at all, so nothing is read into what they hold.
+placeable() {
+  local d o
+  d="$(cd "$1" 2>/dev/null && pwd -P)" || return 1
+  [ "$d" != / ] || return 1
+  for o in "$HOME" "$WIKIS_DIR" "${TMPDIR:-/tmp}" /tmp /var/tmp; do
+    o="$(cd "$o" 2>/dev/null && pwd -P || true)"
+    [ "$d" != "$o" ] || return 1
+  done
+  return 0
+}
+
+# place_note: what a session that isn't in a repository is told, after place. It always
+# says which wikis are used and why, and has the agent tell the user: a session that
+# fell back to the shared wiki without a word went unnoticed for weeks.
+place_note() {
+  local have lack many
+  # shellcheck disable=SC2086
+  have="$(and_list $PLACE_HAVE)"
+  # shellcheck disable=SC2086
+  lack="$(and_list $PLACE_LACK)"
+  # shellcheck disable=SC2086
+  set -- $PLACE_LACK
+  if [ $# -gt 1 ]; then many="clones of $lack, which have no wikis yet"; else many="a clone of $lack, which has no wiki yet"; fi
+  if [ -n "$PLACE_WIKIS" ]; then
+    # shellcheck disable=SC2086
+    printf "This folder isn't a git repository. It holds clones of %s, so their wikis are this session's: %s. Tell the user, in one line, which wikis you are using and why, and that they can say so if that is wrong." "$have" "$(and_list $PLACE_WIKIS)"
+    [ -z "$lack" ] || printf ' %s has no wiki yet: create one with `%s new <name>` when there is something to file there.' "$lack" "$WIKI_CMD"
+    # shellcheck disable=SC2086
+    set -- $PLACE_LACK
+    [ $# -ne 1 ] || printf ' That is `%s new %s`.' "$WIKI_CMD" "$1"
+  elif [ -n "$lack" ]; then
+    printf "This folder isn't a git repository. It holds %s, so the shared wiki is this session's. Tell the user so in one line. Create a repository's wiki with \`%s new <name>\` when there is something to file there." "$many" "$WIKI_CMD"
+  else
+    printf "This folder isn't a git repository, and holds none, so the shared wiki is this session's. Tell the user so in one line, and ask whether they want llm-wiki used for this work, and if so which wiki it belongs to."
+  fi
+  printf '\n'
+}
+
 cmd_start() {
-  local arg="${1:-$PWD}" repo="" top w="" wiki="" note="" out sshc tv v line sname spath d n hinted=""
+  local arg="${1:-$PWD}" repo="" top w="" wiki="" note="" out sshc tv v line sname spath d n hinted="" extras="" more=""
   if [ -d "$arg" ]; then
     if top="$(git -C "$arg" rev-parse --show-toplevel 2>/dev/null)"; then repo="$(repo_name "$top")"; fi
   else
@@ -799,12 +879,24 @@ cmd_start() {
   [ -d "$WIKIS_DIR" ] || die "no wikis at $(tilde "$WIKIS_DIR"). Run: $WIKI_CMD setup"
   helper_auto >/dev/null 2>&1 || true
   if [ -n "$repo" ]; then w="$(which_wiki "$repo")"; [ -z "$w" ] || wiki="$WIKIS_DIR/$w"; fi
+  # Not in a repository: the wikis of the clones in this folder, when it holds any.
+  if [ -z "$repo" ] && [ -d "$arg" ] && placeable "$arg"; then
+    place "$arg"
+    note="$(place_note)"
+    # shellcheck disable=SC2086
+    set -- $PLACE_WIKIS
+    if [ $# -gt 0 ]; then
+      wiki="$WIKIS_DIR/$1"
+      shift
+      extras="$*"
+    fi
+  fi
   if [ -z "$wiki" ]; then
     wiki="$WIKIS_DIR/$SHARED"
     is_wiki "$wiki" || die "no wiki covers ${repo:-this folder}, and there's no shared wiki at $(tilde "$wiki")"
     if [ -n "$repo" ]; then
       note="No wiki covers $repo yet, so the shared wiki is this session's. Create $repo's wiki with \`$WIKI_CMD new $repo\` the first time there's something to file."
-    else
+    elif [ -z "$note" ]; then
       note="Not in a repository, so the shared wiki is this session's."
     fi
   fi
@@ -852,12 +944,28 @@ cmd_start() {
   done <<EOF2
 $(grep '^- [^:]*: ' "$wiki/links.md" 2>/dev/null || true)
 EOF2
+  # The other wikis this folder's clones belong to: two more in full, the rest by name,
+  # since every index printed here is read in every session.
+  n=0
+  for d in $extras; do
+    n=$((n + 1))
+    if [ "$n" -gt 2 ]; then more="$more $d"; continue; fi
+    echo
+    echo "===== $(tilde "$WIKIS_DIR/$d")/index.md (also in this folder)"
+    cat "$WIKIS_DIR/$d/index.md" 2>/dev/null || true
+    print_conventions "$WIKIS_DIR/$d"
+  done
+  if [ -n "$more" ]; then
+    echo
+    # shellcheck disable=SC2086
+    echo "Also in this folder, and not printed here: $(and_list $more). Read one's index when the work reaches it: $(tilde "$WIKIS_DIR")/<name>/index.md"
+  fi
   # This wiki's own agreements and tools, after the shared ones: the more specific last.
   print_conventions "$wiki"
   ( ext_tick ) >/dev/null 2>&1 || true
   echo
   echo "===== Waiting to be compiled"
-  for d in "$wiki" $(grep '^- [^:]*: ' "$wiki/links.md" 2>/dev/null | sed 's/^[^:]*: *//; s/ |.*//; s#^~/#'"$HOME"'/#' || true); do
+  for d in "$wiki" $(for line in $extras; do printf '%s ' "$WIKIS_DIR/$line"; done) $(grep '^- [^:]*: ' "$wiki/links.md" 2>/dev/null | sed 's/^[^:]*: *//; s/ |.*//; s#^~/#'"$HOME"'/#' || true); do
     is_wiki "$d" || continue
     if [ -n "$(unlisted "$d")" ]; then echo "$(tilde "$d"): unknown, can't read $(tilde "$(unlisted "$d")"). If this runs in an agent's sandbox, allow $(tilde "$WIKIS_DIR") there."; continue; fi
     n="$(pending_files "$d" | wc -l | tr -d ' ')"
@@ -8661,6 +8769,17 @@ case "$cmd" in
   __ext-run) ext_run "$@" >/dev/null 2>&1 || true; exit 0 ;;
   # The session hook asks for a wiki's reminders, to hand out at tool calls.
   __reminders) session_reminders "$(wiki_root "${1:-}")"; exit 0 ;;
+  # The session hook asks where a folder that is in no repository belongs: the wiki to
+  # read first, or nothing for the shared one, then what to tell the agent.
+  __place)
+    placeable "${1:-$PWD}" || { printf '\n\n'; exit 0; }
+    place "${1:-$PWD}"
+    # shellcheck disable=SC2086
+    set -- $PLACE_WIKIS
+    if [ $# -gt 0 ]; then printf '%s\n' "$WIKIS_DIR/$1"; else printf '\n'; fi
+    place_note
+    exit 0
+    ;;
   collections)
     collections | while IFS="$TAB" read -r n f r; do
       printf '%-10s %s%s%s\n' "$n" "$(tilde "$f")" "${r:+  matches: }$r" "$([ "$f" = "$WIKIS_DIR" ] && echo '  <- here')"
