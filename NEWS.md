@@ -4,6 +4,12 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-11-17: Jira and Confluence with nobody asking
+
+- With `auto_close = yes` in Jira's settings, a ticket that finishes closes the open item that names it, checked once a day in the background.
+- With `auto = <wikis>` in Confluence's settings, those wikis are published when a sync changes their pages.
+- Both are off until you set them, and neither prints into a session. `wiki extensions log <name>` shows the last runs.
+
 ## 2026-11-16: extensions can run by themselves
 
 - An extension can ask to be run in the background after a sync changes a wiki, or once a day from session start. Nothing is printed into a session.

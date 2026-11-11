@@ -40,7 +40,9 @@ projects = PROJ, OPS
 - On a Mac, store the token from the clipboard: copy it, then run `security add-generic-password -a "$USER" -s jira -U -w "$(pbpaste)"`. Don't let `security` prompt for it: the prompt keeps only the first 128 characters, and an Atlassian token is longer.
 - `projects` is optional. Without it, any word shaped like a key is looked up, and the ones Jira doesn't know are skipped.
 
-To have agents check for themselves, add a line to a wiki's `wiki/conventions.md`: "Before treating an open item that names a ticket as still waiting, run `wiki jira check`."
+To have it run by itself, add `auto_close = yes` to the settings. Once a day, in the background, it then does what `check --close` does: a ticket finishes in Jira, a note is saved, and the next compile closes the item, with no session asked and no tokens spent. `wiki extensions log jira` shows what the last run did.
+
+Without that, an agent can check for itself: add a line to a wiki's `wiki/conventions.md`, such as "Before treating an open item that names a ticket as still waiting, run `wiki jira check`."
 
 ### Confluence
 
@@ -66,7 +68,15 @@ space.payments = PAY
 - `space` is the key of the space to publish into. `space.<wiki>` and `parent.<wiki>` set it for one wiki. `parent` is optional: the id of a page to publish under.
 - `url`, `email` and `token_cmd` are as for Jira, and fall back to the Jira extension's settings, so on Atlassian Cloud one sign-in serves both.
 
-Everyone who can read the space can read what you publish, and a wiki holds whatever its sessions noted. Publish a wiki only to a space whose readers may see all of it, and run the dry run first. An agent should ask before publishing.
+To have a wiki published by itself, name it in `auto`:
+
+```
+auto = payments, relay
+```
+
+When a sync changes a page of one of those wikis, it is published in the background, seconds after the compile that changed it. A sync that changed only notes publishes nothing. Once a day it also catches up on anything a sync couldn't publish, such as one made with no network. `wiki extensions log confluence` shows the last runs, and `wiki status` says when one failed. The list is on each machine, so each person chooses.
+
+Everyone who can read the space can read what you publish, and a wiki holds whatever its sessions noted. Publish a wiki only to a space whose readers may see all of it, and run the dry run first. An agent should ask before publishing, and before adding a wiki to `auto`.
 
 It uses Confluence's first REST API, the only one Data Center has. Atlassian marks it deprecated on Cloud, where it still answers.
 
@@ -143,7 +153,7 @@ What else to know:
 
 Being run for an event is not the same as acting on it. An extension that does something others can see, such as publishing, should act only where a setting of its own says so, and leave that setting off until someone turns it on.
 
-The Jira and Confluence extensions don't use events yet.
+The Jira extension runs on `tick` and the Confluence extension on `sync` and `tick`. Each does nothing until its own setting says so: `auto_close` for Jira, `auto` for Confluence.
 
 ## Rules
 
