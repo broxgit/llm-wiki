@@ -15,7 +15,7 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 ### Extensions: integrations outside wiki.sh
 
 - **Why:** Obsidian, Jira, Confluence, CI and git hosting are each optional, and each one built into `wiki.sh` is code every user carries. Teams also want to add their own. Decided on 2026-11-10: integrations become extensions, home-grown ones are supported as far as they can be, and the features stay agent-agnostic, with a thin layer for each agent.
-- **Sketch:** the command seam, events, two extensions that act on them, and a sign-in they share are done (see Done). Next, the last thing both extensions needed that events don't give: a wiki's content as data (`wiki open --data`, `wiki pages <wiki> --data`), so an extension stops parsing `open.md` and frontmatter itself. After that: CI (Jenkins, GitLab CI and GitHub Actions as separate extensions over one shared prompt), and moving `wiki obsidian` out.
+- **Sketch:** everything the first two extensions needed is done (see Done): the command seam, events, a sign-in they share, and a wiki's content as data. Next: CI (Jenkins, GitLab CI and GitHub Actions as separate extensions over one shared prompt), and moving `wiki obsidian` out. A third extension written by someone else would be the real test of the contract.
 - **Open:** how a team shares extensions. They are per machine on purpose, so a pull can't add a command. A shared collection could carry them behind a step that asks each person once, on each machine, whether to trust each one. Where extensions that ship with llm-wiki live, and whether `wiki update` installs them. How an extension adds a handbook rule without `wiki upgrade` dropping it, and what that costs in context. Whether the helper needs to know about extensions at all.
 
 ### Know whether sessions capture and compile
@@ -78,6 +78,12 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Extensions: a wiki's content as data (2026-11-11)
+
+- **Why:** each extension parsed the wiki's files itself. Jira read `open.md` with its own parser, and Confluence walked `wiki/` and read frontmatter with its own. A change to either format would have broken them without a test failing, and every later extension would have written the same parsers again.
+- **What changed:** `wiki open --data [<wiki>]` prints every entry of the open items, the closed ones too, one a line, tab separated: wiki, state, kind, who, due, status, the notes it came from, heading. `wiki pages <wiki> --data` prints each page under `wiki/`: path, updated, verified, title, where the title is the frontmatter's, or the page's first line when that is a heading, or the file's name. `wiki pages <wiki>` alone lists them for a person. Both are plain whatever the terminal is. They are Bash and awk, with no Python. The Jira extension's `ledger` and the Confluence extension's `wiki_pages` now run them through `$LLM_WIKI`, and their own parsers are gone; Confluence still reads a page's text from its file. `docs/extensions.md` gives the fields as part of what an extension can rely on.
+- **Still untested:** an extension by someone else reading them. A heading or a title with a tab in it has the tab turned into a space.
 
 ### Extensions: one Atlassian sign-in (2026-11-11)
 

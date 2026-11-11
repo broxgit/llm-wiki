@@ -4,6 +4,11 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-11-23: a wiki's open items and pages, for a program
+
+- `wiki open --data` prints every open item, and `wiki pages <wiki> --data` every page with its title, one a line and tab separated.
+- They are for extensions and scripts, so they stop reading the wiki's files themselves. `wiki pages <wiki>` alone lists the pages for you.
+
 ## 2026-11-21: one Atlassian sign-in for Jira and Confluence
 
 - The site, email and token command go in `~/.config/llm-wiki/atlassian`, and both extensions read them there.

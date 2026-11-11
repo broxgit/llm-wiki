@@ -492,23 +492,20 @@ def render(text, wiki="", source_path="", titles=None):
 
 # ---- commands ------------------------------------------------------------------
 
-def wiki_pages(root, wiki):
-    """[(path in the wiki, title, text)], the index first."""
+def wiki_pages(wiki_cmd, root, wiki):
+    """[(path in the wiki, title, text)], the index first. Which pages there are, and
+    the title each goes by, come from `wiki pages --data`."""
     def read(p):
         with open(p, encoding="utf-8", errors="replace") as f:
             return f.read()
+    r = subprocess.run([wiki_cmd, "pages", wiki, "--data"], capture_output=True, text=True)
+    if r.returncode != 0:
+        die((r.stderr.strip() or f"couldn't list the pages of {wiki}").replace("error: ", "", 1))
     pages = []
-    top = os.path.join(root, "wiki")
-    for d, dirs, files in os.walk(top):
-        dirs[:] = sorted(x for x in dirs if not x.startswith("."))
-        for name in sorted(files):
-            if not name.endswith(".md") or name.startswith("."):
-                continue
-            full = os.path.join(d, name)
-            rel = os.path.relpath(full, root).replace(os.sep, "/")
-            text = read(full)
-            front, body = split_front(text)
-            pages.append((rel, title_of(front, body, name[:-3]), text))
+    for line in r.stdout.splitlines():
+        f = line.split("\t")
+        if len(f) >= 4:
+            pages.append((f[0], f[3], read(os.path.join(root, f[0]))))
     seen = {}
     for rel, title, _ in pages:
         seen.setdefault(title.lower(), []).append(rel)
@@ -537,7 +534,8 @@ def cmd_publish(args):
     parent = conf.get(f"parent.{wiki}") or conf.get("parent") or ""
     if not space:
         die(f"no space to publish {wiki} into. Set space, or space.{wiki}, in {CONFIG}. {CMD} confluence --help has the settings.")
-    pages = wiki_pages(root, wiki)
+    wiki_cmd = os.environ.get("LLM_WIKI") or die("LLM_WIKI isn't set. Run this as: wiki confluence")
+    pages = wiki_pages(wiki_cmd, root, wiki)
     titles = {rel: title for rel, title, _ in pages}
     c = Confluence(conf)
     print(f"{'Would publish' if dry else 'Publishing'} {len(pages)} page(s) of {wiki} to the space {space} at {c.url}")
