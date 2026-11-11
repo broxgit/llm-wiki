@@ -238,7 +238,7 @@ Set WIKIS_DIR to keep wikis somewhere other than ~/wikis.
 EOF
 }
 
-# --- style helpers: docs/conventions.md, version 1. Copy, don't edit. ---
+# --- style helpers: docs/conventions.md, version 2. Copy, don't edit. ---
 STYLE_OVERRIDE="${LLM_WIKI_STYLE:-}" # the one line a tool changes: its own variable
 # style_wanted <fd>: style on? LLM_<TOOL>_STYLE=on or off decides; else a terminal, no NO_COLOR, TERM not dumb.
 style_wanted() {
@@ -271,6 +271,19 @@ typed() { printf '%s%s%s' "$S_CYAN" "$*" "$S_OFF"; }
 die() {
   if [ "$STYLE_ERR" = yes ]; then printf '\033[31merror:\033[0m %s\n' "$*" >&2; else echo "error: $*" >&2; fi
   exit 1
+}
+# die_usage <words>: the tool was called wrongly: an unknown command or option, a missing argument. Exits 2.
+die_usage() {
+  if [ "$STYLE_ERR" = yes ]; then printf '\033[31merror:\033[0m %s\n' "$*" >&2; else echo "error: $*" >&2; fi
+  exit 2
+}
+# say_warn_err <words>: a warning on standard error, styled as standard error is, whatever standard output is.
+say_warn_err() {
+  if [ "$STYLE_ERR" = yes ]; then printf '\033[1m\033[33m!\033[0m %s\n' "$*" >&2; else printf '%s\n' "$*" >&2; fi
+}
+# typed_err <command>: something to type, inside a line that goes to standard error.
+typed_err() {
+  if [ "$STYLE_ERR" = yes ]; then printf '\033[36m%s\033[0m' "$*"; else printf '%s' "$*"; fi
 }
 # --- end of style helpers ---
 # need_value "$@", in a flag's arm: without it, shift fails and set -e ends the script with no message.
@@ -1025,7 +1038,7 @@ cmd_lock() {
     case "$1" in
       --release) mode=release; shift ;;
       --renew) mode=renew; shift ;;
-      -*) die "lock options: --release, --renew" ;;
+      -*) die_usage "lock options: --release, --renew" ;;
       *) wiki="$1"; shift ;;
     esac
   done
@@ -1259,8 +1272,8 @@ cmd_compile() {
       # --locked: a background run's own process. The lock is already its own.
       --locked) locked=1; shift ;;
       -h | --help) compile_usage; return 0 ;;
-      -*) die "compile options: --background" ;;
-      *) [ -z "$wiki" ] || die "compile takes one wiki"; wiki="$1"; shift ;;
+      -*) die_usage "compile options: --background" ;;
+      *) [ -z "$wiki" ] || die_usage "compile takes one wiki"; wiki="$1"; shift ;;
     esac
   done
   case "$wiki" in
@@ -1358,7 +1371,7 @@ cmd_log() {
   local wiki="" type="" title="" root lines="" nc=0 nu=0 nf=0 nr=0 corrections="" conflicts="" patterns="" v f
   while [ $# -gt 0 ]; do
     case "$1" in
-      --source) v="${2:-}"; v="${v#raw/}"; [ -n "$v" ] || die "--source takes raw/<file>"; lines="$lines- source: raw/$v"$'\n'; shift 2 ;;
+      --source) v="${2:-}"; v="${v#raw/}"; [ -n "$v" ] || die_usage "--source takes raw/<file>"; lines="$lines- source: raw/$v"$'\n'; shift 2 ;;
       --created) need_value "$@"; lines="$lines- created: ${2:-}"$'\n'; nc=$((nc + 1)); shift 2 ;;
       --updated) need_value "$@"; lines="$lines- updated: ${2:-}"$'\n'; nu=$((nu + 1)); shift 2 ;;
       --fixed) need_value "$@"; lines="$lines- fixed: ${2:-}"$'\n'; nf=$((nf + 1)); shift 2 ;;
@@ -1370,7 +1383,7 @@ cmd_log() {
         shift 2
         ;;
       -h | --help) log_usage; return 0 ;;
-      -*) die "log options: --source raw/F, --created P, --updated P, --fixed T, --reported T, --corrections N, --conflicts N, --patterns N" ;;
+      -*) die_usage "log options: --source raw/F, --created P, --updated P, --fixed T, --reported T, --corrections N, --conflicts N, --patterns N" ;;
       *) if [ -z "$wiki" ]; then wiki="$1"; elif [ -z "$type" ]; then type="$1"; else title="${title:+$title }$1"; fi; shift ;;
     esac
   done
@@ -1469,7 +1482,7 @@ sync_do() {
   while [ $# -gt 0 ]; do
     case "$1" in
       -m) need_value "$@"; msg="${2:-}"; shift 2 ;;
-      -*) die "sync options: -m MESSAGE" ;;
+      -*) die_usage "sync options: -m MESSAGE" ;;
       *) wiki="$1"; shift ;;
     esac
   done
@@ -1574,7 +1587,7 @@ cmd_index() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --check) check=1; shift ;;
-      -*) die "index options: --check" ;;
+      -*) die_usage "index options: --check" ;;
       *) wiki="$1"; shift ;;
     esac
   done
@@ -1700,7 +1713,7 @@ cmd_lint() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --all) all=1; shift ;;
-      -*) die "lint options: --all" ;;
+      -*) die_usage "lint options: --all" ;;
       *) roots+=("$(wiki_root "$1")"); shift ;;
     esac
   done
@@ -1946,7 +1959,7 @@ cmd_pending() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --show) show=1; shift ;;
-      -*) die "pending options: --show" ;;
+      -*) die_usage "pending options: --show" ;;
       *) wiki="$1"; shift ;;
     esac
   done
@@ -2032,7 +2045,7 @@ cmd_harvest() {
     case "$1" in
       --from) need_value "$@"; from="${2:-}"; shift 2 ;;
       --dry-run) dry=1; shift ;;
-      *) die "harvest options: --from DIR, --dry-run" ;;
+      *) die_usage "harvest options: --from DIR, --dry-run" ;;
     esac
   done
   [ -d "$from" ] || die "no Claude Code projects at $(tilde "$from")"
@@ -2130,11 +2143,11 @@ cmd_seed() {
       --wiki) need_value "$@"; wiki="${2:-}"; shift 2 ;;
       --max) need_value "$@"; max="${2:-}"; shift 2 ;;
       --dry-run) dry=1; shift ;;
-      -*) die "seed options: --wiki NAME, --max N, --dry-run" ;;
-      *) [ -z "$src" ] || die "seed takes one repository"; src="$1"; shift ;;
+      -*) die_usage "seed options: --wiki NAME, --max N, --dry-run" ;;
+      *) [ -z "$src" ] || die_usage "seed takes one repository"; src="$1"; shift ;;
     esac
   done
-  case "$max" in '' | *[!0-9]*) die "--max takes a number" ;; esac
+  case "$max" in '' | *[!0-9]*) die_usage "--max takes a number" ;; esac
   top="$(git -C "${src:-.}" rev-parse --show-toplevel 2>/dev/null)" || die "${src:-this folder} isn't in a git repository"
   name="$(repo_name "$top")"
   [ -n "$wiki" ] || wiki="$(which_wiki "$name")"
@@ -2781,7 +2794,7 @@ EOF2
 cmd_stale() {
   local days="$1" cutoff d f v rel map found=0
   case "$days" in
-    '' | *[!0-9]*) die "stale takes a number of days" ;;
+    '' | *[!0-9]*) die_usage "stale takes a number of days" ;;
   esac
   [ -d "$WIKIS_DIR" ] || die "no wikis at $(tilde "$WIKIS_DIR")"
   cutoff="$(days_ago "$days")"
@@ -3645,7 +3658,7 @@ cmd_deps() {
     case "$1" in
       --all) all=1; shift ;;
       --write) write=1; shift ;;
-      *) die "deps options: --all, --write" ;;
+      *) die_usage "deps options: --all, --write" ;;
     esac
   done
   [ -d "$WIKIS_DIR" ] || die "no wikis at $(tilde "$WIKIS_DIR")"
@@ -4122,7 +4135,7 @@ to change.
 EOF
         return 0
         ;;
-      *) die "obsidian options: --no-open" ;;
+      *) die_usage "obsidian options: --no-open" ;;
     esac
     shift
   done
@@ -4291,7 +4304,7 @@ cmd_news() {
       echo "  What's new in llm-wiki outside the handbook, since you last looked. --all prints everything."
       return 0
       ;;
-    *) die "news options: --all" ;;
+    *) die_usage "news options: --all" ;;
   esac
   news_mark_seen
 }
@@ -4393,7 +4406,7 @@ cmd_tour() {
         echo "  It stays between sessions. --clean removes it. --dir keeps it somewhere other than the temp folder."
         return 0
         ;;
-      *) die "tour options: --clean, --dir DIR" ;;
+      *) die_usage "tour options: --clean, --dir DIR" ;;
     esac
   done
   [ -n "$dir" ] || { dir="${TMPDIR:-/tmp}"; dir="${dir%/}/llm-wiki-tour"; }
@@ -4601,7 +4614,7 @@ cmd_update() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --wikis-only) wikis_only=1; shift ;;
-      *) die "update options: --wikis-only" ;;
+      *) die_usage "update options: --wikis-only" ;;
     esac
   done
   [ "$wikis_only" = 0 ] || { update_wikis; return 0; }
@@ -4980,10 +4993,10 @@ cmd_journal_note() {
       *) break ;;
     esac
   done
-  case "$day" in '' | [0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]) ;; *) die "--day takes a date like 2026-10-21" ;; esac
-  case "$at" in '' | [0-2][0-9]:[0-5][0-9]) ;; *) die "--at takes a time like 14:05" ;; esac
+  case "$day" in '' | [0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]) ;; *) die_usage "--day takes a date like 2026-10-21" ;; esac
+  case "$at" in '' | [0-2][0-9]:[0-5][0-9]) ;; *) die_usage "--at takes a time like 14:05" ;; esac
   if [ -n "$day" ] && [[ "$day" > "$(journal_today)" ]]; then die "--day can't be in the future"; fi
-  [ $# -ge 2 ] || die "usage: $WIKI_CMD journal note [--day DATE] [--at HH:MM] <project> <text>"
+  [ $# -ge 2 ] || die_usage "usage: $WIKI_CMD journal note [--day DATE] [--at HH:MM] <project> <text>"
   journal_note "$1" "$(shift; printf '%s ' "$@" | sed 's/ $//')" "$day" "$at"
 }
 
@@ -5004,10 +5017,10 @@ journal_backfill() {
         echo "removed: $(tilde "$JOURNAL_DIR/backfill.md")"
         return 0
         ;;
-      *) die "backfill options: --since lastworkday|yesterday|week|lastweek|14d|DATE, --until DATE, --from DIR, --done" ;;
+      *) die_usage "backfill options: --since lastworkday|yesterday|week|lastweek|14d|DATE, --until DATE, --from DIR, --done" ;;
     esac
   done
-  since_ok "$since" || die "--since takes lastworkday, yesterday, today, week, lastweek, a number of days like 14d, or a date"
+  since_ok "$since" || die_usage "--since takes lastworkday, yesterday, today, week, lastweek, a number of days like 14d, or a date"
   [ -d "$from" ] || [ -d "$AGY_HOME/antigravity/brain" ] || die "no Claude Code sessions at $(tilde "$from"), and no Antigravity conversations. Use --from DIR."
   command -v python3 >/dev/null 2>&1 || die "backfill needs python3 to read session files"
   write_journal_config >/dev/null
@@ -5226,7 +5239,7 @@ cmd_journal() {
     show) journal_show ;;
     on) write_journal_config >/dev/null; journal_set enabled yes; apply_journal_commit ;;
     off) write_journal_config >/dev/null; journal_set enabled no ;;
-    set) [ $# -ge 1 ] || die "usage: $WIKI_CMD journal set <key> <value>"; journal_set "$1" "${2:-}" ;;
+    set) [ $# -ge 1 ] || die_usage "usage: $WIKI_CMD journal set <key> <value>"; journal_set "$1" "${2:-}" ;;
     note) cmd_journal_note "$@" ;;
     backfill) journal_backfill "$@" ;;
     path) journal_file_for "$(journal_today)"; printf '\n' ;;
@@ -5303,17 +5316,17 @@ cmd_standup() {
       --exclude) need_value "$@"; STANDUP_EXCLUDE="${STANDUP_EXCLUDE:+$STANDUP_EXCLUDE,}${2:-}"; shift ;;
       --save) save=yes ;;
       --max) need_value "$@"; max="${2:-}"; shift ;;
-      *) die "standup options: --since X, --until DATE, --day DATE, --format standup|summary|detailed, --only GLOB, --exclude GLOB, --max N, --save" ;;
+      *) die_usage "standup options: --since X, --until DATE, --day DATE, --format standup|summary|detailed, --only GLOB, --exclude GLOB, --max N, --save" ;;
     esac
     shift
   done
   arg="${since:-$(journal_get since)}"
-  since_ok "$arg" || die "--since takes lastworkday, yesterday, today, week, lastweek, a number of days like 7d, or a date"
-  [ -z "$fmt" ] || case "$fmt" in standup | summary | detailed) ;; *) die "--format takes standup, summary, or detailed" ;; esac
+  since_ok "$arg" || die_usage "--since takes lastworkday, yesterday, today, week, lastweek, a number of days like 7d, or a date"
+  [ -z "$fmt" ] || case "$fmt" in standup | summary | detailed) ;; *) die_usage "--format takes standup, summary, or detailed" ;; esac
   STANDUP_ONLY="$only"
   # A busy repository can list 50 commits a day, which costs tokens and buries the rest.
   [ -n "$max" ] || max="$(journal_get max_commits)"
-  case "$max" in '' | *[!0-9]*) die "--max takes a number" ;; esac
+  case "$max" in '' | *[!0-9]*) die_usage "--max takes a number" ;; esac
   [ "${fmt:-$(journal_get format)}" != detailed ] || max=0
 
   # Byte order and byte matching, so glob order and --only and --exclude don't change
@@ -5323,7 +5336,7 @@ cmd_standup() {
   today="$(journal_today)"
   ds="$(journal_get day_starts)"
   if [ -n "$day" ]; then
-    since_ok "$day" || die "--day takes a date like 2026-10-21"
+    since_ok "$day" || die_usage "--day takes a date like 2026-10-21"
     start_date="$day"; end_date="$day"
   else
     start_date="$(since_to_date "$today" "$arg")"
@@ -5679,11 +5692,11 @@ cmd_pages() {
         echo "wiki's folder, and a date the page doesn't give is empty."
         return 0
         ;;
-      -*) die "pages options: --data" ;;
-      *) [ -z "$wiki" ] || die "pages takes one wiki"; wiki="$1"; shift ;;
+      -*) die_usage "pages options: --data" ;;
+      *) [ -z "$wiki" ] || die_usage "pages takes one wiki"; wiki="$1"; shift ;;
     esac
   done
-  [ -n "$wiki" ] || die "usage: $WIKI_CMD pages <wiki> [--data]"
+  [ -n "$wiki" ] || die_usage "usage: $WIKI_CMD pages <wiki> [--data]"
   root="$(resolve "$wiki")"
   is_wiki "$root" || die "$(tilde "$root") is not a wiki. $WIKI_CMD status lists the wikis here."
   [ "$data" = 0 ] || style_off
@@ -5724,7 +5737,7 @@ cmd_open() {
     --data)
       # For a program: plain whatever the terminal is.
       style_off
-      [ $# -le 2 ] || die "usage: $WIKI_CMD open --data [<wiki>]"
+      [ $# -le 2 ] || die_usage "usage: $WIKI_CMD open --data [<wiki>]"
       [ -d "$WIKIS_DIR" ] || die "no wikis at $(tilde "$WIKIS_DIR"). Run: $WIKI_CMD init"
       if [ -n "${2:-}" ]; then
         d="$(resolve "$2")"
@@ -5739,7 +5752,7 @@ cmd_open() {
       return 0
       ;;
     "") ;;
-    *) die "open takes --data, or nothing. Try $WIKI_CMD open --help" ;;
+    *) die_usage "open takes --data, or nothing. Try $WIKI_CMD open --help" ;;
   esac
   [ -d "$WIKIS_DIR" ] || die "no wikis at $(tilde "$WIKIS_DIR")"
   for d in "$WIKIS_DIR"/*/; do
@@ -6075,7 +6088,7 @@ cmd_tips() {
       --mute) need_value "$@"; mode=mute; id="${2:-}"; shift 2 ;;
       --unmute) need_value "$@"; mode=unmute; id="${2:-}"; shift 2 ;;
       --repo) need_value "$@"; TIP_REPO="${2:-}"; shift 2 ;;
-      *) die "tips options: --next, --mute ID, --unmute ID, --repo DIR" ;;
+      *) die_usage "tips options: --next, --mute ID, --unmute ID, --repo DIR" ;;
     esac
   done
   case "$mode" in
@@ -6500,9 +6513,9 @@ cmd_extensions() {
   local f n d any=0 bad=0
   case "${1:-}" in
     "") ;;
-    path) [ $# -eq 1 ] || die "extensions path takes nothing more"; printf '%s\n' "$EXT_DIR"; return 0 ;;
+    path) [ $# -eq 1 ] || die_usage "extensions path takes nothing more"; printf '%s\n' "$EXT_DIR"; return 0 ;;
     add | remove)
-      [ $# -eq 2 ] || die "usage: $WIKI_CMD extensions $1 <name>"
+      [ $# -eq 2 ] || die_usage "usage: $WIKI_CMD extensions $1 <name>"
       if ! ext_shipped "$2" >/dev/null; then
         [ ! -f "$EXT_DIR/wiki-$2" ] || die "$2 is a file of your own, $(tilde "$EXT_DIR/wiki-$2"). It is on while it is there."
         die "no extension called $2 ships with llm-wiki. $WIKI_CMD extensions lists them."
@@ -6521,12 +6534,12 @@ cmd_extensions() {
       return 0
       ;;
     setup)
-      [ $# -eq 2 ] || die "usage: $WIKI_CMD extensions setup <name>"
+      [ $# -eq 2 ] || die_usage "usage: $WIKI_CMD extensions setup <name>"
       ext_setup "$2"
       return 0
       ;;
     log)
-      [ $# -eq 2 ] || die "usage: $WIKI_CMD extensions log <name>"
+      [ $# -eq 2 ] || die_usage "usage: $WIKI_CMD extensions log <name>"
       ext_must_be_on "$2"
       any=0
       for f in "$EXT_STATE/$2"/*.status; do
@@ -6542,7 +6555,7 @@ cmd_extensions() {
       return 0
       ;;
     tick)
-      [ $# -eq 1 ] || die "extensions tick takes nothing more"
+      [ $# -eq 1 ] || die_usage "extensions tick takes nothing more"
       any=0
       bad=0
       for n in $(ext_wanting tick); do
@@ -6563,7 +6576,7 @@ cmd_extensions() {
       ;;
     every)
       shift
-      [ $# -le 2 ] || die "usage: $WIKI_CMD extensions every [<name>] [<time>]"
+      [ $# -le 2 ] || die_usage "usage: $WIKI_CMD extensions every [<name>] [<time>]"
       if [ $# -eq 0 ]; then
         echo "tick: every $(ext_every)"
         for n in $(ext_wanting tick); do
@@ -6575,7 +6588,7 @@ cmd_extensions() {
       # A length of time starts with a digit, and an extension's name never does.
       case "$1" in
         [0-9]*)
-          [ $# -eq 1 ] || die "usage: $WIKI_CMD extensions every [<name>] [<time>]"
+          [ $# -eq 1 ] || die_usage "usage: $WIKI_CMD extensions every [<name>] [<time>]"
           dur_minutes "$1" >/dev/null || die "$1 isn't a length of time. $EXT_EVERY_HINT"
           ext_every_set every "$((10#${1%[mhdw]}))${1#"${1%[mhdw]}"}"
           setup_mark extensions.every
@@ -6598,7 +6611,7 @@ cmd_extensions() {
       esac
       return 0
       ;;
-    *) die "extensions takes path, add <name>, remove <name>, setup <name>, log <name>, tick, every, or nothing" ;;
+    *) die_usage "extensions takes path, add <name>, remove <name>, setup <name>, log <name>, tick, every, or nothing" ;;
   esac
   for f in "$EXT_DIR"/wiki-*; do
     [ -f "$f" ] || continue
@@ -6762,7 +6775,7 @@ _llm_wiki() {
 complete -F _llm_wiki wiki wiki.sh ./wiki.sh
 EOF
       ;;
-    *) die "completion takes zsh or bash" ;;
+    *) die_usage "completion takes zsh or bash" ;;
   esac
 }
 
@@ -7246,7 +7259,7 @@ cmd_report() {
     case "$1" in
       --since) need_value "$@"; since="${2:-}"; shift 2 ;;
       --due) due=1; shift ;;
-      *) die "report options: --since lastworkday|week|lastweek|7d|DATE, --due" ;;
+      *) die_usage "report options: --since lastworkday|week|lastweek|7d|DATE, --due" ;;
     esac
   done
   if [ "$due" = 1 ]; then
@@ -7259,7 +7272,7 @@ cmd_report() {
     echo due
     return 0
   fi
-  since_ok "$since" || die "--since takes lastworkday, yesterday, today, week, lastweek, a number of days like 7d, or a date"
+  since_ok "$since" || die_usage "--since takes lastworkday, yesterday, today, week, lastweek, a number of days like 7d, or a date"
   today="$(journal_today)"
   start="$(since_to_date "$today" "$since")"
   echo "# Wiki report: $start to $today"
@@ -7301,7 +7314,7 @@ STATS_FILE="$WIKIS_DIR/stats.csv"
 
 cmd_stats() {
   local since="${1:-30d}" from
-  since_ok "$since" || die "stats takes a range: lastworkday, yesterday, today, week, lastweek, a number of days like 30d, or a date"
+  since_ok "$since" || die_usage "stats takes a range: lastworkday, yesterday, today, week, lastweek, a number of days like 30d, or a date"
   if [ ! -s "$STATS_FILE" ]; then
     echo "No lookups logged yet. The plugin's hook logs a lookup when a session opens a page of a wiki, once per wiki per session."
     return 0
@@ -7374,7 +7387,7 @@ deleg_mode() {
 
 deleg_set_mode() {
   local tmp
-  case "$1" in off | ask | auto) ;; *) die "delegation mode takes off, ask, or auto" ;; esac
+  case "$1" in off | ask | auto) ;; *) die_usage "delegation mode takes off, ask, or auto" ;; esac
   write_delegation_file >/dev/null
   tmp="$DELEG_FILE.tmp"
   if grep -q '^mode:' "$DELEG_FILE"; then
@@ -7404,7 +7417,7 @@ apply_delegation_ignore() {
 # deleg_log <kind> <model> <effort> <ok|fixed|redone> [--project NAME]: one handoff.
 deleg_log() {
   local project="" top began
-  [ $# -ge 4 ] || die "usage: $WIKI_CMD delegation log <kind> <model> <effort> <ok|fixed|redone> [--project NAME]"
+  [ $# -ge 4 ] || die_usage "usage: $WIKI_CMD delegation log <kind> <model> <effort> <ok|fixed|redone> [--project NAME]"
   local kind="$1" model="$2" effort="$3" result="$4"
   shift 4
   [ "${1:-}" != --project ] || project="${2:-}"
@@ -8017,13 +8030,13 @@ setup_claude() {
     current) echo "${M_OK}$(tilde "$CLAUDE_FILE") has the current wiki line. Every session finds its wiki." ;;
     old)
       echo "$(tilde "$CLAUDE_FILE") has an older wiki line."
-      if ask_yn "Replace it with the current one?" y; then cmd_claude | head -n 1 | sed 's/^/  /'; fi
+      if ask_yn "Replace it with the current one?" y; then cmd_claude | sed -n '1s/^/  /p'; fi
       ;;
     unreadable) echo "Can't read $(tilde "$CLAUDE_FILE") from this shell, so there's no telling whether it has the wiki line." ;;
     missing)
       echo "One line in $(tilde "$CLAUDE_FILE") lets every Claude Code session find its wiki."
       echo "Other agents: put the same line in their user-level instruction file."
-      if ask_yn "Add it?" y; then cmd_claude | head -n 1 | sed 's/^/  /'; fi
+      if ask_yn "Add it?" y; then cmd_claude | sed -n '1s/^/  /p'; fi
       ;;
   esac
 }
@@ -8182,7 +8195,7 @@ setup_list() {
   case "$pending" in *" extension."* | *" extensions.every "*) printf '%s' "$new_note" ;; esac
   printf '\n'
   printf '%-19s %s\n' "compile" "$(compile_auto_on && echo "in the background at session start" || echo "by sessions (background compile is off)")"
-  printf '%-19s %s' "helper" "$(cmd_helper | head -n 1 | sed 's/^helper: //' | { if [ "$STYLE" = yes ]; then sed -E "s/(Run: |own: )(.*)\$/\1${S_CYAN}\2${S_OFF}/"; else cat; fi; }), fetched at session start: $(helper_auto_on && echo on || echo off)"
+  printf '%-19s %s' "helper" "$(cmd_helper | sed -n '1s/^helper: //p' | { if [ "$STYLE" = yes ]; then sed -E "s/(Run: |own: )(.*)\$/\1${S_CYAN}\2${S_OFF}/"; else cat; fi; }), fetched at session start: $(helper_auto_on && echo on || echo off)"
   case "$pending" in *" helper "*) printf '%s' "$new_note" ;; esac
   printf '\n'
   case "$(chat_state)" in none) ;; unreadable) unknown_state chat "$CLAUDE_DESKTOP_CONFIG" ;; *) echo "chat                server $(chat_state)" ;; esac
@@ -8709,7 +8722,7 @@ if [ "$cmd" = seed ]; then
   exit 0
 fi
 if [ "$cmd" = cover ]; then
-  [ $# -ge 2 ] || die "usage: $WIKI_CMD cover <wiki> <repo>..."
+  [ $# -ge 2 ] || die_usage "usage: $WIKI_CMD cover <wiki> <repo>..."
   cmd_cover "$@"
   exit 0
 fi
@@ -8721,9 +8734,9 @@ if ! is_builtin "$cmd"; then
     -*) ;;
     *)
       if [ -f "$EXT_DIR/wiki-$cmd" ]; then
-        die "$cmd can't be a command: an extension's name is lowercase letters, digits and dashes. Rename $(tilde "$EXT_DIR/wiki-$cmd")"
+        die_usage "$cmd can't be a command: an extension's name is lowercase letters, digits and dashes. Rename $(tilde "$EXT_DIR/wiki-$cmd")"
       fi
-      die "no command called $cmd. $WIKI_CMD --help lists the commands, and $WIKI_CMD extensions lists yours."
+      die_usage "no command called $cmd. $WIKI_CMD --help lists the commands, and $WIKI_CMD extensions lists yours."
       ;;
   esac
 fi
@@ -8739,15 +8752,15 @@ for arg in "$@"; do
     --print) want_print=1 ;;
     --yes) want_yes=1 ;;
     -h | --help) usage; exit 0 ;;
-    -*) die "unknown option: $arg" ;;
+    -*) die_usage "unknown option: $arg" ;;
     # find takes a phrase, so `wiki find blue green` works as if quoted.
     *) if [ -z "$target" ]; then target="$arg"
        elif [ "$cmd" = find ]; then target="$target $arg"
-       else die "too many arguments"; fi ;;
+       else die_usage "too many arguments"; fi ;;
   esac
 done
 
-need_target() { [ -n "$target" ] || die "$cmd needs a wiki name or path"; }
+need_target() { [ -n "$target" ] || die_usage "$cmd needs a wiki name or path"; }
 
 case "$cmd" in
   init) cmd_init "$want_git" ;;
@@ -8767,7 +8780,7 @@ case "$cmd" in
     cmd_new "$(resolve "$target")" "$want_git"
     ;;
   status) cmd_status ;;
-  find) [ -n "$target" ] || die "find needs a word"; cmd_find "$target" ;;
+  find) [ -n "$target" ] || die_usage "find needs a word"; cmd_find "$target" ;;
   which) cmd_which "$target" ;;
   stale) cmd_stale "${target:-90}" ;;
   start) cmd_start ${target:+"$target"} ;;

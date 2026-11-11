@@ -75,10 +75,15 @@ API token); without one the token is sent as a Data Center personal access token
 EVENT = False
 
 
-def die(msg):
+def die(msg, code=1):
     sys.stdout.flush()
     print(f"error: {msg}", file=sys.stderr)
-    sys.exit(1)
+    sys.exit(code)
+
+
+def die_usage(msg):
+    """Called wrongly: an unknown command or option, a missing argument. Exits 2."""
+    die(msg, 2)
 
 
 def unreachable(msg):
@@ -489,7 +494,7 @@ def cmd_check(args):
     close = "--close" in args
     rest = [a for a in args if a != "--close"]
     if any(a.startswith("-") for a in rest) or len(rest) > 1:
-        die(f"check takes --close and a wiki's name. {CMD} jira --help")
+        die_usage(f"check takes --close and a wiki's name. {CMD} jira --help")
     conf = settings()
     need_sign_in(conf)
     wikis_dir = os.environ.get("WIKIS_DIR") or die("WIKIS_DIR isn't set. Run this as: wiki jira")
@@ -641,7 +646,7 @@ def cmd_check(args):
 
 def cmd_show(args):
     if not args:
-        die(f"show needs a ticket key, such as PROJ-123")
+        die_usage(f"show needs a ticket key, such as PROJ-123")
     conf = settings()
     need_sign_in(conf)
     jira = Jira(conf)
@@ -658,7 +663,7 @@ def cmd_show(args):
 
 def cmd_config(args):
     if args:
-        die("config takes no arguments")
+        die_usage("config takes no arguments")
     conf = settings()
     _, where = token(conf)
     print(f"shared    {SHARED}{'' if os.path.isfile(SHARED) else ' (not there yet)'}")

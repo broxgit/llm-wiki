@@ -79,6 +79,13 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### Conventions version 2 (2026-11-11)
+
+- **Why:** llm-relay adopted version 1 and came back with three things the guide didn't settle: what a usage error exits with, whether `--yes` is owed, and warnings on standard error that took their style from standard output, so `2>errors.log` at a terminal put colour codes in the file.
+- **What changed in the guide:** exit 2 is "called wrongly": an unknown command or option, or a missing argument. The flag names are for when a tool has such a flag, and a tool may have no `--yes` where the question is the safeguard, as llm-relay's `run`, `review`, `apply` and `answer` have none. The helper block gains `die_usage`, `say_warn_err` and `typed_err`, the last two styled by standard error; the Python block gains the same. One line names llm-relay's way of keeping agents' output plain: `style_off` whenever standard input isn't a terminal.
+- **What changed in llm-wiki:** `wiki.sh` exits 2 at 57 places that are usage errors, through `die_usage`, and the Jira and Confluence extensions do for theirs. `capture`, `feedback add` and a flag given no value still exit 1: the compiled helper answers those too and exits 1 for any refusal, and the two must match. Nothing in `wiki.sh` warns on standard error with a mark yet, so the new helpers are there for llm-relay and for later.
+- **Next:** the llm-relay session copies version 2 and its helper block in its own pull request, once this is merged.
+
 ### Extensions: on, not set up, and silent (2026-11-11)
 
 - **Why:** the maintainer updated his work Mac, answered yes to both extensions in `wiki setup --new`, and nothing told him to write a settings file. Setup's only pointer was half a line beside his answer, `wiki status` had no line for an extension that was on with no sign-in, and `wiki jira` with no settings said no open item named a ticket. Each command had been tested, and the path of someone turning an extension on never had. He asked for it fixed and for a check that there were no other gaps like it.

@@ -1,4 +1,4 @@
-Conventions version 1. llm-wiki keeps the original. llm-relay holds a copy: change it here first, then change the copy in the same sitting.
+Conventions version 2. llm-wiki keeps the original. llm-relay holds a copy: change it here first, then change the copy in the same sitting.
 
 # Conventions for commands
 
@@ -13,6 +13,8 @@ Colour and marks are on only when standard output is a terminal, `NO_COLOR` is u
 `LLM_WIKI_STYLE=on` or `off` overrides all of it, for a pager (`less -R`) and for tests. `on` wins over `NO_COLOR`: it is a request made for this one tool, and `NO_COLOR` is a standing preference for every tool. Each tool names its own variable: `LLM_RELAY_STYLE` in llm-relay.
 
 Agents' shells can be pseudo-terminals, where "is a terminal" is true. So a command whose output an agent or a program reads calls `style_off` and stays plain whatever the terminal says, even with the variable set to `on`. In llm-wiki those are `start`, `capture`, `sync`, `find`, `which`, `pending`, `patterns`, `lint`, `index`, `log`, `lock`, `compile`, `mcp`, `journal`, `standup`, `tour`, `report`, `stats`, every command that begins `__`, and everything a hook or an extension event runs.
+
+A tool whose every command may be run by an assistant, as llm-relay's can, has a second way to apply the same rule: it calls `style_off` whenever standard input isn't a terminal, whatever the variable says.
 
 The compiled helper in `cmd/` and `internal/` always prints plain text. `wiki.sh` adds style on the way out.
 
@@ -46,9 +48,9 @@ A blank line between groups. Marks in front, not words at the end. A column as w
 ## Beyond style
 
 - **Every problem ends with its fix.** A line that says something is wrong ends with what to do: `Run: <command>` for something to type, `Ask an agent: "<request>"` for something to say, `Do: <steps>` for what a person does by hand. For new messages this is the rule, and a warning with no fix is a bug. Some older errors, such as an unknown option, only say what happened.
-- **Errors** go to standard error as `error: <what happened>. <what to do>`, and exit 1. No stack traces for a mistake a person made.
-- **Exit codes.** 0 done. 1 failed. 75 "not now, try later". `wiki.sh` itself never exits 75. An extension does, such as Jira or Confluence when a site can't be reached during an event, and the event runner reads it as "ask again at the next event", not a failure. A new command that can be retried later should use it.
-- **Flag names mean the same everywhere.** `--dry-run` says what would change and changes nothing. `--yes` answers the question in advance. `--help` and `-h` print the usage. `--all` is every one rather than the named one. A new flag takes an existing name when the meaning matches.
+- **Errors** go to standard error as `error: <what happened>. <what to do>`. No stack traces for a mistake a person made. A warning that goes to standard error is styled as standard error is, with `say_warn_err`, and a command inside it with `typed_err`: otherwise `2>errors.log` at a terminal puts colour codes in the file.
+- **Exit codes.** 0 done. 1 failed: the tool tried and couldn't. 2 called wrongly: an unknown command or option, or an argument that is missing, so a script can tell "you called me wrong" from "I tried and failed"; `die_usage` is for those. `wiki.sh` exits 2 for its own commands. Two that the compiled helper also answers, `capture` and `feedback add`, and a flag given no value, still exit 1 for a refusal of any kind. 75 "not now, try later". `wiki.sh` itself never exits 75. An extension does, such as Jira or Confluence when a site can't be reached during an event, and the event runner reads it as "ask again at the next event", not a failure. A new command that can be retried later should use it.
+- **Flag names mean the same everywhere.** `--dry-run` says what would change and changes nothing. `--yes` answers the question in advance. `--help` and `-h` print the usage. `--all` is every one rather than the named one. A new flag takes an existing name when the meaning matches. The names are for when a tool has such a flag, not a promise that it does: a tool may have no `--yes` where the question is the safeguard. llm-relay's `run`, `review`, `apply` and `answer` have none, because nothing from the cloud lands on the Mac without a keypress there.
 - **A program's input is plain and stable.** Output another program reads has no style, no mark, no wrapping and no wording that changes between versions. For new work, give it a flag of its own, so the words for people can change without breaking a caller.
 - **Voice.** Plain words, in the present tense. Say what happened, then what to do. Don't apologise and don't shout.
 
@@ -57,7 +59,7 @@ A blank line between groups. Marks in front, not words at the end. A column as w
 Bash 3.2 compatible. Change only the first line, `STYLE_OVERRIDE`, to the tool's own variable. A smoke test in llm-wiki checks that this block is the one in `wiki.sh`.
 
 ```bash
-# --- style helpers: docs/conventions.md, version 1. Copy, don't edit. ---
+# --- style helpers: docs/conventions.md, version 2. Copy, don't edit. ---
 STYLE_OVERRIDE="${LLM_WIKI_STYLE:-}" # the one line a tool changes: its own variable
 # style_wanted <fd>: style on? LLM_<TOOL>_STYLE=on or off decides; else a terminal, no NO_COLOR, TERM not dumb.
 style_wanted() {
@@ -91,6 +93,19 @@ die() {
   if [ "$STYLE_ERR" = yes ]; then printf '\033[31merror:\033[0m %s\n' "$*" >&2; else echo "error: $*" >&2; fi
   exit 1
 }
+# die_usage <words>: the tool was called wrongly: an unknown command or option, a missing argument. Exits 2.
+die_usage() {
+  if [ "$STYLE_ERR" = yes ]; then printf '\033[31merror:\033[0m %s\n' "$*" >&2; else echo "error: $*" >&2; fi
+  exit 2
+}
+# say_warn_err <words>: a warning on standard error, styled as standard error is, whatever standard output is.
+say_warn_err() {
+  if [ "$STYLE_ERR" = yes ]; then printf '\033[1m\033[33m!\033[0m %s\n' "$*" >&2; else printf '%s\n' "$*" >&2; fi
+}
+# typed_err <command>: something to type, inside a line that goes to standard error.
+typed_err() {
+  if [ "$STYLE_ERR" = yes ]; then printf '\033[36m%s\033[0m' "$*"; else printf '%s' "$*"; fi
+}
 # --- end of style helpers ---
 ```
 
@@ -107,10 +122,14 @@ def sgr(code, text, fd=1):
     return "\033[%sm%s\033[0m" % (code, text) if style_on(fd) else text
 def bold(t): return sgr("1", t)
 def dim(t): return sgr("2", t)
-def typed(t): return sgr("36", t)
-def warn_mark(): return sgr("1;33", "!") + " "
-def error(msg): sys.stderr.write(sgr("31", "error:", 2) + " " + msg + "\n"); sys.exit(1)
+def typed(t, fd=1): return sgr("36", t, fd)
+def warn_mark(fd=1): return sgr("1;33", "!", fd) + " "
+def error(msg, code=1): sys.stderr.write(sgr("31", "error:", 2) + " " + msg + "\n"); sys.exit(code)
+def usage_error(msg): error(msg, 2)
+def warn_err(msg): sys.stderr.write(warn_mark(2) + msg + "\n")
 ```
+
+Pass `2` as `fd` for anything inside a line that goes to standard error: `typed("wiki status", 2)`.
 
 An extension run for an event writes to a log and is never styled: don't call these there.
 

@@ -4,6 +4,11 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-11-25: calling `wiki` wrongly exits 2
+
+- An unknown command or option, or a missing argument, now exits 2, where a failure exits 1. A script can tell the two apart.
+- `docs/conventions.md` is at version 2, with that, a note on `--yes`, and warnings on standard error styled as standard error is.
+
 ## 2026-11-24: an extension that is on says when it isn't set up
 
 - Turning on Jira or Confluence in `wiki setup` now asks for the Atlassian site and email, tests the sign-in, and asks for each one's own settings.
