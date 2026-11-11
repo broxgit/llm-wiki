@@ -79,6 +79,12 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### One terminal style: the conventions guide and `wiki status` (2026-11-11)
+
+- **Why:** llm-relay 0.2.18 gave four commands colour and marks, and the two tools should look and behave alike, governed by one written guide.
+- **What changed:** `docs/conventions.md`, version 1: when style is on, the vocabulary, what never gets style, layout, the conventions beyond style (fixes, errors, exit codes 0, 1 and 75, flags, program output, voice), and the helpers in Bash and Python. `wiki.sh` has the helpers, `LLM_WIKI_STYLE=on|off`, `+` where the locale isn't UTF-8, a red `error:`, and `style_off` for every command an agent reads. `wiki status` is the first command restyled: its words are unchanged. A smoke test keeps the helper block the same as the guide's. The compiled helper is untouched and still prints plain text.
+- **Still untested:** how it renders in a real terminal, on a light theme, and in Windows Terminal. `setup`, `update` and the rest are next, then the copy in llm-relay.
+
 ### Extensions: what a Jira ticket's state means (2026-11-11)
 
 - **Why:** the extension knew done from not done and nothing else. Jira's done group holds Won't Do, Duplicate and Cancelled too, so an item waiting on a ticket that was dropped was recorded as done, as if the work had happened. And a blocked prerequisite, which changes what to work on today, was never mentioned.

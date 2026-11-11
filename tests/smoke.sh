@@ -60,6 +60,7 @@ read -r -d '' PARTS <<'TABLE' || true
 2 | Missing flag values | Collection
 3 | Update | Two clones merge index.md and log.md
 2 | News |
+2 | Terminal style |
 2 | What moved to llm-relay |
 2 | Extensions | Collection
 2 | Jira extension | Collection
@@ -103,6 +104,8 @@ export HOME="$T/home"
 # the runner's own folder, which a part would otherwise read.
 unset XDG_CONFIG_HOME XDG_STATE_HOME XDG_DATA_HOME XDG_CACHE_HOME
 export WIKIS_DIR="$T/wikis"
+# Nothing here may depend on a terminal: style is off unless a test turns it on.
+export LLM_WIKI_STYLE=off
 # The fixtures are dated with `date -u`, and the report's range ends on the journal's
 # day, which is the local date, or the day before until day_starts. One clock for both:
 # UTC here, and day_starts 00:00 once the collection exists. Without it the report
@@ -3768,6 +3771,52 @@ for e, ls in lines.items():
     if len(ls) > 4: print('%d lines under %s' % (len(ls), e))
 " "$REPO/NEWS.md")"
 [ -z "$out" ] && ok "NEWS.md entries are one line per change, four at most" || bad "NEWS.md entries are one line per change, four at most" "$out"
+fi
+
+if section "Terminal style"; then
+SW="$T/style"; mkdir -p "$SW/wikis"
+sty() { env WIKIS_DIR="$SW/wikis" "$@"; }
+"$W" new "$SW/wikis/demo" >/dev/null 2>&1
+for i in 1 2 3 4 5 6; do printf 'note %s\n' "$i" > "$SW/wikis/demo/raw/2026-11-0$i-n$i.md"; done
+ESC=$'\033'
+strip() { sed "s/${ESC}\\[[0-9;]*m//g"; }
+plain="$(sty LLM_WIKI_STYLE=off "$W" status 2>&1)"
+styled="$(sty LLM_WIKI_STYLE=on LANG=en_US.UTF-8 "$W" status 2>&1)"
+case "$styled" in *"${ESC}[1mWIKI"*) ok "forced on, status's header is bold" ;; *) bad "forced on, status's header is bold" "$styled" ;; esac
+case "$styled" in *"${ESC}[33m  <- compile due${ESC}[0m"*) ok "the <- notes are yellow" ;; *) bad "the <- notes are yellow" "$styled" ;; esac
+case "$styled" in *"${ESC}[1m${ESC}[33m!${ESC}[0m demo: 6 notes waiting."*) ok "a To do line starts with the bold yellow warning mark" ;; *) bad "a To do line starts with the bold yellow warning mark" "$styled" ;; esac
+case "$styled" in *"Ask an agent: ${ESC}[36m\"compile demo\"${ESC}[0m"*"Run: ${ESC}[36m"*) ok "the quoted request and what follows Run: are cyan" ;; *) bad "the quoted request and what follows Run: are cyan" "$styled" ;; esac
+case "$plain" in *"${ESC}"*) bad "off, status has no codes" "$plain" ;; *) ok "off, status has no codes" ;; esac
+case "$(printf '%s' "$plain" | sty "$W" status 2>&1)" in *"${ESC}"*) bad "piped, status has no codes" ;; *) ok "piped, status has no codes" ;; esac
+nomark="$(printf '%s\n' "$styled" | strip | sed 's/^! /- /')"
+[ "$nomark" = "$plain" ] && ok "with the codes stripped, and the mark back to '- ', the words are the plain words" || bad "with the codes stripped, the words are the plain words" "$(diff <(printf '%s\n' "$nomark") <(printf '%s\n' "$plain"))"
+out="$(sty LLM_WIKI_STYLE=on NO_COLOR=1 "$W" status 2>&1)"
+case "$out" in *"${ESC}["*) ok "LLM_WIKI_STYLE=on wins over NO_COLOR" ;; *) bad "LLM_WIKI_STYLE=on wins over NO_COLOR" "$out" ;; esac
+out="$(sty -u LLM_WIKI_STYLE NO_COLOR=1 TERM=xterm "$W" status 2>&1)"
+case "$out" in *"${ESC}"*) bad "NO_COLOR alone keeps status plain" "$out" ;; *) ok "NO_COLOR alone keeps status plain" ;; esac
+case "$(sty LLM_WIKI_STYLE=on LANG=en_US.UTF-8 "$W" status 2>&1)" in *"✓"*) bad "status has no tick to translate, only the warning mark" ;; *) ok "status has no tick to translate, only the warning mark" ;; esac
+# An agent's shell can be a pseudo-terminal, so commands an agent reads ignore the override.
+for c in "start demo" "find note" "which demo" "pending" "patterns" "capture demo --help" "report"; do
+  out="$(sty LLM_WIKI_STYLE=on "$W" $c 2>&1 || true)"
+  case "$out" in *"${ESC}["*) bad "'$c' stays plain even when style is forced on" "$out" ;; *) ok "'$c' stays plain even when style is forced on" ;; esac
+done
+out="$(sty LLM_WIKI_STYLE=on "$W" capture 2>&1 || true)"
+case "$out" in *"${ESC}["*) bad "an error from an agent-read command stays plain" "$out" ;; *) ok "an error from an agent-read command stays plain" ;; esac
+out="$(sty LLM_WIKI_STYLE=on "$W" stale x 2>&1 || true)"
+case "$out" in *"${ESC}[31merror:${ESC}[0m"*) ok "an error from a command a person runs has error: in red" ;; *) bad "an error from a command a person runs has error: in red" "$out" ;; esac
+out="$(sty LLM_WIKI_STYLE=off "$W" stale x 2>&1 || true)"
+case "$out" in "error: "*) ok "off, an error is plain" ;; *) bad "off, an error is plain" "$out" ;; esac
+# The tick: ✓ in a UTF-8 locale, + in any other.
+blk="$(sed -n '/^# --- style helpers/,/^# --- end of style helpers/p' "$W")"
+tick() { env "$@" LLM_WIKI_STYLE=on bash -c "$blk"$'\n''say_ok done' | strip; }
+[ "$(tick LC_ALL=en_US.UTF-8)" = "✓ done" ] && ok "a UTF-8 locale gets ✓" || bad "a UTF-8 locale gets ✓" "$(tick LC_ALL=en_US.UTF-8)"
+[ "$(tick LC_ALL=C)" = "+ done" ] && ok "a locale that isn't UTF-8 gets +" || bad "a locale that isn't UTF-8 gets +" "$(tick LC_ALL=C)"
+[ "$(tick LC_ALL= LC_CTYPE= LANG=)" = "+ done" ] && ok "no locale set gets +" || bad "no locale set gets +" "$(tick LC_ALL= LC_CTYPE= LANG=)"
+# One text, two scripts: the guide's block is the one wiki.sh runs.
+doc="$(sed -n '/^# --- style helpers/,/^# --- end of style helpers/p' "$REPO/docs/conventions.md")"
+[ -n "$blk" ] && [ "$blk" = "$doc" ] && ok "the helper block in wiki.sh is the block in docs/conventions.md, byte for byte" || bad "the helper block in wiki.sh is the block in docs/conventions.md, byte for byte"
+case "$(head -n 1 "$REPO/docs/conventions.md")" in "Conventions version "[0-9]*) ok "the guide's first line gives its version" ;; *) bad "the guide's first line gives its version" ;; esac
+grep -q 'docs/conventions.md' "$REPO/AGENTS.md" && ok "AGENTS.md points at the guide" || bad "AGENTS.md points at the guide"
 fi
 
 if section "What moved to llm-relay"; then

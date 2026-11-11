@@ -230,7 +230,41 @@ Set WIKIS_DIR to keep wikis somewhere other than ~/wikis.
 EOF
 }
 
-die() { echo "error: $*" >&2; exit 1; }
+# --- style helpers: docs/conventions.md, version 1. Copy, don't edit. ---
+STYLE_OVERRIDE="${LLM_WIKI_STYLE:-}" # the one line a tool changes: its own variable
+# style_wanted <fd>: style on? LLM_<TOOL>_STYLE=on or off decides; else a terminal, no NO_COLOR, TERM not dumb.
+style_wanted() {
+  case "$STYLE_OVERRIDE" in on) return 0 ;; off) return 1 ;; esac
+  [ -t "$1" ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ]
+}
+style_utf8() {
+  case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in *[Uu][Tt][Ff]-8* | *[Uu][Tt][Ff]8*) return 0 ;; esac
+  return 1
+}
+style_set() {
+  S_BOLD="" S_DIM="" S_GREEN="" S_YELLOW="" S_CYAN="" S_OFF="" M_OK="" M_WARN=""
+  [ "$STYLE" = yes ] || return 0
+  S_BOLD=$'\033[1m' S_DIM=$'\033[2m' S_GREEN=$'\033[32m' S_YELLOW=$'\033[33m' S_CYAN=$'\033[36m' S_OFF=$'\033[0m'
+  if style_utf8; then M_OK="${S_GREEN}✓${S_OFF} "; else M_OK="${S_GREEN}+${S_OFF} "; fi
+  M_WARN="${S_BOLD}${S_YELLOW}!${S_OFF} "
+}
+STYLE=no STYLE_ERR=no
+if style_wanted 1; then STYLE=yes; fi
+if style_wanted 2; then STYLE_ERR=yes; fi
+style_set
+# style_off: for a command whose output an agent or a program reads. Nothing is styled, errors included.
+style_off() { STYLE=no STYLE_ERR=no; style_set; }
+say_ok() { printf '%s%s\n' "$M_OK" "$*"; }
+say_warn() { printf '%s%s\n' "$M_WARN" "$*"; }
+say_head() { printf '%s%s%s\n' "$S_BOLD" "$*" "$S_OFF"; }
+say_dim() { printf '%s%s%s\n' "$S_DIM" "$*" "$S_OFF"; }
+say_next() { printf '%sNext:%s %s\n' "$S_BOLD$S_CYAN" "$S_OFF" "$*"; }
+typed() { printf '%s%s%s' "$S_CYAN" "$*" "$S_OFF"; }
+die() {
+  if [ "$STYLE_ERR" = yes ]; then printf '\033[31merror:\033[0m %s\n' "$*" >&2; else echo "error: $*" >&2; fi
+  exit 1
+}
+# --- end of style helpers ---
 # need_value "$@", in a flag's arm: without it, shift fails and set -e ends the script with no message.
 need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 
@@ -2360,6 +2394,35 @@ EOF
 todo_add() { STATUS_TODO="$STATUS_TODO- $1
 "; }
 
+# status_style_table: the table with its header in bold and its "<-" notes in yellow.
+# Not a word changes. LC_ALL=C, so awk counts bytes.
+status_style_table() {
+  LC_ALL=C awk -v b="$S_BOLD" -v y="$S_YELLOW" -v o="$S_OFF" '
+    NR == 1 { print b $0 o; next }
+    { i = index($0, "  <- ")
+      if (i == 0) { print; next }
+      rest = substr($0, i)
+      j = index(rest, "  covers: ")
+      if (j) print substr($0, 1, i - 1) y substr(rest, 1, j - 1) o substr(rest, j)
+      else print substr($0, 1, i - 1) y rest o }'
+}
+
+# status_style_todo: each "- " becomes the warning mark. What follows "Run: " and the
+# quoted request after "Ask an agent: " are what the reader can type: cyan.
+status_style_todo() {
+  LC_ALL=C awk -v m="$M_WARN" -v c="$S_CYAN" -v o="$S_OFF" '
+    { line = $0; sub(/^- /, "", line)
+      i = index(line, "Run: ")
+      a = index(line, "Ask an agent: \"")
+      if (i) { line = substr(line, 1, i + 4) c substr(line, i + 5) o }
+      else if (a) {
+        pre = substr(line, 1, a + 13); rest = substr(line, a + 15)
+        e = index(rest, "\"")
+        if (e) line = pre c "\"" substr(rest, 1, e) o substr(rest, e + 1)
+      }
+      print m line }'
+}
+
 # status_table <template version>: the table of status, one row per wiki, adding its
 # to-do lines to STATUS_TODO. LC_ALL=C, so the order of the wikis and what sed, grep, tr
 # and awk make of a file don't depend on the locale, and the compiled helper can print
@@ -2488,7 +2551,15 @@ cmd_status() {
   done)"
   # The compiled helper makes the table and counts the other collections' notes. When
   # it isn't sure it answers nothing, and the Bash does it all.
-  status_helper "$tv" "$others" || status_table "$tv"
+  if [ "$STYLE" = yes ]; then
+    # The table goes through a file, so what it adds to STATUS_TODO stays here.
+    f="$(mktemp)"
+    { status_helper "$tv" "$others" || status_table "$tv"; } > "$f"
+    status_style_table < "$f"
+    rm -f "$f"
+  else
+    status_helper "$tv" "$others" || status_table "$tv"
+  fi
   # What agents recorded as waiting or due, from each wiki's open.md.
   n="$(open_counts)"
   if [ "${n%% *}" -gt 0 ]; then
@@ -2561,8 +2632,8 @@ EOF2
   fi
   if [ -n "$STATUS_TODO" ]; then
     echo
-    echo "To do:"
-    printf '%s' "$STATUS_TODO"
+    say_head "To do:"
+    if [ "$STYLE" = yes ]; then printf '%s' "$STATUS_TODO" | status_style_todo; else printf '%s' "$STATUS_TODO"; fi
   fi
 }
 
@@ -8094,6 +8165,11 @@ setup_upgrade_needed() {
 cmd="$1"
 shift
 record_use "$cmd" "${1:-}"
+# Commands an agent or a program reads stay plain, even at a terminal or with the style
+# forced on: an agent's shell can be a pseudo-terminal. docs/conventions.md lists them.
+case "$cmd" in
+  start | capture | sync | find | which | pending | patterns | lint | index | log | lock | compile | mcp | journal | standup | tour | report | stats | __*) style_off ;;
+esac
 if [ "$cmd" = journal ]; then
   cmd_journal "$@"
   exit 0
