@@ -71,38 +71,52 @@ Without that, an agent can check for itself: add a line to a wiki's `wiki/conven
 
 ### Confluence
 
-`wiki confluence publish <wiki>` copies one wiki into a Confluence space, for people who read there and use neither git nor Obsidian. It goes one way. The wiki's index becomes a page called `<wiki> wiki`, and each page under `wiki/` becomes a child of it, named `<wiki>: <title>` because Confluence allows one title per space.
+`wiki confluence` does two separate things, and neither until you choose it. `wiki extensions setup confluence` walks through both, says what each choice does, and ends by listing what is set.
 
-- **Only what changed is written.** A page whose text is the same as last time is left alone, so its history in Confluence stays short.
-- **A page it didn't make is never overwritten.** Its own pages carry the label `llm-wiki`. If a title is already taken by someone else's page, that page is reported, the rest are published, and the command fails so you notice.
+**Watching** reads Confluence and writes nothing to it. You name the pages a wiki should hear about, and when one changes, a note goes into that wiki:
+
+```
+== payments
+  Clip quality: design                         version 7, Ready for review  changed by Ann on 2026-11-11
+  Release runbook                              version 3, Verified          unchanged
+```
+
+- **What is noted.** A page read for the first time, with its text. A page whose text changed, with who changed it, when, and only the lines that changed. A page whose status changed, such as In progress to Verified. The next compile works the note into the wiki's pages.
+- **When.** By itself, once a day, in the background, once pages are named. `wiki extensions every confluence 4h` makes that every four hours. `wiki confluence check` shows what it would note, and `wiki confluence check --save` notes it now.
+- **What it costs.** One request a page. Nothing is saved when nothing changed.
+- **Naming pages.** Paste a page's address from the browser, or its id. `space:ENG` watches every page in a space from then on, and doesn't read the pages already there.
+- **Closing open items.** When a note says something waits on a Confluence page, and the item's heading has the page's address in it, the item closes once the page's status means finished. That is Verified unless `done_states` says otherwise.
+- **How it remembers.** The version it last noted for each page is in the wiki's own notes, so every machine that syncs the wiki agrees, and none notes a change twice.
+
+**Publishing** writes to Confluence, and is off unless you turn it on. `wiki confluence publish <wiki>` copies one wiki into a space, for people who read there and use neither git nor Obsidian. The wiki's index becomes a page called `<wiki> wiki`, and each page under `wiki/` becomes a child of it, named `<wiki>: <title>` because Confluence allows one title per space.
+
+- **Only what changed is written.** A page whose text is the same as last time is left alone.
+- **A page it didn't make is never overwritten.** Its own pages carry the label `llm-wiki`. A title someone else already has is reported with what to do, the rest are published, and the command fails so you notice. `--dry-run` sees it too.
 - **Nothing is deleted.** A page that has left the wiki is reported and stays in Confluence until you remove it there.
-- **Links between pages** point at the published pages. A link to a raw note or a file has nothing to point at there, so only its text is kept. Images in the wiki aren't uploaded.
-- **Every page starts with a note** that it is a copy and that changes made in Confluence are overwritten.
+- **By itself, only for wikis you name.** A wiki in `auto` is published seconds after a sync changes its pages.
+- **Who can read it.** Everyone who can read the space. A wiki holds whatever its sessions noted, so publish only to a space whose readers may see all of it. An agent should ask before publishing, and before adding a wiki to `auto`.
 
-`wiki confluence publish <wiki> --dry-run` says what would change and writes nothing. `wiki confluence render <file.md>` prints one file as Confluence would be sent it, and `wiki confluence config` shows what is set and tests the sign-in.
-
-Settings go in `~/.config/llm-wiki/confluence`:
+The settings, in `~/.config/llm-wiki/confluence`:
 
 ```
+watch.payments = https://your-company.atlassian.net/wiki/spaces/ENG/pages/123456/Design, space:OPS
+done_states = Verified, Approved
 space = ENG
-parent = 123456
-space.payments = PAY
+auto = payments
 ```
 
-- `space` is the key of the space to publish into. `space.<wiki>` and `parent.<wiki>` set it for one wiki. `parent` is optional: the id of a page to publish under.
-- The sign-in is the shared one, above. On a server of your own, where Confluence has its own address, set `url` here. Where a value is in neither file, the Jira extension's own settings are used, as they were before there was a shared file.
+| Setting | What it does |
+|---|---|
+| `watch.<wiki>` | The pages that wiki hears about: addresses or ids, separated by commas, and `space:KEY` for a whole space |
+| `done_states` | The statuses that mean a page is finished, for closing open items. Verified unless set |
+| `space`, `space.<wiki>` | The key of the space to publish into, for every wiki or for one |
+| `parent`, `parent.<wiki>` | Optional: the id of a page to publish under |
+| `auto` | The wikis to publish by themselves |
+| `url` | Only on a server of your own, where Confluence has its own address |
 
-To have a wiki published by itself, name it in `auto`:
+The sign-in is the shared one, above. `wiki confluence config` shows what is set, and `wiki confluence render <file.md>` prints one file as Confluence would be sent it.
 
-```
-auto = payments, relay
-```
-
-When a sync changes a page of one of those wikis, it is published in the background, seconds after the compile that changed it. A sync that changed only notes publishes nothing. Once a day it also catches up on anything a sync couldn't publish, such as one made with no network. `wiki extensions log confluence` shows the last runs, and `wiki status` says when one failed. The list is on each machine, so each person chooses.
-
-Everyone who can read the space can read what you publish, and a wiki holds whatever its sessions noted. Publish a wiki only to a space whose readers may see all of it, and run the dry run first. An agent should ask before publishing, and before adding a wiki to `auto`.
-
-It uses Confluence's first REST API, the only one Data Center has. Atlassian marks it deprecated on Cloud, where it still answers.
+It uses Confluence's first REST API, the only one Data Center has. Atlassian marks it deprecated on Cloud, where it still answers. A page's status exists on Cloud only.
 
 ## Write one
 

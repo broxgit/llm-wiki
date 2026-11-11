@@ -1,23 +1,32 @@
 #!/usr/bin/env python3
-# wiki-extension: Publish a wiki's pages to a Confluence space, as a read-only copy.
+# wiki-extension: Watch Confluence pages and tell your wiki when one changes. It can also publish a wiki to a space, if you choose.
 # wiki-events: sync tick
 # wiki-setup: yes
 """wiki confluence: an llm-wiki extension. Standard library only.
 
-It publishes one wiki at a time, one way: the wiki's index becomes a page called
-"<wiki> wiki", and every page under wiki/ becomes a child of it. Pages it made carry
-the label llm-wiki and a hash of their source in the version comment, so an unchanged
-page isn't written again and a page someone else made is never overwritten. Nothing
-is read back from Confluence into the wiki, and nothing is deleted there.
+It does two separate things, and neither until it is chosen in its settings.
 
-With `auto = <wikis>` in its settings it publishes those wikis by itself: on the sync
-event when a page changed, and on the tick event to catch up on one it missed.
+Watching reads Confluence. For the pages a wiki is set to watch, it notes in that wiki
+when a page's text changes and when its status changes, with who changed it, when, and
+what changed. An open item whose heading links a page closes when that page's status
+becomes one that means finished. What has been noted is read back from the wiki's own
+notes, so two machines agree. It writes nothing to Confluence.
+
+Publishing writes to Confluence. It copies one wiki at a time, one way: the wiki's
+index becomes a page called "<wiki> wiki", and every page under wiki/ becomes a child
+of it. Pages it made carry the label llm-wiki and a hash of their source in the version
+comment, so an unchanged page isn't written again and a page someone else made is never
+overwritten. Nothing is deleted there. With `auto = <wikis>` it publishes those wikis
+by itself: on the sync event when a page changed, and on the tick event to catch up.
 
 It uses Confluence's first REST API (/rest/api/content), the only one Data Center has.
 Atlassian marks it deprecated on Cloud, where it still answers.
 """
 import base64
+import datetime
+import difflib
 import hashlib
+import html.parser
 import json
 import os
 import posixpath
@@ -36,38 +45,51 @@ CONFIG = os.path.join(CONFIG_DIR, "confluence")
 SHARED = os.path.join(CONFIG_DIR, "atlassian")
 LABEL = "llm-wiki"
 
-USAGE = f"""Usage: {CMD} confluence publish <wiki> [--dry-run]
+USAGE = f"""Usage: {CMD} confluence check [--save] [<wiki>]
+       {CMD} confluence publish <wiki> [--dry-run]
        {CMD} confluence render <file.md>
        {CMD} confluence config
 
-  publish  Copy a wiki's pages into a Confluence space: its index as a page called
-           "<wiki> wiki", and each page under wiki/ as a child of it. Pages that
+  check    Watching. For each page a wiki watches, say whether its text or its status
+           changed since the wiki last heard. It reads Confluence and changes nothing.
+           --save notes each change in the wiki, with who changed it, when and what,
+           and syncs. It also closes an open item whose heading links a page, once
+           that page's status means finished. With pages to watch, this runs by itself
+           once a day, in the background.
+  publish  Publishing. Copy a wiki's pages into a Confluence space: its index as a page
+           called "<wiki> wiki", and each page under wiki/ as a child of it. Pages that
            haven't changed are left alone. A page it didn't make is never overwritten,
            and nothing is deleted. --dry-run says what would change and writes nothing.
   render   Print one markdown file as Confluence would be sent it.
   config   What is set, and whether Confluence accepts the sign-in.
 
-Settings go in {CONFIG}, one `name = value` a line:
-  url        https://your-company.atlassian.net/wiki, or your own server's address
-  email      your Atlassian account's email. Cloud only: leave it out for Data Center.
-  token_cmd  a command that prints your API token
-  space      the key of the space to publish into, such as ENG
-  parent     optional: the id of a page to publish under
+{CMD} extensions setup confluence asks for all of these, one at a time, and says what
+each does. They are kept in {CONFIG}, one `name = value` a line.
+
+Watching:
+  watch.<wiki>   the pages that wiki hears about: page addresses or ids, separated by
+                 commas. space:KEY watches every page in a space, from now on.
+  done_states    the statuses that mean a page is finished, for closing open items.
+                 Verified unless set.
+Publishing:
+  space          the key of the space to publish into, such as ENG
+  parent         optional: the id of a page to publish under
   space.<wiki>, parent.<wiki>   the same, for one wiki
-  auto       optional: the wikis to publish by themselves, such as payments, relay.
-             Each is published in the background when a sync changes its pages.
+  auto           optional: the wikis to publish by themselves, such as payments, relay.
+                 Each is published in the background when a sync changes its pages.
+Signing in:
+  url            only on a server of your own: Confluence's address
 The sign-in comes from {SHARED}, which every Atlassian
 extension reads: site, email and token_cmd. On Atlassian Cloud, Confluence is at the
-site's address with /wiki after it. On a server of your own, set url here. Where a
-value is in neither file, the Jira extension's settings are used, as they were before.
+site's address with /wiki after it. Where a value is in neither file, the Jira
+extension's settings are used, as they were before.
 The environment wins over the files: CONFLUENCE_URL, CONFLUENCE_EMAIL,
 CONFLUENCE_API_TOKEN, CONFLUENCE_SPACE, CONFLUENCE_AUTO, and for every Atlassian
 extension ATLASSIAN_SITE, ATLASSIAN_EMAIL and ATLASSIAN_API_TOKEN.
 
-Everyone who can read the space can read what you publish. Publish a wiki only to a
-space whose readers may see everything in it.
+Everyone who can read a space can read what you publish into it. Publish a wiki only
+to a space whose readers may see everything in it. Watching sends nothing anywhere.
 """
-
 
 # True while llm-wiki runs this for an event, in the background, with nobody watching.
 EVENT = False
@@ -188,6 +210,10 @@ def sgr(code, text, fd=1):
 
 def typed(text):
     return sgr("36", text)
+
+
+def bold(text):
+    return sgr("1", text)
 
 
 def done(text):
@@ -316,13 +342,50 @@ def need_sign_in(conf):
         die(f"Confluence isn't set up: {msg}. Run: {CMD} extensions setup confluence")
 
 
+def watch_lists(conf):
+    """{wiki: [what it watches, as written]} from the watch.<wiki> settings."""
+    out = {}
+    for k in sorted(conf):
+        if k.startswith("watch.") and conf[k].strip():
+            out[k[len("watch."):]] = [t.strip() for t in conf[k].split(",") if t.strip()]
+    return out
+
+
+def done_states(conf):
+    return [x.strip().lower() for x in (conf.get("done_states") or "Verified").split(",") if x.strip()]
+
+
 def not_ready(conf):
-    """What publishing lacks, in a few words, or nothing."""
-    return sign_in_missing(conf) or ("" if conf.get("space") else "no space to publish into yet")
+    """What it lacks before it can do anything, in a few words, or nothing."""
+    msg = sign_in_missing(conf)
+    if msg:
+        return msg
+    if not watch_lists(conf) and not conf.get("space"):
+        return "nothing chosen yet: no pages to watch, and no space to publish into"
+    return ""
+
+
+def step(n, of, title):
+    print()
+    print(bold(f"== Step {n} of {of}: {title}"))
 
 
 def setup():
-    """Run by `wiki setup` and `wiki extensions setup confluence`, at a terminal."""
+    """Run by `wiki setup` and `wiki extensions setup confluence`, at a terminal. Every
+    setting is asked for here, with what it does, and nothing happens that isn't chosen."""
+    print(bold("Confluence, for your wikis"))
+    print("It can do two separate things. Neither happens until you choose it here.")
+    print()
+    print("  Watch     Reads Confluence. When a page you name changes, or its status changes,")
+    print("            a note goes into one of your wikis, so your agent knows. It writes nothing")
+    print("            to Confluence.")
+    print("  Publish   Writes to Confluence. Copies one of your wikis into a space, for people who")
+    print("            read there. Off unless you turn it on in step 3.")
+    print()
+    print("Enter keeps the value in brackets, and a dash, -, clears it. You can run this again at any")
+    print(f"time to change an answer: {typed(CMD + ' extensions setup confluence')}")
+
+    step(1, 3, "sign in")
     atlassian_setup()
     own = read_conf(CONFIG)
     if not settings()["url"]:
@@ -334,26 +397,151 @@ def setup():
         else:
             set_conf(CONFIG, "url", url.rstrip("/"))
     conf = settings()
+    c = None
     if sign_in_missing(conf):
-        print("  " + warn(f"Confluence can't sign in yet: {sign_in_missing(conf)}."))
+        print("  " + warn(f"Confluence can't sign in yet: {sign_in_missing(conf)}. The pages you name below can't be checked until it can."))
     else:
         try:
-            me = Confluence(conf).call("GET", "/rest/api/user/current")
+            c = Confluence(conf)
+            me = c.call("GET", "/rest/api/user/current")
             print("  " + done(f"Signed in to Confluence as {me.get('displayName') or me.get('username') or '?'}."))
         except Refused as e:
+            c = None
             print("  " + warn(f"{conf['url']} has no Confluence API at /rest/api ({e.code}). On Cloud the address ends in /wiki."))
         except SystemExit:
+            c = None
             print("  " + warn("The sign-in didn't work. The line above says why."))
+
+    step(2, 3, "watch pages")
+    print("What it does   For each page you name, it remembers the version your wiki last heard about.")
+    print("               When the page's text changes, or its status changes (such as In progress to")
+    print("               Verified), it saves a note in the wiki: who changed it, when, and what changed.")
+    print("               The next compile works that into the wiki's pages.")
+    print("When it runs   By itself, in the background, once a day. Nobody has to ask.")
+    print(f"               {CMD} extensions every confluence 4h makes that every four hours.")
+    print("What it costs  One request a page. A note is saved only when something changed.")
+    print("What it sends  Nothing. Watching only reads.")
+    wikis = sorted(n for n in os.listdir(os.environ.get("WIKIS_DIR", ".")) if is_wiki(n)) if os.path.isdir(os.environ.get("WIKIS_DIR", "")) else []
+    if wikis:
+        print()
+        print("Your wikis: " + ", ".join(wikis))
+    lists = watch_lists(own)
+    first = True
+    while True:
+        default = next(iter(lists), "") if first else ""
+        first = False
+        print()
+        wiki = ask("Which wiki should hear about Confluence pages? Leave empty to skip watching", default)
+        if not wiki:
+            break
+        if not is_wiki(wiki):
+            print("  " + warn(f"{wiki} isn't one of your wikis, so nothing was saved for it."))
+        else:
+            print(f"Name the pages for {wiki}. Paste a page's address from your browser, or its id, and separate")
+            print("several with commas. To watch every page in a space from now on, write space: and its key,")
+            print("such as space:ENG.")
+            raw = ask(f"Pages to watch for {wiki}", ", ".join(lists.get(wiki, [])))
+            kept = []
+            for t in [x.strip() for x in raw.split(",") if x.strip()]:
+                kind, ref = target(t)
+                if kind is None:
+                    print("  " + warn(f"{t} isn't a page's address, an id, or space:KEY, so it was left out."))
+                elif kind == "space":
+                    kept.append(f"space:{ref}")
+                    print("  " + done(f"space {ref}: every page in it, from now on"))
+                elif c is None:
+                    kept.append(ref)
+                    print(f"  page {ref}: saved, and not checked, since Confluence can't be reached yet")
+                else:
+                    page = fetch_page(c, ref)
+                    if page is None:
+                        print("  " + warn(f"{ref} isn't a page you can read, so it was left out."))
+                    else:
+                        kept.append(ref)
+                        st = page_state(c, ref)
+                        print("  " + done(f"{page['title']} (version {page['version']}" + (f", {st}" if st else "") + ")"))
+            set_conf(CONFIG, f"watch.{wiki}", ", ".join(kept))
+            lists[wiki] = kept
+        if not ask_yn("Watch pages for another wiki?", False):
+            break
     print()
-    print("Everyone who can read a space can read what is published into it, and a wiki holds whatever")
-    print("its sessions noted. Choose a space whose readers may see all of it.")
-    space = ask("Key of the space to publish into, such as ENG", own.get("space", ""))
-    set_conf(CONFIG, "space", space)
-    print("A wiki named here is published by itself whenever a sync changes its pages. Any other is")
-    print(f"published only when you run {CMD} confluence publish <wiki>.")
-    auto = ask("Wikis to publish by themselves, such as payments, relay. Empty for none", own.get("auto", ""))
-    set_conf(CONFIG, "auto", auto)
+    print("A page's status can also close an open item. When a note says something is waiting on a")
+    print("Confluence page, and the item's heading has the page's address in it, the item closes by")
+    print("itself once the page's status is one that means finished.")
+    names = []
+    if c is not None:
+        for refs in lists.values():
+            for ref in refs:
+                if not ref.startswith("space:"):
+                    names = available_states(c, ref)
+                    break
+            if names:
+                break
+    if names:
+        print("Statuses your Confluence offers: " + ", ".join(names))
+    states = ask("Statuses that mean a page is finished, separated by commas", own.get("done_states", "") or "Verified")
+    set_conf(CONFIG, "done_states", "" if states == "Verified" else states)
+
+    step(3, 3, "publish (optional)")
+    print("What it does   Copies a wiki's pages into a Confluence space, as pages under one called")
+    print("               \"<wiki> wiki\", so people who don't use your wikis can read them there.")
+    print("What it sends  The wiki's pages, to everyone who can read that space. A wiki holds whatever")
+    print("               its sessions noted, so choose a space whose readers may see all of it.")
+    print("What it never  It never changes a page it didn't make, and never deletes one.")
+    print("does")
+    has = bool(own.get("space"))
+    if ask_yn("Set up publishing?", has):
+        space = ask("Key of the space to publish into. It is in the space's address: .../spaces/ENG/...", own.get("space", ""))
+        set_conf(CONFIG, "space", space)
+        print("A wiki named next is published by itself, seconds after a sync changes its pages. Any other")
+        print(f"is published only when you run {CMD} confluence publish <wiki>.")
+        auto = ask("Wikis to publish by themselves, separated by commas. Leave empty for none", own.get("auto", ""))
+        set_conf(CONFIG, "auto", auto)
+    elif has:
+        print(f"  Publishing stays as it is: the space {own['space']}. To turn it off, answer yes and clear the space with -.")
+    else:
+        print("  Publishing stays off. Nothing of yours goes to Confluence.")
+
+    conf = settings()
+    print()
+    print(bold("What is set"))
+    for line in summary(conf):
+        print("  " + line)
+    print()
+    print(bold("What happens now"))
+    lists = watch_lists(conf)
+    if lists:
+        print("  Once a day, in the background, the watched pages are checked, and a change is noted in its wiki.")
+        print(f"  To check now, and see what it would note: {typed(CMD + ' confluence check')}")
+    if auto_wikis(conf):
+        print("  A sync that changes a page of " + ", ".join(auto_wikis(conf)) + " publishes that wiki.")
+    if not lists and not conf.get("space"):
+        print("  Nothing: no pages are watched and publishing is off.")
+    print(f"  To see what the last run did: {typed(CMD + ' extensions log confluence')}")
+    print(f"  Every setting is in {CONFIG}, and {CMD} confluence --help lists them.")
     return 0
+
+
+def summary(conf):
+    """What is set, a line for each lever, in words."""
+    out = []
+    missing = sign_in_missing(conf)
+    out.append("Sign-in      " + (f"not set up: {missing}" if missing else conf["url"] + (f", as {conf['email']}" if conf.get("email") else "")))
+    lists = watch_lists(conf)
+    if lists:
+        for wiki, refs in lists.items():
+            pages = sum(1 for r in refs if not r.startswith("space:"))
+            spaces = [r[len("space:"):] for r in refs if r.startswith("space:")]
+            parts = ([f"{pages} page(s)"] if pages else []) + ([f"the space {x}" for x in spaces])
+            out.append(f"Watching     {wiki} hears about " + " and ".join(parts))
+    else:
+        out.append("Watching     off: no pages named")
+    out.append("Finished is  " + ", ".join(x.capitalize() for x in done_states(conf)) + " (a page with that status closes an open item that links it)")
+    if conf.get("space"):
+        out.append(f"Publishing   into the space {conf['space']}; by themselves: " + (", ".join(auto_wikis(conf)) or "none, only when you run publish"))
+    else:
+        out.append("Publishing   off")
+    return out
 
 
 # ---- Confluence ----------------------------------------------------------------
@@ -682,6 +870,341 @@ def render(text, wiki="", source_path="", titles=None):
     return banner + (f"<p><em>{meta}</em></p>" if meta else "") + Renderer(source_path, titles).blocks(body)
 
 
+# ---- watching ------------------------------------------------------------------
+
+STATE = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "llm-wiki", "extensions", "confluence")
+PAGE_REF = re.compile(r"/pages/(\d+)|[?&]pageId=(\d+)")
+NOTED = re.compile(r"^Confluence-page: (\d+) \| version (\d+) \| status (.*)$")
+# A note this extension saved. A second in the same second is named <stamp>-confluence-2.md.
+OWN_NOTE = re.compile(r"-confluence(-\d+)?\.md$")
+
+
+def target(text):
+    """("page", id), ("space", KEY) or (None, None) for what someone wrote."""
+    text = text.strip()
+    if text.lower().startswith("space:"):
+        key = text[6:].strip()
+        return ("space", key) if key else (None, None)
+    m = PAGE_REF.search(text)
+    if m:
+        return "page", m.group(1) or m.group(2)
+    return ("page", text) if text.isdigit() else (None, None)
+
+
+class PageText(html.parser.HTMLParser):
+    """A Confluence page as plain text: enough to read, and to see what changed."""
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.out = []
+
+    def handle_starttag(self, tag, attrs):
+        if len(tag) == 2 and tag[0] == "h" and tag[1].isdigit():
+            self.out.append("\n\n" + "#" * int(tag[1]) + " ")
+        elif tag in ("p", "div", "tr", "table", "ul", "ol", "blockquote", "br"):
+            self.out.append("\n")
+        elif tag == "li":
+            self.out.append("\n- ")
+        elif tag in ("td", "th"):
+            self.out.append(" | ")
+        elif tag == "ac:plain-text-body":
+            self.out.append("\n    ")
+
+    def handle_endtag(self, tag):
+        if (len(tag) == 2 and tag[0] == "h" and tag[1].isdigit()) or tag in ("p", "table", "ul", "ol", "ac:plain-text-body"):
+            self.out.append("\n")
+
+    def handle_data(self, data):
+        self.out.append(data)
+
+    def unknown_decl(self, data):
+        if data.startswith("CDATA["):
+            self.out.append(data[6:].replace("\n", "\n    "))
+
+
+def page_text(storage, limit=30000):
+    parser = PageText()
+    try:
+        parser.feed(storage or "")
+        parser.close()
+    except Exception:
+        return ""
+    lines = [re.sub(r"[ \t]+", " ", l).rstrip() for l in "".join(parser.out).split("\n")]
+    text = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+    return text if len(text) <= limit else text[:limit] + "\n(cut here: the page is longer)"
+
+
+def fetch_page(c, pid):
+    """{id, title, version, by, when, link, text}, or None for a page that can't be read."""
+    try:
+        d = c.call("GET", f"/rest/api/content/{pid}?expand=version,body.storage")
+    except Refused:
+        return None
+    v = d.get("version") or {}
+    return {"id": str(d.get("id") or pid), "title": d.get("title") or f"page {pid}", "version": int(v.get("number") or 0),
+            "by": (v.get("by") or {}).get("displayName") or "", "when": v.get("when") or "",
+            "link": c.url + ((d.get("_links") or {}).get("webui") or f"/pages/viewpage.action?pageId={pid}"),
+            "text": page_text(((d.get("body") or {}).get("storage") or {}).get("value") or "")}
+
+
+def page_state(c, pid):
+    """The page's status, such as Verified, or nothing where it has none or the server has no such thing."""
+    try:
+        d = c.call("GET", f"/rest/api/content/{pid}/state")
+    except Refused:
+        return ""
+    return ((d.get("contentState") or {}).get("name") or "") if isinstance(d, dict) else ""
+
+
+def available_states(c, pid):
+    try:
+        d = c.call("GET", f"/rest/api/content/{pid}/state/available")
+    except Refused:
+        return []
+    return [x.get("name") for x in (d.get("spaceContentStates") or []) + (d.get("customContentStates") or []) if x.get("name")]
+
+
+def space_pages(c, key, since):
+    """Ids of the pages in a space changed at or after `since`. The search is asked for a
+    day earlier, since it reads dates in the account's own time zone, and narrowed here."""
+    asked = (since - datetime.timedelta(days=1)).strftime("%Y-%m-%d %H:%M")
+    q = urllib.parse.urlencode({"cql": f'space = "{key}" and type = page and lastmodified >= "{asked}"', "expand": "version", "limit": 100})
+    try:
+        res = c.call("GET", "/rest/api/content/search?" + q).get("results") or []
+    except Refused:
+        return None
+    out = []
+    for r in res:
+        when = parse_when(((r.get("version") or {}).get("when")) or "")
+        if when is None or when >= since:
+            out.append(str(r.get("id")))
+    return out
+
+
+def parse_when(text):
+    try:
+        t = datetime.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return t if t.tzinfo else t.replace(tzinfo=datetime.timezone.utc)
+
+
+def note_order(name):
+    """Oldest first: by the stamp, then by the number a same-second note was given."""
+    m = re.match(r"(.*)-confluence(?:-(\d+))?\.md$", name)
+    return (m.group(1), int(m.group(2) or 1)) if m else (name, 0)
+
+
+def noted(root):
+    """{page id: (version, status)} as the wiki's own notes last recorded it. The notes
+    are in git, so every machine that syncs the wiki reads the same answer."""
+    out = {}
+    raw = os.path.join(root, "raw")
+    try:
+        names = sorted((n for n in os.listdir(raw) if OWN_NOTE.search(n)), key=note_order)
+    except OSError:
+        return out
+    for n in names:
+        try:
+            with open(os.path.join(raw, n), encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    m = NOTED.match(line.rstrip("\n"))
+                    if m:
+                        out[m.group(1)] = (int(m.group(2)), m.group(3).strip())
+        except OSError:
+            pass
+    return out
+
+
+def waiting_lines(wiki_cmd, root, wiki):
+    """The lines of this extension's notes that no compile has taken yet."""
+    r = subprocess.run([wiki_cmd, "pending", wiki], capture_output=True, text=True)
+    names = [l.split()[0][len("raw/"):] for l in r.stdout.splitlines() if l.startswith("raw/")] if r.returncode == 0 else []
+    lines = set()
+    for n in names:
+        if OWN_NOTE.search(n):
+            try:
+                with open(os.path.join(root, "raw", n), encoding="utf-8", errors="replace") as f:
+                    lines.update(f.read().splitlines())
+            except OSError:
+                pass
+    return lines
+
+
+def cache_path(pid):
+    return os.path.join(STATE, "pages", f"{pid}.txt")
+
+
+def read_cache(pid):
+    try:
+        with open(cache_path(pid), encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def since_path(key):
+    return os.path.join(STATE, f"space-{re.sub(r'[^A-Za-z0-9~._-]', '_', key)}.since")
+
+
+def cmd_check(args):
+    save = "--save" in args
+    rest = [a for a in args if a != "--save"]
+    if any(a.startswith("-") for a in rest) or len(rest) > 1:
+        die_usage(f"check takes --save and a wiki's name. {CMD} confluence --help")
+    conf = settings()
+    need_sign_in(conf)
+    wikis_dir = os.environ.get("WIKIS_DIR") or die("WIKIS_DIR isn't set. Run this as: wiki confluence")
+    wiki_cmd = os.environ.get("LLM_WIKI") or die("LLM_WIKI isn't set. Run this as: wiki confluence")
+    only = rest[0] if rest else None
+    if only and not is_wiki(only):
+        die(f"{only} isn't a wiki here. {CMD} status lists the wikis.")
+    lists = {w: refs for w, refs in watch_lists(conf).items() if not only or w == only}
+    c = Confluence(conf)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    finished = done_states(conf)
+    found = {}     # wiki -> [change]
+    closes = {}    # wiki -> [heading]
+    waiting = {}   # wiki -> the lines of its notes no compile has taken yet
+    bad = 0
+    seen_spaces = []
+
+    for wiki, refs in lists.items():
+        if not is_wiki(wiki):
+            print(warn(f"watch.{wiki} names a wiki that isn't here. Take it out of {CONFIG}."))
+            bad = 1
+            continue
+        print(f"== {wiki}")
+        root = os.path.join(wikis_dir, wiki)
+        known = noted(root)
+        ids = []
+        for ref in refs:
+            kind, val = target(ref)
+            if kind == "page":
+                ids.append(val)
+            elif kind == "space":
+                try:
+                    with open(since_path(val), encoding="utf-8") as f:
+                        since = parse_when(f.read().strip())
+                except OSError:
+                    since = None
+                if since is None:
+                    print(f"  space {val}: watched from now on. Pages changed after this will be noted.")
+                    seen_spaces.append(val)
+                    continue
+                got = space_pages(c, val, since)
+                if got is None:
+                    print("  " + warn(f"the space {val} can't be read. Check it in watch.{wiki} in {CONFIG}."))
+                    bad = 1
+                    continue
+                seen_spaces.append(val)
+                print(f"  space {val}: {len(got)} page(s) changed since {since:%Y-%m-%d %H:%M} UTC")
+                ids += [i for i in got if i not in ids]
+            else:
+                print("  " + warn(f"{ref} isn't a page's address, an id, or space:KEY. Fix watch.{wiki} in {CONFIG}."))
+                bad = 1
+        for pid in ids:
+            page = fetch_page(c, pid)
+            if page is None:
+                print("  " + warn(f"{pid} isn't a page you can read. Take it out of watch.{wiki} in {CONFIG}."))
+                bad = 1
+                continue
+            page["status"] = page_state(c, pid)
+            was = known.get(pid)
+            who = f"by {page['by']} " if page["by"] else ""
+            if was is None:
+                page["kind"] = "first read"
+            elif page["version"] > was[0]:
+                page["kind"] = f"changed {who}on {page['when'][:10]}"
+            elif page["status"] != was[1]:
+                page["kind"] = "status changed"
+            else:
+                page["kind"] = ""
+            page["was"] = was
+            stat = f"version {page['version']}" + (f", {page['status']}" if page["status"] else "")
+            print(f"  {page['title'][:44]:<44} {stat:<28} {page['kind'] or 'unchanged'}")
+            if page["kind"]:
+                found.setdefault(wiki, []).append(page)
+
+    # An open item whose heading links a page closes when the page's status means finished.
+    r = subprocess.run([wiki_cmd, "open", "--data"] + ([only] if only else []), capture_output=True, text=True)
+    for line in r.stdout.splitlines() if r.returncode == 0 else []:
+        f = line.split("\t")
+        if len(f) < 8 or f[1] not in ("open", "overdue"):
+            continue
+        m = PAGE_REF.search(f[7])
+        if not m:
+            continue
+        st = page_state(c, m.group(1) or m.group(2))
+        if st and st.lower() in finished:
+            if f[0] not in found and f[0] not in closes and f[0] not in lists:
+                print(f"== {f[0]}")
+            print(f"  open item: {f[7][:70]}")
+            if f[0] not in waiting:
+                waiting[f[0]] = waiting_lines(wiki_cmd, os.path.join(wikis_dir, f[0]), f[0])
+            if f"Done: {f[7]}" in waiting[f[0]]:
+                # A waiting note already asks for it: leave it out.
+                print(f"      its page is {st}: already noted as done, waiting for a compile")
+            else:
+                print(f"      its page is {st}, which means finished: the item closes")
+                closes.setdefault(f[0], []).append((f[7], st))
+
+    n = sum(len(v) for v in found.values()) + sum(len(v) for v in closes.values())
+    print()
+    if not lists and not closes:
+        print(f"No wiki watches a page yet. Run: {CMD} extensions setup confluence")
+    if n == 0:
+        if lists:
+            print("Nothing changed.")
+    elif not save:
+        print(f"{n} change(s) to note. To note them in the wiki: {CMD} confluence check --save")
+    else:
+        for wiki in sorted(set(found) | set(closes)):
+            pages = found.get(wiki, [])
+            note = [f"# Confluence: what changed, as of {now:%Y-%m-%d}", "",
+                    f"Source: {c.url}, read by `wiki confluence` on {now:%Y-%m-%d %H:%M} UTC.", ""]
+            for page in pages:
+                old = read_cache(page["id"])
+                note += [f"## {page['title']}", "", f"- page: {page['link']}",
+                         f"- change: {page['kind']}" + (f", version {page['version']}" if "version" not in page["kind"] else ""),
+                         "- status: " + (page["status"] or "none")
+                         + (f" (was {page['was'][1] or 'none'})" if page["was"] and page["was"][1] != page["status"] else ""), ""]
+                if page["kind"] != "status changed":
+                    diff = None
+                    if old is not None and old != page["text"]:
+                        diff = "\n".join(difflib.unified_diff(old.split("\n"), page["text"].split("\n"), "before", "now", lineterm="", n=2))
+                    if diff and len(diff) < len(page["text"]):
+                        note += ["What changed in the page's text:", "", "````diff", diff, "````", ""]
+                    else:
+                        note += ["The page's text:", "", "````text", page["text"], "````", ""]
+            for page in pages:
+                note.append(f"Confluence-page: {page['id']} | version {page['version']} | status {page['status']}")
+            for h, st in closes.get(wiki, []):
+                note += ["", f"The page this item waits on is {st}.", f"Done: {h}"]
+            r = subprocess.run([wiki_cmd, "capture", wiki, "confluence"], input="\n".join(note) + "\n", text=True, capture_output=True)
+            if r.returncode != 0:
+                die(f"couldn't save the note in {wiki}: {r.stderr.strip()}")
+            r = subprocess.run([wiki_cmd, "sync", wiki, "-m", f"Confluence: {len(pages) + len(closes.get(wiki, []))} change(s)"], capture_output=True, text=True)
+            if r.returncode != 0:
+                die(f"saved the note in {wiki}, but the sync failed. Run: {CMD} sync {wiki}")
+            for page in pages:
+                try:
+                    os.makedirs(os.path.dirname(cache_path(page["id"])), exist_ok=True)
+                    with open(cache_path(page["id"]), "w", encoding="utf-8") as f:
+                        f.write(page["text"])
+                except OSError:
+                    pass
+            print(f"{wiki}: noted {len(pages) + len(closes.get(wiki, []))} change(s). The next compile works them into the wiki.")
+    if save:
+        for key in seen_spaces:
+            try:
+                os.makedirs(STATE, exist_ok=True)
+                with open(since_path(key), "w", encoding="utf-8") as f:
+                    f.write(now.isoformat())
+            except OSError:
+                pass
+    return bad
+
+
 # ---- commands ------------------------------------------------------------------
 
 def wiki_pages(wiki_cmd, root, wiki):
@@ -828,6 +1351,13 @@ def cmd_config(args):
     print(f"url       {conf['url'] or 'not set'}{came_from(conf, 'url')}")
     print(f"email     {conf.get('email') or 'not set, so the token is sent as a Data Center personal access token'}{came_from(conf, 'email')}")
     print(f"token     {'from ' + where if where else 'not set'}")
+    for wiki, refs in watch_lists(conf).items():
+        print(f"watch     {wiki}: {', '.join(refs)}")
+        if not is_wiki(wiki):
+            print(warn(f"watch.{wiki} names a wiki that isn't here. Take it out of {CONFIG}."))
+    if not watch_lists(conf):
+        print("watch     off: no pages named")
+    print(f"finished  {', '.join(x.capitalize() for x in done_states(conf))}")
     print(f"space     {conf.get('space') or 'not set'}")
     print(f"auto      {', '.join(auto_wikis(conf)) or 'off'}")
     for w in auto_wikis(conf):
@@ -844,8 +1374,10 @@ def cmd_config(args):
     except Refused as e:
         die(f"{conf['url']} has no Confluence API at /rest/api ({e.code}). Is url the address of Confluence itself? On Cloud it ends in /wiki.")
     print(f"\nSigned in as {me.get('displayName') or me.get('username') or '?'}.")
-    if not conf.get("space"):
-        print(f"No space is set, so publish has nowhere to go yet. Run: {CMD} extensions setup confluence")
+    if not watch_lists(conf) and not conf.get("space"):
+        print(f"Nothing is chosen yet: no pages to watch, and no space to publish into. Run: {CMD} extensions setup confluence")
+    elif not conf.get("space"):
+        print("Publishing is off: no space is set.")
     return 0
 
 
@@ -859,13 +1391,18 @@ def auto_wikis(conf):
 
 
 def on_event(args):
-    """Run by llm-wiki for an event. Publishes only the wikis that auto names."""
+    """Run by llm-wiki for an event. On tick it checks the watched pages and notes what
+    changed, then catches up on publishing. On sync it publishes a wiki that auto names."""
     global EVENT
     EVENT = True
-    auto = auto_wikis(settings())
+    conf = settings()
+    auto = auto_wikis(conf)
+    worst = 0
+    if args[:1] == ["tick"]:
+        worst = cmd_check(["--save"])
     if not auto:
         print("auto is empty, so nothing was published.")
-        return 0
+        return worst
     if args[:1] == ["sync"] and len(args) > 1:
         wiki = args[1]
         if wiki not in auto:
@@ -882,7 +1419,6 @@ def on_event(args):
         return cmd_publish([wiki])
     if args[:1] == ["tick"]:
         # Catch up on a publish that a sync couldn't make. Unchanged pages cost a read.
-        worst = 0
         for wiki in auto:
             if not is_wiki(wiki):
                 print(f"auto names {wiki}, which isn't a wiki here. Take it out of auto in {CONFIG}.")
@@ -907,9 +1443,9 @@ def main(argv):
     if not argv or argv[0] in ("-h", "--help", "help"):
         print(USAGE, end="")
         return 0 if argv else 1
-    cmds = {"publish": cmd_publish, "render": cmd_render, "config": cmd_config}
+    cmds = {"check": cmd_check, "publish": cmd_publish, "render": cmd_render, "config": cmd_config}
     if argv[0] not in cmds:
-        die_usage(f"confluence takes publish, render or config. {CMD} confluence --help")
+        die_usage(f"confluence takes check, publish, render or config. {CMD} confluence --help")
     return cmds[argv[0]](argv[1:])
 
 

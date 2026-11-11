@@ -79,6 +79,15 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### Extensions: Confluence watches pages (2026-11-11)
+
+- **Why:** the Confluence extension only published a wiki outward. The maintainer had expected the opposite: watch Confluence pages and tell the agent, as Jira does for tickets. He found out at setup's prompt for a space to publish into, which read as if his wikis were about to be published. The question a team asks first is what happened elsewhere, which is information coming in.
+- **What changed:** watching is the extension's main job, and it reads only. `watch.<wiki>` names pages by address or id, or a whole space as `space:KEY`. `wiki confluence check` says what changed since the wiki last heard, and `--save` notes it: a page read for the first time with its text, a page whose text changed with who, when and a diff, and a page whose status changed. With pages named, the tick event does that once a day. An open item whose heading has a page's address closes when the page's status is in `done_states`, Verified by default. The version last noted for each page is a line in the wiki's own notes, so machines agree; the text a diff is made against is kept on each machine, and a machine without it notes the full text. A space is watched from the moment it is named, by a search for pages modified since, asked a day early and narrowed here, since the search reads dates in the account's time zone. Publishing is unchanged and still off unless chosen.
+- **What changed in setup:** both extensions' setups open by saying what the extension does, explain each choice before asking it, and end with "What is set" and "What happens now". Confluence's is three numbered steps: sign in, watch, publish. Each page is checked as it is named, with its title and status or why it was left out. It lists the statuses the site offers before asking which mean finished. Publishing is one yes or no, and a no says nothing of yours goes to Confluence. Jira's asks for `done_statuses` too.
+- **Found on the way:** a second note saved in the same second is named `<stamp>-<slug>-2.md`, and neither extension recognised it as its own, so Jira could have noted an item twice. Both now do.
+- **Checked on a real Confluence Cloud site, read only:** a page's version, author and date; that a page with no status answers `{}`; the statuses a space offers (Rough draft, In progress, Ready for review, Verified); and the search for pages modified since a date.
+- **Still untested:** a page that has a status, on a real site: the name is read from `contentState.name`, which is from memory of the API and was not seen. Watching a real page through a real change. A space with more than 100 changed pages. Data Center, which has no page status.
+
 ### Conventions version 2 (2026-11-11)
 
 - **Why:** llm-relay adopted version 1 and came back with three things the guide didn't settle: what a usage error exits with, whether `--yes` is owed, and warnings on standard error that took their style from standard output, so `2>errors.log` at a terminal put colour codes in the file.
