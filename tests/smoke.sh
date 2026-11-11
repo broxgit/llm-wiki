@@ -3560,7 +3560,7 @@ report --since
 tips --repo
 tips --mute
 EOF
-lacks "and every flag's arm in wiki.sh is guarded" "shift" bash -c "grep -E '^ +-[^ )]*\) .*\\\$\{2:-\}.*shift' '$REPO/wiki.sh' | grep -v 'need_value\|die \|needs a name'"
+lacks "and every flag's arm in wiki.sh is guarded" "shift" bash -c "grep -E '^ +-[^ )]*\) .*\\\$\{2:-\}.*shift' '$REPO/wiki.sh' | grep -v 'need_value\|die \|die_usage \|needs a name'"
 fi
 
 if section "Update"; then
@@ -3911,6 +3911,33 @@ rm -rf "$HOME/.cursor" "$HOME/.claude/plugins/installed_plugins.json"
 doc="$(sed -n '/^# --- style helpers/,/^# --- end of style helpers/p' "$REPO/docs/conventions.md")"
 [ -n "$blk" ] && [ "$blk" = "$doc" ] && ok "the helper block in wiki.sh is the block in docs/conventions.md, byte for byte" || bad "the helper block in wiki.sh is the block in docs/conventions.md, byte for byte"
 case "$(head -n 1 "$REPO/docs/conventions.md")" in "Conventions version "[0-9]*) ok "the guide's first line gives its version" ;; *) bad "the guide's first line gives its version" ;; esac
+v="$(head -n 1 "$REPO/docs/conventions.md" | sed 's/^Conventions version \([0-9]*\).*/\1/')"
+case "$blk" in "# --- style helpers: docs/conventions.md, version $v. "*) ok "and the helper block names the same version" ;; *) bad "and the helper block names the same version" "$v" ;; esac
+# Version 2: what a usage error exits with, and warnings on standard error.
+exits() { local want="$1"; shift; "$@" >/dev/null 2>&1; [ "$?" -eq "$want" ]; }
+check "an unknown command exits 2: called wrongly, not tried and failed" exits 2 sty "$W" nosuchcommand
+check "an unknown option exits 2" exits 2 sty "$W" status --bogus
+check "a missing argument exits 2" exits 2 sty "$W" pages
+check "an option a command doesn't know exits 2" exits 2 sty "$W" pages demo --json
+check "a failure exits 1: a wiki that isn't there" exits 1 sty "$W" pages nosuchwiki
+check "an extension's own usage error exits 2" exits 2 env WIKIS_DIR="$SW/wikis" LLM_WIKI="$W" "$REPO/extensions/wiki-confluence" delete
+check "and its failure exits 1" exits 1 env WIKIS_DIR="$SW/wikis" LLM_WIKI="$W" "$REPO/extensions/wiki-confluence" publish nosuchwiki
+expect "a usage error still says error:" "error: no command called nosuchcommand" sty "$W" nosuchcommand
+# A warning on standard error follows standard error, whatever standard output is.
+werr() { bash -c "$blk"$'\n'"STYLE=$1 STYLE_ERR=$2; style_set; say_warn_err \"careful: \$(typed_err 'wiki status')\"; say_warn \"plain: \$(typed 'wiki open')\"" 2>"$SW/err" >"$SW/out"; }
+werr no yes
+case "$(cat "$SW/err")" in "${ESC}[1m${ESC}[33m!${ESC}[0m careful: ${ESC}[36mwiki status${ESC}[0m") ok "say_warn_err and typed_err are styled when standard error is" ;; *) bad "say_warn_err and typed_err are styled when standard error is" "$(cat -v "$SW/err")" ;; esac
+case "$(cat "$SW/out")" in *"$ESC"*) bad "while standard output, which isn't, stays plain" "$(cat -v "$SW/out")" ;; *) ok "while standard output, which isn't, stays plain" ;; esac
+werr yes no
+[ "$(cat "$SW/err")" = "careful: wiki status" ] && ok "sent to a file, a warning on standard error has no codes, though the terminal's output has" || bad "sent to a file, a warning on standard error has no codes" "$(cat -v "$SW/err")"
+case "$(cat "$SW/out")" in *"${ESC}[36mwiki open${ESC}[0m"*) ok "and standard output keeps its own" ;; *) bad "and standard output keeps its own" "$(cat -v "$SW/out")" ;; esac
+out="$(bash -c "$blk"$'\n''style_off; say_warn_err x' 2>&1)"
+[ "$out" = x ] && ok "style_off covers it" || bad "style_off covers it" "$out"
+out="$(LLM_WIKI_STYLE=on bash -c "$blk"$'\n''die_usage wrong' 2>&1; echo "code $?")"
+case "$out" in "${ESC}[31merror:${ESC}[0m wrong"*"code 2") ok "die_usage says error: in red and exits 2" ;; *) bad "die_usage says error: in red and exits 2" "$(printf '%s' "$out" | cat -v)" ;; esac
+check "the guide says what a usage error exits with" grep -q '2 called wrongly' "$REPO/docs/conventions.md"
+check "that --yes isn't owed where the question is the safeguard" grep -q 'a tool may have no `--yes` where the question is the safeguard' "$REPO/docs/conventions.md"
+check "and gives the same pair in Python" grep -q 'def warn_err' "$REPO/docs/conventions.md"
 grep -q 'docs/conventions.md' "$REPO/AGENTS.md" && ok "AGENTS.md points at the guide" || bad "AGENTS.md points at the guide"
 fi
 

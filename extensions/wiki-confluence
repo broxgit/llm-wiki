@@ -73,10 +73,15 @@ space whose readers may see everything in it.
 EVENT = False
 
 
-def die(msg):
+def die(msg, code=1):
     sys.stdout.flush()
     print(f"error: {msg}", file=sys.stderr)
-    sys.exit(1)
+    sys.exit(code)
+
+
+def die_usage(msg):
+    """Called wrongly: an unknown command or option, a missing argument. Exits 2."""
+    die(msg, 2)
 
 
 def unreachable(msg):
@@ -710,7 +715,7 @@ def cmd_publish(args):
     dry = "--dry-run" in args
     rest = [a for a in args if a != "--dry-run"]
     if len(rest) != 1 or rest[0].startswith("-"):
-        die(f"usage: {CMD} confluence publish <wiki> [--dry-run]")
+        die_usage(f"usage: {CMD} confluence publish <wiki> [--dry-run]")
     wiki = rest[0]
     wikis_dir = os.environ.get("WIKIS_DIR") or die("WIKIS_DIR isn't set. Run this as: wiki confluence")
     root = os.path.join(wikis_dir, wiki)
@@ -803,7 +808,7 @@ def cmd_publish(args):
 
 def cmd_render(args):
     if len(args) != 1:
-        die(f"usage: {CMD} confluence render <file.md>")
+        die_usage(f"usage: {CMD} confluence render <file.md>")
     try:
         with open(args[0], encoding="utf-8", errors="replace") as f:
             text = f.read()
@@ -815,7 +820,7 @@ def cmd_render(args):
 
 def cmd_config(args):
     if args:
-        die("config takes no arguments")
+        die_usage("config takes no arguments")
     conf = settings()
     _, where = token(conf)
     print(f"shared    {SHARED}{'' if os.path.isfile(SHARED) else ' (not there yet)'}")
@@ -904,7 +909,7 @@ def main(argv):
         return 0 if argv else 1
     cmds = {"publish": cmd_publish, "render": cmd_render, "config": cmd_config}
     if argv[0] not in cmds:
-        die(f"confluence takes publish, render or config. {CMD} confluence --help")
+        die_usage(f"confluence takes publish, render or config. {CMD} confluence --help")
     return cmds[argv[0]](argv[1:])
 
 
