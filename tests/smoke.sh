@@ -48,6 +48,7 @@ read -r -d '' PARTS <<'TABLE' || true
 3 | Sync takes turns | Two clones merge index.md and log.md, Seed
 3 | Session start in one call | Two clones merge index.md and log.md
 3 | A folder of clones | Collection
+3 | Patterns for where a session is | Collection
 3 | A remote the branch doesn't track | Two clones merge index.md and log.md
 4 | Antigravity plugin | Session hook, Team skills
 4 | Codex plugin | Session hook, Team skills
@@ -5035,6 +5036,81 @@ out="$(env -C "$HOME" "$W" start 2>&1)"
 case "$out" in *"isn't a git repository"*) bad "nothing is read into what the home folder holds" "$out" ;; *"Not in a repository, so the shared wiki is this session's."*) ok "nothing is read into what the home folder holds" ;; *) bad "nothing is read into what the home folder holds" "$out" ;; esac
 rm -rf "$HOME/somerepo"
 rm -rf "$T/tickets"
+fi
+
+# The patterns below are written with a ~ on purpose: it is kept as typed.
+# shellcheck disable=SC2088
+if section "Patterns for where a session is"; then
+# What a person says about a kind of folder is kept as a line in the shared wiki's
+# workflows.md, so the question is asked once. Session start reads it.
+PF="$HOME/repos"
+WFILE="$WIKIS_DIR/global/workflows.md"
+mkdir -p "$PF/INFRA-100/notes" "$PF/INFRA-200" "$PF/scratch" "$PF/other" "$HOME/notesdir"
+"$W" new pfalpha >/dev/null 2>&1
+"$W" new pfbeta >/dev/null 2>&1
+for r in pfalpha pfbeta; do git init -q "$PF/INFRA-100/$r"; git init -q "$PF/INFRA-200/$r"; done
+expect "with no patterns, workflows says so and how to add one" "No patterns yet" "$W" workflows
+out="$(env -C "$PF/INFRA-100" "$W" start 2>&1)"
+case "$out" in *"No pattern of theirs covers this folder yet. Ask once whether folders like this one always work this way."*"workflows add '~/repos/*-[0-9]*' inside"*) ok "a good guess with no pattern has the agent ask once, with a pattern to record" ;; *) bad "a good guess with no pattern has the agent ask once, with a pattern to record" "$out" ;; esac
+out="$(env -C "$PF/other" "$W" start 2>&1)"
+case "$out" in *"No pattern of theirs covers this folder yet. If they want llm-wiki here, ask how the folder is laid out and whether to remember it"*"workflows add '~/repos/other' none"*) ok "no guess and no pattern has the agent ask about the layout, and offers to remember a no" ;; *) bad "no guess and no pattern has the agent ask about the layout, and offers to remember a no" "$out" ;; esac
+out="$("$W" workflows add '~/repos/*-[0-9]*' inside 2>&1)"
+case "$out" in "added: in \`~/repos/*-[0-9]*\`: the wikis of the repositories inside."*) ok "workflows add records a pattern" ;; *) bad "workflows add records a pattern" "$out" ;; esac
+check "as one line of a fixed shape in the shared wiki's workflows.md" grep -qxF -- '- in `~/repos/*-[0-9]*`: the wikis of the repositories inside.' "$WFILE"
+expect "and workflows lists it" 'in `~/repos/*-[0-9]*`: the wikis of the repositories inside.' "$W" workflows
+out="$(env -C "$PF/INFRA-200" "$W" start 2>&1)"
+[ "$(printf '%s\n' "$out" | head -n 1)" = "wiki: $WIKIS_DIR/pfalpha" ] && ok "another folder of that kind gets the wikis of its clones" || bad "another folder of that kind gets the wikis of its clones" "$out"
+case "$out" in *'This folder matches your pattern `~/repos/*-[0-9]*`'*"Tell the user in one line that you recognised the pattern and which wikis you are using, and that they can say so if it is wrong."*) ok "and the session says which pattern it recognised, and how to say it is wrong" ;; *) bad "and the session says which pattern it recognised, and how to say it is wrong" "$out" ;; esac
+case "$out" in *"Ask once"*|*"No pattern of theirs"*) bad "and nothing is asked again" "$out" ;; *) ok "and nothing is asked again" ;; esac
+case "$out" in *"===== $WIKIS_DIR/pfbeta/index.md (also in this folder)"*) ok "and the other clone's index is printed" ;; *) bad "and the other clone's index is printed" "$out" ;; esac
+out="$(env -C "$PF/INFRA-100/notes" "$W" start 2>&1)"
+case "$out" in *"matches your pattern"*) bad "a * stops at a slash, so a folder inside one is not matched" "$out" ;; *) ok "a * stops at a slash, so a folder inside one is not matched" ;; esac
+# A named wiki, and no wiki.
+"$W" workflows add '~/notesdir' pfbeta >/dev/null 2>&1
+out="$(env -C "$HOME/notesdir" "$W" start 2>&1)"
+case "$out" in "wiki: $WIKIS_DIR/pfbeta"*'matches your pattern `~/notesdir`'*"which names the wiki pfbeta"*) ok "a pattern can name one wiki" ;; *) bad "a pattern can name one wiki" "$out" ;; esac
+"$W" workflows add '~/repos/scratch' none >/dev/null 2>&1
+out="$(env -C "$PF/scratch" "$W" start 2>&1)"
+[ "$(printf '%s\n' "$out" | head -n 1)" = "wiki: none" ] && ok "a pattern can say no wiki, and start names none" || bad "a pattern can say no wiki, and start names none" "$out"
+case "$out" in *"llm-wiki isn't used in this session"*"Tell the user so in one line, and that they can say so if it is wrong."*) ok "and says llm-wiki isn't used, and to tell the user" ;; *) bad "and says llm-wiki isn't used, and to tell the user" "$out" ;; esac
+case "$out" in *"====="*) bad "and prints no index" "$out" ;; *) ok "and prints no index" ;; esac
+# A path with no wildcard goes before the patterns, since the first match wins.
+"$W" workflows add '~/repos/INFRA-200' pfbeta >/dev/null 2>&1
+out="$(env -C "$PF/INFRA-200" "$W" start 2>&1)"
+case "$out" in "wiki: $WIKIS_DIR/pfbeta"*) ok "one folder's own line wins over a pattern that also fits" ;; *) bad "one folder's own line wins over a pattern that also fits" "$out" ;; esac
+# Adding the same pattern again changes its line.
+out="$("$W" workflows add '~/repos/INFRA-200' none 2>&1)"
+case "$out" in "changed: in \`~/repos/INFRA-200\`: no wiki."*) ok "adding a pattern that is there changes it" ;; *) bad "adding a pattern that is there changes it" "$out" ;; esac
+check "and leaves one line for it" test "$(grep -c 'INFRA-200' "$WFILE")" = 1
+out="$("$W" workflows remove '~/repos/INFRA-200' 2>&1)"
+case "$out" in "removed: in \`~/repos/INFRA-200\`"*) ok "workflows remove takes a pattern out" ;; *) bad "workflows remove takes a pattern out" "$out" ;; esac
+check "and the line is gone" test "$(grep -c 'INFRA-200' "$WFILE")" = 0
+"$W" workflows remove '~/nowhere' >/dev/null 2>&1; rc=$?
+check "removing a pattern that isn't there fails" test "$rc" = 1
+# Calling it wrongly.
+"$W" workflows add 'repos/*' inside >/dev/null 2>&1; rc=$?
+check "a pattern that isn't a full path is a usage error" test "$rc" = 2
+"$W" workflows add '~/x' >/dev/null 2>&1; rc=$?
+check "and so is a pattern with nothing to do" test "$rc" = 2
+"$W" workflows add '~/x' nosuchwiki >/dev/null 2>&1; rc=$?
+check "a pattern can't name a wiki that doesn't exist" test "$rc" = 1
+expect "and the message says so" "there is no wiki nosuchwiki" "$W" workflows add '~/x' nosuchwiki
+# A wiki that was removed after its pattern was written.
+printf -- '- in `~/gone`: `vanished`.\n' >> "$WFILE"
+mkdir -p "$HOME/gone"
+out="$(env -C "$HOME/gone" "$W" start 2>&1)"
+case "$out" in "wiki: $WIKIS_DIR/global"*"names the wiki vanished, and there is no such wiki"*) ok "a pattern naming a wiki that is gone falls back to the shared wiki, and says so" ;; *) bad "a pattern naming a wiki that is gone falls back to the shared wiki, and says so" "$out" ;; esac
+expect "workflows check says what a session in a folder would be told" 'matches your pattern `~/repos/*-[0-9]*`' "$W" workflows check "$PF/INFRA-100"
+# The Claude Code session hook follows the same patterns.
+out="$(hook "$PF/INFRA-100" '{"source":"startup"}')"
+case "$out" in *"knowledge wiki is "*"/pfalpha"*'matches your pattern `~/repos/*-[0-9]*`'*) ok "the session hook uses the pattern, and names it" ;; *) bad "the session hook uses the pattern, and names it" "$out" ;; esac
+out="$(hook "$PF/scratch" '{"source":"startup"}')"
+case "$out" in *"llm-wiki isn't used in this session"*) ok "and for a no-wiki pattern the hook says llm-wiki isn't used" ;; *) bad "and for a no-wiki pattern the hook says llm-wiki isn't used" "$out" ;; esac
+case "$out" in *"knowledge wiki is"*|*"AGENTS.md"*) bad "and names no wiki and no handbook" "$out" ;; *) ok "and names no wiki and no handbook" ;; esac
+lacks "lint has no finding for the shared wiki's workflows.md" "workflows.md" "$W" lint global
+check "the workflows rule ships in the template" grep -q 'workflows add' "$REPO/template/rules/workflows.md"
+check "and AGENTS.md points to it" grep -q 'rules/workflows.md' "$REPO/template/AGENTS.md"
+rm -rf "$PF" "$HOME/notesdir" "$HOME/gone" "$WFILE"
 fi
 
 if section "Tour"; then

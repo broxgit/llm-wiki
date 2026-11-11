@@ -150,6 +150,9 @@ Usage: $WIKI_CMD <command> [options]
                        Start a wiki from a repository's own docs: README, agent
                        instructions, skills, docs/, decision records.
   cover <wiki> <repo>...  Record that one wiki covers several repositories.
+  workflows [add <pattern> inside|none|<wiki> | remove <pattern> | check [<folder>]]
+                       Where sessions outside a repository belong: which folders
+                       use the wikis of their clones, one wiki, or none.
   collections          List the wiki collections and the repositories each one takes.
   update [--wikis-only]
                        Update llm-wiki itself, then pull, upgrade and push every collection,
@@ -867,6 +870,203 @@ place_note() {
   printf '\n'
 }
 
+# Patterns: what a person said about a kind of folder, one line each in the shared
+# wiki's workflows.md, so the question is asked once. The shape is fixed, so a shell can
+# read it:   - in `<glob>`: <what to do>.
+# What to do is "the wikis of the repositories inside", a wiki's name in backticks, or
+# "no wiki". The first line that matches a folder wins.
+workflows_file() { printf '%s/%s/workflows.md' "$WIKIS_DIR" "$SHARED"; }
+
+# slashes <text>: how many slashes it has. A * in a pattern stops at one.
+slashes() { local s="${1//[^\/]/}"; printf '%s' "${#s}"; }
+
+# workflow_for <folder>: the first pattern that fits it. Sets WF_GLOB, as written, and
+# WF_WHAT: "inside", "none" or a wiki's name. Fails when none fits.
+workflow_for() {
+  local f bt='`' line glob what g d dp hp
+  WF_GLOB="" WF_WHAT=""
+  f="$(workflows_file)"
+  [ -f "$f" ] || return 1
+  d="$(cd "$1" 2>/dev/null && pwd)" || return 1
+  dp="$(cd "$1" 2>/dev/null && pwd -P)" || return 1
+  hp="$(cd "$HOME" 2>/dev/null && pwd -P || printf '%s' "$HOME")"
+  while IFS= read -r line; do
+    case "$line" in "- in $bt"*"$bt: "*) ;; *) continue ;; esac
+    glob="${line#"- in $bt"}"
+    what="${glob#*"$bt: "}"
+    glob="${glob%%"$bt"*}"
+    case "$what" in
+      "the wikis of the repositories inside"*) what=inside ;;
+      "no wiki"*) what=none ;;
+      "$bt"*"$bt"*) what="${what#"$bt"}"; what="${what%%"$bt"*}" ;;
+      *) continue ;;
+    esac
+    # shellcheck disable=SC2088
+    case "$glob" in "~/"*) set -- "$HOME/${glob#??}" "$hp/${glob#??}" ;; *) set -- "$glob" ;; esac
+    for g in "$@"; do
+      for line in "$d" "$dp"; do
+        [ "$(slashes "$g")" = "$(slashes "$line")" ] || continue
+        # The pattern is a glob, so it is not quoted.
+        # shellcheck disable=SC2254
+        case "$line" in $g) WF_GLOB="$glob"; WF_WHAT="$what"; return 0 ;; esac
+      done
+    done
+  done < "$f"
+  return 1
+}
+
+# suggest_glob <folder>: a pattern to offer for folders like it. A folder named for a
+# ticket, such as INFRA-17937, gets one for its siblings. Anything else gets its own path.
+suggest_glob() {
+  local d base re='^[A-Za-z][A-Za-z0-9]*-[0-9]+$'
+  d="$(cd "$1" 2>/dev/null && pwd)" || d="$1"
+  base="${d##*/}"
+  if [[ $base =~ $re ]]; then tilde "${d%/*}/*-[0-9]*"; else tilde "$d"; fi
+}
+
+# place_lack: the sentence about clones that have no wiki yet, after place.
+place_lack() {
+  local lack
+  # shellcheck disable=SC2086
+  lack="$(and_list $PLACE_LACK)"
+  [ -n "$lack" ] || return 0
+  printf ' %s has no wiki yet: create one with `%s new <name>` when there is something to file there.' "$lack" "$WIKI_CMD"
+  # shellcheck disable=SC2086
+  set -- $PLACE_LACK
+  [ $# -ne 1 ] || printf ' That is `%s new %s`.' "$WIKI_CMD" "$1"
+}
+
+# place_all <folder>: everything session start needs for a folder that is in no
+# repository. A pattern decides when one fits. Otherwise it is the best guess, and the
+# agent is told to ask, with a pattern to record the answer as. Sets:
+#   PLACE_WIKIS  the wikis to use, the session's own first
+#   PLACE_OFF    1 when a pattern says to use no wiki
+#   PLACE_NOTE   one line for the agent: what was used, why, and what to say or ask
+place_all() {
+  local dir="$1" bt='`' how sug own
+  PLACE_WIKIS="" PLACE_HAVE="" PLACE_LACK="" PLACE_OFF="" PLACE_NOTE=""
+  how=" Patterns are listed and changed with $bt$WIKI_CMD workflows$bt."
+  if workflow_for "$dir"; then
+    PLACE_NOTE="This folder matches your pattern $bt$WF_GLOB$bt, which"
+    case "$WF_WHAT" in
+      none)
+        PLACE_OFF=1
+        PLACE_NOTE="$PLACE_NOTE says no wiki, so llm-wiki isn't used in this session: read no wiki and capture nothing unless the user asks. Tell the user so in one line, and that they can say so if it is wrong.$how"
+        ;;
+      inside)
+        place "$dir"
+        if [ -n "$PLACE_WIKIS" ]; then
+          # shellcheck disable=SC2086
+          PLACE_NOTE="$PLACE_NOTE says the wikis of the repositories inside. It holds clones of $(and_list $PLACE_HAVE), so this session's wikis are $(and_list $PLACE_WIKIS). Tell the user in one line that you recognised the pattern and which wikis you are using, and that they can say so if it is wrong.$(place_lack)$how"
+        else
+          PLACE_NOTE="$PLACE_NOTE says the wikis of the repositories inside, but it holds no clone that has a wiki, so the shared wiki is this session's. Tell the user so in one line.$(place_lack)$how"
+        fi
+        ;;
+      *)
+        if is_wiki "$WIKIS_DIR/$WF_WHAT"; then
+          PLACE_WIKIS=" $WF_WHAT"
+          PLACE_NOTE="$PLACE_NOTE names the wiki $WF_WHAT, so that is this session's wiki. Tell the user in one line that you recognised the pattern and which wiki you are using, and that they can say so if it is wrong.$how"
+        else
+          PLACE_NOTE="$PLACE_NOTE names the wiki $WF_WHAT, and there is no such wiki, so the shared wiki is this session's. Tell the user so, and offer to fix the pattern.$how"
+        fi
+        ;;
+    esac
+    return 0
+  fi
+  place "$dir"
+  sug="$(suggest_glob "$dir")"
+  own="$(tilde "$(cd "$dir" 2>/dev/null && pwd)")"
+  PLACE_NOTE="$(place_note)"
+  if [ -n "$PLACE_WIKIS" ]; then
+    PLACE_NOTE="$PLACE_NOTE No pattern of theirs covers this folder yet. Ask once whether folders like this one always work this way. On a yes, show them the pattern and record it: $bt$WIKI_CMD workflows add '$sug' inside$bt."
+    [ "$sug" = "$own" ] || PLACE_NOTE="$PLACE_NOTE If only this folder does: $bt$WIKI_CMD workflows add '$own' inside$bt."
+  else
+    PLACE_NOTE="$PLACE_NOTE No pattern of theirs covers this folder yet. If they want llm-wiki here, ask how the folder is laid out and whether to remember it. If they don't, offer to remember that: $bt$WIKI_CMD workflows add '$sug' none$bt."
+  fi
+  PLACE_NOTE="$PLACE_NOTE ${bt}rules/workflows.md$bt in the handbook has the questions."
+}
+
+# workflows_text <what>: the words a pattern's line ends with.
+workflows_text() {
+  case "$1" in
+    inside) printf 'the wikis of the repositories inside.' ;;
+    none) printf 'no wiki.' ;;
+    *) printf '`%s`.' "$1" ;;
+  esac
+}
+
+# wiki workflows [add <pattern> inside|none|<wiki> | remove <pattern> | check [<folder>]]
+cmd_workflows() {
+  local f sub="${1:-}" glob what line bt='`' had="" tmp dir top
+  f="$(workflows_file)"
+  [ $# -eq 0 ] || shift
+  case "$sub" in
+    "")
+      if [ -f "$f" ] && grep -q "^- in $bt" "$f"; then
+        echo "Where sessions outside a repository belong, from $(tilde "$f"). The first that fits wins."
+        echo
+        sed -n "s/^- in $bt/  in $bt/p" "$f"
+      else
+        echo "No patterns yet. A session in a folder that isn't a git repository asks, and the answer is kept here."
+      fi
+      echo
+      echo "Add one:    $WIKI_CMD workflows add '<pattern>' inside|none|<wiki>"
+      echo "Remove one: $WIKI_CMD workflows remove '<pattern>'"
+      echo "Try one:    $WIKI_CMD workflows check <folder>"
+      ;;
+    add)
+      [ $# -eq 2 ] || die_usage "workflows add needs a pattern and what to do there: inside, none, or a wiki's name"
+      glob="$1" what="$2"
+      # shellcheck disable=SC2088
+      case "$glob" in "~/"?* | /?*) ;; *) die_usage "a pattern is a full path, starting with ~/ or /, such as '~/repos/*-[0-9]*'" ;; esac
+      case "$glob" in *"$bt"* | *"'"* | *\\* | *"**"* | *"
+"*) die_usage "a pattern can't hold a backtick, a quote, a backslash or **" ;; esac
+      is_wiki "$WIKIS_DIR/$SHARED" || die "there's no shared wiki at $(tilde "$WIKIS_DIR/$SHARED") to keep patterns in"
+      case "$what" in
+        inside | none) ;;
+        *) is_wiki "$WIKIS_DIR/$what" || die "there is no wiki $what. Say inside, none, or the name of a wiki: $WIKI_CMD list" ;;
+      esac
+      if [ ! -f "$f" ]; then
+        printf '# Workflows\n\nWhere this person'"'"'s sessions belong when they are not in a git repository, learned by asking. Session start reads the lines that start with "- in", and the first that fits the session'"'"'s folder wins. A * stops at a slash. Change them with `wiki workflows`.\n\n' > "$f"
+      fi
+      ! grep -qF -- "- in $bt$glob$bt: " "$f" || had=1
+      line="- in $bt$glob$bt: $(workflows_text "$what")"
+      tmp="$f.tmp.$$"
+      # A path with no wildcard goes before the patterns: it is the more specific.
+      WF_LINE="$line" WF_PRE="- in $bt$glob$bt: " awk '
+        BEGIN { line = ENVIRON["WF_LINE"]; pre = ENVIRON["WF_PRE"]; exact = (pre !~ /[*?\[]/) }
+        index($0, pre) == 1 { next }
+        exact && !done && index($0, "- in `") == 1 { print line; done = 1 }
+        { print }
+        END { if (!done) print line }' "$f" > "$tmp" && mv "$tmp" "$f"
+      echo "$([ -n "$had" ] && echo changed || echo added): ${line#- }"
+      echo "Send it to your other machines: $WIKI_CMD sync $SHARED -m \"$SHARED: where sessions belong\""
+      ;;
+    remove)
+      [ $# -eq 1 ] || die_usage "workflows remove needs the pattern to take out"
+      glob="$1"
+      [ -f "$f" ] && grep -qF -- "- in $bt$glob$bt: " "$f" || die "no pattern $glob. See them: $WIKI_CMD workflows"
+      tmp="$f.tmp.$$"
+      WF_PRE="- in $bt$glob$bt: " awk 'index($0, ENVIRON["WF_PRE"]) != 1' "$f" > "$tmp" && mv "$tmp" "$f"
+      echo "removed: in $bt$glob$bt"
+      echo "Send it to your other machines: $WIKI_CMD sync $SHARED -m \"$SHARED: where sessions belong\""
+      ;;
+    check)
+      dir="${1:-$PWD}"
+      [ -d "$dir" ] || die "$dir is not a folder"
+      if top="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)"; then
+        echo "$(tilde "$dir") is in the repository $(repo_name "$top"), so a session there uses that repository's wiki. Patterns are for folders outside one."
+      elif ! placeable "$dir"; then
+        echo "$(tilde "$dir") is not a folder a session is placed in, so a session there uses the shared wiki."
+      else
+        place_all "$dir"
+        echo "$PLACE_NOTE"
+      fi
+      ;;
+    *) die_usage "unknown workflows command: $sub. Use add, remove or check" ;;
+  esac
+}
+
 cmd_start() {
   local arg="${1:-$PWD}" repo="" top w="" wiki="" note="" out sshc tv v line sname spath d n hinted="" extras="" more=""
   if [ -d "$arg" ]; then
@@ -881,8 +1081,14 @@ cmd_start() {
   if [ -n "$repo" ]; then w="$(which_wiki "$repo")"; [ -z "$w" ] || wiki="$WIKIS_DIR/$w"; fi
   # Not in a repository: the wikis of the clones in this folder, when it holds any.
   if [ -z "$repo" ] && [ -d "$arg" ] && placeable "$arg"; then
-    place "$arg"
-    note="$(place_note)"
+    place_all "$arg"
+    note="$PLACE_NOTE"
+    # A pattern of theirs says this folder has no wiki.
+    if [ -n "$PLACE_OFF" ]; then
+      echo "wiki: none"
+      echo "$note"
+      return 0
+    fi
     # shellcheck disable=SC2086
     set -- $PLACE_WIKIS
     if [ $# -gt 0 ]; then
@@ -8770,14 +8976,15 @@ case "$cmd" in
   # The session hook asks for a wiki's reminders, to hand out at tool calls.
   __reminders) session_reminders "$(wiki_root "${1:-}")"; exit 0 ;;
   # The session hook asks where a folder that is in no repository belongs: the wiki to
-  # read first, or nothing for the shared one, then what to tell the agent.
+  # read first, nothing for the shared one or - for none at all, then what to tell the agent.
   __place)
     placeable "${1:-$PWD}" || { printf '\n\n'; exit 0; }
-    place "${1:-$PWD}"
+    place_all "${1:-$PWD}"
+    [ -z "$PLACE_OFF" ] || { printf -- '-\n%s\n' "$PLACE_NOTE"; exit 0; }
     # shellcheck disable=SC2086
     set -- $PLACE_WIKIS
     if [ $# -gt 0 ]; then printf '%s\n' "$WIKIS_DIR/$1"; else printf '\n'; fi
-    place_note
+    printf '%s\n' "$PLACE_NOTE"
     exit 0
     ;;
   collections)
@@ -8827,6 +9034,7 @@ case "$cmd" in
   lint) cmd_lint "$@"; exit 0 ;;
   open) cmd_open "$@"; exit 0 ;;
   pages) cmd_pages "$@"; exit 0 ;;
+  workflows) cmd_workflows "$@"; exit 0 ;;
 esac
 if [ "$cmd" = harvest ]; then
   cmd_harvest "$@"

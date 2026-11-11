@@ -4,6 +4,16 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v34 (2026-11-13)
+
+A session outside a git repository asks where it belongs, once, and remembers the answer.
+
+- Session start in a folder that is not a repository says which wikis it used and why. When nothing you said before covers the folder, the agent asks: whether folders like it always work this way, or whether you want llm-wiki used there at all.
+- Your answer is kept as a line in `workflows.md` in your shared wiki. The next session in a folder of that kind uses it, says which pattern it recognised, and asks nothing. Tell the agent if it is wrong.
+- A pattern can say the wikis of the clones inside, one named wiki, or no wiki. `wiki workflows` lists them, and adds, removes and tries them.
+- A new `rules/workflows.md` has the questions. Sessions inside a repository are unchanged.
+- Do: run `wiki upgrade --all`.
+
 ## v33 (2026-11-12)
 
 A note you make in Obsidian is yours until a compile files it.

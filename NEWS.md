@@ -4,6 +4,13 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-11-28: a session outside a repository asks once where it belongs
+
+- In a folder that isn't a git repository, the agent asks once how folders like it work, and keeps your answer as a pattern in your shared wiki.
+- Later sessions in that kind of folder use the pattern and say which one they recognised. Tell the agent if it is wrong.
+- `wiki workflows` lists the patterns, and adds, removes and tries them. A pattern can also say a folder uses no wiki.
+- Do: run `wiki upgrade --all`, for handbook version 34.
+
 ## 2026-11-27: a session in a folder of clones uses their wikis
 
 - Start a session in a folder that holds clones, such as one for a ticket, and it uses the wikis of those clones. It used the shared wiki and said nothing.

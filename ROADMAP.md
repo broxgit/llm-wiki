@@ -21,8 +21,8 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 ### Learn where a person works, by asking
 
 - **Why:** llm-wiki assumed a session belongs to one repository. Most of one team starts sessions in a folder for a ticket, which holds clones, and for weeks their project wikis never loaded and nothing said so. Decided on 2026-11-11: never guess silently; ask when unsure; write what is learned into the person's own wiki, so the questions get rarer.
-- **Sketch:** step 1 is done (see Done). Next, patterns: a `workflows.md` at the root of the shared wiki, lines of the shape "- in `<glob>`: <what to do>", read at session start the way `## Reminders` is. A good guess asks once and records a pattern for that kind of folder. A pattern recognised later is used, and the session says which one and how to say it is wrong. With no pattern and no guess, the agent asks whether to use llm-wiki there, then about the layout, then whether to remember it. This needs a handbook rule. Then ticket folders: the ticket's key, from the folder's name, in every capture, so the Jira extension can close their open items, and where the ticket stands at session start. Then `wiki setup` asks how you work.
-- **Open:** how many wikis to read in full when a folder's clones belong to many. Where a ticket's own state goes: the repo's wiki, the personal journal, or both.
+- **Sketch:** steps 1 and 2 are done (see Done): a folder of clones uses their wikis, and patterns remember the answer. Next, ticket folders: the ticket's key, from the folder's name, in every capture, so the Jira extension can close their open items, and where the ticket stands at session start. Then `wiki setup` asks how you work, and writes the first pattern.
+- **Open:** how many wikis to read in full when a folder's clones belong to many. Where a ticket's own state goes: the maintainer said "both, maybe", the repo's wiki and the personal journal.
 
 ### Know whether sessions capture and compile
 
@@ -84,6 +84,12 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Patterns: a session outside a repository asks once where it belongs (2026-11-11)
+
+- **Why:** the second step of "Learn where a person works, by asking" under Next. Step 1 said which wikis a session in a folder of clones used, and remembered nothing, so the same folder was placed, and would have been asked about, every time. The maintainer's answers on 2026-11-11: a good guess asks once; a pattern seen again is used, and the session says so at the start with a way to say it is wrong; with no pattern, ask whether to use llm-wiki there at all, then about the layout, then whether to remember it.
+- **What changed:** patterns are lines of a fixed shape in `workflows.md` at the root of the shared wiki: a full path that may hold wildcards, and one of "the wikis of the repositories inside", a wiki's name, or "no wiki". `place_all` in `wiki.sh` reads them for a folder outside a repository, and both `wiki start` and the Claude Code session hook use it. The first line that fits wins, a `*` stops at a slash, and a path with no wildcard is written ahead of the patterns. A match is named in the session's opening text. No match adds the question to ask and the exact command that records the answer, with a pattern offered: a folder named like a ticket, `INFRA-17937`, gets one for its siblings. A no-wiki pattern makes `wiki start` print `wiki: none` and the hook say only that llm-wiki isn't used. `wiki workflows` lists, adds, changes, removes and tries patterns. Handbook version 34 adds `rules/workflows.md` and one row in `AGENTS.md`.
+- **Still untested:** all of it in a real session: whether an agent asks in its first reply, proposes a sensible pattern, and records it. Whether "ask once" feels like once when the user declines to have it remembered, since the next session asks again. Antigravity, Codex and Cursor. A pattern that names a second or third wiki: one line gives one wiki.
 
 ### A session in a folder of clones uses their wikis, and says so (2026-11-11)
 

@@ -137,6 +137,12 @@ if [ -z "$repo" ]; then
   placed="$(LLM_WIKI_CMD=wiki.sh "$WIKI_SH" __place "$DIR" 2>/dev/null || true)"
   p="$(printf '%s\n' "$placed" | sed -n 1p)"
   note="$(printf '%s\n' "$placed" | sed -n 2p)"
+  # A pattern of theirs says this folder has no wiki: say so, and nothing else.
+  if [ "$p" = "-" ]; then
+    emit "# llm-wiki
+
+$note"
+  fi
   if [ -n "$p" ] && [ -f "$p/AGENTS.md" ]; then wiki="$p"; fi
 fi
 if [ -z "$wiki" ]; then
