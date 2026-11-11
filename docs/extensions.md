@@ -14,6 +14,23 @@ wiki extensions add jira
 
 `wiki extensions` lists them, on or off. `wiki extensions remove jira` turns one off. `wiki setup --new` asks about a new one once.
 
+### Signing in to Atlassian
+
+The Jira and Confluence extensions share one sign-in, in `~/.config/llm-wiki/atlassian`:
+
+```
+site = https://your-company.atlassian.net
+email = you@your-company.com
+token_cmd = security find-generic-password -s atlassian -w
+```
+
+- `site` is where Jira is. On Atlassian Cloud, Confluence is at the same address with `/wiki` after it, and is found from this.
+- `email` is for Atlassian Cloud, with an [API token](https://id.atlassian.com/manage-profile/security/api-tokens). Leave it out for Data Center, where the token is a personal access token.
+- `token_cmd` is a command that prints the token, so the token itself stays in your keychain or password manager and out of the file. `ATLASSIAN_API_TOKEN` in the environment works too.
+- On a Mac, store the token from the clipboard: copy it, then run `security add-generic-password -a "$USER" -s atlassian -U -w "$(pbpaste)"`. Don't let `security` prompt for it: the prompt keeps only the first 128 characters, and an Atlassian token is longer.
+
+Each value is looked for in this order, and the first one found is used: the extension's own environment variable, such as `JIRA_URL`; Atlassian's, such as `ATLASSIAN_SITE`; the extension's own file; then this shared file. So an extension's file needs `url`, `email` or `token_cmd` only where its own differs, as on servers where Jira and Confluence have different addresses. `wiki jira config` and `wiki confluence config` say where each value came from.
+
 ### Jira
 
 `wiki jira` reads Jira and never writes to it. For every open item whose heading names a ticket, such as `Waiting: Katherine | Release PROJ-123`, it says where the ticket stands:
@@ -38,18 +55,12 @@ Jira sorts every status into to do, in progress or done, whatever a team calls i
 
 `wiki jira show PROJ-123` prints one ticket, and `wiki jira config` shows what is set and tests the sign-in.
 
-Settings go in `~/.config/llm-wiki/jira`:
+Jira's own settings go in `~/.config/llm-wiki/jira`:
 
 ```
-url = https://your-company.atlassian.net
-email = you@your-company.com
-token_cmd = security find-generic-password -s jira -w
 projects = PROJ, OPS
 ```
 
-- `email` is for Jira Cloud, with an [API token](https://id.atlassian.com/manage-profile/security/api-tokens). Leave it out for Jira Data Center, where the token is a personal access token.
-- `token_cmd` is a command that prints the token, so the token itself stays in your keychain or password manager and out of the file. `JIRA_API_TOKEN` in the environment works too.
-- On a Mac, store the token from the clipboard: copy it, then run `security add-generic-password -a "$USER" -s jira -U -w "$(pbpaste)"`. Don't let `security` prompt for it: the prompt keeps only the first 128 characters, and an Atlassian token is longer.
 - `projects` is optional. Without it, any word shaped like a key is looked up, and the ones Jira doesn't know are skipped.
 
 To have it run by itself, add `auto_close = yes` to the settings. Once a day, or as often as `wiki extensions every jira <time>` says, in the background, it then does what `check --close` does: a ticket finishes in Jira, a note is saved, and the next compile closes the item, with no session asked and no tokens spent. `wiki extensions log jira` shows what the last run did.
@@ -71,14 +82,13 @@ Without that, an agent can check for itself: add a line to a wiki's `wiki/conven
 Settings go in `~/.config/llm-wiki/confluence`:
 
 ```
-url = https://your-company.atlassian.net/wiki
 space = ENG
 parent = 123456
 space.payments = PAY
 ```
 
 - `space` is the key of the space to publish into. `space.<wiki>` and `parent.<wiki>` set it for one wiki. `parent` is optional: the id of a page to publish under.
-- `url`, `email` and `token_cmd` are as for Jira, and fall back to the Jira extension's settings, so on Atlassian Cloud one sign-in serves both.
+- The sign-in is the shared one, above. On a server of your own, where Confluence has its own address, set `url` here. Where a value is in neither file, the Jira extension's own settings are used, as they were before there was a shared file.
 
 To have a wiki published by itself, name it in `auto`:
 
