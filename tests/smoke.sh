@@ -4012,6 +4012,26 @@ expect "settings come from the file too, the token from a command" "Signed in as
 check "and that token was the one sent" grep -qxF "Basic $(printf 'me@example.com:file-token' | base64)" "$J/auth.log"
 lacks "config never prints the token" "file-token" env WIKIS_DIR="$JW" "$W" jira config
 rm "$HOME/.config/llm-wiki/jira"
+# One sign-in for every Atlassian extension, in a file they share.
+printf 'site = http://127.0.0.1:%s\nemail = shared@example.com\ntoken_cmd = echo shared-token\n' "$(cat "$J/port")" > "$HOME/.config/llm-wiki/atlassian"
+: > "$J/auth.log"
+out="$(env WIKIS_DIR="$JW" "$W" jira config 2>&1)"
+case "$out" in *"Signed in as Smoke Tester"*) ok "jira signs in from the shared Atlassian file alone" ;; *) bad "jira signs in from the shared Atlassian file alone" "$out" ;; esac
+check "with its email and token" grep -qxF "Basic $(printf 'shared@example.com:shared-token' | base64)" "$J/auth.log"
+case "$out" in *"url       http://127.0.0.1:"*"(from the shared file)"*"email     shared@example.com  (from the shared file)"*"token     from token_cmd in the shared file"*) ok "and config says where each came from" ;; *) bad "and config says where each came from" "$out" ;; esac
+case "$out" in *shared-token*) bad "still without printing the token" "$out" ;; *) ok "still without printing the token" ;; esac
+printf 'email = own@example.com\ntoken_cmd = echo own-token\n' > "$HOME/.config/llm-wiki/jira"
+: > "$J/auth.log"
+env WIKIS_DIR="$JW" "$W" jira config >/dev/null 2>&1
+check "jira's own settings win over the shared file, one value at a time" grep -qxF "Basic $(printf 'own@example.com:own-token' | base64)" "$J/auth.log"
+: > "$J/auth.log"
+env ATLASSIAN_API_TOKEN=env-shared WIKIS_DIR="$JW" "$W" jira config >/dev/null 2>&1
+check "ATLASSIAN_API_TOKEN wins over both files" grep -qxF "Basic $(printf 'own@example.com:env-shared' | base64)" "$J/auth.log"
+: > "$J/auth.log"
+env ATLASSIAN_API_TOKEN=env-shared JIRA_API_TOKEN=env-own WIKIS_DIR="$JW" "$W" jira config >/dev/null 2>&1
+check "and JIRA_API_TOKEN over that" grep -qxF "Basic $(printf 'own@example.com:env-own' | base64)" "$J/auth.log"
+rm "$HOME/.config/llm-wiki/jira" "$HOME/.config/llm-wiki/atlassian"
+expect "with neither file, jira names the shared file as the place to start" "llm-wiki/atlassian" env WIKIS_DIR="$JW" "$W" jira
 expect "a sign-in Jira refuses is said plainly" "refused the sign-in" env WIKIS_DIR="$JW" JIRA_URL="http://127.0.0.1:$(cat "$J/port")" JIRA_API_TOKEN=bad "$W" jira
 refuse "and fails" env WIKIS_DIR="$JW" JIRA_URL="http://127.0.0.1:$(cat "$J/port")" JIRA_API_TOKEN=bad "$W" jira
 expect "projects limits which keys count" "No open item names a ticket." env JIRA_PROJECTS=OPS WIKIS_DIR="$JW" JIRA_URL="http://127.0.0.1:$(cat "$J/port")" JIRA_API_TOKEN=smoke-token "$W" jira
@@ -4297,6 +4317,15 @@ printf 'url = https://acme.atlassian.net\nemail = j@example.com\ntoken_cmd = ech
 out="$(env -u CONFLUENCE_SPACE WIKIS_DIR="$CW" "$W" confluence config 2>&1 || true)"
 case "$out" in *"url       https://acme.atlassian.net/wiki"*"email     j@example.com"*"token     from token_cmd"*) ok "the sign-in falls back to the Jira extension's settings" ;; *) bad "the sign-in falls back to the Jira extension's settings" "$out" ;; esac
 case "$out" in *jira-token*) bad "and the token is never printed" "$out" ;; *) ok "and the token is never printed" ;; esac
+printf 'site = https://shared.atlassian.net\nemail = shared@example.com\ntoken_cmd = echo shared-token\n' > "$HOME/.config/llm-wiki/atlassian"
+out="$(env -u CONFLUENCE_SPACE WIKIS_DIR="$CW" "$W" confluence config 2>&1 || true)"
+case "$out" in *"url       https://shared.atlassian.net/wiki  (from the shared file)"*"email     shared@example.com  (from the shared file)"*"token     from token_cmd in the shared file"*) ok "confluence takes its sign-in from the shared Atlassian file, before Jira's" ;; *) bad "confluence takes its sign-in from the shared Atlassian file, before Jira's" "$out" ;; esac
+printf 'site = https://jira.example.com\nemail = shared@example.com\ntoken_cmd = echo shared-token\n' > "$HOME/.config/llm-wiki/atlassian"
+rm "$HOME/.config/llm-wiki/jira"
+out="$(env -u CONFLUENCE_SPACE WIKIS_DIR="$CW" "$W" confluence config 2>&1 || true)"
+case "$out" in *"url       not set"*"email     shared@example.com"*) ok "a site that isn't Atlassian Cloud gives no Confluence address, since a server's differs" ;; *) bad "a site that isn't Atlassian Cloud gives no Confluence address, since a server's differs" "$out" ;; esac
+printf 'x = y\n' > "$HOME/.config/llm-wiki/jira"
+rm "$HOME/.config/llm-wiki/atlassian"
 rm "$HOME/.config/llm-wiki/jira" "$HOME/.config/llm-wiki/confluence"
 WIKIS_DIR="$CW" "$W" new "team" >/dev/null 2>&1
 python3 - "$C" <<'PY3'
