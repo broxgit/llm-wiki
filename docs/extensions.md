@@ -142,6 +142,15 @@ Its arguments, exactly as typed after the name, and three environment variables:
 
 The extension's exit code is the command's. Its output goes straight to the terminal.
 
+To read a wiki, ask the wiki command, and don't parse its files. Both of these print one line for each thing, tab separated, and stay the same from one version to the next:
+
+| Command | A line is | Fields |
+|---|---|---|
+| `"$LLM_WIKI" open --data [<wiki>]` | An entry in a wiki's list of open items, the closed ones too | `wiki`, `state` (`open`, `overdue`, `done`, `bad`), `kind` (`waiting`, `due`), `who`, `due`, `status`, `from` (the notes it came from, joined by `; `), `heading` |
+| `"$LLM_WIKI" pages <wiki> --data` | A page under `wiki/` | `path` from the wiki's folder, `updated`, `verified`, `title` |
+
+A field with nothing in it is empty, and the last field is the one that may hold anything but a tab. A page's text is the file at its path, to read as it is. The Jira and Confluence extensions read a wiki this way.
+
 To save knowledge, run `"$LLM_WIKI" capture <wiki> <slug>` with the note on stdin, then `"$LLM_WIKI" sync <wiki>`. Don't write into `raw/` or `wiki/` yourself: capture names the note and sync takes its turn with other sessions.
 
 ## Events

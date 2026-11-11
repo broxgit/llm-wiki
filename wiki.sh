@@ -169,7 +169,10 @@ Usage: $WIKI_CMD <command> [options]
   stale [days]         List pages not verified in that many days (default 90), or 50
                        commits behind their repository's clone under code_dirs.
   patterns             Recurring feedback across wikis, and which patterns are ready to propose.
-  open                 What is waiting on someone or on a date, in every wiki. open --help has more.
+  open [--data [<wiki>]]  What is waiting on someone or on a date, in every wiki. --data gives
+                       every entry in a plain form for a program. open --help has more.
+  pages <wiki> [--data]  A wiki's pages and their titles. --data gives path, dates and title,
+                       tab separated, for a program.
   skills [link]        Team skills in the wikis, and link them into ~/.claude/skills.
   tips [--mute NAME]   Features your own wikis suggest you'd get something out of.
   completion zsh|bash  Print tab completion for a shell. wiki setup turns it on.
@@ -5601,16 +5604,119 @@ open_ledger() {
 open_usage() {
   cat <<EOF
 Usage: $WIKI_CMD open
+       $WIKI_CMD open --data [<wiki>]
 
 Lists what is open in every wiki: things waiting on someone, and dates to look at.
 Those past their date come first in each wiki. Agents add them to their notes as
 Waiting: and Due: lines, and close them with Done:. rules/open.md has the format.
+
+open --data is for a program, such as an extension. It prints every entry of every
+wiki's open.md, or of one wiki's, the closed ones too, one a line, tab separated:
+  wiki  state  kind  who  due  status  from  heading
+state is open, overdue, done or bad. kind is waiting or due. from is the notes the
+entry came from, joined by "; ". A field with nothing in it is empty.
 EOF
+}
+
+# open_data <wiki root>: every entry of its open.md, one a line, for a program.
+open_data() {
+  [ -f "$1/open.md" ] || return 0
+  LC_ALL=C awk -v today="$(date -u +%Y-%m-%d)" -v wiki="${1##*/}" '
+    function clean(s) { gsub(/\t/, " ", s); return s }
+    function flush(   state) {
+      if (name == "") return
+      state = "open"
+      if (kind != "waiting" && kind != "due") state = "bad"
+      else if (kind == "due" && due !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) state = "bad"
+      else if (status ~ /^done [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) state = "done"
+      else if (status != "open") state = "bad"
+      else if (kind == "due" && due < today) state = "overdue"
+      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", wiki, state, kind, clean(who), due, clean(status), clean(from), clean(name)
+      name = ""; kind = ""; who = ""; due = ""; status = ""; from = ""
+    }
+    /^## / { flush(); name = substr($0, 4); next }
+    /^- kind:/ { kind = $3 }
+    /^- who:/ { sub(/^- who: */, ""); who = $0 }
+    /^- due:/ { due = $3 }
+    /^- status:/ { sub(/^- status: */, ""); status = $0 }
+    /^- from:/ { sub(/^- from: */, ""); from = (from == "" ? $0 : from "; " $0) }
+    END { flush() }
+  ' "$1/open.md"
+}
+
+# pages <wiki> [--data]: the pages under wiki/, with the title each would go by: the
+# frontmatter's, or the page's first line when that is a heading, or the file's name.
+# --data prints path, updated, verified and title, tab separated, for a program.
+cmd_pages() {
+  local wiki="" data=0 root
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --data) data=1; shift ;;
+      -h | --help)
+        echo "Usage: $WIKI_CMD pages <wiki> [--data]"
+        echo
+        echo "Lists a wiki's pages with their titles. --data is for a program, such as an extension:"
+        echo "one page a line, tab separated: path, updated, verified, title. The path is from the"
+        echo "wiki's folder, and a date the page doesn't give is empty."
+        return 0
+        ;;
+      -*) die "pages options: --data" ;;
+      *) [ -z "$wiki" ] || die "pages takes one wiki"; wiki="$1"; shift ;;
+    esac
+  done
+  [ -n "$wiki" ] || die "usage: $WIKI_CMD pages <wiki> [--data]"
+  root="$(wiki_root "$wiki")"
+  [ "$data" = 0 ] || style_off
+  [ -d "$root/wiki" ] || return 0
+  (cd "$root" && LC_ALL=C find wiki -type f -name '*.md' ! -path '*/.*' | LC_ALL=C sort | tr '\n' '\0' | LC_ALL=C xargs -0 awk '
+    function val(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); if (s ~ /^".*"$/ || s ~ /^\047.*\047$/) s = substr(s, 2, length(s) - 2); gsub(/\t/, " ", s); return s }
+    function flush(   t, n, parts) {
+      if (file == "") return
+      t = title
+      if (t == "") t = head
+      if (t == "") { n = split(file, parts, "/"); t = parts[n]; sub(/\.md$/, "", t) }
+      printf "%s\t%s\t%s\t%s\n", file, upd, ver, t
+    }
+    FNR == 1 { flush(); file = FILENAME; fm = 0; title = ""; upd = ""; ver = ""; head = ""; seen = 0 }
+    FNR == 1 && /^---[ \t]*$/ { fm = 1; next }
+    fm == 1 && /^---[ \t]*$/ { fm = 2; next }
+    fm == 1 {
+      if ($0 ~ /^title:/) title = val(substr($0, 7))
+      else if ($0 ~ /^updated:/) upd = val(substr($0, 9))
+      else if ($0 ~ /^verified:/) ver = val(substr($0, 10))
+      next
+    }
+    seen == 0 && /[^ \t]/ {
+      seen = 1
+      if ($0 ~ /^# /) { head = $0; sub(/^#[ \t]+/, "", head); sub(/[ \t#]+$/, "", head); gsub(/[*_`]/, "", head); gsub(/\t/, " ", head) }
+    }
+    END { flush() }
+  ' /dev/null) | if [ "$data" = 1 ]; then cat; else awk -F '\t' '{ printf "%-44s %s\n", $1, $4 }'; fi
 }
 
 cmd_open() {
   local d line state kind detail status name n_open=0 n_over=0 want wikis=0
-  case "${1:-}" in -h | --help) open_usage; return 0 ;; "") ;; *) die "open takes no arguments. Try $WIKI_CMD open --help" ;; esac
+  case "${1:-}" in
+    -h | --help) open_usage; return 0 ;;
+    --data)
+      # For a program: plain whatever the terminal is.
+      style_off
+      [ $# -le 2 ] || die "usage: $WIKI_CMD open --data [<wiki>]"
+      [ -d "$WIKIS_DIR" ] || die "no wikis at $(tilde "$WIKIS_DIR")"
+      if [ -n "${2:-}" ]; then
+        d="$(wiki_root "$2")" || exit 1
+        open_data "$d"
+        return 0
+      fi
+      for d in "$WIKIS_DIR"/*/; do
+        d="${d%/}"
+        if is_wiki "$d"; then open_data "$d"; fi
+      done
+      return 0
+      ;;
+    "") ;;
+    *) die "open takes --data, or nothing. Try $WIKI_CMD open --help" ;;
+  esac
   [ -d "$WIKIS_DIR" ] || die "no wikis at $(tilde "$WIKIS_DIR")"
   for d in "$WIKIS_DIR"/*/; do
     d="${d%/}"
@@ -6346,7 +6452,7 @@ cmd_extensions() {
 # Tab completion. `completion zsh|bash` prints a small script for the shell, which
 # asks `__complete` for candidates on every Tab. The candidates live here, so a
 # plugin update can't leave completion stale.
-COMMANDS="setup init new update start collections deps permissions seed harvest capture lock compile helper log sync index lint pending cover which status find stale patterns open skills tips report stats feedback news obsidian extensions tour mcp delegation upgrade unlock claude link journal standup completion"
+COMMANDS="setup init new update start collections deps permissions seed harvest capture lock compile helper log sync index lint pending cover which status find stale patterns open pages skills tips report stats feedback news obsidian extensions tour mcp delegation upgrade unlock claude link journal standup completion"
 RANGES="lastworkday yesterday today week lastweek 7d 14d 30d"
 
 wiki_names() {
@@ -6390,6 +6496,8 @@ cmd_complete() {
     sync) [ "$i" -eq 2 ] && wiki_names; echo -m ;;
     index) [ "$i" -eq 2 ] && wiki_names; echo --check ;;
     lint) wiki_names; echo --all ;;
+    open) [ "$i" -eq 2 ] && echo --data; [ "$i" -eq 3 ] && wiki_names ;;
+    pages) [ "$i" -eq 2 ] && wiki_names; echo --data ;;
     extensions)
       [ "$i" -eq 2 ] && printf 'path\nadd\nremove\nlog\ntick\nevery\n'
       if [ "$i" -eq 3 ] && { [ "${2:-}" = log ] || [ "${2:-}" = every ]; }; then extension_names; return 0; fi
@@ -8397,6 +8505,7 @@ case "$cmd" in
   index) cmd_index "$@"; exit 0 ;;
   lint) cmd_lint "$@"; exit 0 ;;
   open) cmd_open "$@"; exit 0 ;;
+  pages) cmd_pages "$@"; exit 0 ;;
 esac
 if [ "$cmd" = harvest ]; then
   cmd_harvest "$@"

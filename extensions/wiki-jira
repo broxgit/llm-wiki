@@ -3,8 +3,8 @@
 # wiki-events: tick
 """wiki jira: an llm-wiki extension. Standard library only.
 
-It reads each wiki's open.md (the ledger rules/open.md describes), finds the open
-entries that name a Jira ticket, and asks Jira for each ticket's status. It never
+It reads each wiki's open items through `wiki open --data`, finds the open entries
+that name a Jira ticket, and asks Jira for each ticket's status. It never
 writes to Jira. With --close it saves a note, through `wiki capture` and `wiki sync`,
 for the changes that alter what someone should do, and for no others:
 
@@ -247,41 +247,21 @@ def keys_in(text, projects):
     return out
 
 
-def ledger(wikis_dir, only):
-    """[(wiki, [entry])] for every wiki's open.md. An entry is its heading, status,
-    who, and the notes it came from."""
-    out = []
-    try:
-        names = sorted(os.listdir(wikis_dir))
-    except OSError:
-        die(f"no wikis at {wikis_dir}")
-    if only and only not in names:
-        die(f"no wiki called {only}")
-    for name in names:
-        root = os.path.join(wikis_dir, name)
-        if name.startswith(".") or (only and name != only):
+def ledger(wiki_cmd, only):
+    """[(wiki, [entry])] for every wiki's open items, from `wiki open --data`. An entry
+    is its heading, status, who, and the notes it came from."""
+    r = subprocess.run([wiki_cmd, "open", "--data"] + ([only] if only else []), capture_output=True, text=True)
+    if r.returncode != 0:
+        die((r.stderr.strip() or "couldn't read the open items").replace("error: ", "", 1))
+    books = {}
+    for line in r.stdout.splitlines():
+        f = line.split("\t")
+        if len(f) < 8:
             continue
-        if not (os.path.isfile(os.path.join(root, "AGENTS.md")) and os.path.isfile(os.path.join(root, "index.md"))):
-            continue
-        try:
-            with open(os.path.join(root, "open.md"), encoding="utf-8", errors="replace") as f:
-                lines = f.read().splitlines()
-        except OSError:
-            continue
-        entries, cur = [], None
-        for line in lines:
-            if line.startswith("## "):
-                cur = {"heading": line[3:].strip(), "status": "", "who": "", "from": []}
-                entries.append(cur)
-            elif cur is not None and line.startswith("- "):
-                k, _, v = line[2:].partition(":")
-                if k == "from":
-                    cur["from"].append(v.strip())
-                elif k in ("status", "who"):
-                    cur[k] = v.strip()
-        if entries:
-            out.append((name, entries))
-    return out
+        wiki, _state, _kind, who, _due, status, came, heading = f[:8]
+        books.setdefault(wiki, []).append({"heading": heading.strip(), "status": status, "who": who,
+                                           "from": [x for x in came.split("; ") if x]})
+    return sorted(books.items())
 
 
 def describe(t):
@@ -340,8 +320,8 @@ def cmd_check(args):
         die(f"check takes --close and a wiki's name. {CMD} jira --help")
     conf = settings()
     wikis_dir = os.environ.get("WIKIS_DIR") or die("WIKIS_DIR isn't set. Run this as: wiki jira")
-    wiki_cmd = os.environ.get("LLM_WIKI", "")
-    books = ledger(wikis_dir, rest[0] if rest else None)
+    wiki_cmd = os.environ.get("LLM_WIKI") or die("LLM_WIKI isn't set. Run this as: wiki jira")
+    books = ledger(wiki_cmd, rest[0] if rest else None)
 
     def keys(e):
         return keys_in(e["heading"], conf["projects"])

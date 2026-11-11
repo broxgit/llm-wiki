@@ -66,6 +66,7 @@ read -r -d '' PARTS <<'TABLE' || true
 2 | Jira extension | Collection
 2 | Confluence extension | Collection
 2 | Extension events | Collection
+2 | Content as data | Collection
 3 | Tour |
 4 | The released helper | Session hook
 TABLE
@@ -4605,6 +4606,79 @@ i=0; while [ -d "$XS/rec/sync-edemo.running" ] && [ "$i" -lt 100 ]; do sleep 0.1
 expect "completion offers log and tick" "tick" "$W" __complete 2 extensions ""
 check "the docs give the contract's second version" grep -q 'wiki-event' "$REPO/docs/extensions.md"
 rm -rf "$XD" "$XS"
+fi
+
+if section "Content as data"; then
+# A wiki's open items and pages, in a plain form a program reads, so an extension
+# doesn't parse the wiki's files itself.
+DW="$T/dwikis"
+WIKIS_DIR="$DW" "$W" new alpha >/dev/null 2>&1
+WIKIS_DIR="$DW" "$W" new beta >/dev/null 2>&1
+dw() { WIKIS_DIR="$DW" "$W" "$@"; }
+TB="$(printf '\t')"
+lacks "with nothing open, open --data prints nothing" "." dw open --data
+cat > "$DW/alpha/open.md" <<'OPEN'
+# Open
+
+## Release PROJ-1 to production
+- kind: waiting
+- who: Katherine Nieman
+- status: open
+- from: 2026-11-09 raw/a.md
+- from: 2026-11-10 raw/b.md
+
+## Look at the trial
+- kind: due
+- due: 2020-01-01
+- status: open
+- from: 2026-11-09 raw/a.md
+
+## Shipped the thing
+- kind: waiting
+- who: user
+- status: done 2026-11-10
+- from: 2026-11-10 raw/2026-11-10-000000-jira-done.md
+OPEN
+printf '# Open\n\n## Beta thing\n- kind: due\n- due: 2099-01-01\n- status: open\n- from: 2026-11-09 raw/a.md\n' > "$DW/beta/open.md"
+out="$(dw open --data)"
+want="alpha${TB}open${TB}waiting${TB}Katherine Nieman${TB}${TB}open${TB}2026-11-09 raw/a.md; 2026-11-10 raw/b.md${TB}Release PROJ-1 to production
+alpha${TB}overdue${TB}due${TB}${TB}2020-01-01${TB}open${TB}2026-11-09 raw/a.md${TB}Look at the trial
+alpha${TB}done${TB}waiting${TB}user${TB}${TB}done 2026-11-10${TB}2026-11-10 raw/2026-11-10-000000-jira-done.md${TB}Shipped the thing
+beta${TB}open${TB}due${TB}${TB}2099-01-01${TB}open${TB}2026-11-09 raw/a.md${TB}Beta thing"
+[ "$out" = "$want" ] && ok "open --data gives every entry of every wiki, one a line, tab separated" || bad "open --data gives every entry of every wiki, one a line, tab separated" "$out"
+check "open --data <wiki> gives one wiki's" test "$(dw open --data beta | wc -l | tr -d ' ')" = 1
+refuse "and fails for a wiki that isn't there" dw open --data nosuch
+refuse "open still takes nothing else" dw open alpha
+expect "open without it is still the list for people" "Release PROJ-1 to production (waiting on Katherine Nieman)" dw open
+expect "open --help names it" "open --data" dw open --help
+ESC=$'\033'
+case "$(LLM_WIKI_STYLE=on WIKIS_DIR="$DW" "$W" open --data)" in *"$ESC"*) bad "open --data stays plain when style is forced on" ;; *) ok "open --data stays plain when style is forced on" ;; esac
+# Pages.
+mkdir -p "$DW/alpha/wiki/concepts" "$DW/alpha/wiki/how-to" "$DW/alpha/wiki/.hidden"
+printf -- '---\ntitle: "Quoted: a title"\nsummary: s\nupdated: 2026-11-01\nverified: 2026-11-02\n---\n\n# Ignored heading\n\nBody.\n' > "$DW/alpha/wiki/concepts/a.md"
+printf '# From the *heading*\n\nBody.\n' > "$DW/alpha/wiki/concepts/b.md"
+printf 'No heading here.\n\n# Too late\n' > "$DW/alpha/wiki/how-to/c d.md"
+printf -- '---\ntitle: Hidden\n---\n' > "$DW/alpha/wiki/.hidden/h.md"
+printf 'not markdown\n' > "$DW/alpha/wiki/concepts/notes.txt"
+out="$(dw pages alpha --data | grep -v "^wiki/conventions.md")"
+want="wiki/concepts/a.md${TB}2026-11-01${TB}2026-11-02${TB}Quoted: a title
+wiki/concepts/b.md${TB}${TB}${TB}From the heading
+wiki/how-to/c d.md${TB}${TB}${TB}c d"
+[ "$out" = "$want" ] && ok "pages --data gives each page's path, dates and title: from the frontmatter, the first heading, or the file's name" || bad "pages --data gives each page's path, dates and title" "$out"
+expect "pages without it is a list for people" "Quoted: a title" dw pages alpha
+refuse "pages needs a wiki" dw pages
+refuse "that is there" dw pages nosuch --data
+refuse "and refuses an option it doesn't know" dw pages alpha --json
+case "$(LLM_WIKI_STYLE=on WIKIS_DIR="$DW" "$W" pages alpha --data)" in *"$ESC"*) bad "pages --data stays plain when style is forced on" ;; *) ok "pages --data stays plain when style is forced on" ;; esac
+expect "the usage names pages" "pages <wiki> [--data]" "$W" --help
+expect "completion offers pages" "pages" "$W" __complete 1 pa
+expect "and its flag" "--data" "$W" __complete 3 pages alpha ""
+expect "and open's" "--data" "$W" __complete 2 open ""
+# The extensions read these, and no longer the wiki's files.
+lacks "the Jira extension doesn't open open.md itself" 'open(os.path.join(root, "open.md")' cat "$REPO/extensions/wiki-jira"
+lacks "nor the Confluence extension walk wiki/" "os.walk" cat "$REPO/extensions/wiki-confluence"
+expect "run without llm-wiki, jira says how to run it" "Run this as: wiki jira" env -u LLM_WIKI WIKIS_DIR="$DW" JIRA_URL=http://127.0.0.1:1 JIRA_API_TOKEN=x "$REPO/extensions/wiki-jira" check
+check "the docs say how an extension reads a wiki" grep -q 'open --data' "$REPO/docs/extensions.md"
 fi
 
 if section "Tour"; then
