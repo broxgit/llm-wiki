@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # wiki-extension: Check the Jira tickets your open items wait on, and close the ones that are done.
 # wiki-events: tick
+# wiki-setup: yes
 """wiki jira: an llm-wiki extension. Standard library only.
 
 It reads each wiki's open items through `wiki open --data`, finds the open entries
@@ -150,9 +151,178 @@ def token(conf):
         except subprocess.TimeoutExpired:
             die("token_cmd took more than 30 seconds")
         if out.returncode != 0 or not out.stdout.strip():
-            die(f"token_cmd printed no token (exit {out.returncode}). Run it yourself to see why.")
+            die(f"token_cmd printed no token (exit {out.returncode}). Run it yourself to see why: {conf['token_cmd']}")
         return out.stdout.strip(), conf["_from"]["token_cmd"]
     return "", ""
+
+
+TOKEN_ENV = ("JIRA_API_TOKEN", "ATLASSIAN_API_TOKEN")
+
+
+# ---- talking to a person: docs/conventions.md ---------------------------------------
+
+def style_on(fd=1):
+    o = os.environ.get("LLM_WIKI_STYLE", "")
+    if o in ("on", "off"):
+        return o == "on"
+    return os.isatty(fd) and not os.environ.get("NO_COLOR") and os.environ.get("TERM", "dumb") != "dumb"
+
+
+def sgr(code, text, fd=1):
+    return "\033[%sm%s\033[0m" % (code, text) if style_on(fd) else text
+
+
+def typed(text):
+    return sgr("36", text)
+
+
+def done(text):
+    """A line saying something was done: the tick in front, where style is on."""
+    if not style_on():
+        return text
+    loc = os.environ.get("LC_ALL") or os.environ.get("LC_CTYPE") or os.environ.get("LANG") or ""
+    return sgr("32", "\u2713" if "utf" in loc.lower() else "+") + " " + text
+
+
+def warn(text):
+    """A line that leaves something for the person: the warning mark in front."""
+    return (sgr("1;33", "!") + " " if style_on() else "") + text
+
+
+def read_line():
+    """One line from standard input, a byte at a time, so nothing meant for whoever
+    reads next is taken. None when the input has ended."""
+    buf = b""
+    while True:
+        c = os.read(0, 1)
+        if not c:
+            return buf.decode(errors="replace") if buf else None
+        if c == b"\n":
+            return buf.decode(errors="replace")
+        buf += c
+
+
+def ask(prompt, default=""):
+    """Enter keeps the value in brackets, and - clears it."""
+    sys.stdout.write(f"{prompt} [{default or 'none'}]: ")
+    sys.stdout.flush()
+    line = read_line()
+    if line is None:
+        print()
+        return default
+    line = line.strip()
+    return default if line == "" else ("" if line == "-" else line)
+
+
+def ask_yn(prompt, default=False):
+    sys.stdout.write(f"{prompt} [{'Y/n' if default else 'y/N'}]: ")
+    sys.stdout.flush()
+    line = read_line()
+    if line is None:
+        print()
+        return default
+    line = line.strip().lower()
+    return default if line == "" else line.startswith("y")
+
+
+def set_conf(path, key, value):
+    """Set one `name = value` line in a settings file, or take it out when value is empty.
+    Every other line stays as it is."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except FileNotFoundError:
+        lines = []
+    kept = [l for l in lines if l.split("#", 1)[0].split("=", 1)[0].strip() != key or "=" not in l.split("#", 1)[0]]
+    if value:
+        kept.append(f"{key} = {value}")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(kept) + ("\n" if kept else ""))
+
+
+def has_token(conf):
+    """Whether a token is set to come from somewhere. The command isn't run to find out."""
+    return bool(conf.get("token_cmd")) or any(os.environ.get(n) for n in TOKEN_ENV)
+
+
+def atlassian_setup():
+    """Ask for the sign-in every Atlassian extension shares, and keep it in the shared file."""
+    shared = read_conf(SHARED)
+    conf = settings()
+    if conf["url"] and has_token(conf):
+        print(f"The Atlassian sign-in is already set: {conf['url']}" + (f", as {conf['email']}" if conf.get("email") else "") + ".")
+        if not ask_yn("Change it?", False):
+            return
+    print(f"Jira and Confluence share one Atlassian sign-in, kept in {SHARED}.")
+    print("Enter keeps the value in brackets.")
+    site = ask("Site, such as https://your-company.atlassian.net", shared.get("site", ""))
+    if site and not site.startswith(("https://", "http://")):
+        print("  " + warn(f"{site} isn't an address, so it wasn't saved. An address starts with https://"))
+    else:
+        set_conf(SHARED, "site", site.rstrip("/"))
+    email = ask("Email of your Atlassian account. Leave it empty on Data Center", shared.get("email", ""))
+    set_conf(SHARED, "email", email)
+    if has_token(settings()):
+        return
+    print()
+    print("The API token is kept out of this file. Create one at")
+    print("  https://id.atlassian.com/manage-profile/security/api-tokens")
+    print("or, on Data Center, a personal access token in your profile. Copy it.")
+    if sys.platform == "darwin":
+        print("Then put it in your keychain from the clipboard. In another terminal, run:")
+        print("  " + typed('security add-generic-password -a "$USER" -s atlassian -U -w "$(pbpaste)"'))
+        sys.stdout.write("Press Enter when that is done, or type skip to do it later: ")
+        sys.stdout.flush()
+        answer = read_line()
+        if answer is None:
+            print()
+        if answer is not None and answer.strip().lower() != "skip":
+            set_conf(SHARED, "token_cmd", "security find-generic-password -s atlassian -w")
+    else:
+        cmd = ask("A command that prints the token, such as: pass show atlassian", "")
+        set_conf(SHARED, "token_cmd", cmd)
+
+
+def sign_in_missing(conf):
+    """What the sign-in lacks, in a few words, or nothing."""
+    if not conf["url"]:
+        return "no Atlassian site yet"
+    if not has_token(conf):
+        return "no API token yet"
+    return ""
+
+
+def need_sign_in(conf):
+    msg = sign_in_missing(conf)
+    if msg:
+        die(f"Jira isn't set up: {msg}. Run: {CMD} extensions setup jira")
+
+
+def setup():
+    """Run by `wiki setup` and `wiki extensions setup jira`, at a terminal."""
+    atlassian_setup()
+    conf = settings()
+    if sign_in_missing(conf):
+        print("  " + warn(f"Jira can't sign in yet: {sign_in_missing(conf)}."))
+    else:
+        try:
+            me = Jira(conf).get("/rest/api/2/myself")
+            if me is None:
+                print("  " + warn(f"{conf['url']} has no Jira API at /rest/api/2. Is the site the address of Jira itself?"))
+            else:
+                print("  " + done(f"Signed in to Jira as {me.get('displayName') or me.get('name') or me.get('emailAddress') or '?'}."))
+        except SystemExit:
+            print("  " + warn("The sign-in didn't work. The line above says why."))
+    print()
+    own = read_conf(CONFIG)
+    projects = ask("Projects whose keys count as tickets, such as PROJ, OPS. Empty for any", own.get("projects", ""))
+    set_conf(CONFIG, "projects", projects)
+    print("With this on, a ticket that finishes is noted in the wiki, checked in the background with")
+    print("nobody asking, and the next compile closes the open item that names it. It only ever reads Jira.")
+    auto = ask_yn("Close open items by themselves?", auto_on(own))
+    set_conf(CONFIG, "auto_close", "yes" if auto else "")
+    return 0
 
 
 class Jira:
@@ -252,6 +422,8 @@ def ledger(wiki_cmd, only):
     is its heading, status, who, and the notes it came from."""
     r = subprocess.run([wiki_cmd, "open", "--data"] + ([only] if only else []), capture_output=True, text=True)
     if r.returncode != 0:
+        if only:
+            die(f"{only} isn't a wiki here, and isn't something jira does. {CMD} jira --help has its commands.")
         die((r.stderr.strip() or "couldn't read the open items").replace("error: ", "", 1))
     books = {}
     for line in r.stdout.splitlines():
@@ -319,6 +491,7 @@ def cmd_check(args):
     if any(a.startswith("-") for a in rest) or len(rest) > 1:
         die(f"check takes --close and a wiki's name. {CMD} jira --help")
     conf = settings()
+    need_sign_in(conf)
     wikis_dir = os.environ.get("WIKIS_DIR") or die("WIKIS_DIR isn't set. Run this as: wiki jira")
     wiki_cmd = os.environ.get("LLM_WIKI") or die("LLM_WIKI isn't set. Run this as: wiki jira")
     books = ledger(wiki_cmd, rest[0] if rest else None)
@@ -333,7 +506,12 @@ def cmd_check(args):
     watched = [(w, e) for w, es in books for e in es if keys(e)
                and (e["status"] == "open" or (recently_done(e["status"]) and ours(e) and not e["heading"].startswith(OWN)))]
     if not watched:
-        print("No open item names a ticket." + ("" if conf["projects"] else " A ticket is a key such as PROJ-123 in the item's heading."))
+        if conf["projects"]:
+            others = sorted({k for _, es in books for e in es if e["status"] == "open" for k in keys_in(e["heading"], [])})
+            print(f"No open item names a ticket in {', '.join(conf['projects'])}."
+                  + (f" {len(others)} other key(s) are left out by projects in {CONFIG}: {', '.join(others[:5])}." if others else ""))
+        else:
+            print("No open item names a ticket. A ticket is a key such as PROJ-123 in the item's heading.")
         return 0
     jira = Jira(conf)
     seen = {}
@@ -390,7 +568,10 @@ def cmd_check(args):
                 if item not in open_headings:
                     add(("blocked", f"Waiting: {e['who'] or 'user'} | {item}", [t]))
     if not shown and not any(notes.values()):
-        print("No open item names a ticket Jira knows.")
+        if seen and jira.get("/rest/api/2/myself", soft=True) is None:
+            die(f"{jira.url} doesn't answer as Jira: none of {len(seen)} ticket(s) could be looked up, and it has no Jira "
+                f"API at /rest/api/2. The site is the address of Jira itself. Run: {CMD} extensions setup jira")
+        print(f"None of the keys the open items name is a ticket Jira knows: {', '.join(sorted(seen)[:8])}.")
         return 0
 
     # Leave out what a waiting note already says.
@@ -461,7 +642,9 @@ def cmd_check(args):
 def cmd_show(args):
     if not args:
         die(f"show needs a ticket key, such as PROJ-123")
-    jira = Jira(settings())
+    conf = settings()
+    need_sign_in(conf)
+    jira = Jira(conf)
     missing = 0
     for k in args:
         t = jira.ticket(k.upper())
@@ -487,7 +670,7 @@ def cmd_config(args):
     print(f"auto      {'check --close runs by itself once a day' if auto_on(conf) else 'off'}")
     print(f"done      {', '.join(conf['done_statuses']) or 'what Jira counts as done'}")
     if not conf["url"] or not where:
-        print(f"\nNot ready. {CMD} jira --help has the settings.")
+        print(f"\nNot set up: {sign_in_missing(conf)}. Run: {CMD} extensions setup jira")
         return 1
     me = Jira(conf).get("/rest/api/2/myself")
     if me is None:
@@ -515,6 +698,13 @@ def on_event(args):
 def main(argv):
     if argv and argv[0] == "--wiki-event":
         return on_event(argv[1:])
+    if argv and argv[0] == "--wiki-ready":
+        msg = sign_in_missing(settings())
+        if msg:
+            print(msg)
+        return 1 if msg else 0
+    if argv and argv[0] == "--wiki-setup":
+        return setup()
     if argv and argv[0] in ("-h", "--help", "help"):
         print(USAGE, end="")
         return 0

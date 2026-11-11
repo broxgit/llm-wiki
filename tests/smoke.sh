@@ -3950,7 +3950,7 @@ EXT
 chmod +x "$XD/wiki-hello"
 out="$("$W" hello one "two words" --all -x 2>&1)"
 case "$out" in *"args: [one] [two words] [--all] [-x]"*) ok "wiki <name> runs the extension with its arguments as given" ;; *) bad "wiki <name> runs the extension with its arguments as given" "$out" ;; esac
-case "$out" in *"api=2 dir=$WIKIS_DIR"*) ok "and tells it the contract's version and the collection" ;; *) bad "and tells it the contract's version and the collection" "$out" ;; esac
+case "$out" in *"api=3 dir=$WIKIS_DIR"*) ok "and tells it the contract's version and the collection" ;; *) bad "and tells it the contract's version and the collection" "$out" ;; esac
 case "$out" in *"nested: $XD"*) ok "and how to run the wiki command" ;; *) bad "and how to run the wiki command" "$out" ;; esac
 "$W" hello fail >/dev/null 2>&1
 code=$?
@@ -3959,7 +3959,7 @@ expect "extensions lists it with its description" "Says hello, for the smoke tes
 expect "the first word completes to it" "hello" "$W" __complete 1 he
 expect "and to extensions" "extensions" "$W" __complete 1 ex
 expect "extensions completes to path" "path" "$W" __complete 2 extensions ""
-expect "the usage names the command" "extensions [path | add <name> | remove <name> | log <name> | tick | every ...]" "$W" --help
+expect "the usage names the command" "extensions [path | add <name> | remove <name> | setup <name> | log <name> | tick | every ...]" "$W" --help
 # A command of llm-wiki's own always wins.
 printf '#!/bin/sh\necho HIJACK\n' > "$XD/wiki-news"
 printf '#!/bin/sh\necho HIJACK\n' > "$XD/wiki-relay"
@@ -3978,13 +3978,59 @@ printf '#!/bin/sh\necho ran\n' > "$XD/wiki-Bad_Name"
 chmod +x "$XD/wiki-Bad_Name"
 refuse "a name that isn't lowercase letters, digits and dashes doesn't run" "$W" Bad_Name
 expect "and is listed as ignored" "ignored: a name is lowercase letters, digits and dashes" "$W" extensions
+expect "with the file to rename" "Rename " "$W" extensions
+expect "and running it says why it can't be a command" "Bad_Name can't be a command: an extension's name is lowercase letters, digits and dashes. Rename " "$W" Bad_Name
 rm "$XD/wiki-Bad_Name"
 refuse "an unknown command still fails" "$W" nosuchcommand
+out="$("$W" nosuchcommand 2>&1)"
+[ "$out" = "error: no command called nosuchcommand. $W --help lists the commands, and $W extensions lists yours." ] && ok "in one line that names the word, not a page of usage" || bad "in one line that names the word, not a page of usage" "$out"
 mkdir -p "$T/ext2"
 printf '#!/bin/sh\necho elsewhere\n' > "$T/ext2/wiki-there"
 chmod +x "$T/ext2/wiki-there"
 expect "LLM_WIKI_EXTENSIONS_DIR names another folder" "elsewhere" env LLM_WIKI_EXTENSIONS_DIR="$T/ext2" "$W" there
 check "the docs say what an extension is given" grep -q 'LLM_WIKI_EXTENSION' "$REPO/docs/extensions.md"
+# An extension that needs setting up says so, and is never on, unready and silent.
+cat > "$XD/wiki-prep" <<'EXT'
+#!/bin/sh
+# wiki-extension: Needs setting up, for the smoke test.
+# wiki-events: tick
+# wiki-setup: yes
+case "${1:-}" in
+  --wiki-ready) [ -f "$HOME/prep-ready" ] && exit 0; echo "no prep file yet"; exit 1 ;;
+  --wiki-setup) printf 'Make it? '; read -r a; [ "$a" != make ] || : > "$HOME/prep-ready"; exit 0 ;;
+  --wiki-event) echo ticked >> "$HOME/prep-ticks"; exit 0 ;;
+esac
+echo ran
+EXT
+chmod +x "$XD/wiki-prep"
+expect "status lists an extension that says it isn't set up, with the command that sets it up" "extension prep: on, but not ready: no prep file yet. Run: " "$W" status
+expect "and that command is extensions setup" "extensions setup prep" "$W" status
+expect "the list of extensions says it too" "not ready: no prep file yet" "$W" extensions
+expect "an event doesn't run it while it isn't set up" "prep: not set up" env LLM_WIKI_EVENTS=wait "$W" extensions tick
+check "at all" test ! -e "$HOME/prep-ticks"
+out="$(printf 'no\n' | "$W" extensions setup prep 2>&1)"
+case "$out" in *"Make it?"*"prep isn't set up yet: no prep file yet. Run: "*) ok "extensions setup asks its questions, and says when it still isn't set up" ;; *) bad "extensions setup asks its questions, and says when it still isn't set up" "$out" ;; esac
+expect "and when it is" "prep is set up." bash -c "printf 'make\n' | '$W' extensions setup prep"
+lacks "status then says nothing about it" "extension prep" "$W" status
+expect "and events run it" "prep: ok" env LLM_WIKI_EVENTS=wait "$W" extensions tick
+rm "$HOME/prep-ready"
+expect "an extension that stops being ready is caught by the next event" "prep: not set up" env LLM_WIKI_EVENTS=wait "$W" extensions tick
+expect "and status says so again" "extension prep: on, but not ready" "$W" status
+expect "one with nothing to set up says that" "hello has nothing to set up." "$W" extensions setup hello
+refuse "extensions setup needs an extension that is on" "$W" extensions setup nosuch
+printf '#!/bin/sh\n# wiki-extension: Slow to say.\n# wiki-setup: yes\n[ "$1" != --wiki-ready ] || sleep 30\n' > "$XD/wiki-slow"
+chmod +x "$XD/wiki-slow"
+expect "one that doesn't answer in time counts as not ready, and status doesn't wait for it" "extension slow: on, but not ready: it didn't say whether it is set up." env LLM_WIKI_READY_SECONDS=1 "$W" status
+rm "$XD/wiki-slow" "$XD/wiki-prep"
+# An extension written in something this machine doesn't have.
+printf '#!/usr/bin/env nosuchlang\n# wiki-extension: In a language this machine lacks.\nprint("hi")\n' > "$XD/wiki-alien"
+chmod +x "$XD/wiki-alien"
+expect "running one whose language is missing says what it needs" "alien needs nosuchlang, which isn't on this machine. Do: install nosuchlang" "$W" alien
+refuse "and fails" "$W" alien
+expect "status says so too" "extension alien: on, but not ready: it needs nosuchlang" "$W" status
+rm "$XD/wiki-alien"
+expect "completion offers setup" "setup" "$W" __complete 2 extensions ""
+check "the docs give the contract's third version" grep -q 'wiki-setup' "$REPO/docs/extensions.md"
 rm -rf "$XD"
 fi
 
@@ -4002,6 +4048,12 @@ refuse "it is still off" "$W" jira --help
 refuse "extensions add refuses a name that doesn't ship" "$W" extensions add nosuch
 refuse "and needs a name" "$W" extensions add
 expect "extensions add turns it on" "on: jira" "$W" extensions add jira
+"$W" extensions remove jira >/dev/null
+expect "and says at once that it isn't set up, with the command that does it" "jira isn't set up yet: no Atlassian site yet. Run: " "$W" extensions add jira
+expect "status lists an extension that is on and not set up" "extension jira: on, but not ready: no Atlassian site yet. Run: " "$W" status
+expect "and so does the list of extensions" "not ready: no Atlassian site yet" "$W" extensions
+check "the extension says itself what it lacks, in one line" test "$(env WIKIS_DIR="$WIKIS_DIR" "$REPO/extensions/wiki-jira" --wiki-ready)" = "no Atlassian site yet"
+refuse "and fails while it lacks it" "$REPO/extensions/wiki-jira" --wiki-ready
 expect "and it runs" "Usage: " "$W" jira --help
 expect "setup --list names it" "on: jira" bash -c "'$W' setup --list | grep '^extensions'"
 expect "completion offers it" "jira" "$W" __complete 1 ji
@@ -4089,7 +4141,9 @@ cat > "$JW/jdemo/open.md" <<'OPEN'
 - from: 2026-11-09 raw/a.md
 OPEN
 jira() { WIKIS_DIR="$JW" JIRA_URL="http://127.0.0.1:$(cat "$J/port")" JIRA_EMAIL=me@example.com JIRA_API_TOKEN=smoke-token "$W" jira "$@"; }
-expect "with no address, jira says what to set" "no Jira address" env WIKIS_DIR="$JW" "$W" jira
+expect "with no sign-in, jira says so and what to run" "Jira isn't set up: no Atlassian site yet. Run: " env WIKIS_DIR="$JW" "$W" jira
+refuse "and fails, where it used to say there was nothing to do" env WIKIS_DIR="$JW" "$W" jira
+expect "show says the same" "extensions setup jira" env WIKIS_DIR="$JW" "$W" jira show PROJ-1
 expect "with no token, it says that" "no API token" env WIKIS_DIR="$JW" JIRA_URL=http://127.0.0.1:1 "$W" jira
 out="$(jira check 2>&1)"
 case "$out" in *"== jdemo"*"Release PROJ-1 to production"*"PROJ-1       Done, resolved 2026-11-08"*) ok "jira says a ticket an open item names is done" ;; *) bad "jira says a ticket an open item names is done" "$out" ;; esac
@@ -4126,14 +4180,20 @@ check "ATLASSIAN_API_TOKEN wins over both files" grep -qxF "Basic $(printf 'own@
 env ATLASSIAN_API_TOKEN=env-shared JIRA_API_TOKEN=env-own WIKIS_DIR="$JW" "$W" jira config >/dev/null 2>&1
 check "and JIRA_API_TOKEN over that" grep -qxF "Basic $(printf 'own@example.com:env-own' | base64)" "$J/auth.log"
 rm "$HOME/.config/llm-wiki/jira" "$HOME/.config/llm-wiki/atlassian"
-expect "with neither file, jira names the shared file as the place to start" "llm-wiki/atlassian" env WIKIS_DIR="$JW" "$W" jira
+expect "with neither file, jira names the one command that sets it up" "extensions setup jira" env WIKIS_DIR="$JW" "$W" jira
 expect "a sign-in Jira refuses is said plainly" "refused the sign-in" env WIKIS_DIR="$JW" JIRA_URL="http://127.0.0.1:$(cat "$J/port")" JIRA_API_TOKEN=bad "$W" jira
 refuse "and fails" env WIKIS_DIR="$JW" JIRA_URL="http://127.0.0.1:$(cat "$J/port")" JIRA_API_TOKEN=bad "$W" jira
-expect "projects limits which keys count" "No open item names a ticket." env JIRA_PROJECTS=OPS WIKIS_DIR="$JW" JIRA_URL="http://127.0.0.1:$(cat "$J/port")" JIRA_API_TOKEN=smoke-token "$W" jira
+expect "projects limits which keys count, and says which it left out" "No open item names a ticket in OPS. 3 other key(s) are left out by projects" env JIRA_PROJECTS=OPS WIKIS_DIR="$JW" JIRA_URL="http://127.0.0.1:$(cat "$J/port")" JIRA_API_TOKEN=smoke-token "$W" jira
 expect "show gives a ticket's status and summary" "In Progress  Second step" jira show proj-2
 refuse "show fails for a ticket Jira doesn't know" jira show NOPE-9
 refuse "jira refuses an option it doesn't know" jira check --force
 refuse "and a wiki that isn't there" jira check nosuchwiki
+expect "saying it is neither a wiki nor a command" "nosuchwiki isn't a wiki here, and isn't something jira does" jira check nosuchwiki
+# An address that answers, but isn't Jira: every ticket comes back unknown.
+out="$(env WIKIS_DIR="$JW" JIRA_URL="http://127.0.0.1:$(cat "$J/port")/nonsense" JIRA_API_TOKEN=smoke-token "$W" jira 2>&1)"
+code=$?
+case "$out" in *"doesn't answer as Jira: none of "*" ticket(s) could be looked up"*"extensions setup jira"*) ok "an address that isn't Jira is said to be so, where it used to say nothing was open" ;; *) bad "an address that isn't Jira is said to be so" "$out" ;; esac
+[ "$code" -ne 0 ] && ok "and jira fails, so a run by itself is a failure too" || bad "and jira fails, so a run by itself is a failure too" "exit $code"
 expect "check --close notes the item as done" "jdemo: noted 1 item(s) as done" jira check --close
 note="$(ls "$JW/jdemo/raw"/*-jira-done.md 2>/dev/null | head -n 1)"
 check "the note has the Done line the compile matches" grep -qxF "Done: Release PROJ-1 to production" "$note"
@@ -4217,6 +4277,50 @@ lacks "and an item about a block isn't itself reported as blocked" "holding up \
 check "an item whose tickets are done still closes" grep -qxF "Done: Cut over at PROJ-6" "$note"
 check "the note says where each ticket stood" grep -q "PROJ-3 \"Dropped\": Closed as Won't Do, without the work done." "$note"
 expect "a second --close notes nothing again" "already noted, waiting for a compile" jst check --close
+# Its guided setup: the shared sign-in, a test of it, then Jira's own settings.
+JH="$T/jhome"
+mkdir -p "$JH"
+jsetup() { env HOME="$JH" WIKIS_DIR="$JW" ATLASSIAN_API_TOKEN=smoke-token "$W" extensions setup jira; }
+HOME="$JH" "$W" extensions add jira >/dev/null 2>&1
+out="$(printf 'http://127.0.0.1:%s\nme@example.com\nPROJ, OPS\ny\n' "$(cat "$J/port")" | jsetup 2>&1)"
+case "$out" in *"share one Atlassian sign-in"*"Site, such as"*"Email of your Atlassian account"*) ok "setup asks for the site and the email" ;; *) bad "setup asks for the site and the email" "$out" ;; esac
+case "$out" in *"Signed in to Jira as Smoke Tester."*) ok "then tests the sign-in and says who it signed in as" ;; *) bad "then tests the sign-in and says who it signed in as" "$out" ;; esac
+case "$out" in *"Close open items by themselves?"*"jira is set up."*) ok "asks about closing items by itself, and ends by saying it is set up" ;; *) bad "asks about closing items by itself, and ends by saying it is set up" "$out" ;; esac
+check "the sign-in went to the shared file" grep -qx "site = http://127.0.0.1:$(cat "$J/port")" "$JH/.config/llm-wiki/atlassian"
+check "with the email" grep -qx "email = me@example.com" "$JH/.config/llm-wiki/atlassian"
+check "and Jira's own answers to Jira's file" grep -qx "projects = PROJ, OPS" "$JH/.config/llm-wiki/jira"
+check "the yes included" grep -qx "auto_close = yes" "$JH/.config/llm-wiki/jira"
+lacks "status then has nothing to say about it" "extension jira" env HOME="$JH" WIKIS_DIR="$JW" ATLASSIAN_API_TOKEN=smoke-token "$W" status
+out="$(printf '\n\n\n\n\n' | jsetup 2>&1)"
+case "$out" in *"The Atlassian sign-in is already set"*"Change it?"*) ok "a second run says the sign-in is set, and asks before changing it" ;; *) bad "a second run says the sign-in is set, and asks before changing it" "$out" ;; esac
+check "and Enter keeps every answer" grep -qx "projects = PROJ, OPS" "$JH/.config/llm-wiki/jira"
+printf 'y\n\n\n-\nn\n' | jsetup >/dev/null 2>&1
+lacks "a dash clears a value, and a no turns the setting off" "projects\|auto_close" cat "$JH/.config/llm-wiki/jira"
+out="$(printf 'y\nnot-an-address\n\n' | jsetup 2>&1)"
+case "$out" in *"not-an-address isn't an address, so it wasn't saved"*) ok "an answer that isn't an address is refused, and the old one kept" ;; *) bad "an answer that isn't an address is refused, and the old one kept" "$out" ;; esac
+check "which it was" grep -q "^site = http://127.0.0.1:" "$JH/.config/llm-wiki/atlassian"
+out="$(printf 'http://127.0.0.1:%s\nme@example.com\n' "$(cat "$J/port")" | env HOME="$T/jhome2" WIKIS_DIR="$JW" "$W" extensions setup jira 2>&1 || true)"
+case "$out" in *"jira is off. Turn it on: "*"extensions add jira"*) ok "setup of an extension that is off says how to turn it on" ;; *) bad "setup of an extension that is off says how to turn it on" "$out" ;; esac
+mkdir -p "$T/jhome2"
+HOME="$T/jhome2" "$W" extensions add jira >/dev/null 2>&1
+out="$(printf 'http://127.0.0.1:%s\nme@example.com\n' "$(cat "$J/port")" | env HOME="$T/jhome2" WIKIS_DIR="$JW" "$W" extensions setup jira 2>&1)"
+case "$out" in *"id.atlassian.com/manage-profile/security/api-tokens"*) ok "with no token anywhere, setup says where to make one" ;; *) bad "with no token anywhere, setup says where to make one" "$out" ;; esac
+case "$out" in *smoke-token*) bad "and never asks for the token itself" "$out" ;; *) ok "and never asks for the token itself" ;; esac
+mkdir -p "$T/jhome3"
+HOME="$T/jhome3" "$W" extensions add jira >/dev/null 2>&1
+out="$(printf 'http://127.0.0.1:%s\n\n\n\n' "$(cat "$J/port")" | env HOME="$T/jhome3" WIKIS_DIR="$JW" ATLASSIAN_API_TOKEN=bad "$W" extensions setup jira 2>&1)"
+case "$out" in *"refused the sign-in"*"The sign-in didn't work."*) ok "a sign-in Jira refuses is said during setup, and setup carries on" ;; *) bad "a sign-in Jira refuses is said during setup, and setup carries on" "$out" ;; esac
+case "$out" in *"Close open items by themselves?"*) ok "to Jira's own questions" ;; *) bad "to Jira's own questions" "$out" ;; esac
+# With no answer about the token, nothing is written that would look like one is set.
+mkdir -p "$T/jhome5"
+HOME="$T/jhome5" "$W" extensions add jira >/dev/null 2>&1
+printf 'http://127.0.0.1:%s\nme@example.com\n' "$(cat "$J/port")" | env HOME="$T/jhome5" WIKIS_DIR="$JW" "$W" extensions setup jira >/dev/null 2>&1
+lacks "setup cut short before the token leaves no token command behind" "token_cmd" cat "$T/jhome5/.config/llm-wiki/atlassian"
+expect "so the extension still says it has no token" "no API token yet" env HOME="$T/jhome5" WIKIS_DIR="$JW" "$W" status
+# Through wiki setup: a yes goes straight on to the extension's own questions.
+mkdir -p "$T/jhome4"
+out="$(printf 'n\ny\nhttp://127.0.0.1:%s\nme@example.com\n\nn\n6h\n' "$(cat "$J/port")" | env HOME="$T/jhome4" WIKIS_DIR="$JW" ATLASSIAN_API_TOKEN=smoke-token LLM_WIKI_TEST_TTY=1 "$W" setup extensions 2>&1)"
+case "$out" in *"Turn on"*"jira?"*"share one Atlassian sign-in"*"Signed in to Jira as Smoke Tester."*"jira is set up."*"To go through this again:"*"extensions setup jira"*"tick: every 6h"*) ok "wiki setup turns it on, asks its questions, and carries on with its own" ;; *) bad "wiki setup turns it on, asks its questions, and carries on with its own" "$out" ;; esac
 # With auto_close, the tick event does the same with nobody asking.
 expect "jira asks for the tick event" "(runs on: tick)" "$W" extensions
 jtick() { WIKIS_DIR="$JW" JIRA_URL="http://127.0.0.1:$(cat "$J/port")" JIRA_EMAIL=me@example.com JIRA_API_TOKEN=smoke-token LLM_WIKI_EVENTS=wait "$W" extensions tick; }
@@ -4234,6 +4338,9 @@ expect "and status says so" "extension jira: its last tick run failed" env WIKIS
 kill "$JPID" 2>/dev/null
 wait "$JPID" 2>/dev/null
 expect "extensions remove turns it off" "off: jira" "$W" extensions remove jira
+expect "and says so when it already was" "jira is already off." "$W" extensions remove jira
+expect "a command about an extension that is off says how to turn it on" "jira is off. Turn it on: " "$W" extensions log jira
+expect "every too" "jira is off. Turn it on: " "$W" extensions every jira 2h
 refuse "and it no longer runs" "$W" jira --help
 check "the docs say how to set it up" grep -q 'token_cmd' "$REPO/docs/extensions.md"
 fi
@@ -4367,16 +4474,37 @@ $2" "$C/state.json"; }
 expect "config tests the sign-in" "Signed in as Smoke Tester" conf config
 expect "and says when no space is set" "No space is set" conf config
 expect "publish needs a space" "no space to publish cdemo into" conf publish cdemo
+expect "and says the command that sets one" "extensions setup confluence" conf publish cdemo
+expect "with no sign-in, publish says that first" "Confluence isn't set up: no Confluence address yet. Run: " env WIKIS_DIR="$CW" "$W" confluence publish cdemo
+check "confluence says itself that it lacks a space" test "$(conf --wiki-ready 2>/dev/null; true)" = "" -o "$(env WIKIS_DIR="$CW" CONFLUENCE_URL=http://127.0.0.1:1 CONFLUENCE_API_TOKEN=x "$REPO/extensions/wiki-confluence" --wiki-ready)" = "no space to publish into yet"
+CH="$T/chome"
+mkdir -p "$CH"
+HOME="$CH" "$W" extensions add confluence >/dev/null 2>&1
+expect "status lists confluence while it has no sign-in" "extension confluence: on, but not ready: no Confluence address yet. Run: " env HOME="$CH" WIKIS_DIR="$CW" "$W" status
+out="$(printf 'http://127.0.0.1:%s
+me@example.com
+http://127.0.0.1:%s
+ENG
+cdemo
+' "$(cat "$C/port")" "$(cat "$C/port")" | env -u CONFLUENCE_SPACE HOME="$CH" WIKIS_DIR="$CW" ATLASSIAN_API_TOKEN=smoke-token "$W" extensions setup confluence 2>&1)"
+case "$out" in *"Confluence's own address is needed"*"Signed in to Confluence as Smoke Tester."*"Key of the space to publish into"*"confluence is set up."*) ok "confluence's setup asks for its address where the site isn't Cloud, the space, and tests the sign-in" ;; *) bad "confluence's setup asks for its address where the site isn't Cloud, the space, and tests the sign-in" "$out" ;; esac
+case "$out" in *"Everyone who can read a space can read what is published into it"*) ok "and says who can read what is published, before asking for the space" ;; *) bad "and says who can read what is published, before asking for the space" "$out" ;; esac
+check "the space is saved" grep -qx "space = ENG" "$CH/.config/llm-wiki/confluence"
+check "and the wikis to publish by themselves" grep -qx "auto = cdemo" "$CH/.config/llm-wiki/confluence"
+lacks "status then has nothing to say about it" "extension confluence" env -u CONFLUENCE_SPACE HOME="$CH" WIKIS_DIR="$CW" ATLASSIAN_API_TOKEN=smoke-token "$W" status
 refuse "and a wiki that is there" env CONFLUENCE_SPACE=ENG WIKIS_DIR="$CW" CONFLUENCE_URL="http://127.0.0.1:$(cat "$C/port")" CONFLUENCE_API_TOKEN=smoke-token "$W" confluence publish nosuch
 expect "a space Confluence doesn't know is said plainly" "can't read the space NOPE" env CONFLUENCE_SPACE=NOPE WIKIS_DIR="$CW" CONFLUENCE_URL="http://127.0.0.1:$(cat "$C/port")" CONFLUENCE_API_TOKEN=smoke-token "$W" confluence publish cdemo
 export CONFLUENCE_SPACE=ENG
 out="$(conf publish cdemo --dry-run 2>&1)"
-case "$out" in *"Would publish 5 page(s) of cdemo to the space ENG"*"would create: cdemo wiki"*"would create: cdemo: Beta"*"5 to create, 0 to update, 0 unchanged"*) ok "a dry run says what would be created" ;; *) bad "a dry run says what would be created" "$out" ;; esac
+case "$out" in *"Would publish 5 page(s) of cdemo to the space ENG"*"would create: cdemo wiki"*"would create: cdemo: Beta"*"4 to create, 0 to update, 0 unchanged"*) ok "a dry run says what would be created" ;; *) bad "a dry run says what would be created" "$out" ;; esac
+case "$out" in *"not published: cdemo: Taken: a page of that name is already in the space"*"Rename that page in Confluence, or change this page's title in the wiki."*) ok "and sees a title someone else has, with what to do about it" ;; *) bad "and sees a title someone else has, with what to do about it" "$out" ;; esac
+case "$out" in *"would create: cdemo: Taken"*) bad "without saying it would create that page" "$out" ;; *) ok "without saying it would create that page" ;; esac
 check "and writes nothing" test ! -e "$C/writes.log"
 out="$(conf publish cdemo 2>&1)"
 code=$?
 case "$out" in *"created: cdemo wiki"*"created: cdemo: Beta"*"cdemo: 4 created, 0 updated, 0 unchanged."*) ok "publish creates the index and the pages" ;; *) bad "publish creates the index and the pages" "$out" ;; esac
-case "$out" in *"not published: cdemo: Taken: A page with this title already exists"*) ok "a title someone else used is reported, and the rest still go" ;; *) bad "a title someone else used is reported, and the rest still go" "$out" ;; esac
+case "$out" in *"not published: cdemo: Taken: a page of that name is already in the space"*"Rename that page in Confluence"*) ok "a title someone else used is reported with its fix, and the rest still go" ;; *) bad "a title someone else used is reported with its fix, and the rest still go" "$out" ;; esac
+case "$out" in *"created: cdemo: Taken"*) bad "and a page that wasn't created isn't said to be" "$out" ;; *) ok "and a page that wasn't created isn't said to be" ;; esac
 [ "$code" -eq 1 ] && ok "and publish fails, so it is noticed" || bad "and publish fails, so it is noticed" "exit $code"
 case "$out" in *"/spaces/ENG/pages/1000"*) ok "it ends with the address of the wiki's page" ;; *) bad "it ends with the address of the wiki's page" "$out" ;; esac
 check "the index is the parent of the pages" state x "
@@ -4459,6 +4587,17 @@ check "and its log says why" grep -q "no page of pub changed" "$HOME/.local/stat
 printf -- '---\ntitle: Auto\n---\n\nFourth.\n' > "$CA/pub/wiki/concepts/auto.md"
 expect "the tick catches up on a page no sync published" "confluence: ok" env CONFLUENCE_AUTO=pub WIKIS_DIR="$CA" CONFLUENCE_URL="http://127.0.0.1:$(cat "$C/port")" CONFLUENCE_EMAIL=me@example.com CONFLUENCE_API_TOKEN=smoke-token LLM_WIKI_EVENTS=wait "$W" extensions tick
 check "with the page as it is on disk" state x "assert 'Fourth.' in [p for p in P.values() if p['title'] == 'pub: Auto'][0]['body']"
+printf -- '---\ntitle: Auto\n---\n\nFifth.\n' > "$CA/pub/wiki/concepts/auto.md"
+out="$(env CONFLUENCE_AUTO="gone, pub" WIKIS_DIR="$CA" CONFLUENCE_URL="http://127.0.0.1:$(cat "$C/port")" CONFLUENCE_EMAIL=me@example.com CONFLUENCE_API_TOKEN=smoke-token LLM_WIKI_EVENTS=wait "$W" extensions tick 2>&1 || true)"
+case "$out" in *"confluence: failed"*) ok "auto naming a wiki that isn't here fails the run" ;; *) bad "auto naming a wiki that isn't here fails the run" "$out" ;; esac
+check "and its log says which, and to take it out" grep -q "auto names gone, which isn't a wiki here. Take it out of auto in" "$HOME/.local/state/llm-wiki/extensions/confluence/tick.log"
+check "while the wikis after it are still published" state x "assert 'Fifth.' in [p for p in P.values() if p['title'] == 'pub: Auto'][0]['body']"
+expect "config says so too" "auto names gone, which isn't a wiki here" env CONFLUENCE_AUTO="gone, pub" WIKIS_DIR="$CA" CONFLUENCE_URL="http://127.0.0.1:$(cat "$C/port")" CONFLUENCE_API_TOKEN=smoke-token "$W" confluence config
+env CONFLUENCE_AUTO=pub WIKIS_DIR="$CA" CONFLUENCE_URL="http://127.0.0.1:$(cat "$C/port")" CONFLUENCE_EMAIL=me@example.com CONFLUENCE_API_TOKEN=smoke-token LLM_WIKI_EVENTS=wait "$W" extensions tick >/dev/null 2>&1
+printf 'site = https://jira.example.com\ntoken_cmd = echo t\n' > "$HOME/.config/llm-wiki/atlassian"
+expect "a site that isn't Atlassian Cloud says Confluence needs its own address, not to set the site" "jira.example.com isn't on Atlassian Cloud, so Confluence's own address is needed" env -u CONFLUENCE_SPACE WIKIS_DIR="$CA" "$W" confluence publish pub
+rm "$HOME/.config/llm-wiki/atlassian"
+expect "a space Confluence can't read ends with what to check" "Check space in" env CONFLUENCE_SPACE=NOPE WIKIS_DIR="$CW" CONFLUENCE_URL="http://127.0.0.1:$(cat "$C/port")" CONFLUENCE_API_TOKEN=smoke-token "$W" confluence publish cdemo
 expect "config names the wikis in auto" "auto      pub" env CONFLUENCE_AUTO=pub WIKIS_DIR="$CA" CONFLUENCE_URL="http://127.0.0.1:$(cat "$C/port")" CONFLUENCE_API_TOKEN=smoke-token "$W" confluence config
 expect "a Confluence out of reach during an event is for later" "confluence: later" env CONFLUENCE_AUTO=pub WIKIS_DIR="$CA" CONFLUENCE_URL="http://127.0.0.1:1" CONFLUENCE_API_TOKEN=smoke-token LLM_WIKI_EVENTS=wait "$W" extensions tick
 lacks "so status says nothing" "extension confluence" env WIKIS_DIR="$CA" "$W" status
@@ -4493,11 +4632,18 @@ EXT
 printf '#!/bin/sh\n# wiki-extension: Asks for nothing.\necho called >> "%s/quiet"\n' "$REC" > "$XD/wiki-quiet"
 chmod +x "$XD/wiki-rec" "$XD/wiki-quiet"
 expect "extensions says which events one runs on" "(runs on: sync, tick)" ew extensions
+# A comment that asks for something that will never happen is said, not left silent.
+printf '#!/bin/sh\n# wiki-extension: Misspelled.\n# wiki-events: ticks\necho x\n' > "$XD/wiki-typo"
+printf '#!/bin/sh\n# wiki-extension: Too far down.\n#\n#\n#\n#\n#\n#\n#\n#\n#\n#\n# wiki-events: tick\necho x\n' > "$XD/wiki-late"
+chmod +x "$XD/wiki-typo" "$XD/wiki-late"
+expect "an event that doesn't exist is said in the list" "no event is called ticks, so it is never run for it. The events are sync and tick." ew extensions
+expect "and a comment past the first ten lines" "its wiki- comment on line 13 is past the first ten lines, so it is not read. Move it up." ew extensions
+rm "$XD/wiki-typo" "$XD/wiki-late"
 lacks "and nothing for one that asks for none" "quiet          Asks for nothing. (runs on" ew extensions
 echo "a note" | ew capture edemo first >/dev/null
 ew sync edemo -m "a note" >/dev/null 2>&1
 out="$(cat "$REC/log" 2>/dev/null)"
-case "$out" in "--wiki-event sync edemo|api=2|in=1|changed=raw/"*"-first.md "*) ok "a sync that changed a wiki runs the extension, with the paths it changed" ;; *) bad "a sync that changed a wiki runs the extension, with the paths it changed" "$out" ;; esac
+case "$out" in "--wiki-event sync edemo|api=3|in=1|changed=raw/"*"-first.md "*) ok "a sync that changed a wiki runs the extension, with the paths it changed" ;; *) bad "a sync that changed a wiki runs the extension, with the paths it changed" "$out" ;; esac
 check "what it printed is in its log" grep -q "said on the way" "$XS/rec/sync-edemo.log"
 check "and the run is recorded as fine" grep -q "^ok" "$XS/rec/sync-edemo.status"
 check "an extension that asks for no events is never run" test ! -e "$REC/quiet"
@@ -4516,7 +4662,7 @@ case "$out" in *"-second.md"*"-third.md"* | *"-third.md"*"-second.md"*) ok "and 
 # tick, from session start, once per interval.
 : > "$REC/log"
 ew start >/dev/null 2>&1
-expect "session start runs the tick event" "--wiki-event tick|api=2" cat "$REC/log"
+expect "session start runs the tick event" "--wiki-event tick|api=3" cat "$REC/log"
 ew start >/dev/null 2>&1
 check "and not again within the interval" test "$(grep -c . "$REC/log")" = 1
 expect "extensions tick runs it now" "rec: ok" ew extensions tick
@@ -4582,6 +4728,24 @@ expect "status says so, with the fix" "extension rec: its last tick run failed (
 out="$(ew extensions log rec 2>&1)"
 case "$out" in *"tick: failed (exit 3)"*"said on the way"*) ok "extensions log shows how each run ended and what it printed" ;; *) bad "extensions log shows how each run ended and what it printed" "$out" ;; esac
 refuse "extensions log needs a name it knows" ew extensions log nosuch
+refuse "extensions tick fails when a run did, for cron" ew extensions tick
+expect "and says where to read why" "extensions log rec shows why" ew extensions tick
+expect "extensions log ends with what to run once it is fixed" "Once that is fixed, run it again with: " ew extensions log rec
+# Put off three times in a row is no longer "not now": a mistyped address looks like this.
+echo 75 > "$REC/exit"
+ew extensions tick >/dev/null 2>&1
+ew extensions tick >/dev/null 2>&1
+lacks "a run put off twice is still nothing to report" "extension rec" ew status
+expect "extensions tick says a run was put off, and where to read why" "it could not run now." ew extensions tick
+expect "put off three times in a row, status says so" "extension rec: its last tick run couldn't be made, 3 times in a row. Run: " ew status
+# And a tick that was put off is tried again in half an hour, not a whole interval later.
+later() { python3 -c "import os, sys, time; t = time.time() - float(sys.argv[2]) * 60; os.utime(sys.argv[1], (t, t))" "$XS/rec/tick.retry" "$1"; }
+n="$(grep -c . "$REC/log")"
+ew start >/dev/null 2>&1
+check "a tick put off isn't tried again at the very next session start" test "$(grep -c . "$REC/log")" = "$n"
+later 31
+ew start >/dev/null 2>&1
+check "but is after half an hour, though the interval is a day" test "$(grep -c . "$REC/log")" = "$((n + 1))"
 rm "$REC/exit"
 ew extensions tick >/dev/null 2>&1
 lacks "after a run that works, status is quiet again" "extension rec" ew status
@@ -4668,6 +4832,10 @@ wiki/how-to/c d.md${TB}${TB}${TB}c d"
 expect "pages without it is a list for people" "Quoted: a title" dw pages alpha
 refuse "pages needs a wiki" dw pages
 refuse "that is there" dw pages nosuch --data
+expect "and says how to see which wikis there are" "status lists the wikis here." dw pages nosuch --data
+expect "a wiki with no pages says so to a person" "No pages yet." dw pages beta
+lacks "and nothing to a program" "." dw pages beta --data
+expect "open --data with no collection says how to make one" "Run: " env WIKIS_DIR="$T/nowikis" "$W" open --data
 refuse "and refuses an option it doesn't know" dw pages alpha --json
 case "$(LLM_WIKI_STYLE=on WIKIS_DIR="$DW" "$W" pages alpha --data)" in *"$ESC"*) bad "pages --data stays plain when style is forced on" ;; *) ok "pages --data stays plain when style is forced on" ;; esac
 expect "the usage names pages" "pages <wiki> [--data]" "$W" --help

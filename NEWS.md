@@ -4,6 +4,13 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-11-24: an extension that is on says when it isn't set up
+
+- Turning on Jira or Confluence in `wiki setup` now asks for the Atlassian site and email, tests the sign-in, and asks for each one's own settings.
+- `wiki status` lists an extension that is on and not set up, with the command that fixes it: `wiki extensions setup <name>`.
+- A wrong address, a taken title and a run that keeps being put off are now said, where they used to look like nothing to do.
+- Do: if you turned an extension on before this, run `wiki extensions setup jira`, or `confluence`.
+
 ## 2026-11-23: a wiki's open items and pages, for a program
 
 - `wiki open --data` prints every open item, and `wiki pages <wiki> --data` every page with its title, one a line and tab separated.
