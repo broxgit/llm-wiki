@@ -64,6 +64,7 @@ read -r -d '' PARTS <<'TABLE' || true
 2 | Extensions | Collection
 2 | Jira extension | Collection
 2 | Confluence extension | Collection
+2 | Extension events | Collection
 3 | Tour |
 4 | The released helper | Session hook
 TABLE
@@ -3805,7 +3806,7 @@ EXT
 chmod +x "$XD/wiki-hello"
 out="$("$W" hello one "two words" --all -x 2>&1)"
 case "$out" in *"args: [one] [two words] [--all] [-x]"*) ok "wiki <name> runs the extension with its arguments as given" ;; *) bad "wiki <name> runs the extension with its arguments as given" "$out" ;; esac
-case "$out" in *"api=1 dir=$WIKIS_DIR"*) ok "and tells it the contract's version and the collection" ;; *) bad "and tells it the contract's version and the collection" "$out" ;; esac
+case "$out" in *"api=2 dir=$WIKIS_DIR"*) ok "and tells it the contract's version and the collection" ;; *) bad "and tells it the contract's version and the collection" "$out" ;; esac
 case "$out" in *"nested: $XD"*) ok "and how to run the wiki command" ;; *) bad "and how to run the wiki command" "$out" ;; esac
 "$W" hello fail >/dev/null 2>&1
 code=$?
@@ -3814,7 +3815,7 @@ expect "extensions lists it with its description" "Says hello, for the smoke tes
 expect "the first word completes to it" "hello" "$W" __complete 1 he
 expect "and to extensions" "extensions" "$W" __complete 1 ex
 expect "extensions completes to path" "path" "$W" __complete 2 extensions ""
-expect "the usage names the command" "extensions [path | add <name> | remove <name>]" "$W" --help
+expect "the usage names the command" "extensions [path | add <name> | remove <name> | log <name> | tick]" "$W" --help
 # A command of llm-wiki's own always wins.
 printf '#!/bin/sh\necho HIJACK\n' > "$XD/wiki-news"
 printf '#!/bin/sh\necho HIJACK\n' > "$XD/wiki-relay"
@@ -4166,6 +4167,95 @@ kill "$CPID" 2>/dev/null
 wait "$CPID" 2>/dev/null
 "$W" extensions remove confluence >/dev/null
 check "the docs say who can read what is published" grep -q 'Everyone who can read the space' "$REPO/docs/extensions.md"
+fi
+
+if section "Extension events"; then
+# An extension that asks for events is run when they happen, with nobody asking.
+XD="$HOME/.local/share/llm-wiki/extensions"
+XS="$HOME/.local/state/llm-wiki/extensions"
+EW="$T/ewikis"
+REC="$T/rec"
+mkdir -p "$XD" "$REC"
+WIKIS_DIR="$EW" "$W" init --git >/dev/null 2>&1
+WIKIS_DIR="$EW" "$W" new edemo >/dev/null 2>&1
+ew() { WIKIS_DIR="$EW" LLM_WIKI_EVENTS=wait "$W" "$@"; }
+ew sync edemo -m "start" >/dev/null 2>&1
+cat > "$XD/wiki-rec" <<EXT
+#!/bin/sh
+# wiki-extension: Records the events it is given, for the smoke test.
+# wiki-events: sync tick
+echo "\$*|api=\$LLM_WIKI_EXTENSION|in=\$LLM_WIKI_IN_EVENT|changed=\$(tr '\n' ' ' < "\${LLM_WIKI_CHANGED:-/dev/null}")" >> "$REC/log"
+echo "said on the way"
+[ ! -f "$REC/sleep" ] || sleep 30
+[ ! -f "$REC/sync-again" ] || { rm "$REC/sync-again"; echo nested | "\$LLM_WIKI" capture edemo nested >/dev/null; "\$LLM_WIKI" sync edemo >/dev/null; }
+exit "\$(cat "$REC/exit" 2>/dev/null || echo 0)"
+EXT
+printf '#!/bin/sh\n# wiki-extension: Asks for nothing.\necho called >> "%s/quiet"\n' "$REC" > "$XD/wiki-quiet"
+chmod +x "$XD/wiki-rec" "$XD/wiki-quiet"
+expect "extensions says which events one runs on" "(runs on: sync, tick)" ew extensions
+lacks "and nothing for one that asks for none" "quiet          Asks for nothing. (runs on" ew extensions
+echo "a note" | ew capture edemo first >/dev/null
+ew sync edemo -m "a note" >/dev/null 2>&1
+out="$(cat "$REC/log" 2>/dev/null)"
+case "$out" in "--wiki-event sync edemo|api=2|in=1|changed=raw/"*"-first.md "*) ok "a sync that changed a wiki runs the extension, with the paths it changed" ;; *) bad "a sync that changed a wiki runs the extension, with the paths it changed" "$out" ;; esac
+check "what it printed is in its log" grep -q "said on the way" "$XS/rec/sync-edemo.log"
+check "and the run is recorded as fine" grep -q "^ok" "$XS/rec/sync-edemo.status"
+check "an extension that asks for no events is never run" test ! -e "$REC/quiet"
+ew sync edemo >/dev/null 2>&1
+check "a sync that changed nothing runs nothing" test "$(grep -c . "$REC/log")" = 1
+# A run that is still going takes the next sync's paths when it ends.
+mkdir "$XS/rec/sync-edemo.running"
+echo "second" | ew capture edemo second >/dev/null
+ew sync edemo >/dev/null 2>&1
+check "while one run is going, another isn't started" test "$(grep -c . "$REC/log")" = 1
+rmdir "$XS/rec/sync-edemo.running"
+echo "third" | ew capture edemo third >/dev/null
+ew sync edemo >/dev/null 2>&1
+out="$(sed -n 2p "$REC/log")"
+case "$out" in *"-second.md"*"-third.md"* | *"-third.md"*"-second.md"*) ok "and the paths it missed come with the next" ;; *) bad "and the paths it missed come with the next" "$out" ;; esac
+# tick, from session start, once per interval.
+: > "$REC/log"
+ew start >/dev/null 2>&1
+expect "session start runs the tick event" "--wiki-event tick|api=2" cat "$REC/log"
+ew start >/dev/null 2>&1
+check "and not again within the interval" test "$(grep -c . "$REC/log")" = 1
+expect "extensions tick runs it now" "rec: ok" ew extensions tick
+check "whatever the interval" test "$(grep -c . "$REC/log")" = 2
+# How a run ends.
+lacks "a run that went fine leaves status alone" "extension rec" ew status
+echo 75 > "$REC/exit"
+expect "exit 75 means not now" "rec: later" ew extensions tick
+lacks "and status says nothing about it" "extension rec" ew status
+echo 3 > "$REC/exit"
+expect "any other failure is one" "rec: failed" ew extensions tick
+expect "status says so, with the fix" "extension rec: its last tick run failed (exit 3). Run: " ew status
+out="$(ew extensions log rec 2>&1)"
+case "$out" in *"tick: failed (exit 3)"*"said on the way"*) ok "extensions log shows how each run ended and what it printed" ;; *) bad "extensions log shows how each run ended and what it printed" "$out" ;; esac
+refuse "extensions log needs a name it knows" ew extensions log nosuch
+rm "$REC/exit"
+ew extensions tick >/dev/null 2>&1
+lacks "after a run that works, status is quiet again" "extension rec" ew status
+: > "$REC/sleep"
+expect "a run past its time limit is stopped" "rec: stopped after 1 second(s)" env LLM_WIKI_EVENT_SECONDS=1 WIKIS_DIR="$EW" LLM_WIKI_EVENTS=wait "$W" extensions tick
+expect "and status says so" "extension rec: its last tick run was stopped" ew status
+rm "$REC/sleep"
+ew extensions tick >/dev/null 2>&1
+# A sync an extension makes during an event starts no event.
+: > "$REC/log"
+: > "$REC/sync-again"
+ew extensions tick >/dev/null 2>&1
+check "a sync made inside an event runs no event" test "$(grep -c . "$REC/log")" = 1
+check "though the note it saved is there" test -n "$(find "$EW/edemo/raw" -name '*-nested.md')"
+# For real, it runs in the background and sync doesn't wait.
+: > "$REC/log"
+echo "fourth" | WIKIS_DIR="$EW" "$W" capture edemo fourth >/dev/null
+WIKIS_DIR="$EW" "$W" sync edemo >/dev/null 2>&1
+i=0; while ! grep -q "sync edemo" "$REC/log" 2>/dev/null && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+expect "without being told to wait, sync starts it in the background" "--wiki-event sync edemo" cat "$REC/log"
+i=0; while [ -d "$XS/rec/sync-edemo.running" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+expect "completion offers log and tick" "tick" "$W" __complete 2 extensions ""
+check "the docs give the contract's second version" grep -q 'wiki-event' "$REPO/docs/extensions.md"
+rm -rf "$XD" "$XS"
 fi
 
 if section "Tour"; then
