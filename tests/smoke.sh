@@ -47,6 +47,7 @@ read -r -d '' PARTS <<'TABLE' || true
 2 | Dependency map | Journal and standup
 3 | Sync takes turns | Two clones merge index.md and log.md, Seed
 3 | Session start in one call | Two clones merge index.md and log.md
+3 | A folder of clones | Collection
 3 | A remote the branch doesn't track | Two clones merge index.md and log.md
 4 | Antigravity plugin | Session hook, Team skills
 4 | Codex plugin | Session hook, Team skills
@@ -4982,6 +4983,58 @@ lacks "the Jira extension doesn't open open.md itself" 'open(os.path.join(root, 
 lacks "nor the Confluence extension walk wiki/" "os.walk" cat "$REPO/extensions/wiki-confluence"
 expect "run without llm-wiki, jira says how to run it" "Run this as: wiki jira" env -u LLM_WIKI WIKIS_DIR="$DW" JIRA_URL=http://127.0.0.1:1 JIRA_API_TOKEN=x "$REPO/extensions/wiki-jira" check
 check "the docs say how an extension reads a wiki" grep -q 'open --data' "$REPO/docs/extensions.md"
+fi
+
+if section "A folder of clones"; then
+# Some people start a session in a folder for a ticket, which is not a repository and
+# holds clones of the repositories the ticket touches. The wikis of those clones are the
+# session's, and it says so: nothing is guessed silently.
+TF="$T/tickets/INFRA-17937"
+mkdir -p "$TF/docs"
+for r in tfalpha tfbeta tfgamma; do git init -q "$TF/$r"; done
+"$W" new tfalpha >/dev/null 2>&1
+"$W" new tfbeta >/dev/null 2>&1
+out="$(cd "$TF" && "$W" start 2>&1)"
+[ "$(printf '%s\n' "$out" | head -n 1)" = "wiki: $WIKIS_DIR/tfalpha" ] && ok "started in a folder of clones, the first clone's wiki is the session's" || bad "started in a folder of clones, the first clone's wiki is the session's" "$out"
+case "$out" in *"This folder isn't a git repository. It holds clones of tfalpha and tfbeta, so their wikis are this session's"*) ok "and start says why, naming the clones" ;; *) bad "and start says why, naming the clones" "$out" ;; esac
+case "$out" in *"Tell the user, in one line, which wikis you are using and why, and that they can say so if that is wrong."*) ok "and has the agent tell the user, and how to say it is wrong" ;; *) bad "and has the agent tell the user, and how to say it is wrong" "$out" ;; esac
+case "$out" in *"===== $WIKIS_DIR/tfalpha/index.md"*"===== $WIKIS_DIR/tfbeta/index.md (also in this folder)"*) ok "the other clone's index is printed too" ;; *) bad "the other clone's index is printed too" "$out" ;; esac
+case "$out" in *"tfgamma has no wiki yet"*"new tfgamma"*) ok "a clone with no wiki is named, with how to make one" ;; *) bad "a clone with no wiki is named, with how to make one" "$out" ;; esac
+case "$out" in *"$WIKIS_DIR/tfbeta: nothing waiting"*) ok "and what waits to be compiled covers every wiki in use" ;; *) bad "and what waits to be compiled covers every wiki in use" "$out" ;; esac
+out="$(cd "$TF/tfalpha" && "$W" start 2>&1)"
+case "$out" in "wiki: $WIKIS_DIR/tfalpha, for the repository tfalpha"*) ok "started inside one of the clones, it is that repository's wiki, as before" ;; *) bad "started inside one of the clones, it is that repository's wiki, as before" "$out" ;; esac
+case "$out" in *"isn't a git repository"*) bad "with nothing said about folders" "$out" ;; *) ok "with nothing said about folders" ;; esac
+mkdir -p "$T/tickets/EMPTY/notes"
+out="$(cd "$T/tickets/EMPTY" && "$W" start 2>&1)"
+case "$out" in "wiki: $WIKIS_DIR/global"*"This folder isn't a git repository, and holds none, so the shared wiki is this session's. Tell the user so in one line, and ask whether they want llm-wiki used for this work, and if so which wiki it belongs to."*) ok "a folder with no repository in it gets the shared wiki, says so, and has the agent ask" ;; *) bad "a folder with no repository in it gets the shared wiki, says so, and has the agent ask" "$out" ;; esac
+mkdir -p "$T/tickets/NOWIKI"
+git init -q "$T/tickets/NOWIKI/tfgamma"
+out="$(cd "$T/tickets/NOWIKI" && "$W" start 2>&1)"
+case "$out" in "wiki: $WIKIS_DIR/global"*"It holds a clone of tfgamma, which has no wiki yet, so the shared wiki is this session's."*) ok "clones that have no wikis yet are named, and the shared wiki is used" ;; *) bad "clones that have no wikis yet are named, and the shared wiki is used" "$out" ;; esac
+# Two clones one wiki covers count once, and more than three wikis are named, not all printed.
+"$W" cover tfalpha tfdelta >/dev/null 2>&1
+git init -q "$TF/tfdelta"
+out="$(cd "$TF" && "$W" start 2>&1)"
+check "two clones that one wiki covers load it once" test "$(printf '%s\n' "$out" | grep -c "^===== $WIKIS_DIR/tfalpha/index.md")" = 1
+for r in tfc1 tfc2 tfc3; do "$W" new "$r" >/dev/null 2>&1; git init -q "$TF/$r"; done
+out="$(cd "$TF" && "$W" start 2>&1)"
+check "at most three wikis are printed in full" test "$(printf '%s\n' "$out" | grep -c "^===== .*index.md" | tr -d ' ')" -le 4
+case "$out" in *"Also in this folder, and not printed here: tfc2 and tfc3."*) ok "and the rest are named, with how to read one" ;; *) bad "and the rest are named, with how to read one" "$out" ;; esac
+# The Claude Code session hook says the same.
+out="$(hook "$T/tickets/EMPTY" '{"source":"startup"}')"
+case "$out" in *"isn't a git repository, and holds none"*"ask whether they want llm-wiki used for this work"*) ok "the session hook says a folder couldn't be placed, and has the agent ask" ;; *) bad "the session hook says a folder couldn't be placed, and has the agent ask" "$out" ;; esac
+out="$(hook "$T/tickets/NOWIKI" '{"source":"startup"}')"
+case "$out" in *"It holds a clone of tfgamma, which has no wiki yet"*) ok "and names clones that have no wikis" ;; *) bad "and names clones that have no wikis" "$out" ;; esac
+out="$(hook "$TF" '{"source":"startup"}')"
+case "$out" in *"knowledge wiki is "*"/tfalpha"*"It holds clones of"*"so their wikis are this session's"*) ok "and in a folder of clones, the hook gives the first clone's wiki and names the others" ;; *) bad "and in a folder of clones, the hook gives the first clone's wiki and names the others" "$out" ;; esac
+lacks "the hook no longer falls back without saying why" "isn't in a repository, so the shared wiki is its wiki" hook "$TF" '{"source":"startup"}'
+# The home folder is where a hook lands with no folder to go on. The MCP server's
+# checks cover the temporary folder it runs from.
+mkdir -p "$HOME/somerepo" && git init -q "$HOME/somerepo"
+out="$(env -C "$HOME" "$W" start 2>&1)"
+case "$out" in *"isn't a git repository"*) bad "nothing is read into what the home folder holds" "$out" ;; *"Not in a repository, so the shared wiki is this session's."*) ok "nothing is read into what the home folder holds" ;; *) bad "nothing is read into what the home folder holds" "$out" ;; esac
+rm -rf "$HOME/somerepo"
+rm -rf "$T/tickets"
 fi
 
 if section "Tour"; then

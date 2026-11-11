@@ -18,6 +18,12 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 - **Sketch:** everything the first two extensions needed is done (see Done): the command seam, events, a sign-in they share, and a wiki's content as data. Next: CI (Jenkins, GitLab CI and GitHub Actions as separate extensions over one shared prompt), and moving `wiki obsidian` out. A third extension written by someone else would be the real test of the contract.
 - **Open:** how a team shares extensions. They are per machine on purpose, so a pull can't add a command. A shared collection could carry them behind a step that asks each person once, on each machine, whether to trust each one. Where extensions that ship with llm-wiki live, and whether `wiki update` installs them. How an extension adds a handbook rule without `wiki upgrade` dropping it, and what that costs in context. Whether the helper needs to know about extensions at all.
 
+### Learn where a person works, by asking
+
+- **Why:** llm-wiki assumed a session belongs to one repository. Most of one team starts sessions in a folder for a ticket, which holds clones, and for weeks their project wikis never loaded and nothing said so. Decided on 2026-11-11: never guess silently; ask when unsure; write what is learned into the person's own wiki, so the questions get rarer.
+- **Sketch:** step 1 is done (see Done). Next, patterns: a `workflows.md` at the root of the shared wiki, lines of the shape "- in `<glob>`: <what to do>", read at session start the way `## Reminders` is. A good guess asks once and records a pattern for that kind of folder. A pattern recognised later is used, and the session says which one and how to say it is wrong. With no pattern and no guess, the agent asks whether to use llm-wiki there, then about the layout, then whether to remember it. This needs a handbook rule. Then ticket folders: the ticket's key, from the folder's name, in every capture, so the Jira extension can close their open items, and where the ticket stands at session start. Then `wiki setup` asks how you work.
+- **Open:** how many wikis to read in full when a folder's clones belong to many. Where a ticket's own state goes: the repo's wiki, the personal journal, or both.
+
 ### Know whether sessions capture and compile
 
 - **Why:** `wiki stats` measures lookups only. Saving and compiling are the parts that failed in the first week (50 of 109 notes never compiled), and nothing measures them now.
@@ -78,6 +84,12 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### A session in a folder of clones uses their wikis, and says so (2026-11-11)
+
+- **Why:** the first step of "Learn where a person works, by asking" under Next. A session started in a folder that was no repository got the shared wiki, and only the agent was told. One person worked that way for weeks without her project wikis loading, and found out by guessing.
+- **What changed:** `place` in `wiki.sh` looks one level down, at 30 folders at most, for git repositories, and maps each to its wiki. `wiki start` and the Claude Code session hook both use it, the hook through a hidden `__place`, so the two can't disagree. Where the clones have wikis, the first is the session's and the others are printed too, three in full at most and any more by name; a clone with no wiki is named, with how to make one; two clones one wiki covers load it once. Every such session is told which wikis are in use and why, and to tell the user in one line, with how to say it is wrong. A folder with no repository in it gets the shared wiki, says so, and the agent asks whether llm-wiki should be used for that work. Inside a repository nothing changes, and nothing is read into the home folder, the collection's own or the temporary folder, where a hook or the MCP server lands with no folder to go on. `wiki which`, which the compiled helper also answers, is untouched.
+- **Still untested:** in a real session, whether the agent passes the line on and asks. Antigravity, Codex and Cursor, which reach it through `wiki start`. Reminders come from the first wiki only. Nothing is remembered yet, so the same folder is placed again every time.
 
 ### Extensions: Confluence watches pages (2026-11-11)
 

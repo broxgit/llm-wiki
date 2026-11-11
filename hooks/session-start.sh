@@ -130,13 +130,22 @@ if [ -n "$repo" ]; then
   case "$w" in "~/"*) w="$HOME/${w:2}" ;; esac
   [ -n "$w" ] && wiki="$w"
 fi
+# Not in a repository: some people start a session in a folder for a ticket, which holds
+# clones of the repositories it touches. wiki.sh says which wikis those are, and what to
+# tell the agent, so a session never falls back to the shared wiki without saying why.
+if [ -z "$repo" ]; then
+  placed="$(LLM_WIKI_CMD=wiki.sh "$WIKI_SH" __place "$DIR" 2>/dev/null || true)"
+  p="$(printf '%s\n' "$placed" | sed -n 1p)"
+  note="$(printf '%s\n' "$placed" | sed -n 2p)"
+  if [ -n "$p" ] && [ -f "$p/AGENTS.md" ]; then wiki="$p"; fi
+fi
 if [ -z "$wiki" ]; then
   [ -f "$WIKIS_DIR/global/AGENTS.md" ] || exit 0
   wiki="$WIKIS_DIR/global"
   if [ -n "$repo" ]; then
     note="No wiki covers $repo yet, so the shared wiki is this session's. Create $repo's wiki with \`wiki.sh new $repo\` when there's something to file. Before that, offer once to start it from the repository's own docs with \`wiki.sh seed\`, run in the repository."
-  else
-    note="This session isn't in a repository, so the shared wiki is its wiki."
+  elif [ -z "$note" ]; then
+    note="This session isn't in a repository, so the shared wiki is its wiki. Tell the user so in one line."
   fi
 fi
 [ -f "$wiki/AGENTS.md" ] || exit 0

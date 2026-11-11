@@ -4,6 +4,12 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-11-27: a session in a folder of clones uses their wikis
+
+- Start a session in a folder that holds clones, such as one for a ticket, and it uses the wikis of those clones. It used the shared wiki and said nothing.
+- The session says at the start which wikis it is using and why, so you can say if that is wrong.
+- In a folder with no repository in it, the agent asks whether you want llm-wiki used there.
+
 ## 2026-11-26: Confluence can tell your wiki when a page changes
 
 - `wiki confluence` now watches pages you name: a change to a page's text or status is noted in a wiki, once a day, in the background. It only reads.
