@@ -5108,6 +5108,46 @@ mkdir -p "$HOME/somerepo" && git init -q "$HOME/somerepo"
 out="$(env -C "$HOME" "$W" start 2>&1)"
 case "$out" in *"isn't a git repository"*) bad "nothing is read into what the home folder holds" "$out" ;; *"Not in a repository, so the shared wiki is this session's."*) ok "nothing is read into what the home folder holds" ;; *) bad "nothing is read into what the home folder holds" "$out" ;; esac
 rm -rf "$HOME/somerepo"
+# A folder named for a ticket is handed the pages that mention the ticket, in whichever
+# wiki they are. Its clones have no wiki here, so placement gives the shared wiki, and
+# the page is in a wiki no clone leads to: a session that isn't handed it never finds it.
+"$W" new tfrecall >/dev/null 2>&1
+mkdir -p "$WIKIS_DIR/tfrecall/wiki/concepts"
+printf -- '---\ntitle: Gateway timeout\n---\n\n# Gateway timeout\n\nRECALL-42 needs the orders client changed too.\n' > "$WIKIS_DIR/tfrecall/wiki/concepts/gateway-timeout.md"
+printf -- '---\ntitle: Other\n---\n\n# Other\n\nThis is about RECALL-421, another ticket.\n' > "$WIKIS_DIR/tfrecall/wiki/concepts/other.md"
+printf -- '---\ntitle: Plan\n---\n\n# Plan\n\nNothing about tickets.\n' > "$WIKIS_DIR/tfrecall/wiki/concepts/plan.md"
+cat >> "$WIKIS_DIR/tfrecall/index.md" <<'EOF'
+
+## Concepts
+- [Gateway timeout](wiki/concepts/gateway-timeout.md): Why the timeout is not a one-repository change.
+- [Other](wiki/concepts/other.md): Another ticket.
+- [RECALL-42 plan](wiki/concepts/plan.md): The order of work for RECALL-42.
+EOF
+RC="$T/tickets/RECALL-42"
+mkdir -p "$RC" "$T/tickets/RECALL-42-with-words" "$T/tickets/RECALL-4" "$T/tickets/plain"
+git init -q "$RC/tfgamma"
+out="$("$W" __recall "$RC" 2>&1)"
+case "$out" in "RECALL-42"*) ok "a folder named for a ticket gives its key" ;; *) bad "a folder named for a ticket gives its key" "$out" ;; esac
+case "$out" in *"- tfrecall wiki: [RECALL-42 plan]("*"/tfrecall/wiki/concepts/plan.md): The order of work for RECALL-42."*"- tfrecall wiki: [Gateway timeout]("*"/tfrecall/wiki/concepts/gateway-timeout.md)"*) ok "and the pages that mention it, the one named for it first" ;; *) bad "and the pages that mention it, the one named for it first" "$out" ;; esac
+case "$out" in *"other.md"*) bad "a longer number is another ticket" "$out" ;; *) ok "a longer number is another ticket" ;; esac
+check "a page's path is written from the collection, so it can be opened" sh -c 'printf "%s" "$1" | grep -q "]($2/tfrecall/wiki/concepts/plan.md)"' _ "$out" "$WIKIS_DIR"
+expect "a folder with words after the number is the same ticket" "RECALL-42" "$W" __recall "$T/tickets/RECALL-42-with-words"
+expect "and so is a clone inside the ticket's folder" "[RECALL-42 plan]" "$W" __recall "$RC/tfgamma"
+check "a ticket no page mentions gives nothing" test -z "$("$W" __recall "$T/tickets/RECALL-4" 2>&1)"
+check "and so does a folder that isn't named for a ticket" test -z "$("$W" __recall "$T/tickets/plain" 2>&1)"
+out="$(hook "$RC" '{"source":"startup"}')"
+case "$out" in *"This folder is named for RECALL-42. A search of every wiki found these pages that mention it."*"- tfrecall wiki: [RECALL-42 plan]"*) ok "the session hook hands the pages over, as facts" ;; *) bad "the session hook hands the pages over, as facts" "$out" ;; esac
+case "$out" in *"so the shared wiki is this session's"*) ok "and the session is still placed by its clones" ;; *) bad "and the session is still placed by its clones" "$out" ;; esac
+lacks "a folder not named for a ticket gets no such lines" "A search of every wiki" hook "$T/tickets/plain" '{"source":"startup"}'
+out="$(env -C "$RC" "$W" start 2>&1)"
+case "$out" in *"===== Pages that mention RECALL-42, from a search of every wiki"*"- tfrecall wiki: [RECALL-42 plan]"*) ok "wiki start prints them too, for agents with no hook" ;; *) bad "wiki start prints them too, for agents with no hook" "$out" ;; esac
+lacks "and prints no such heading when there are none" "===== Pages that mention" env -C "$T/tickets/RECALL-4" "$W" start
+# A pattern of theirs that says no wiki keeps llm-wiki out, the search included.
+"$W" workflows add "$RC" none >/dev/null 2>&1
+lacks "a folder that uses no wiki is handed no pages" "A search of every wiki" hook "$RC" '{"source":"startup"}'
+lacks "nor by wiki start" "===== Pages that mention" env -C "$RC" "$W" start
+"$W" workflows remove "$RC" >/dev/null 2>&1
+rm -rf "$WIKIS_DIR/tfrecall"
 rm -rf "$T/tickets"
 fi
 

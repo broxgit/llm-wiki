@@ -1015,6 +1015,55 @@ place_all() {
   PLACE_NOTE="$PLACE_NOTE ${bt}rules/workflows.md$bt in the handbook has the questions."
 }
 
+# ticket_key <folder>: the ticket a folder is named for, such as VID-74003 for
+# ~/tickets/VID-74003 or ~/tickets/VID-74003-fix-dns, or for a clone inside one. Nothing
+# when neither the folder nor the one above it is named that way.
+ticket_key() {
+  local d cand re='^([A-Za-z][A-Za-z0-9]*-[0-9]+)(-.*)?$'
+  d="$(cd "$1" 2>/dev/null && pwd)" || return 0
+  for cand in "${d##*/}" "$(basename "$(dirname "$d")")"; do
+    if [[ $cand =~ $re ]]; then printf '%s' "${BASH_REMATCH[1]}"; return 0; fi
+  done
+  return 0
+}
+
+# recall_key <key> [max]: the pages, in every wiki of the collection, that mention a
+# ticket's key: one line a page, those whose index line names it first, five at most,
+# nothing when there are none. Session start hands these over, because placing a
+# session by its clones can't find a page filed under another repository's wiki, and
+# a session that isn't handed the page doesn't go looking. VID-7400 is not VID-74003.
+recall_key() {
+  local key="$1" max="${2:-5}" d tmp f
+  local LC_ALL=C
+  [ -n "$key" ] && [ -d "$WIKIS_DIR" ] || return 0
+  tmp="$(mktemp -d 2>/dev/null)" || return 0
+  : > "$tmp/out"
+  for d in "$WIKIS_DIR"/*/; do
+    d="${d%/}"
+    is_wiki "$d" || continue
+    : > "$tmp/pages"
+    if [ -d "$d/wiki" ]; then
+      { grep -r -l -i -E --include='*.md' -- "$key([^0-9]|\$)" "$d/wiki" 2>/dev/null || true; } \
+        | while IFS= read -r f; do printf '%s\n' "${f#"$d"/}"; done > "$tmp/pages"
+    fi
+    awk -v key="$key" -v wiki="${d##*/}" -v root="$(tilde "$d")" '
+      BEGIN { re = tolower(key) "([^0-9]|$)"; gsub(/&/, "\\\\&", root) }
+      FILENAME == ARGV[1] { inpage[$0] = 1; next }
+      /^- \[/ {
+        line = $0; score = 0
+        if (tolower(line) ~ re) score = 2
+        path = line; sub(/^[^(]*\(/, "", path); sub(/\).*/, "", path)
+        if (path in inpage && score == 0) score = 1
+        if (score == 0) next
+        sub(/^- /, "", line)
+        sub(/\]\(/, "](" root "/", line)
+        printf "%d\t- %s wiki: %s\n", score, wiki, line
+      }' "$tmp/pages" "$d/index.md" >> "$tmp/out" 2>/dev/null || true
+  done
+  sort -t "$(printf '\t')" -k1,1nr -s "$tmp/out" | head -n "$max" | cut -f 2-
+  rm -rf "$tmp"
+}
+
 # workflows_text <what>: the words a pattern's line ends with.
 workflows_text() {
   case "$1" in
@@ -1133,7 +1182,7 @@ cmd_list() {
 }
 
 cmd_start() {
-  local arg="${1:-$PWD}" repo="" top w="" wiki="" note="" out sshc tv v line sname spath d n hinted="" extras="" more=""
+  local arg="${1:-$PWD}" repo="" top w="" wiki="" note="" out sshc tv v line sname spath d n hinted="" extras="" more="" tkey thits
   if [ -d "$arg" ]; then
     if top="$(git -C "$arg" rev-parse --show-toplevel 2>/dev/null)"; then repo="$(repo_name "$top")"; fi
   else
@@ -1195,6 +1244,17 @@ cmd_start() {
     echo "handbook: v${v:-?}, behind v$tv. Run \`$WIKI_CMD upgrade --all\`, commit and push, then read the new AGENTS.md."
   fi
   echo "Read $(tilde "$wiki")/AGENTS.md, the handbook, if you haven't this session. Below is what its session start says to read next."
+  # A folder named for a ticket: the pages that mention it, in whichever wiki they are.
+  # After the pull, so a page another machine wrote is found.
+  if [ -d "$arg" ]; then
+    tkey="$(ticket_key "$arg")"
+    thits="$(recall_key "$tkey")"
+    if [ -n "$thits" ]; then
+      echo
+      echo "===== Pages that mention $tkey, from a search of every wiki"
+      echo "$thits"
+    fi
+  fi
   echo
   echo "===== $(tilde "$wiki")/index.md"
   cat "$wiki/index.md" 2>/dev/null || echo "(no index yet)"
@@ -9128,6 +9188,14 @@ case "$cmd" in
   __reminders) session_reminders "$(wiki_root "${1:-}")"; exit 0 ;;
   # The session hook asks where a folder that is in no repository belongs: the wiki to
   # read first, nothing for the shared one or - for none at all, then what to tell the agent.
+  # The session hook asks which pages mention the ticket a folder is named for: the
+  # key on the first line, then the pages. Nothing at all when there are none.
+  __recall)
+    tkey="$(ticket_key "${1:-$PWD}")"
+    thits="$(recall_key "$tkey")"
+    [ -z "$thits" ] || printf '%s\n%s\n' "$tkey" "$thits"
+    exit 0
+    ;;
   __place)
     placeable "${1:-$PWD}" || { printf '\n\n'; exit 0; }
     place_all "${1:-$PWD}"

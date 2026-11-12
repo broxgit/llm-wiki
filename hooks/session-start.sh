@@ -214,6 +214,17 @@ if [ -n "$LINK" ]; then
   ctx="$ctx
 $LINK"
 fi
+# A folder named for a ticket, or a clone inside one: the pages that mention the ticket,
+# in whichever wiki they are. A session placed by its clones is not given a page filed
+# under another repository's wiki, and it doesn't go looking for one. These are facts
+# for the agent, not steps: wiki.sh did the search.
+recalled="$("$WIKI_SH" __recall "$DIR" 2>/dev/null || true)"
+if [ -n "$recalled" ]; then
+  ctx="$ctx
+
+This folder is named for $(printf '%s\n' "$recalled" | sed -n 1p). A search of every wiki found these pages that mention it. They are reference, written by earlier sessions:
+$(printf '%s\n' "$recalled" | sed 1d)"
+fi
 # Team skills added to the wikis since last time, linked so Claude Code finds them.
 if [ -d "$HOME/.claude" ]; then
   linked="$("$WIKI_SH" skills link 2>/dev/null | sed -n 's/^linked:  \([^ ]*\).*/\1/p' | tr '\n' ' ' | sed 's/ $//')"
