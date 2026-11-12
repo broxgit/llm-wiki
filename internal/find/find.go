@@ -1,6 +1,7 @@
 // Package find searches a collection's wikis for a word. It answers `wiki find`: for
 // each wiki, the lines of its index that mention the word, then the pages whose text
-// mentions it and whose index line doesn't. It prints what find_search in wiki.sh
+// mentions it and whose index line doesn't, then the notes in raw/ that mention it and
+// aren't compiled yet. It prints what find_search in wiki.sh
 // prints, and that Bash is the fallback where this program isn't built, so the two are
 // kept the same and a smoke test compares them.
 //
@@ -21,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/broxgit/llm-wiki/internal/routing"
+	"github.com/broxgit/llm-wiki/internal/status"
 )
 
 const (
@@ -67,7 +69,11 @@ func Search(o Options) (text, first string, err error) {
 		if err != nil {
 			return "", "", err
 		}
-		if len(hits) == 0 && len(pages) == 0 {
+		notes, err := noteHits(dir, word)
+		if err != nil {
+			return "", "", err
+		}
+		if len(hits) == 0 && len(pages) == 0 && len(notes) == 0 {
 			continue
 		}
 		if first == "" {
@@ -80,6 +86,12 @@ func Search(o Options) (text, first string, err error) {
 		if len(pages) > 0 {
 			b.WriteString("  also in pages:\n")
 			for _, line := range pages {
+				b.WriteString("    " + line + "\n")
+			}
+		}
+		if len(notes) > 0 {
+			b.WriteString("  waiting to be compiled:\n")
+			for _, line := range notes {
 				b.WriteString("    " + line + "\n")
 			}
 		}
@@ -148,6 +160,70 @@ func pageHits(dir string, word []byte, hits []string) ([]string, error) {
 		}
 		if line := excerpt(lines, word); line != "" {
 			out = append(out, rel+": "+line)
+		}
+	}
+	return out, nil
+}
+
+// noteHits is the "waiting to be compiled" lines of one wiki: for the newest few notes
+// in raw/ that no compile has recorded and that mention the word, "raw/<name>: <the
+// line>". A note is saved the moment something is learned and compiled later, and one
+// nobody compiles would otherwise never be found again. Only .md notes are read: raw/
+// also holds PDFs and the like. Newest first is by name, which starts with the date.
+func noteHits(dir string, word []byte) ([]string, error) {
+	// The notes that mention the word, before asking which are compiled: that reads
+	// every page of the wiki, and most searches find no note at all.
+	entries, err := os.ReadDir(dir + "/raw")
+	if routing.NotThere(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	type hit struct{ name, line string }
+	var found []hit
+	for _, e := range entries {
+		name := e.Name()
+		// The glob raw/*.md leaves out hidden names.
+		if strings.HasPrefix(name, ".") || !strings.HasSuffix(name, ".md") {
+			continue
+		}
+		if strings.Contains(name, "\n") {
+			return nil, errors.New("a note's name for the Bash: " + name)
+		}
+		if ok, err := routing.IsFile(dir + "/raw/" + name); err != nil {
+			return nil, err
+		} else if !ok {
+			continue
+		}
+		lines, err := readLines(dir + "/raw/" + name)
+		if err != nil {
+			return nil, err
+		}
+		if line := excerpt(lines, word); line != "" {
+			found = append(found, hit{name, line})
+		}
+	}
+	if len(found) == 0 {
+		return nil, nil
+	}
+	names, err := status.PendingNames(dir)
+	if err != nil {
+		return nil, err
+	}
+	waiting := map[string]bool{}
+	for _, name := range names {
+		waiting[name] = true
+	}
+	// sort -r under LC_ALL=C.
+	sort.Slice(found, func(i, j int) bool { return found[i].name > found[j].name })
+	var out []string
+	for _, h := range found {
+		if len(out) == maxPages {
+			break
+		}
+		if waiting[h.name] {
+			out = append(out, "raw/"+h.name+": "+h.line)
 		}
 	}
 	return out, nil

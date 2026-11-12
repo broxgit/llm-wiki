@@ -14,15 +14,23 @@ import (
 // compared without their extension. A raw/ or wiki/sources the Bash can't list is a
 // "?" in its table, so here it is an error.
 func pending(dir string) (int, error) {
+	names, err := PendingNames(dir)
+	return len(names), err
+}
+
+// PendingNames is pending_files: the names of the files in raw/ no compile has
+// recorded, as the folder lists them. `wiki find` searches them, so that a note is
+// found before it is compiled.
+func PendingNames(dir string) ([]string, error) {
 	done, err := compiled(dir)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	entries, err := readDir(dir + "/raw")
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	n := 0
+	var names []string
 	for _, name := range entries {
 		// The glob's * leaves out hidden names, and so does the case after it.
 		if strings.HasPrefix(name, ".") {
@@ -30,19 +38,20 @@ func pending(dir string) (int, error) {
 		}
 		// [ -f ] follows a link.
 		if ok, err := routing.IsFile(dir + "/raw/" + name); err != nil {
-			return 0, err
+			return nil, err
 		} else if !ok {
 			continue
 		}
 		// awk's sub(/\.[^.]*$/, ""): the last extension, whatever it is.
+		stem := name
 		if i := strings.LastIndexByte(name, '.'); i >= 0 {
-			name = name[:i]
+			stem = name[:i]
 		}
-		if !done[name] {
-			n++
+		if !done[stem] {
+			names = append(names, name)
 		}
 	}
-	return n, nil
+	return names, nil
 }
 
 // compiled is compiled_stems: the names of the notes already compiled.

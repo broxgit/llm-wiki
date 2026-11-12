@@ -168,7 +168,8 @@ Usage: $WIKI_CMD <command> [options]
   list [--names]       The wikis here, and the repositories each covers. --names prints
                        the names alone, for a program.
   status               List wikis: handbook version, notes waiting, lock state.
-  find <words>         Search every wiki's index, then page text, for a word or phrase.
+  find <words>         Search every wiki's index, then page text, then the notes not
+                       compiled yet, for a word or phrase.
   deps [--all] [--write]
                        Which repository owns which package, and which use each other's,
                        from go.mod, package.json and pyproject.toml. --write saves it
@@ -307,7 +308,7 @@ need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 # Raise GO_PROTOCOL, with the constant in cmd/llm-wiki/main.go, whenever a ported
 # command's arguments or output change. scripts/helper.sh builds releases and writes
 # helper.lock.
-GO_PROTOCOL=15
+GO_PROTOCOL=16
 HELPER_LOCK="$REPO/helper.lock"
 HELPER_DIR="${LLM_WIKI_HELPER_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/llm-wiki/helper}"
 
@@ -3249,7 +3250,7 @@ cmd_find() {
 # case, and where a page's line is cut don't depend on the locale, and the compiled
 # helper can print the same. A line is cut at a byte, and never inside a character.
 find_search() {
-  local word="$1" d hits pages f line n
+  local word="$1" d hits pages f line n notes
   local LC_ALL=C
   for d in "$WIKIS_DIR"/*/; do
     d="${d%/}"
@@ -3274,12 +3275,33 @@ find_search() {
 $(LC_ALL=C grep -r -l -i -F --include='*.md' --exclude-dir=sources -- "$word" "$d/wiki" 2>/dev/null | LC_ALL=C sort)
 EOF2
     fi
-    [ -n "$hits$pages" ] || continue
+    # The newest few notes that mention it and aren't compiled yet. A note is saved the
+    # moment something is learned and compiled later, and one nobody compiles would
+    # otherwise never be found again. Only .md notes: raw/ also holds PDFs and the like.
+    notes=""
+    n=0
+    # Which notes are compiled is asked only when a note mentions the word: that reads
+    # every page of the wiki, and most searches find no note at all.
+    if LC_ALL=C grep -l -i -F -- "$word" "$d"/raw/*.md >/dev/null 2>&1; then
+    while IFS= read -r f; do
+      [ -n "$f" ] && [ "$n" -lt "$FIND_PAGES" ] || continue
+      case "$f" in *.md) ;; *) continue ;; esac
+      line="$(LC_ALL=C awk -v w="$word" 'NR == 1 && /^---$/ { fm = 1; next } fm && /^---$/ { fm = 0; next }
+        !fm && index(tolower($0), tolower(w)) { print; exit }' "$f" | LC_ALL=C sed 's/^[[:space:]]*//' | LC_ALL=C cut -c 1-120 | LC_ALL=C sed -E "s/$FIND_CUT//")"
+      [ -n "$line" ] || continue
+      notes="$notes    ${f#"$d"/}: $line"$'\n'
+      n=$((n + 1))
+    done <<EOF3
+$(pending_files "$d" | LC_ALL=C sort -r)
+EOF3
+    fi
+    [ -n "$hits$pages$notes" ] || continue
     found=1
     [ -n "$first" ] || first="${d##*/}"
     echo "${d##*/}:"
     [ -z "$hits" ] || printf '%s\n' "$hits" | LC_ALL=C sed 's/^/  /'
     [ -z "$pages" ] || printf '  also in pages:\n%s' "$pages"
+    [ -z "$notes" ] || printf '  waiting to be compiled:\n%s' "$notes"
   done
   [ "$found" = 1 ] || echo "no mentions in any index or page: $word"
 }
