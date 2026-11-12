@@ -1030,17 +1030,33 @@ place_all() {
   PLACE_NOTE="$PLACE_NOTE ${bt}rules/workflows.md$bt in the handbook has the questions."
 }
 
-# ticket_key <folder>: the ticket a folder is named for, such as VID-74003 for
-# ~/tickets/VID-74003 or ~/tickets/VID-74003-fix-dns, or for a clone inside one. Nothing
-# when neither the folder nor the one above it is named that way.
-ticket_key() {
-  local d cand re='^([A-Za-z][A-Za-z0-9]*-[0-9]+)(-.*)?$'
+# ticket_find <folder>: the ticket a session there is working on, and where that was
+# read, as "<key> folder" or "<key> branch". The folder's name comes first, such as
+# VID-74003 for ~/tickets/VID-74003 or ~/tickets/VID-74003-fix-dns, then the folder
+# above a clone. Failing those, the branch a repository is on, such as
+# feature/VID-74441-end-block: most people work in one repository on a branch named
+# for the ticket. Nothing when none of them names one. A branch such as release-2026
+# has the shape of a key and isn't one, so the commonest of those words are left out.
+ticket_find() {
+  local d cand b re='^([A-Za-z][A-Za-z0-9]*-[0-9]+)(-.*)?$' bre='(^|[/_-])([A-Za-z][A-Za-z0-9]*-[0-9]+)([^0-9]|$)' w
+  local notkeys=" release rel version ver v sprint hotfix feature feat fix bugfix bug issue issues pr mr patch task story build test step phase part py python node go java "
   d="$(cd "$1" 2>/dev/null && pwd)" || return 0
   for cand in "${d##*/}" "$(basename "$(dirname "$d")")"; do
-    if [[ $cand =~ $re ]]; then printf '%s' "${BASH_REMATCH[1]}"; return 0; fi
+    if [[ $cand =~ $re ]]; then printf '%s folder' "${BASH_REMATCH[1]}"; return 0; fi
+  done
+  b="$(git -C "$d" symbolic-ref --short -q HEAD 2>/dev/null || true)"
+  while [ -n "$b" ] && [[ $b =~ $bre ]]; do
+    cand="${BASH_REMATCH[2]}"
+    w="$(printf '%s' "${cand%-*}" | tr '[:upper:]' '[:lower:]')"
+    case "$notkeys" in
+      *" $w "*) b="${b#*"$cand"}" ;;
+      *) printf '%s branch' "$cand"; return 0 ;;
+    esac
   done
   return 0
 }
+# ticket_key <folder>: the key alone.
+ticket_key() { local t; t="$(ticket_find "$1")"; printf '%s' "${t% *}"; }
 
 # recall_key <key> [max]: the pages, in every wiki of the collection, that mention a
 # ticket's key: one line a page, those whose index line names it first, five at most,
@@ -9203,11 +9219,12 @@ case "$cmd" in
   __reminders) session_reminders "$(wiki_root "${1:-}")"; exit 0 ;;
   # The session hook asks where a folder that is in no repository belongs: the wiki to
   # read first, nothing for the shared one or - for none at all, then what to tell the agent.
-  # The session hook asks which pages mention the ticket a folder is named for: the
-  # key on the first line, then the pages. Nothing at all when there are none.
+  # The session hook asks which pages mention the ticket a session is working on: the
+  # key and where it was read (folder or branch) on the first line, then the pages.
+  # Nothing at all when there are none.
   __recall)
-    tkey="$(ticket_key "${1:-$PWD}")"
-    thits="$(recall_key "$tkey")"
+    tkey="$(ticket_find "${1:-$PWD}")"
+    thits="$(recall_key "${tkey% *}")"
     [ -z "$thits" ] || printf '%s\n%s\n' "$tkey" "$thits"
     exit 0
     ;;
