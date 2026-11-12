@@ -4,6 +4,12 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-12-02: a ticket folder finds the ticket's pages in any wiki
+
+- Start a session in a folder named for a ticket, such as `VID-74003`, and it is handed the pages that mention that ticket, whichever wiki they are in.
+- It used to get only the wikis of the clones in the folder, so a page filed under another repository's wiki was never found.
+- `wiki start` prints the same pages, for agents that have no session hook.
+
 ## 2026-12-01: a locked wiki says who holds it
 
 - A session that finds a wiki locked for compiling is told who holds it: a background compile and how far it has got, or a session and the folder it is in.
