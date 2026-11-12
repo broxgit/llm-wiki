@@ -1001,6 +1001,12 @@ place_all() {
   if [ -n "$PLACE_WIKIS" ]; then
     PLACE_NOTE="$PLACE_NOTE No pattern of theirs covers this folder yet. Ask once whether folders like this one always work this way. On a yes, show them the pattern and record it: $bt$WIKI_CMD workflows add '$sug' inside$bt."
     [ "$sug" = "$own" ] || PLACE_NOTE="$PLACE_NOTE If only this folder does: $bt$WIKI_CMD workflows add '$own' inside$bt."
+  elif [ -n "$PLACE_LACK" ]; then
+    # Clones with no wikis yet: the layout is known, so ask about that, not how it is laid
+    # out. A yes is kept as "inside", which starts to work when the wikis exist.
+    PLACE_NOTE="$PLACE_NOTE No pattern of theirs covers this folder yet. Ask once whether folders like this one should use the wikis of the repositories inside, as those get wikis. On a yes, show them the pattern and record it: $bt$WIKI_CMD workflows add '$sug' inside$bt."
+    [ "$sug" = "$own" ] || PLACE_NOTE="$PLACE_NOTE If only this folder does: $bt$WIKI_CMD workflows add '$own' inside$bt."
+    PLACE_NOTE="$PLACE_NOTE If they don't want llm-wiki in folders like this, offer to remember that: $bt$WIKI_CMD workflows add '$sug' none$bt."
   else
     PLACE_NOTE="$PLACE_NOTE No pattern of theirs covers this folder yet. If they want llm-wiki here, ask how the folder is laid out and whether to remember it. If they don't, offer to remember that: $bt$WIKI_CMD workflows add '$sug' none$bt."
   fi
