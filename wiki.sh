@@ -847,21 +847,15 @@ placeable() {
 # says which wikis are used and why, and has the agent tell the user: a session that
 # fell back to the shared wiki without a word went unnoticed for weeks.
 place_note() {
-  local have lack many
-  # shellcheck disable=SC2086
-  have="$(and_list $PLACE_HAVE)"
+  local lack many
   # shellcheck disable=SC2086
   lack="$(and_list $PLACE_LACK)"
   # shellcheck disable=SC2086
   set -- $PLACE_LACK
   if [ $# -gt 1 ]; then many="clones of $lack, which have no wikis yet"; else many="a clone of $lack, which has no wiki yet"; fi
   if [ -n "$PLACE_WIKIS" ]; then
-    # shellcheck disable=SC2086
-    printf "This folder isn't a git repository. It holds clones of %s, so their wikis are this session's: %s. Tell the user, in one line, which wikis you are using and why, and that they can say so if that is wrong." "$have" "$(and_list $PLACE_WIKIS)"
-    [ -z "$lack" ] || printf ' %s has no wiki yet: create one with `%s new <name>` when there is something to file there.' "$lack" "$WIKI_CMD"
-    # shellcheck disable=SC2086
-    set -- $PLACE_LACK
-    [ $# -ne 1 ] || printf ' That is `%s new %s`.' "$WIKI_CMD" "$1"
+    printf "This folder isn't a git repository. %s Tell the user, in one line, which wikis you are using and why, and that they can say so if that is wrong." "$(place_holds)"
+    place_lack
   elif [ -n "$lack" ]; then
     printf "This folder isn't a git repository. It holds %s, so the shared wiki is this session's. Tell the user so in one line. Create a repository's wiki with \`%s new <name>\` when there is something to file there." "$many" "$WIKI_CMD"
   else
@@ -924,16 +918,41 @@ suggest_glob() {
   if [[ $base =~ $re ]]; then tilde "${d%/*}/*-[0-9]*"; else tilde "$d"; fi
 }
 
+# place_holds: the sentence naming the clones a folder holds and the wikis they give,
+# after place. One clone or one wiki is said in the singular. With PLACE_HOLDS_PATTERN
+# set it ends the way a recognised pattern's note does.
+place_holds() {
+  local have wikis c="clones" own="their" n
+  # shellcheck disable=SC2086
+  have="$(and_list $PLACE_HAVE)"
+  # shellcheck disable=SC2086
+  wikis="$(and_list $PLACE_WIKIS)"
+  # shellcheck disable=SC2086
+  set -- $PLACE_HAVE
+  [ $# -ne 1 ] || { c="a clone"; own="its"; }
+  # shellcheck disable=SC2086
+  set -- $PLACE_WIKIS
+  n=$#
+  if [ -n "${PLACE_HOLDS_PATTERN:-}" ]; then
+    if [ "$n" -eq 1 ]; then printf "It holds %s of %s, so this session's wiki is %s." "$c" "$have" "$wikis"
+    else printf "It holds %s of %s, so this session's wikis are %s." "$c" "$have" "$wikis"; fi
+  elif [ "$n" -eq 1 ]; then printf "It holds %s of %s, so %s wiki is this session's: %s." "$c" "$have" "$own" "$wikis"
+  else printf "It holds %s of %s, so their wikis are this session's: %s." "$c" "$have" "$wikis"; fi
+}
+
 # place_lack: the sentence about clones that have no wiki yet, after place.
 place_lack() {
   local lack
   # shellcheck disable=SC2086
   lack="$(and_list $PLACE_LACK)"
   [ -n "$lack" ] || return 0
-  printf ' %s has no wiki yet: create one with `%s new <name>` when there is something to file there.' "$lack" "$WIKI_CMD"
   # shellcheck disable=SC2086
   set -- $PLACE_LACK
-  [ $# -ne 1 ] || printf ' That is `%s new %s`.' "$WIKI_CMD" "$1"
+  if [ $# -eq 1 ]; then
+    printf ' %s has no wiki yet: create one with `%s new <name>` when there is something to file there. That is `%s new %s`.' "$lack" "$WIKI_CMD" "$WIKI_CMD" "$1"
+  else
+    printf ' %s have no wikis yet: create one with `%s new <name>` when there is something to file there.' "$lack" "$WIKI_CMD"
+  fi
 }
 
 # place_all <folder>: everything session start needs for a folder that is in no
@@ -956,8 +975,7 @@ place_all() {
       inside)
         place "$dir"
         if [ -n "$PLACE_WIKIS" ]; then
-          # shellcheck disable=SC2086
-          PLACE_NOTE="$PLACE_NOTE says the wikis of the repositories inside. It holds clones of $(and_list $PLACE_HAVE), so this session's wikis are $(and_list $PLACE_WIKIS). Tell the user in one line that you recognised the pattern and which wikis you are using, and that they can say so if it is wrong.$(place_lack)$how"
+          PLACE_NOTE="$PLACE_NOTE says the wikis of the repositories inside. $(PLACE_HOLDS_PATTERN=1 place_holds) Tell the user in one line that you recognised the pattern and which wikis you are using, and that they can say so if it is wrong.$(place_lack)$how"
         else
           PLACE_NOTE="$PLACE_NOTE says the wikis of the repositories inside, but it holds no clone that has a wiki, so the shared wiki is this session's. Tell the user so in one line.$(place_lack)$how"
         fi
@@ -997,7 +1015,7 @@ workflows_text() {
 
 # wiki workflows [add <pattern> inside|none|<wiki> | remove <pattern> | check [<folder>]]
 cmd_workflows() {
-  local f sub="${1:-}" glob what line bt='`' had="" tmp dir top
+  local f sub="${1:-}" glob what line bt='`' had="" tmp dir top shown
   f="$(workflows_file)"
   [ $# -eq 0 ] || shift
   case "$sub" in
@@ -1054,10 +1072,13 @@ cmd_workflows() {
     check)
       dir="${1:-$PWD}"
       [ -d "$dir" ] || die "$dir is not a folder"
+      # tilde leaves the home folder itself as a full path.
+      shown="$(tilde "$dir")"
+      [ "${dir%/}" != "$HOME" ] || shown="~"
       if top="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)"; then
-        echo "$(tilde "$dir") is in the repository $(repo_name "$top"), so a session there uses that repository's wiki. Patterns are for folders outside one."
+        echo "$shown is in the repository $(repo_name "$top"), so a session there uses that repository's wiki. Patterns are for folders outside one."
       elif ! placeable "$dir"; then
-        echo "$(tilde "$dir") is not a folder a session is placed in, so a session there uses the shared wiki."
+        echo "$shown is not a folder a session is placed in, so a session there uses the shared wiki."
       else
         place_all "$dir"
         echo "$PLACE_NOTE"

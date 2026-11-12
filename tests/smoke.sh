@@ -5012,10 +5012,28 @@ mkdir -p "$T/tickets/NOWIKI"
 git init -q "$T/tickets/NOWIKI/tfgamma"
 out="$(cd "$T/tickets/NOWIKI" && "$W" start 2>&1)"
 case "$out" in "wiki: $WIKIS_DIR/global"*"It holds a clone of tfgamma, which has no wiki yet, so the shared wiki is this session's."*) ok "clones that have no wikis yet are named, and the shared wiki is used" ;; *) bad "clones that have no wikis yet are named, and the shared wiki is used" "$out" ;; esac
+# One clone, two clones without a wiki, and two clones of one wiki read as a person would say them.
+mkdir -p "$T/tickets/ONE" "$T/tickets/LACK2"
+git init -q "$T/tickets/ONE/tfalpha"
+out="$(cd "$T/tickets/ONE" && "$W" start 2>&1)"
+case "$out" in *"It holds a clone of tfalpha, so its wiki is this session's: tfalpha."*) ok "one clone is said in the singular" ;; *) bad "one clone is said in the singular" "$out" ;; esac
+for r in tfalpha tfgamma tfomega; do git init -q "$T/tickets/LACK2/$r"; done
+out="$(cd "$T/tickets/LACK2" && "$W" start 2>&1)"
+case "$out" in *"tfgamma and tfomega have no wikis yet: create one with"*) ok "two clones with no wiki have none, not has" ;; *) bad "two clones with no wiki have none, not has" "$out" ;; esac
+case "$out" in *"That is "*) bad "and no one command is offered for two" "$out" ;; *) ok "and no one command is offered for two" ;; esac
+out="$(env -C "$HOME" "$W" workflows check "$HOME" 2>&1)"
+case "$out" in "~ is not a folder a session is placed in"*) ok "workflows check writes the home folder as ~" ;; *) bad "workflows check writes the home folder as ~" "$out" ;; esac
+# A session that was compacted or resumed is told not to ask a second time.
+for src in compact resume; do
+  out="$(hook "$TF" "{\"source\":\"$src\"}")"
+  case "$out" in *"No pattern of theirs covers this folder yet."*"if you asked already, don't ask again."*) ok "after a $src the hook says not to ask again" ;; *) bad "after a $src the hook says not to ask again" "$out" ;; esac
+done
+lacks "and a new session is not told that" "if you asked already" hook "$TF" '{"source":"startup"}'
 # Two clones one wiki covers count once, and more than three wikis are named, not all printed.
 "$W" cover tfalpha tfdelta >/dev/null 2>&1
 git init -q "$TF/tfdelta"
 out="$(cd "$TF" && "$W" start 2>&1)"
+case "$out" in *"so their wikis are this session's: tfalpha and tfbeta."*) ok "and the sentence still names each wiki once" ;; *) bad "and the sentence still names each wiki once" "$out" ;; esac
 check "two clones that one wiki covers load it once" test "$(printf '%s\n' "$out" | grep -c "^===== $WIKIS_DIR/tfalpha/index.md")" = 1
 for r in tfc1 tfc2 tfc3; do "$W" new "$r" >/dev/null 2>&1; git init -q "$TF/$r"; done
 out="$(cd "$TF" && "$W" start 2>&1)"

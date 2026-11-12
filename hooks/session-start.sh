@@ -24,6 +24,8 @@ line=""
 while IFS= read -r -t 1 line; do input="$input$line"; done
 input="$input$line"
 case "$input" in *'"source":"compact"'* | *'"source": "compact"'*) compacted=1 ;; *) compacted=0 ;; esac
+# A session that was compacted or resumed has had its first reply already.
+case "$input" in *'"source":"compact"'* | *'"source": "compact"'* | *'"source":"resume"'* | *'"source": "resume"'*) again=1 ;; *) again=0 ;; esac
 
 # emit <text>: hand text to Claude Code as additional context, JSON-escaped without jq.
 emit() {
@@ -144,6 +146,10 @@ if [ -z "$repo" ]; then
 $note"
   fi
   if [ -n "$p" ] && [ -f "$p/AGENTS.md" ]; then wiki="$p"; fi
+  # The note says to ask once. It is handed over again here, so say not to ask twice.
+  if [ "$again" = 1 ]; then
+    case "$note" in *"No pattern of theirs covers this folder yet."*) note="$note This session was going before this: if you asked already, don't ask again." ;; esac
+  fi
 fi
 if [ -z "$wiki" ]; then
   [ -f "$WIKIS_DIR/global/AGENTS.md" ] || exit 0
