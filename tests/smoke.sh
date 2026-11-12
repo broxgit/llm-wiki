@@ -922,6 +922,44 @@ expect "lock --release frees it" "released:" "$W" lock demo --release
 printf 'held abc123 2020-01-01T00:00:00Z\n' > "$WIKIS_DIR/demo/.compile-lock"
 expect "a lock older than 30 minutes is taken" "locked:" "$W" lock demo
 "$W" lock demo --release >/dev/null
+# A session that finds a wiki locked is told who holds it, so it can say who to ask.
+LK="$WIKIS_DIR/demo/.compile-lock"
+mkdir -p "$HOME/work/feature"
+expect "a free lock says so" "free: " "$W" lock demo --who
+out="$(CLAUDE_PROJECT_DIR="$HOME/work/feature" "$W" lock demo 2>&1)"
+case "$out" in *"--renew --as '<a few words on this session>'"*) ok "taking the lock says how a session names itself" ;; *) bad "taking the lock says how a session names itself" "$out" ;; esac
+check "the lock's first line is as the handbook has it" grep -qE '^held [0-9a-f]{6} [0-9T:Z-]+$' "$LK"
+check "and its second says who took it" grep -q "^by: session|$HOME/work/feature|" "$LK"
+out="$("$W" lock demo 2>&1)"; rc=$?
+case "$out" in "held: a session in ~/work/feature has held the lock on "*"last renewed "*"tell them which session holds the lock"*"lock demo --release"*) ok "a held lock names the folder of the session that holds it" ;; *) bad "a held lock names the folder of the session that holds it" "$out" ;; esac
+check "and taking it still fails" test "$rc" = 1
+"$W" lock demo --renew --as 'cloud-dvr | feature work' >/dev/null
+check "renew keeps who holds it, and --as names the session" grep -q "^by: session|$HOME/work/feature|.*|cloud-dvr  feature work$" "$LK"
+expect "a held lock then names the session" 'held: the session "cloud-dvr  feature work", in ~/work/feature, has held the lock' "$W" lock demo
+expect "and so does --who" 'held: the session "cloud-dvr  feature work", in ~/work/feature, has held the lock' "$W" lock demo --who
+check "--who changes nothing and succeeds" "$W" lock demo --who
+"$W" lock demo --renew >/dev/null
+check "a plain renew keeps the name" grep -q "|cloud-dvr  feature work$" "$LK"
+"$W" lock demo --release >/dev/null
+out="$("$W" lock demo --as 'tidying up' 2>&1)"
+case "$out" in *"--renew --as"*) bad "a session that named itself isn't told how to" "$out" ;; *) ok "a session that named itself isn't told how to" ;; esac
+"$W" lock demo --release >/dev/null
+"$W" lock demo --as >/dev/null 2>&1; rc=$?
+check "--as with no name is a usage error" test "$rc" = 2
+# A lock written by hand, as the handbook allows, has no second line.
+printf 'held abc123 %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$LK"
+expect "a lock with no word of who holds it is another session's" "held: another session has held the lock on" "$W" lock demo
+"$W" lock demo --renew >/dev/null
+check "renewing it adds nothing" test "$(wc -l < "$LK" | tr -d ' ')" = 1
+# A background compile says so, and one that has stopped holds nothing.
+printf 'held abc123 %s\nby: background|%s|2026-01-01T00:00:00Z|%s|7|\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$HOME/work/feature" "$$" > "$LK"
+out="$("$W" lock demo 2>&1)"
+case "$out" in "held: a background compile started from ~/work/feature, with "*" of 7 note(s) still waiting, has held the lock"*"nothing needs doing."*) ok "a background compile that is running is named, with how far it has got" ;; *) bad "a background compile that is running is named, with how far it has got" "$out" ;; esac
+sleep 1 & gone=$!; wait "$gone"
+printf 'held abc123 %s\nby: background|%s|2026-01-01T00:00:00Z|%s|7|\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$HOME/work/feature" "$gone" > "$LK"
+expect "a background compile that has stopped holds nothing" "free: " "$W" lock demo --who
+expect "so its lock is taken" "locked:" "$W" lock demo
+"$W" lock demo --release >/dev/null
 fi
 
 if section "Background compile"; then
@@ -1019,7 +1057,8 @@ expect "start hands notes over too" "being compiled in the background now" "$W" 
 check "and that run finishes" bg_runs $((n + 2))
 bg_note 6
 "$W" lock bg >/dev/null
-expect "start says when another session holds the lock" "another session holds the compile lock" "$W" start bg
+expect "start says when another session holds the lock" "holds the compile lock. Leave them and carry on." "$W" start bg
+expect "and says which one, by the folder it is in" "and a session in " "$W" start bg
 lacks "and the hook starts nothing then" "in the background" bg_hook
 "$W" lock bg --release >/dev/null
 expect "compile off turns it off" "compile: off" "$W" compile off
