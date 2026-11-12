@@ -163,6 +163,8 @@ Usage: $WIKI_CMD <command> [options]
                        write, and Antigravity's grants when it's installed. wiki setup
                        permissions and wiki setup antigravity add them.
   which [repo]         Print the wiki that covers a repository, by default the one you're in.
+  list [--names]       The wikis here, and the repositories each covers. --names prints
+                       the names alone, for a program.
   status               List wikis: handbook version, notes waiting, lock state.
   find <words>         Search every wiki's index, then page text, for a word or phrase.
   deps [--all] [--write]
@@ -910,9 +912,10 @@ workflow_for() {
 }
 
 # suggest_glob <folder>: a pattern to offer for folders like it. A folder named for a
-# ticket, such as INFRA-17937, gets one for its siblings. Anything else gets its own path.
+# ticket, such as INFRA-17937 or INFRA-17937-fix-dns, gets one for its siblings. Anything
+# else gets its own path.
 suggest_glob() {
-  local d base re='^[A-Za-z][A-Za-z0-9]*-[0-9]+$'
+  local d base re='^[A-Za-z][A-Za-z0-9]*-[0-9]+(-.*)?$'
   d="$(cd "$1" 2>/dev/null && pwd)" || d="$1"
   base="${d##*/}"
   if [[ $base =~ $re ]]; then tilde "${d%/*}/*-[0-9]*"; else tilde "$d"; fi
@@ -1086,6 +1089,39 @@ cmd_workflows() {
       ;;
     *) die_usage "unknown workflows command: $sub. Use add, remove or check" ;;
   esac
+}
+
+# list [--names]: the wikis in this collection, and the repositories each one covers
+# beyond its own name. --names prints the names alone, one a line, for a program.
+cmd_list() {
+  local d w names=0 width=0 found=0 covers
+  case "${1:-}" in
+    "") ;;
+    --names) names=1 ;;
+    *) die_usage "list takes --names or nothing, not $1" ;;
+  esac
+  [ $# -le 1 ] || die_usage "list takes --names or nothing"
+  for d in "$WIKIS_DIR"/*/; do
+    d="${d%/}"
+    is_wiki "$d" || continue
+    found=1
+    w="${d##*/}"
+    [ "${#w}" -le "$width" ] || width="${#w}"
+  done
+  if [ "$found" = 0 ]; then
+    [ "$names" = 1 ] || echo "No wikis yet. Run: $WIKI_CMD init"
+    return 0
+  fi
+  for d in "$WIKIS_DIR"/*/; do
+    d="${d%/}"
+    is_wiki "$d" || continue
+    w="${d##*/}"
+    if [ "$names" = 1 ]; then printf '%s\n' "$w"; continue; fi
+    covers=""
+    [ ! -f "$d/repos.md" ] || covers="$(sed -n 's/^- //p' "$d/repos.md" | tr '\n' ' ')"
+    covers="${covers% }"
+    if [ -n "$covers" ]; then printf '%-*s  covers: %s\n' "$width" "$w" "$covers"; else printf '%s\n' "$w"; fi
+  done
 }
 
 cmd_start() {
@@ -6988,7 +7024,7 @@ cmd_extensions() {
 # Tab completion. `completion zsh|bash` prints a small script for the shell, which
 # asks `__complete` for candidates on every Tab. The candidates live here, so a
 # plugin update can't leave completion stale.
-COMMANDS="setup init new update start collections deps permissions seed harvest capture lock compile helper log sync index lint pending cover which status find stale patterns open pages skills tips report stats feedback news obsidian extensions tour mcp delegation upgrade unlock claude link journal standup completion"
+COMMANDS="setup init new update start collections deps permissions seed harvest capture lock compile helper log sync index lint pending cover workflows which list status find stale patterns open pages skills tips report stats feedback news obsidian extensions tour mcp delegation upgrade unlock claude link journal standup completion"
 RANGES="lastworkday yesterday today week lastweek 7d 14d 30d"
 
 wiki_names() {
@@ -9056,6 +9092,7 @@ case "$cmd" in
   open) cmd_open "$@"; exit 0 ;;
   pages) cmd_pages "$@"; exit 0 ;;
   workflows) cmd_workflows "$@"; exit 0 ;;
+  list) cmd_list "$@"; exit 0 ;;
 esac
 if [ "$cmd" = harvest ]; then
   cmd_harvest "$@"

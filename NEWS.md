@@ -4,6 +4,12 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-11-29: wiki list names your wikis
+
+- `wiki list` prints the wikis in your collection and the repositories each one covers. `wiki list --names` prints the names alone, for a script.
+- A ticket folder with words after its number, such as `INFRA-1235-fix-dns`, is offered the same pattern as its siblings.
+- Tab completion offers `list` and `workflows`.
+
 ## 2026-11-28: a session outside a repository asks once where it belongs
 
 - In a folder that isn't a git repository, the agent asks once how folders like it work, and keeps your answer as a pattern in your shared wiki.
