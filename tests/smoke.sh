@@ -5052,9 +5052,11 @@ mkdir -p "$HOME/jobs/INFRA-400"
 git init -q "$HOME/jobs/INFRA-400/tfgamma"; git init -q "$HOME/jobs/INFRA-400/tfomega"
 out="$("$W" workflows check "$HOME/jobs/INFRA-400" 2>&1)"
 case "$out" in *"clones of tfgamma and tfomega, which have no wikis yet"*"record it: \`"*"workflows add '~/jobs/*-[0-9]*' inside\`. If only this folder does: \`"*"workflows add '~/jobs/INFRA-400' inside\`."*"workflows add '~/jobs/*-[0-9]*' none"*) ok "a ticket folder of clones with no wikis is offered the wildcard, inside first" ;; *) bad "a ticket folder of clones with no wikis is offered the wildcard, inside first" "$out" ;; esac
+# shellcheck disable=SC2088
 "$W" workflows add '~/jobs/*-[0-9]*' inside >/dev/null 2>&1
 expect "and once that is recorded, a session there recognises it and asks nothing" "says the wikis of the repositories inside, but it holds no clone that has a wiki" "$W" workflows check "$HOME/jobs/INFRA-400"
 lacks "with no question left" "Ask once" "$W" workflows check "$HOME/jobs/INFRA-400"
+# shellcheck disable=SC2088
 "$W" workflows remove '~/jobs/*-[0-9]*' >/dev/null 2>&1
 out="$(hook "$T/tickets/EMPTY" '{"source":"startup"}')"
 case "$out" in *"ask how the folder is laid out"*"/tickets/EMPTY' none"*) ok "a folder with nothing in it is still asked how it is laid out" ;; *) bad "a folder with nothing in it is still asked how it is laid out" "$out" ;; esac
