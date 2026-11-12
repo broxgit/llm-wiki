@@ -5108,6 +5108,31 @@ mkdir -p "$HOME/somerepo" && git init -q "$HOME/somerepo"
 out="$(env -C "$HOME" "$W" start 2>&1)"
 case "$out" in *"isn't a git repository"*) bad "nothing is read into what the home folder holds" "$out" ;; *"Not in a repository, so the shared wiki is this session's."*) ok "nothing is read into what the home folder holds" ;; *) bad "nothing is read into what the home folder holds" "$out" ;; esac
 rm -rf "$HOME/somerepo"
+# A folder that holds more than 30 folders is where someone keeps their clones, not the
+# folder of one piece of work. Its first 30 say nothing about a session there, so
+# nothing is guessed from them and nothing is asked.
+BIG="$T/tickets/allrepos"
+mkdir -p "$BIG"
+git init -q "$BIG/aa-tfalpha"; git -C "$BIG/aa-tfalpha" remote add origin git@example.com:x/tfalpha.git
+for i in 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29; do git init -q "$BIG/r$i"; done
+out="$("$W" workflows check "$BIG" 2>&1)"
+case "$out" in *"It holds a clone of tfalpha, so its wiki is this session's: tfalpha."*) ok "a folder of 30 folders is still placed by its clones" ;; *) bad "a folder of 30 folders is still placed by its clones" "$out" ;; esac
+case "$out" in *"r01, r02, r03 and 26 more have no wikis yet"*) ok "and a long list of clones with no wiki is cut to three and a count" ;; *) bad "and a long list of clones with no wiki is cut to three and a count" "$out" ;; esac
+git init -q "$BIG/r30"
+out="$("$W" workflows check "$BIG" 2>&1)"
+case "$out" in "This folder isn't a git repository. It holds more than 30 folders, so it is taken for where repositories are kept"*"the shared wiki is this session's. Tell the user so in one line."*) ok "a folder of more than 30 is where repositories are kept, and gets the shared wiki" ;; *) bad "a folder of more than 30 is where repositories are kept, and gets the shared wiki" "$out" ;; esac
+case "$out" in *"tfalpha"* | *"Ask once"* | *"have no wikis yet"*) bad "nothing is read into its clones, and nothing is asked" "$out" ;; *) ok "nothing is read into its clones, and nothing is asked" ;; esac
+case "$out" in *"workflows add '"*"/tickets/allrepos' <wiki>"*"workflows add '"*"/tickets/allrepos' none"*) ok "and it says how to name a wiki for it, or none" ;; *) bad "and it says how to name a wiki for it, or none" "$out" ;; esac
+out="$(env -C "$BIG" "$W" start 2>&1)"
+case "$out" in "wiki: $WIKIS_DIR/global"*"It holds more than 30 folders"*) ok "wiki start gives it the shared wiki" ;; *) bad "wiki start gives it the shared wiki" "$out" ;; esac
+expect "and so does the session hook" "It holds more than 30 folders" hook "$BIG" '{"source":"startup"}'
+# Their own word still decides: a pattern that says inside is followed.
+"$W" workflows add "$BIG" inside >/dev/null 2>&1
+expect "a pattern of theirs for such a folder is still followed" "It holds a clone of tfalpha, so this session's wiki is tfalpha." "$W" workflows check "$BIG"
+"$W" workflows remove "$BIG" >/dev/null 2>&1
+mkdir -p "$T/tickets/SIX-1"
+for r in n1 n2 n3 n4 n5 n6 n7; do git init -q "$T/tickets/SIX-1/$r"; done
+expect "many clones with no wiki at all are cut the same way" "It holds clones of n1, n2, n3 and 4 more, which have no wikis yet" "$W" workflows check "$T/tickets/SIX-1"
 # A folder named for a ticket is handed the pages that mention the ticket, in whichever
 # wiki they are. Its clones have no wiki here, so placement gives the shared wiki, and
 # the page is in a wiki no clone leads to: a session that isn't handed it never finds it.
