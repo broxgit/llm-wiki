@@ -5044,6 +5044,20 @@ out="$(hook "$T/tickets/EMPTY" '{"source":"startup"}')"
 case "$out" in *"isn't a git repository, and holds none"*"ask whether they want llm-wiki used for this work"*) ok "the session hook says a folder couldn't be placed, and has the agent ask" ;; *) bad "the session hook says a folder couldn't be placed, and has the agent ask" "$out" ;; esac
 out="$(hook "$T/tickets/NOWIKI" '{"source":"startup"}')"
 case "$out" in *"It holds a clone of tfgamma, which has no wiki yet"*) ok "and names clones that have no wikis" ;; *) bad "and names clones that have no wikis" "$out" ;; esac
+# Clones with no wikis yet: the layout is known, so the question is about using their
+# wikis as they get them, and a yes is kept as "inside". A no can be kept too.
+case "$out" in *"Ask once whether folders like this one should use the wikis of the repositories inside, as those get wikis."*"workflows add '"*"/tickets/NOWIKI' inside"*"workflows add '"*"/tickets/NOWIKI' none"*) ok "and has the agent ask once, with inside and none to record" ;; *) bad "and has the agent ask once, with inside and none to record" "$out" ;; esac
+case "$out" in *"ask how the folder is laid out"*) bad "and doesn't ask how a folder of clones is laid out" "$out" ;; *) ok "and doesn't ask how a folder of clones is laid out" ;; esac
+mkdir -p "$HOME/jobs/INFRA-400"
+git init -q "$HOME/jobs/INFRA-400/tfgamma"; git init -q "$HOME/jobs/INFRA-400/tfomega"
+out="$("$W" workflows check "$HOME/jobs/INFRA-400" 2>&1)"
+case "$out" in *"clones of tfgamma and tfomega, which have no wikis yet"*"record it: \`"*"workflows add '~/jobs/*-[0-9]*' inside\`. If only this folder does: \`"*"workflows add '~/jobs/INFRA-400' inside\`."*"workflows add '~/jobs/*-[0-9]*' none"*) ok "a ticket folder of clones with no wikis is offered the wildcard, inside first" ;; *) bad "a ticket folder of clones with no wikis is offered the wildcard, inside first" "$out" ;; esac
+"$W" workflows add '~/jobs/*-[0-9]*' inside >/dev/null 2>&1
+expect "and once that is recorded, a session there recognises it and asks nothing" "says the wikis of the repositories inside, but it holds no clone that has a wiki" "$W" workflows check "$HOME/jobs/INFRA-400"
+lacks "with no question left" "Ask once" "$W" workflows check "$HOME/jobs/INFRA-400"
+"$W" workflows remove '~/jobs/*-[0-9]*' >/dev/null 2>&1
+out="$(hook "$T/tickets/EMPTY" '{"source":"startup"}')"
+case "$out" in *"ask how the folder is laid out"*"/tickets/EMPTY' none"*) ok "a folder with nothing in it is still asked how it is laid out" ;; *) bad "a folder with nothing in it is still asked how it is laid out" "$out" ;; esac
 out="$(hook "$TF" '{"source":"startup"}')"
 case "$out" in *"knowledge wiki is "*"/tfalpha"*"It holds clones of"*"so their wikis are this session's"*) ok "and in a folder of clones, the hook gives the first clone's wiki and names the others" ;; *) bad "and in a folder of clones, the hook gives the first clone's wiki and names the others" "$out" ;; esac
 lacks "the hook no longer falls back without saying why" "isn't in a repository, so the shared wiki is its wiki" hook "$TF" '{"source":"startup"}'
