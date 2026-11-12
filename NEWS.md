@@ -4,6 +4,11 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-12-04: a branch named for a ticket finds the ticket's pages
+
+- Start a session in a repository on a branch such as `feature/VID-74441-fix`, and it is handed the pages that mention that ticket, whichever wiki they are in.
+- It used to need the folder to be named for the ticket. A branch such as `release-2026` is not taken for one.
+
 ## 2026-12-03: the folder where you keep your clones is left alone
 
 - A session started in a folder that holds more than 30 folders uses the shared wiki and says so. It was treated as a ticket folder, from its first 30.

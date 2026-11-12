@@ -5152,7 +5152,7 @@ RC="$T/tickets/RECALL-42"
 mkdir -p "$RC" "$T/tickets/RECALL-42-with-words" "$T/tickets/RECALL-4" "$T/tickets/plain"
 git init -q "$RC/tfgamma"
 out="$("$W" __recall "$RC" 2>&1)"
-case "$out" in "RECALL-42"*) ok "a folder named for a ticket gives its key" ;; *) bad "a folder named for a ticket gives its key" "$out" ;; esac
+case "$out" in "RECALL-42 folder"*) ok "a folder named for a ticket gives its key" ;; *) bad "a folder named for a ticket gives its key" "$out" ;; esac
 case "$out" in *"- tfrecall wiki: [RECALL-42 plan]("*"/tfrecall/wiki/concepts/plan.md): The order of work for RECALL-42."*"- tfrecall wiki: [Gateway timeout]("*"/tfrecall/wiki/concepts/gateway-timeout.md)"*) ok "and the pages that mention it, the one named for it first" ;; *) bad "and the pages that mention it, the one named for it first" "$out" ;; esac
 case "$out" in *"other.md"*) bad "a longer number is another ticket" "$out" ;; *) ok "a longer number is another ticket" ;; esac
 check "a page's path is written from the collection, so it can be opened" sh -c 'printf "%s" "$1" | grep -q "]($2/tfrecall/wiki/concepts/plan.md)"' _ "$out" "$WIKIS_DIR"
@@ -5167,6 +5167,29 @@ lacks "a folder not named for a ticket gets no such lines" "A search of every wi
 out="$(env -C "$RC" "$W" start 2>&1)"
 case "$out" in *"===== Pages that mention RECALL-42, from a search of every wiki"*"- tfrecall wiki: [RECALL-42 plan]"*) ok "wiki start prints them too, for agents with no hook" ;; *) bad "wiki start prints them too, for agents with no hook" "$out" ;; esac
 lacks "and prints no such heading when there are none" "===== Pages that mention" env -C "$T/tickets/RECALL-4" "$W" start
+# Most people work in one repository, on a branch named for the ticket. The branch says
+# what the folder's name doesn't.
+BR="$T/tickets/plain/svc"
+git init -q "$BR"
+git -C "$BR" commit -q --allow-empty -m init
+git -C "$BR" switch -q -c feature/RECALL-42-raise-timeout
+out="$("$W" __recall "$BR" 2>&1)"
+case "$out" in "RECALL-42 branch"*"- tfrecall wiki: [RECALL-42 plan]"*) ok "a branch named for a ticket gives its key and pages" ;; *) bad "a branch named for a ticket gives its key and pages" "$out" ;; esac
+expect "the session hook says the branch is why" "This repository is on a branch named for RECALL-42. A search of every wiki found these pages" hook "$BR" '{"source":"startup"}'
+expect "and wiki start prints the pages" "===== Pages that mention RECALL-42, from a search of every wiki" env -C "$BR" "$W" start
+git -C "$BR" switch -q -c brock/recall-42_fix
+expect "the key can be lowercase and after a name" "recall-42 branch" "$W" __recall "$BR"
+git -C "$BR" switch -q -c release-421
+printf -- '- [Release 421](wiki/concepts/other.md): Notes on release-421.\n' >> "$WIKIS_DIR/tfrecall/index.md"
+check "a branch such as release-421 is not a ticket" test -z "$("$W" __recall "$BR" 2>&1)"
+git -C "$BR" switch -q -c sprint-9/RECALL-42
+expect "a ticket after such a word is still found" "RECALL-42 branch" "$W" __recall "$BR"
+git -C "$BR" switch -q -c fix/1234-timeout
+check "a branch named for a bare number gives nothing" test -z "$("$W" __recall "$BR" 2>&1)"
+git -C "$BR" checkout -q --detach
+check "and so does a repository on no branch" test -z "$("$W" __recall "$BR" 2>&1)"
+mkdir -p "$T/tickets/RECALL-4/svc2" && git init -q "$T/tickets/RECALL-4/svc2" && git -C "$T/tickets/RECALL-4/svc2" commit -q --allow-empty -m init && git -C "$T/tickets/RECALL-4/svc2" switch -q -c feature/RECALL-42-x
+check "the folder's ticket comes before the branch's" test -z "$("$W" __recall "$T/tickets/RECALL-4/svc2" 2>&1)"
 # A pattern of theirs that says no wiki keeps llm-wiki out, the search included.
 "$W" workflows add "$RC" none >/dev/null 2>&1
 lacks "a folder that uses no wiki is handed no pages" "A search of every wiki" hook "$RC" '{"source":"startup"}'

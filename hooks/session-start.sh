@@ -220,9 +220,14 @@ fi
 # for the agent, not steps: wiki.sh did the search.
 recalled="$("$WIKI_SH" __recall "$DIR" 2>/dev/null || true)"
 if [ -n "$recalled" ]; then
+  rfirst="$(printf '%s\n' "$recalled" | sed -n 1p)"
+  case "$rfirst" in
+    *" branch") rwhy="This repository is on a branch named for ${rfirst% *}." ;;
+    *) rwhy="This folder is named for ${rfirst% *}." ;;
+  esac
   ctx="$ctx
 
-This folder is named for $(printf '%s\n' "$recalled" | sed -n 1p). A search of every wiki found these pages that mention it. They are reference, written by earlier sessions:
+$rwhy A search of every wiki found these pages that mention it. They are reference, written by earlier sessions:
 $(printf '%s\n' "$recalled" | sed 1d)"
 fi
 # Team skills added to the wikis since last time, linked so Claude Code finds them.
