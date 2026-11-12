@@ -805,6 +805,12 @@ and_list() {
   done
   printf '%s' "$out"
 }
+# few_list <words>: and_list, but past five words only the first three and how many more.
+# A folder of clones can hold dozens with no wiki, and a session doesn't need them named.
+few_list() {
+  if [ $# -le 5 ]; then and_list "$@"; return 0; fi
+  printf '%s, %s, %s and %d more' "$1" "$2" "$3" $(($# - 3))
+}
 
 # place <folder>: for a folder that is in no repository, which wikis a session there
 # should use. Some people start a session in a folder for a ticket, which holds clones
@@ -815,12 +821,13 @@ and_list() {
 #   PLACE_LACK   the clones no wiki covers yet
 place() {
   local d n=0 name w
-  PLACE_WIKIS="" PLACE_HAVE="" PLACE_LACK=""
+  PLACE_WIKIS="" PLACE_HAVE="" PLACE_LACK="" PLACE_MANY=""
   for d in "$1"/*/; do
     d="${d%/}"
     [ -d "$d" ] || continue
     n=$((n + 1))
-    [ "$n" -le 30 ] || break
+    # More than 30 folders is where repositories are kept, not one piece of work's folder.
+    [ "$n" -le 30 ] || { PLACE_MANY=1; break; }
     [ -e "$d/.git" ] || continue
     name="$(repo_name "$d")"
     w="$(which_wiki "$name" || true)"
@@ -853,7 +860,7 @@ placeable() {
 place_note() {
   local lack many
   # shellcheck disable=SC2086
-  lack="$(and_list $PLACE_LACK)"
+  lack="$(few_list $PLACE_LACK)"
   # shellcheck disable=SC2086
   set -- $PLACE_LACK
   if [ $# -gt 1 ]; then many="clones of $lack, which have no wikis yet"; else many="a clone of $lack, which has no wiki yet"; fi
@@ -949,7 +956,7 @@ place_holds() {
 place_lack() {
   local lack
   # shellcheck disable=SC2086
-  lack="$(and_list $PLACE_LACK)"
+  lack="$(few_list $PLACE_LACK)"
   [ -n "$lack" ] || return 0
   # shellcheck disable=SC2086
   set -- $PLACE_LACK
@@ -999,6 +1006,14 @@ place_all() {
   place "$dir"
   sug="$(suggest_glob "$dir")"
   own="$(tilde "$(cd "$dir" 2>/dev/null && pwd)")"
+  # A folder that holds more than place reads is where someone keeps their clones. Its
+  # first 30 say nothing about what a session there is for, so nothing is guessed and
+  # nothing is asked: the shared wiki, said in a line, and how to say otherwise.
+  if [ -n "$PLACE_MANY" ]; then
+    PLACE_WIKIS="" PLACE_HAVE="" PLACE_LACK=""
+    PLACE_NOTE="This folder isn't a git repository. It holds more than 30 folders, so it is taken for where repositories are kept, not the folder of one piece of work: nothing is read into the clones in it, and the shared wiki is this session's. Tell the user so in one line. If they want sessions here to use one wiki, or none, record it: $bt$WIKI_CMD workflows add '$own' <wiki>$bt or $bt$WIKI_CMD workflows add '$own' none$bt."
+    return 0
+  fi
   PLACE_NOTE="$(place_note)"
   if [ -n "$PLACE_WIKIS" ]; then
     PLACE_NOTE="$PLACE_NOTE No pattern of theirs covers this folder yet. Ask once whether folders like this one always work this way. On a yes, show them the pattern and record it: $bt$WIKI_CMD workflows add '$sug' inside$bt."
