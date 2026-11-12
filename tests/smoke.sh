@@ -5113,6 +5113,22 @@ check "and so is a pattern with nothing to do" test "$rc" = 2
 "$W" workflows add '~/x' nosuchwiki >/dev/null 2>&1; rc=$?
 check "a pattern can't name a wiki that doesn't exist" test "$rc" = 1
 expect "and the message says so" "there is no wiki nosuchwiki" "$W" workflows add '~/x' nosuchwiki
+# That message sends the reader to list, which names the wikis and what each covers.
+check "the command that message names exists" "$W" list
+out="$("$W" list 2>&1)"
+case "$out" in *"tfalpha"*"covers: tfdelta"*) ok "list names a wiki and the repositories it covers" ;; *) bad "list names a wiki and the repositories it covers" "$out" ;; esac
+check "and a wiki that covers only itself is a bare name" sh -c 'printf "%s\n" "$1" | grep -qx tfbeta' _ "$out"
+out="$("$W" list --names 2>&1)"
+check "list --names prints one name a line and nothing else" test "$out" = "$(for d in "$WIKIS_DIR"/*/; do [ -f "$d/AGENTS.md" ] && [ -f "$d/index.md" ] && basename "$d"; done)"
+"$W" list --bogus >/dev/null 2>&1; rc=$?
+check "list with an option it doesn't know is a usage error" test "$rc" = 2
+expect "list completes as a command" "list" "$W" __complete 1 li
+expect "and so does workflows" "workflows" "$W" __complete 1 wo
+check "an empty collection lists nothing with --names" test -z "$(WIKIS_DIR="$T/nowikis" "$W" list --names 2>&1)"
+# A ticket folder with words after its number is one of its siblings too.
+mkdir -p "$HOME/work/INFRA-300-fix-dns"
+git init -q "$HOME/work/INFRA-300-fix-dns/tfalpha"
+expect "a ticket folder named with words after the number is offered the wildcard" "workflows add '~/work/*-[0-9]*' inside" "$W" workflows check "$HOME/work/INFRA-300-fix-dns"
 # A wiki that was removed after its pattern was written.
 printf -- '- in `~/gone`: `vanished`.\n' >> "$WFILE"
 mkdir -p "$HOME/gone"
