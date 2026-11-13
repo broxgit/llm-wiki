@@ -30,7 +30,7 @@ skills/llm-wiki/   The Claude skill that finds, runs, and scaffolds wikis.
 mcp/server.py      A local MCP server for sessions with no file access. wiki mcp starts it where there is no compiled helper; it runs wiki.sh.
 commands/          The plugin's slash commands. wiki.sh also makes skills from them for Antigravity, Codex and Cursor.
 tests/smoke.sh     Smoke tests for wiki.sh, the hook and the secret scan. CI runs them.
-tests/ui-lint.sh   Fails on a colour code outside ui.sh. A report until every command has moved to the kit.
+tests/ui-lint.sh   Fails on a colour code outside ui.sh, or a command printing without the kit.
 tests/gallery/     What each command a person reads prints, kept by scripts/gallery.sh.
 .github/workflows/ CI: shellcheck, plugin validation, and the smoke tests on Linux and macOS.
 helper.lock        The released helper for this commit: its compiler, source hash and a SHA-256 per platform.
