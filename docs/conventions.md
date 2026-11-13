@@ -113,7 +113,7 @@ A blank line between groups. Marks in front, not words at the end. A column as w
 
 ## The kit: `ui.sh`
 
-Kit version 3. sha256 `2aea7ad1afadc53edeff84a79881a5b9b879a031b8cfac515354192adc59f762`.
+Kit version 4. sha256 `d84ba41da1af1c3cbb8b8da091855e5102c914db7df68ad7cd8fb3966aee940a`.
 
 `ui.sh` is in Bash 3.2 and has no dependency. llm-wiki keeps the original. Every other tool carries it byte for byte, beside its script, and sources it after setting three variables, which are all a tool changes:
 
@@ -129,10 +129,8 @@ llm-relay points both files at its settings file. A tool must work with no other
 Three checks hold it together:
 
 - **The copies.** The line above gives the kit's sha256. Each tool's smoke test fails when its `ui.sh` doesn't have it, so a copy can't be edited on its own. When the other tool's checkout sits beside this one, the test compares the two files as well. What no test catches is a change made in one tool and never copied to the other, with its guide: each tool's CI sees only its own repository, and the smoke tests never use the network. Copying both files in the same sitting is the rule that covers it. A check in CI that fetched the other repository's kit would fail every change until both had merged, so there isn't one.
-- **The lint.** `tests/ui-lint.sh` fails on a colour code (`\033[`, `\e[`, `\x1b[` in either case, `tput setaf` or `setab`, or an escape byte itself), an `S_` or `M_` variable, or a call to version 2's pieces (`say_ok`, `say_warn`, `say_head`, `say_dim`, `say_next`) anywhere outside `ui.sh`, and names the function each is in. Until every command has moved to the pieces, the smoke test runs it as a report, which lists what is left, and doesn't fail on it.
-- **The gallery.** `scripts/gallery.sh` runs every command a person reads against fakes, at a terminal's settings, and keeps what each printed in `tests/gallery/`, with an index that says which pieces each used. A command on the old look shows there as `old look`. Run it after changing what a command prints, look at the difference, and commit it. `scripts/gallery.sh --check` fails when what a command prints no longer matches its file, and the smoke test runs that.
-
-Version 2's helpers, `say_ok`, `say_warn`, `say_head`, `say_dim` and `say_next`, are still in the kit until every command has moved, and print as they did. Don't use them in new work.
+- **The lint.** `tests/ui-lint.sh` fails on a colour code (`\033[`, `\e[`, `\x1b[` in either case, `tput setaf` or `setab`, or an escape byte itself), an `S_` or `M_` variable, or a call to version 2's helpers (`say_ok`, `say_warn`, `say_head`, `say_dim`, `say_next`, which the kit no longer has) anywhere outside `ui.sh`, and names the function each is in. The smoke test runs it, and fails on what it finds.
+- **The gallery.** `scripts/gallery.sh` runs every command a person reads against fakes, at a terminal's settings, and keeps what each printed in `tests/gallery/`, with an index that says which pieces each used. A command that isn't on the kit shows there as `old look` or `unstyled`. Run it after changing what a command prints, look at the difference, and commit it. `scripts/gallery.sh --check` fails when what a command prints no longer matches its file, and the smoke test runs that.
 
 A Python tool follows the same rules, with the 16 colours:
 

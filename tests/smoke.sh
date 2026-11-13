@@ -4032,12 +4032,12 @@ case "$out" in "error: "*) ok "off, an error is plain" ;; *) bad "off, an error 
 # The tick: ✓ in a UTF-8 locale, + in any other.
 # What wiki.sh sets before it sources the kit, and the kit.
 blk="STYLE_OVERRIDE=\"\${LLM_WIKI_STYLE:-}\" STYLE_PALETTE_FILE=\"\${XDG_CONFIG_HOME:-\$HOME/.config}/llm-wiki/palette\" STYLE_THEME_FILE=\"\${XDG_CONFIG_HOME:-\$HOME/.config}/llm-wiki/theme\"; . '$REPO/ui.sh'"
-tick() { env "$@" LLM_WIKI_STYLE=on bash -c "$blk"$'\n''say_ok done' | strip; }
+tick() { env "$@" LLM_WIKI_STYLE=on bash -c "$blk"$'\n''ui_item ok done' | strip; }
 [ "$(tick LC_ALL=en_US.UTF-8)" = "✓ done" ] && ok "a UTF-8 locale gets ✓" || bad "a UTF-8 locale gets ✓" "$(tick LC_ALL=en_US.UTF-8)"
 [ "$(tick LC_ALL=C)" = "+ done" ] && ok "a locale that isn't UTF-8 gets +" || bad "a locale that isn't UTF-8 gets +" "$(tick LC_ALL=C)"
 [ "$(tick LC_ALL= LC_CTYPE= LANG=)" = "+ done" ] && ok "no locale set gets +" || bad "no locale set gets +" "$(tick LC_ALL= LC_CTYPE= LANG=)"
 # The palette: LLM_PALETTE, then the setting, then default.
-pal() { local cfg="$SW/palcfg"; mkdir -p "$cfg/llm-wiki"; env -u LLM_PALETTE XDG_CONFIG_HOME="$cfg" LLM_WIKI_STYLE=on "$@" bash -c "$blk"$'\n''say_ok done; typed x; echo; die oops' 2>&1 || true; }
+pal() { local cfg="$SW/palcfg"; mkdir -p "$cfg/llm-wiki"; env -u LLM_PALETTE XDG_CONFIG_HOME="$cfg" LLM_WIKI_STYLE=on "$@" bash -c "$blk"$'\n''ui_item ok done; typed x; echo; die oops' 2>&1 || true; }
 rm -rf "$SW/palcfg"
 case "$(pal LANG=en_US.UTF-8)" in *"${ESC}[32m✓"*"${ESC}[31merror:"*) ok "palette: default is a green tick and a red error" ;; *) bad "palette: default is a green tick and a red error" "$(pal LANG=en_US.UTF-8)" ;; esac
 case "$(pal LANG=en_US.UTF-8 LLM_PALETTE=colorblind)" in *"${ESC}[34m✓"*"${ESC}[36mx"*"${ESC}[35merror:"*) ok "palette: LLM_PALETTE=colorblind is a blue tick and a magenta error, typed text stays cyan" ;; *) bad "palette: LLM_PALETTE=colorblind" "$(pal LANG=en_US.UTF-8 LLM_PALETTE=colorblind)" ;; esac
@@ -4061,7 +4061,7 @@ case "$tw" in *"theme: light"*) ok "setup theme takes the answer" ;; *) bad "set
 grep -qx 'theme=light' "$SW/thcfg/llm-wiki/theme" && ok "setup theme writes the setting" || bad "setup theme writes the setting"
 grep -qx 'theme' "$SW/thcfg/llm-wiki/setup" && ok "setup theme is recorded, so --new won't ask again" || bad "setup theme is recorded"
 case "$(sty XDG_CONFIG_HOME="$SW/thcfg" LLM_WIKI_STYLE=off "$W" setup --list 2>&1)" in *"theme               light"*) ok "setup --list shows the theme" ;; *) bad "setup --list shows the theme" ;; esac
-case "$(env XDG_CONFIG_HOME="$SW/thcfg" LLM_WIKI_STYLE=on COLORTERM=truecolor bash -c "$blk"$'\n''say_ok done')" in *"38;2;0;135;60m"*) ok "and the kit reads it: ok is the light theme's green" ;; *) bad "and the kit reads it: ok is the light theme's green" ;; esac
+case "$(env XDG_CONFIG_HOME="$SW/thcfg" LLM_WIKI_STYLE=on COLORTERM=truecolor bash -c "$blk"$'\n''ui_item ok done')" in *"38;2;0;135;60m"*) ok "and the kit reads it: ok is the light theme's green" ;; *) bad "and the kit reads it: ok is the light theme's green" ;; esac
 tn="$(printf 'grey\nauto\n' | sty XDG_CONFIG_HOME="$SW/thcfg2" LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE=off "$W" setup theme 2>&1)"
 case "$tn" in *"Answer auto, dark or light."*"theme: auto"*) ok "setup theme refuses a value that is no theme" ;; *) bad "setup theme refuses a bad value" "$tn" ;; esac
 # wiki setup, in its forms. A mark goes in front of a line, after any indent. With the
@@ -4176,7 +4176,7 @@ check "an extension's own usage error exits 2" exits 2 env WIKIS_DIR="$SW/wikis"
 check "and its failure exits 1" exits 1 env WIKIS_DIR="$SW/wikis" LLM_WIKI="$W" "$REPO/extensions/wiki-confluence" publish nosuchwiki
 expect "a usage error still says error:" "error: no command called nosuchcommand" sty "$W" nosuchcommand
 # A warning on standard error follows standard error, whatever standard output is.
-werr() { bash -c "$blk"$'\n'"STYLE=$1 STYLE_ERR=$2; style_set; say_warn_err \"careful: \$(typed_err 'wiki status')\"; say_warn \"plain: \$(typed 'wiki open')\"" 2>"$SW/err" >"$SW/out"; }
+werr() { bash -c "$blk"$'\n'"STYLE=$1 STYLE_ERR=$2; style_set; say_warn_err \"careful: \$(typed_err 'wiki status')\"; ui_item warn \"plain: \$(typed 'wiki open')\"" 2>"$SW/err" >"$SW/out"; }
 werr no yes
 case "$(cat "$SW/err")" in "${ESC}[1m${ESC}[33m!${ESC}[0m careful: ${ESC}[36mwiki status${ESC}[0m") ok "say_warn_err and typed_err are styled when standard error is" ;; *) bad "say_warn_err and typed_err are styled when standard error is" "$(cat -v "$SW/err")" ;; esac
 case "$(cat "$SW/out")" in *"$ESC"*) bad "while standard output, which isn't, stays plain" "$(cat -v "$SW/out")" ;; *) ok "while standard output, which isn't, stays plain" ;; esac
@@ -4304,7 +4304,7 @@ case "$out" in *"${ESC}[32m✓${ESC}[0m x"*"- z"*) case "${out#*- z}" in *"$ESC"
 # The gallery: what every command a person reads prints, as kept in tests/gallery.
 if out="$("$REPO/scripts/gallery.sh" --check 2>&1)"; then ok "the gallery is current: $out"; else bad "the gallery is current" "$out"; fi
 # The lint. It is on once every command has moved to the pieces; until then it reports.
-UI_LINT=report
+UI_LINT=on
 printf 'f() {\n  printf "\\033[1mx"\n}\n# say_ok in a comment\ng() { say_ok y; echo "$S_BOLD"; }\n' > "$KS/bad.sh"
 out="$("$REPO/tests/ui-lint.sh" "$KS/bad.sh" 2>&1)"; code=$?
 [ "$code" = 1 ] && ok "the lint fails on a colour code, an S_ variable or a version 2 piece" || bad "the lint fails on a colour code, an S_ variable or a version 2 piece" "$out"

@@ -4,11 +4,11 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
-## 2026-12-07: one look for every llm tool, starting with its colours
+## 2026-12-07: one look for every llm tool
 
-- At a terminal that says it can (`COLORTERM=truecolor`), colours are 24-bit. Elsewhere they stay the terminal's own 16.
-- `wiki setup theme` or `LLM_THEME=light` makes them read on a light background. `auto`, the default, reads `COLORFGBG` where it's set.
-- Commands move to a new timeline look one at a time, the same in llm-relay. `bash ui.sh`, in the llm-wiki folder, shows it now.
+- Every command prints as a timeline: stages down a line on the left, ✓ ! ✗ marks, and what to do next. The words agents read are the same.
+- Colours are 24-bit where your terminal says it can show them (`COLORTERM=truecolor`), and the terminal's own 16 elsewhere.
+- `wiki setup theme` (or `LLM_THEME=light`) suits a light background. `bash ui.sh`, in the llm-wiki folder, shows every piece.
 
 ## 2026-12-07: session start leaves your agents' rules alone
 

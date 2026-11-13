@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # ui-lint.sh: commands print through ui.sh's pieces, never a colour code. docs/conventions.md.
 # Fails on a colour code (\033[ \e[ \E[ \x1b[ in either case, tput setaf or setab, or an escape
-# byte itself), an S_ or M_ variable, or a call to version 2's pieces (say_ok, say_warn, say_head,
+# byte itself), an S_ or M_ variable, or a call to version 2's helpers (say_ok, say_warn, say_head,
 # say_dim, say_next) in a shell script other than ui.sh, and names the function each is in. A
 # comment line doesn't count.
 #
 #   tests/ui-lint.sh [--report] [--functions] [file...]
 #
-# --report lists what it finds and exits 0: the smoke test runs it so until every command has
-# moved. --functions prints only the functions left, one a line. With no file, it reads the
+# --report lists what it finds and exits 0, for a look at what is left while commands move to the
+# kit. --functions prints only the functions left, one a line. With no file, it reads the
 # tool's scripts: each .sh at the top of the repository, and the hooks. The same file in each tool.
 # Works with the bash that ships on macOS (3.2) and on Linux.
 set -u

@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# ui.sh: how the llm tools look at a terminal. Kit version 3, for docs/conventions.md version 4.
+# ui.sh: how the llm tools look at a terminal. Kit version 4, for docs/conventions.md version 4.
 # llm-wiki keeps the original. Every other tool carries this file byte for byte, and a test holds
 # the copies together, so change it in llm-wiki first and copy it in the same sitting. Bash 3.2.
 #
@@ -88,8 +88,7 @@ _ui_pill() {
 }
 # style_set: every code, for the palette, theme and colours in force. Empty when style is off.
 style_set() {
-  S_BOLD="" S_DIM="" S_OFF="" S_OK="" S_WARN="" S_ERR="" S_TYPED="" M_OK="" M_WARN=""
-  S_GREEN="" S_YELLOW="" S_CYAN="" # version 2's names for ok, warn and typed
+  S_BOLD="" S_DIM="" S_OFF="" S_OK="" S_WARN="" S_ERR="" S_TYPED=""
   _P_A1="" _P_A2="" _P_A3="" _P_A4="" _P_WARN="" _P_ERR="" _P_TYPED="" _P_MUTED="" _U_CARD="" _U_A1="" _U_A2="" _U_A3="" _U_A4=""
   style_palette
   style_theme
@@ -131,10 +130,6 @@ style_set() {
   else
     _U_CARD=$'\033[47m\033[30m'
   fi
-  # shellcheck disable=SC2034 # read by commands still on version 2's names
-  S_GREEN="$S_OK" S_YELLOW="$S_WARN" S_CYAN="$S_TYPED"
-  M_OK="${S_OK}${_G_OK}${S_OFF} "
-  M_WARN="${S_BOLD}${S_WARN}!${S_OFF} "
 }
 STYLE=no STYLE_ERR=no
 # _UI_LIVE: whether a wait may draw at a terminal with style off. style_off says no: an agent's
@@ -461,15 +456,6 @@ say_warn_err() {
   _ui_t ui_error
   if [ "$STYLE_ERR" = yes ]; then printf '\033[1m%s!\033[0m %s\n' "$_E_WARN" "$*" >&2; else printf '%s\n' "$*" >&2; fi
 }
-
-# ---- version 2's pieces, until every command has moved -------------------------------------
-# The old look: a mark in front of a line, a bold heading, a dim aside. The gallery lists the
-# commands that still use them, and the lint fails on them once it is switched on.
-say_ok() { _ui_t v2; printf '%s%s\n' "$M_OK" "$*"; }
-say_warn() { _ui_t v2; printf '%s%s\n' "$M_WARN" "$*"; }
-say_head() { _ui_t v2; printf '%s%s%s\n' "$S_BOLD" "$*" "$S_OFF"; }
-say_dim() { _ui_t v2; printf '%s%s%s\n' "$S_DIM" "$*" "$S_OFF"; }
-say_next() { _ui_t v2; printf '%sNext:%s %s\n' "$S_BOLD$S_TYPED" "$S_OFF" "$*"; }
 
 # ---- for tests --------------------------------------------------------------------------------
 # ui_words: the words of what a command printed, one a line, so a terminal's output can be held
