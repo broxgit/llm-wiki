@@ -1,1 +1,1 @@
-nothing older than 30 days (cutoff YYYY-MM-DD) or 50 commits
+[32m✓[0m nothing older than 30 days (cutoff YYYY-MM-DD) or 50 commits

@@ -57,10 +57,13 @@ normalize() {
 }
 # look <trace> <output>: from the pieces the run called. kit: the kit's pieces and nothing else.
 # old look: version 2's helpers, or codes of its own. mixed: both. unstyled: nothing at all,
-# though a person reads it. typed and an error alone don't make a command's look.
+# though a person reads it. typed alone doesn't make a command's look; an error alone does, since a
+# run that only failed has nothing else to show.
 look() {
   local kit=no v2=no
   grep -qv -e '^ui_typed$' -e '^ui_error$' -e '^v2$' "$1" 2>/dev/null && kit=yes
+  # A run that only failed printed the kit's error, and that is all it has to show.
+  [ "$kit" = yes ] || ! grep -q '^ui_error$' "$1" 2>/dev/null || grep -q '^v2$' "$1" || kit=yes
   grep -q '^v2$' "$1" 2>/dev/null && v2=yes
   if [ "$kit" = yes ] && [ "$v2" = yes ]; then echo mixed
   elif [ "$kit" = yes ]; then echo kit

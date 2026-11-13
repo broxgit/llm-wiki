@@ -1,4 +1,3 @@
-== demo
-           Review of the parser (waiting on a teammate)
-
-1 open in 1 wiki(s), 0 past their date.
+[34m●[0m [1m[44m[97m OPEN [0m  [1mdemo[0m
+[2m│[0m     Review of the parser (waiting on a teammate)
+[2m│[0m     1 open in 1 wiki(s), 0 past their date.

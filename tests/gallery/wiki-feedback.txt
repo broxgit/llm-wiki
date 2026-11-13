@@ -1,2 +1,2 @@
-Feedback on llm-wiki: notes. Notes in ~/.local/state/llm-wiki/feedback
-None yet.
+[34m●[0m [1m[44m[97m FEEDBACK [0m  [1mon llm-wiki: notes[0m[2m · notes in ~/.local/state/llm-wiki/feedback[0m
+[2m│[0m     None yet.

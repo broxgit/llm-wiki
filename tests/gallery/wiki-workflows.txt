@@ -1,5 +1,4 @@
-No patterns yet. A session in a folder that isn't a git repository asks, and the answer is kept here.
-
-Add one:    wiki workflows add '<pattern>' inside|none|<wiki>
-Remove one: wiki workflows remove '<pattern>'
-Try one:    wiki workflows check <folder>
+[34m●[0m [1m[44m[97m WORKFLOWS [0m  [1mNo patterns yet. A session in a folder that isn't a git repository asks, and the answer is kept here.[0m
+[2m│[0m     Add one:    [36mwiki workflows add '<pattern>' inside|none|<wiki>[0m
+[2m│[0m     Remove one: [36mwiki workflows remove '<pattern>'[0m
+[2m│[0m     Try one:    [36mwiki workflows check <folder>[0m

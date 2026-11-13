@@ -5558,7 +5558,7 @@ case "$out" in *"No pattern of theirs covers this folder yet. Ask once whether f
 out="$(env -C "$PF/other" "$W" start 2>&1)"
 case "$out" in *"No pattern of theirs covers this folder yet. If they want llm-wiki here, ask how the folder is laid out and whether to remember it"*"workflows add '~/repos/other' none"*) ok "no guess and no pattern has the agent ask about the layout, and offers to remember a no" ;; *) bad "no guess and no pattern has the agent ask about the layout, and offers to remember a no" "$out" ;; esac
 out="$("$W" workflows add '~/repos/*-[0-9]*' inside 2>&1)"
-case "$out" in "added: in \`~/repos/*-[0-9]*\`: the wikis of the repositories inside."*) ok "workflows add records a pattern" ;; *) bad "workflows add records a pattern" "$out" ;; esac
+case "$out" in "- added: in \`~/repos/*-[0-9]*\`: the wikis of the repositories inside."*) ok "workflows add records a pattern" ;; *) bad "workflows add records a pattern" "$out" ;; esac
 check "as one line of a fixed shape in the shared wiki's workflows.md" grep -qxF -- '- in `~/repos/*-[0-9]*`: the wikis of the repositories inside.' "$WFILE"
 expect "and workflows lists it" 'in `~/repos/*-[0-9]*`: the wikis of the repositories inside.' "$W" workflows
 out="$(env -C "$PF/INFRA-200" "$W" start 2>&1)"
@@ -5583,10 +5583,10 @@ out="$(env -C "$PF/INFRA-200" "$W" start 2>&1)"
 case "$out" in "wiki: $WIKIS_DIR/pfbeta"*) ok "one folder's own line wins over a pattern that also fits" ;; *) bad "one folder's own line wins over a pattern that also fits" "$out" ;; esac
 # Adding the same pattern again changes its line.
 out="$("$W" workflows add '~/repos/INFRA-200' none 2>&1)"
-case "$out" in "changed: in \`~/repos/INFRA-200\`: no wiki."*) ok "adding a pattern that is there changes it" ;; *) bad "adding a pattern that is there changes it" "$out" ;; esac
+case "$out" in "- changed: in \`~/repos/INFRA-200\`: no wiki."*) ok "adding a pattern that is there changes it" ;; *) bad "adding a pattern that is there changes it" "$out" ;; esac
 check "and leaves one line for it" test "$(grep -c 'INFRA-200' "$WFILE")" = 1
 out="$("$W" workflows remove '~/repos/INFRA-200' 2>&1)"
-case "$out" in "removed: in \`~/repos/INFRA-200\`"*) ok "workflows remove takes a pattern out" ;; *) bad "workflows remove takes a pattern out" "$out" ;; esac
+case "$out" in "- removed: in \`~/repos/INFRA-200\`"*) ok "workflows remove takes a pattern out" ;; *) bad "workflows remove takes a pattern out" "$out" ;; esac
 check "and the line is gone" test "$(grep -c 'INFRA-200' "$WFILE")" = 0
 "$W" workflows remove '~/nowhere' >/dev/null 2>&1; rc=$?
 check "removing a pattern that isn't there fails" test "$rc" = 1
