@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: shellcheck
-        run: shellcheck -S warning wiki.sh ui.sh tests/ui-lint.sh scripts/gallery.sh hooks/session-start.sh hooks/pre-tool-use.sh hooks/pre-commit scripts/migrate-to-plugin.sh scripts/helper.sh tests/smoke.sh tests/smoke-parts.sh
+        run: shellcheck -S warning wiki.sh ui.sh tests/ui-lint.sh scripts/gallery.sh hooks/session-start.sh hooks/pre-tool-use.sh hooks/pre-commit scripts/migrate-to-plugin.sh scripts/helper.sh tests/smoke.sh tests/smoke-parts.sh tests/budget.sh
       - name: The smoke matrix runs every part of the suite
         run: test "$(tests/smoke.sh --list | cut -f 1 | sort -un | paste -sd ' ' -)" = "1 2 3 4"
       - uses: actions/setup-node@v4

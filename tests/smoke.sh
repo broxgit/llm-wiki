@@ -70,6 +70,7 @@ read -r -d '' PARTS <<'TABLE' || true
 2 | Confluence extension | Collection
 2 | Extension events | Collection
 2 | Content as data | Collection
+2 | Size budget |
 3 | Tour |
 4 | The released helper | Session hook
 TABLE
@@ -5551,6 +5552,45 @@ lacks "lint has no finding for the shared wiki's workflows.md" "workflows.md" "$
 check "the workflows rule ships in the template" grep -q 'workflows add' "$REPO/template/rules/workflows.md"
 check "and AGENTS.md points to it" grep -q 'rules/workflows.md' "$REPO/template/AGENTS.md"
 rm -rf "$PF" "$HOME/notesdir" "$HOME/gone" "$WFILE"
+fi
+
+if section "Size budget"; then
+# tests/budget.sh measures the text an agent is handed against tests/budget.tsv, so a
+# change that grows it has to say so in its diff. It builds its own fixture and home.
+B="$REPO/tests/budget.sh"
+BR="$T/budget.tsv"
+check "the sizes of what agents are handed are as recorded" "$B"
+cp "$REPO/tests/budget.tsv" "$BR"
+check "updating a copy that is in step changes nothing" bash -c "'$B' --update --record '$BR' >/dev/null && cmp -s '$BR' '$REPO/tests/budget.tsv'"
+check "every item is a number, so none was left out as -" bash -c "! '$B' --print | grep -q '	-$'"
+# A wrong number, a missing line and an extra line are each named, with the fix.
+sed 's/^\(template\/AGENTS.md	\)[0-9]*$/\11/' "$REPO/tests/budget.tsv" > "$BR"
+out="$("$B" --check --record "$BR" 2>&1)"; rc=$?
+check "a number that is wrong fails the check" test "$rc" = 1
+case "$out" in *"template/AGENTS.md: recorded 1, measured "*" (+"*) ok "and the item is named, with both numbers and the difference" ;; *) bad "and the item is named, with both numbers and the difference" "$out" ;; esac
+case "$out" in *"Run: tests/budget.sh --update, and say in the pull request why it changed"*) ok "and the fix is a command to run" ;; *) bad "and the fix is a command to run" "$out" ;; esac
+[ "$(printf '%s\n' "$out" | grep -c ': recorded')" = 1 ] && ok "and only that item is named" || bad "and only that item is named" "$out"
+grep -v '^mcp: INSTRUCTIONS' "$REPO/tests/budget.tsv" > "$BR"
+expect "an item with no recorded number is named" "mcp: INSTRUCTIONS: recorded -, measured " "$B" --check --record "$BR"
+{ cat "$REPO/tests/budget.tsv"; printf 'gone item\t5\n'; } > "$BR"
+expect "and so is a recorded item that is no longer measured" "gone item: recorded 5, measured -" "$B" --check --record "$BR"
+# The ceiling for the session hook's output, which a record can't raise.
+cp "$REPO/tests/budget.tsv" "$BR"
+out="$(BUDGET_TEST_CEILING=500 "$B" --check --record "$BR" 2>&1)"; rc=$?
+check "a hook item over the ceiling fails even when it is recorded" test "$rc" = 1
+case "$out" in *"CEILING hook: a ticket folder with no wikis: "*"and a hook item has to stay under 500."*"cuts a hook's output at 10,000 characters"*"Do: shorten that text."*) ok "and says which item, why, and what to do" ;; *) bad "and says which item, why, and what to do" "$out" ;; esac
+case "$out" in *"CEILING template"* | *"CEILING start"* | *"CEILING mcp"*) bad "and only hook items have a ceiling" "$out" ;; *) ok "and only hook items have a ceiling" ;; esac
+out="$(BUDGET_TEST_CEILING=500 "$B" --update --record "$BR" 2>&1)"; rc=$?
+check "--update refuses to record text over the ceiling" test "$rc" = 1
+check "and leaves the record as it was" cmp -s "$BR" "$REPO/tests/budget.tsv"
+expect "the environment can lower the ceiling and not raise it" "size budget: " env BUDGET_TEST_CEILING=99999 "$B" --check --record "$BR"
+# Another checkout: what it can't produce is -, not an error.
+mkdir -p "$T/not-a-checkout"
+out="$("$B" --print --repo "$T/not-a-checkout" 2>&1)"; rc=$?
+[ "$rc" = 0 ] && [ -n "$out" ] && ! printf '%s\n' "$out" | grep -q "$(printf '\t')[0-9]" && ok "a checkout with none of it is measured, and every item is -" || bad "a checkout with none of it is measured, and every item is -" "$out"
+refuse "a folder that isn't there is a usage error" "$B" --print --repo "$T/nowhere"
+refuse "so is a flag with no value" "$B" --record
+rm -rf "$T/not-a-checkout" "$BR"
 fi
 
 if section "Tour"; then
