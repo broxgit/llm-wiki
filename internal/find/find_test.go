@@ -271,3 +271,49 @@ func TestSearchLeavesToBash(t *testing.T) {
 		t.Errorf("a NUL in a page past the fifth: %v", err)
 	}
 }
+
+// A note is found before it is compiled, the newest first, and not once a compile has
+// recorded it.
+func TestSearchNotes(t *testing.T) {
+	root := collection(t)
+	write(t, root+"/demo/log.md", "# Log\n\n## ingest\n- source: raw/2026-01-03-done.md\n")
+	write(t, root+"/demo/raw/2026-01-01-old.md", "Captured: 2026-01-01\n\nA heron was seen.\n")
+	write(t, root+"/demo/raw/2026-02-02-new.md", "---\ntitle: heron in the title only\n---\n  The HERON came back.\n")
+	write(t, root+"/demo/raw/2026-01-03-done.md", "The heron, compiled already.\n")
+	write(t, root+"/demo/raw/2026-03-03-scan.pdf", "heron in a file that isn't a note\n")
+	write(t, root+"/demo/raw/.hidden.md", "heron in a hidden note\n")
+	write(t, root+"/demo/raw/2026-04-04-other.md", "---\ntitle: heron up here only\n---\nNothing below.\n")
+	got, first, err := Search(Options{Wikis: root, Word: "heron"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "demo:\n  waiting to be compiled:\n    raw/2026-02-02-new.md: The HERON came back.\n    raw/2026-01-01-old.md: A heron was seen.\n"
+	if got != want || first != "demo" {
+		t.Errorf("got %q, first %q\nwant %q", got, first, want)
+	}
+	// With pages too, the notes come last.
+	write(t, root+"/demo/raw/2026-05-05-canary.md", "The canary note.\n")
+	got, _, err = Search(Options{Wikis: root, Word: "canary"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "    wiki/notes.md: The CANARY host is canary-1.\n  waiting to be compiled:\n    raw/2026-05-05-canary.md: The canary note.\nzeta:\n") {
+		t.Errorf("notes don't follow the pages: %q", got)
+	}
+	// Five at most.
+	for _, d := range []string{"06", "07", "08", "09", "10", "11"} {
+		write(t, root+"/zeta/raw/2026-"+d+"-01-n.md", "heron "+d+"\n")
+	}
+	got, _, err = Search(Options{Wikis: root, Word: "heron"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(got, "raw/2026-"); n != 7 || strings.Contains(got, "2026-06-01-n.md") || !strings.Contains(got, "2026-11-01-n.md: heron 11") {
+		t.Errorf("%d notes shown, or the wrong five of zeta: %q", n, got)
+	}
+	// A note with a NUL byte is the Bash's.
+	write(t, root+"/zeta/raw/2026-12-01-nul.md", "heron\x00\n")
+	if _, _, err := Search(Options{Wikis: root, Word: "heron"}); err == nil {
+		t.Error("a NUL in a note gave no error")
+	}
+}

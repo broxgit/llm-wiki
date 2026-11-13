@@ -1578,6 +1578,21 @@ expect "stats says a page read logs itself, and misses were by hand" "logs a hit
 check "find logs a search that found nothing, with its word" bash -c "tail -n 1 '$WIKIS_DIR/stats.csv' | grep -q ',global,search-none,zzznothingmatches$'"
 "$W" find canary >/dev/null
 check "and one that found something" bash -c "tail -n 1 '$WIKIS_DIR/stats.csv' | grep -q ',search-found,canary$'"
+# A note is found before it is compiled. Someone with no session that compiles would
+# otherwise never get a note back: find read the index and the pages, and nothing else.
+printf 'The client wants the Q3 figures zzrestated.\n' | "$W" capture demo find-me >/dev/null
+out="$("$W" find zzrestated 2>&1)"
+case "$out" in "demo:
+  waiting to be compiled:
+    raw/"*"-find-me.md: The client wants the Q3 figures zzrestated.") ok "find finds a note that isn't compiled yet" ;; *) bad "find finds a note that isn't compiled yet" "$out" ;; esac
+check "and logs it as found" bash -c "tail -n 1 '$WIKIS_DIR/stats.csv' | grep -q ',demo,search-found,zzrestated$'"
+note=""
+for f in "$WIKIS_DIR"/demo/raw/*-find-me.md; do note="${f##*/}"; done
+printf '\n## [2026-01-01] ingest | find-me\n- source: raw/%s\n' "$note" >> "$WIKIS_DIR/demo/log.md"
+expect "a note a compile has recorded is no longer listed" "no mentions in any index or page: zzrestated" "$W" find zzrestated
+rm -f "$WIKIS_DIR/demo/raw/$note"
+# Later checks count the searches logged so far.
+grep -v ',zzrestated$' "$WIKIS_DIR/stats.csv" > "$WIKIS_DIR/stats.csv.tmp" && mv "$WIKIS_DIR/stats.csv.tmp" "$WIKIS_DIR/stats.csv"
 expect "stats lists the words that found nothing" "1 found nothing: zzznothingmatches" "$W" stats
 expect "searches don't change the hit rate" "67%" "$W" stats
 # Page reads come from transcripts, so they don't depend on a session logging anything.
@@ -2831,6 +2846,37 @@ exit 0" frun "$T/bin/llm-wiki" "$RC" latinend
   # No output of wiki.sh can end a call to the MCP server: bytes that aren't UTF-8 come back as U+FFFD.
   expect "wiki_search answers when an index line isn't UTF-8" "- [School](wiki/school.md): " mcp_any wiki_search '{"word":"in Latin-1"}'
   lacks "and doesn't fail" "ERROR" mcp_any wiki_search '{"word":"in Latin-1"}'
+  # Notes that aren't compiled yet: the newest first, five at most, .md only, and not
+  # one a compile has recorded.
+  mkdir -p "$FD/alpha/raw" "$FD/Beta/raw"
+  printf '# Log\n\n## ingest\n- source: raw/2026-01-03-done.md\n' >> "$FD/alpha/log.md"
+  printf 'Captured: 2026-01-01\n\nA heron was seen.\n' > "$FD/alpha/raw/2026-01-01-old.md"
+  printf -- '---\ntitle: heron up here\n---\n \t The HERON came back.\n' > "$FD/alpha/raw/2026-02-02-new.md"
+  printf 'The heron, compiled already.\n' > "$FD/alpha/raw/2026-01-03-done.md"
+  printf 'heron in a file that is not a note\n' > "$FD/alpha/raw/2026-03-03-scan.pdf"
+  printf 'heron in a hidden note\n' > "$FD/alpha/raw/.hidden.md"
+  printf -- '---\ntitle: heron only up here\n---\nNothing below.\n' > "$FD/alpha/raw/2026-04-04-front.md"
+  for i in 1 2 3 4 5 6; do printf 'heron number %s\n' "$i" > "$FD/Beta/raw/2026-06-0$i-n.md"; done
+  fsame "find, helper and Bash: notes that aren't compiled yet" helper heron
+  out="$(frun "" "$RC" heron)"
+  case "$out" in "Beta:
+  waiting to be compiled:
+    raw/2026-06-06-n.md: heron number 6
+    raw/2026-06-05-n.md: heron number 5
+    raw/2026-06-04-n.md: heron number 4
+    raw/2026-06-03-n.md: heron number 3
+    raw/2026-06-02-n.md: heron number 2
+alpha:
+  waiting to be compiled:
+    raw/2026-02-02-new.md: The HERON came back.
+    raw/2026-01-01-old.md: A heron was seen.
+exit 0"*) ok "and they are the newest five, .md only, without the compiled and the hidden" ;; *) bad "and they are the newest five, .md only, without the compiled and the hidden" "$out" ;; esac
+  printf 'The canary, noted.\n' > "$FD/alpha/raw/2026-07-07-canary.md"
+  fsame "find, helper and Bash: notes after the index lines and the pages" helper canary
+  rm -f "$FD/alpha/raw/2026-07-07-canary.md"
+  printf 'heron\0\n' > "$FD/alpha/raw/2026-08-08-nul.md"
+  fsame "find, helper and Bash: a note with a NUL byte" bash heron
+  rm -rf "$FD/alpha/raw" "$FD/Beta/raw"
   fsame "find, helper and Bash: a word that matches nothing" helper zzznothing
   expect "and the helper says so, and logs it against the shared wiki" "no mentions in any index or page: zzznothing
 exit 0
