@@ -4202,6 +4202,21 @@ else:
     text, sid, cwd = d.get("prompt"), d.get("session_id"), d.get("cwd")
 if not isinstance(text, str) or not isinstance(sid, str):
     sys.exit(0)
+# Turns Claude Code starts by itself reach this hook as prompts, and nothing in the payload
+# says so: the text is all there is. Their words are not the user words, so they are not
+# searched. Each wrapper is what such a turn starts with, after a system-reminder opening.
+# Seen in a headless run: task-notification, for a background command and for a background
+# sub-agent reporting back. The rest were seen in a desktop session, or are named in Claude
+# Code documentation: another session message, a CI monitor event, a scheduled task, an
+# agent message, a cross-session message, a side-session event.
+UNTYPED = ("Another Claude session sent a message:", "<task-notification>",
+           "[SYSTEM NOTIFICATION - NOT USER INPUT]", "<ci-monitor-event>",
+           "<agent-message", "<cross-session-message", "<side-sessions-event>")
+head = text.lstrip()[:200]
+if head.startswith("<system-reminder>"):
+    head = head[17:].lstrip()
+if not head or head.startswith(UNTYPED):
+    sys.exit(0)
 with open(os.environ["PROMPT_FILE"], "wb") as f:
     f.write(text[:4000].encode("utf-8", "replace"))
 print(sid + "\t" + (cwd if isinstance(cwd, str) else ""))' 2>/dev/null || true)"

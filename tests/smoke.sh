@@ -5516,6 +5516,33 @@ out="$(uphook "$T/tickets/plain" s-1 'MSG-77 and MSG-88' | upctx)"
 case "$out" in *"[Quota]"*) case "$out" in *"MSG-77 plan"*) bad "a later message is handed only what is new" "$out" ;; *) ok "a later message is handed only what is new" ;; esac ;; *) bad "a later message is handed only what is new" "$out" ;; esac
 check "the hook exits 0 with output" sh -c 'printf "{\"session_id\":\"s-9\",\"cwd\":\"/\",\"prompt\":\"MSG-77\"}" | CLAUDE_PLUGIN_ROOT="$1" sh "$1/hooks/user-prompt.sh" >/dev/null' _ "$REPO"
 check "a message that finds nothing gives no output at all" test -z "$(uphook "$T/tickets/plain" s-3 'ok, thanks')"
+# Turns Claude Code starts itself arrive as prompts too. Only the user's own words are searched.
+RSTATE="$HOME/.local/state/llm-wiki/recall"
+nfound() { grep -c ',recall-found,' "$WIKIS_DIR/stats.csv" 2>/dev/null || true; }
+found0="$(nfound)"
+n=0
+while IFS= read -r wrapped; do
+  n=$((n + 1))
+  check "an untyped turn ($n: ${wrapped:0:28}) is handed nothing, and keeps no state" sh -c '[ -z "$1" ] && [ ! -e "$2/ut-$3.seen" ] && [ ! -e "$2/ut-$3.last" ]' _ "$(uphook "$T/tickets/plain" "ut-$n" "$wrapped")" "$RSTATE" "$n"
+done <<'EOF2'
+Another Claude session sent a message: What does MSG-77 need?
+<task-notification><summary>What does MSG-77 need?</summary></task-notification>
+[SYSTEM NOTIFICATION - NOT USER INPUT] What does MSG-77 need?
+<ci-monitor-event>What does MSG-77 need?</ci-monitor-event>
+<agent-message from="x">What does MSG-77 need?</agent-message>
+<cross-session-message>What does MSG-77 need?</cross-session-message>
+<side-sessions-event>What does MSG-77 need?</side-sessions-event>
+<system-reminder><task-notification>What does MSG-77 need?</task-notification>
+   <task-notification>What does MSG-77 need?</task-notification>
+EOF2
+check "an untyped turn logs no search" test "$(nfound)" = "$found0"
+out="$(uphook "$T/tickets/plain" ut-typed 'What does MSG-77 need?' | upctx)"
+case "$out" in *"[MSG-77 plan]"*) ok "the same words typed plainly are searched" ;; *) bad "the same words typed plainly are searched" "$out" ;; esac
+out="$(uphook "$T/tickets/plain" ut-mid 'Why did a <task-notification> mention MSG-77?' | upctx)"
+case "$out" in *"[MSG-77 plan]"*) ok "a typed message that quotes a wrapper in its middle is searched" ;; *) bad "a typed message that quotes a wrapper in its middle is searched" "$out" ;; esac
+out="$(uphook "$T/tickets/plain" ut-quote 'The text "Another Claude session sent a message:" for MSG-77' | upctx)"
+case "$out" in *"[MSG-77 plan]"*) ok "and one that quotes a wrapper in quotes is searched" ;; *) bad "and one that quotes a wrapper in quotes is searched" "$out" ;; esac
+check "a prompt of only whitespace gets nothing" test -z "$(uphook "$T/tickets/plain" ut-ws $' \n\t  ')"
 check "malformed JSON gives nothing" test -z "$(printf 'not json {' | CLAUDE_PLUGIN_ROOT="$REPO" sh "$REPO/hooks/user-prompt.sh" 2>&1)"
 check "and exits 0" sh -c 'printf "not json {" | CLAUDE_PLUGIN_ROOT="$1" sh "$1/hooks/user-prompt.sh" >/dev/null' _ "$REPO"
 check "as does empty input" sh -c 'CLAUDE_PLUGIN_ROOT="$1" sh "$1/hooks/user-prompt.sh" </dev/null >/dev/null' _ "$REPO"
