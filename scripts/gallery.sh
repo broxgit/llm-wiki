@@ -39,6 +39,11 @@ unset XDG_CONFIG_HOME XDG_STATE_HOME XDG_DATA_HOME XDG_CACHE_HOME LC_ALL LC_CTYP
 PATH="/usr/bin:/bin"
 mkdir -p "$HOME"
 cd "$T" || exit 1
+# A copy of the checkout inside the fake home, so a path to it is ~/llm-wiki on every machine:
+# a card wraps at its width before any placeholder goes in, so its length has to be the same.
+mkdir -p "$HOME/llm-wiki"
+(cd "$REPO" && tar cf - --exclude ./.git --exclude ./.claude --exclude ./tests --exclude ./bin .) | (cd "$HOME/llm-wiki" && tar xf -)
+W="$HOME/llm-wiki/wiki.sh"
 printf '[user]\n\tname = Gallery\n\temail = gallery@example.test\n[init]\n\tdefaultBranch = main\n' >"$HOME/.gitconfig"
 printf '# News\n\n## 2026-01-02: An entry\n\n- Something you would notice.\n- Do: run `wiki status`.\n' >"$LLM_WIKI_NEWS_FILE"
 LLM_WIKI_STYLE=off "$W" new "$WIKIS_DIR/global" >/dev/null 2>&1
@@ -57,10 +62,13 @@ normalize() {
 }
 # look <trace> <output>: from the pieces the run called. kit: the kit's pieces and nothing else.
 # old look: version 2's helpers, or codes of its own. mixed: both. unstyled: nothing at all,
-# though a person reads it. typed and an error alone don't make a command's look.
+# though a person reads it. typed alone doesn't make a command's look; an error alone does, since a
+# run that only failed has nothing else to show.
 look() {
   local kit=no v2=no
   grep -qv -e '^ui_typed$' -e '^ui_error$' -e '^v2$' "$1" 2>/dev/null && kit=yes
+  # A run that only failed printed the kit's error, and that is all it has to show.
+  [ "$kit" = yes ] || ! grep -q '^ui_error$' "$1" 2>/dev/null || grep -q '^v2$' "$1" || kit=yes
   grep -q '^v2$' "$1" 2>/dev/null && v2=yes
   if [ "$kit" = yes ] && [ "$v2" = yes ]; then echo mixed
   elif [ "$kit" = yes ]; then echo kit

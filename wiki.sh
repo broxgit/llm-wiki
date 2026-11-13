@@ -132,7 +132,10 @@ else
   esac
 fi
 
-usage() {
+# usage: the commands, as a table of the kit: its first line, the header, is bold.
+usage() { usage_text | ui_table; }
+
+usage_text() {
   cat <<EOF
 Usage: $WIKI_CMD <command> [options]
 
@@ -416,8 +419,8 @@ cmd_helper() {
         on | off) helper_auto_set "$2" || die "can't write $(tilde "$HELPER_FILE")" ;;
         *) die "helper auto takes: on, off" ;;
       esac
-      if [ "$2" = on ]; then echo "helper auto: on. Session start fetches the helper in the background when it is missing or out of date."
-      else echo "helper auto: off. $WIKI_CMD update and $WIKI_CMD helper fetch still download it."
+      if [ "$2" = on ]; then ui_item ok "helper auto: on. Session start fetches the helper in the background when it is missing or out of date."
+      else ui_item ok "helper auto: off. $WIKI_CMD update and $WIKI_CMD helper fetch still download it."
       fi
       return 0
       ;;
@@ -425,6 +428,13 @@ cmd_helper() {
     *) die "helper takes: fetch, auto on, auto off" ;;
   esac
   src="$(helper_source)"
+  # A table of the kit with no header: its first line is what setup --list reads.
+  helper_lines "$src" | ui_table --no-head
+}
+
+# helper_lines <release>: which helper a checkout uses, and where it comes from, a line each.
+helper_lines() {
+  local b src="$1"
   if [ -n "${LLM_WIKI_NO_GO:-}" ]; then
     echo "helper: off, because LLM_WIKI_NO_GO is set"
   elif b="$(go_helper)"; then
@@ -1094,16 +1104,14 @@ cmd_workflows() {
   case "$sub" in
     "")
       if [ -f "$f" ] && grep -q "^- in $bt" "$f"; then
-        echo "Where sessions outside a repository belong, from $(tilde "$f"). The first that fits wins."
-        echo
-        sed -n "s/^- in $bt/  in $bt/p" "$f"
+        ui_stage WORKFLOWS "Where sessions outside a repository belong, from $(tilde "$f"). The first that fits wins."
+        sed -n "s/^- in $bt/in $bt/p" "$f" | while IFS= read -r line; do ui_detail "$line"; done
       else
-        echo "No patterns yet. A session in a folder that isn't a git repository asks, and the answer is kept here."
+        ui_stage WORKFLOWS "No patterns yet. A session in a folder that isn't a git repository asks, and the answer is kept here."
       fi
-      echo
-      echo "Add one:    $WIKI_CMD workflows add '<pattern>' inside|none|<wiki>"
-      echo "Remove one: $WIKI_CMD workflows remove '<pattern>'"
-      echo "Try one:    $WIKI_CMD workflows check <folder>"
+      ui_detail "Add one:    $(typed "$WIKI_CMD workflows add '<pattern>' inside|none|<wiki>")"
+      ui_detail "Remove one: $(typed "$WIKI_CMD workflows remove '<pattern>'")"
+      ui_detail "Try one:    $(typed "$WIKI_CMD workflows check <folder>")"
       ;;
     add)
       [ $# -eq 2 ] || die_usage "workflows add needs a pattern and what to do there: inside, none, or a wiki's name"
@@ -1130,8 +1138,8 @@ cmd_workflows() {
         exact && !done && index($0, "- in `") == 1 { print line; done = 1 }
         { print }
         END { if (!done) print line }' "$f" > "$tmp" && mv "$tmp" "$f"
-      echo "$([ -n "$had" ] && echo changed || echo added): ${line#- }"
-      echo "Send it to your other machines: $WIKI_CMD sync $SHARED -m \"$SHARED: where sessions belong\""
+      ui_item ok "$([ -n "$had" ] && echo changed || echo added): ${line#- }"
+      ui_detail "Send it to your other machines: $(typed "$WIKI_CMD sync $SHARED -m \"$SHARED: where sessions belong\"")"
       ;;
     remove)
       [ $# -eq 1 ] || die_usage "workflows remove needs the pattern to take out"
@@ -1139,8 +1147,8 @@ cmd_workflows() {
       [ -f "$f" ] && grep -qF -- "- in $bt$glob$bt: " "$f" || die "no pattern $glob. See them: $WIKI_CMD workflows"
       tmp="$f.tmp.$$"
       WF_PRE="- in $bt$glob$bt: " awk 'index($0, ENVIRON["WF_PRE"]) != 1' "$f" > "$tmp" && mv "$tmp" "$f"
-      echo "removed: in $bt$glob$bt"
-      echo "Send it to your other machines: $WIKI_CMD sync $SHARED -m \"$SHARED: where sessions belong\""
+      ui_item ok "removed: in $bt$glob$bt"
+      ui_detail "Send it to your other machines: $(typed "$WIKI_CMD sync $SHARED -m \"$SHARED: where sessions belong\"")"
       ;;
     check)
       dir="${1:-$PWD}"
@@ -1179,9 +1187,10 @@ cmd_list() {
     [ "${#w}" -le "$width" ] || width="${#w}"
   done
   if [ "$found" = 0 ]; then
-    [ "$names" = 1 ] || echo "No wikis yet. Run: $WIKI_CMD init"
+    [ "$names" = 1 ] || ui_item warn "No wikis yet. Run: $(typed "$WIKI_CMD init")"
     return 0
   fi
+  # --names is for a program: the names alone. Otherwise a table of the kit with no header.
   for d in "$WIKIS_DIR"/*/; do
     d="${d%/}"
     is_wiki "$d" || continue
@@ -1191,7 +1200,7 @@ cmd_list() {
     [ ! -f "$d/repos.md" ] || covers="$(sed -n 's/^- //p' "$d/repos.md" | tr '\n' ' ')"
     covers="${covers% }"
     if [ -n "$covers" ]; then printf '%-*s  covers: %s\n' "$width" "$w" "$covers"; else printf '%s\n' "$w"; fi
-  done
+  done | if [ "$names" = 1 ]; then cat; else ui_table --no-head; fi
 }
 
 cmd_start() {
@@ -3370,10 +3379,10 @@ cmd_stale() {
       v="$(sed -n 's/^verified: *\([0-9-]*\).*/\1/p' "$f" | head -n 1)"
       rel="${f:$((${#d} + 1))}"
       if [ -z "$v" ]; then
-        echo "${d##*/}: $rel  (never verified)"
+        ui_item warn "${d##*/}: $rel  (never verified)"
         found=1
       elif [[ "$v" < "$cutoff" ]]; then
-        echo "${d##*/}: $rel  (verified $v)"
+        ui_item warn "${d##*/}: $rel  (verified $v)"
         found=1
       fi
     done <<EOF2
@@ -3389,16 +3398,16 @@ EOF2
         [ -n "$rel" ] || continue
         found=1
         case "$v" in
-          behind*) set -- $v; echo "${d##*/}: $rel  ($2 commits behind $3)" ;;
-          missing*) set -- $v; echo "${d##*/}: $rel  (commit $2 not found in $3)" ;;
-          bare*) echo "${d##*/}: $rel  (commit ${v#bare } names no repository; this wiki covers several, so write repo@hash)" ;;
+          behind*) set -- $v; ui_item warn "${d##*/}: $rel  ($2 commits behind $3)" ;;
+          missing*) set -- $v; ui_item warn "${d##*/}: $rel  (commit $2 not found in $3)" ;;
+          bare*) ui_item warn "${d##*/}: $rel  (commit ${v#bare } names no repository; this wiki covers several, so write repo@hash)" ;;
         esac
       done <<EOF2
 $(commit_lag "$d" "$map")
 EOF2
     done
   fi
-  [ "$found" = 1 ] || echo "nothing older than $days days (cutoff $cutoff) or $STALE_COMMITS commits"
+  [ "$found" = 1 ] || ui_item ok "nothing older than $days days (cutoff $cutoff) or $STALE_COMMITS commits"
 }
 
 upgrade_one() {
@@ -3621,7 +3630,7 @@ cmd_unlock() {
   local root="$1"
   is_wiki "$root" || die "$(tilde "$root") is not a wiki"
   printf 'free\n' > "$root/.compile-lock"
-  echo "unlocked: $(tilde "$root")"
+  ui_item ok "unlocked: $(tilde "$root")"
 }
 
 CLAUDE_FILE="$HOME/.claude/CLAUDE.md"
@@ -4464,7 +4473,7 @@ cmd_feedback() {
       local f
       f="$(feedback_find "${1:-}")"
       feedback_status "$f" "dismissed $(date -u +%Y-%m-%d)"
-      echo "dismissed: ${f##*/}"
+      ui_item ok "dismissed: ${f##*/}"
       ;;
     -h | --help)
       cat <<EOF
@@ -4498,20 +4507,21 @@ feedback_list() {
   # The user looked, so start holds the reminder for a few days. An agent listing
   # them, with its output captured, doesn't count.
   [ ! -t 1 ] || ( tip_set used:feedback ) 2>/dev/null || true
-  echo "Feedback on llm-wiki: $(feedback_mode). Notes in $(tilde "$FEEDBACK_DIR")"
+  ui_stage FEEDBACK "on llm-wiki: $(feedback_mode)" "notes in $(tilde "$FEEDBACK_DIR")"
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     n=$((n + 1))
     kind="$(feedback_field Kind "$f")"; seen="$(feedback_field Seen "$f")"
     status="$(feedback_field Status "$f")"; sum="$(feedback_field Summary "$f")"
     f="$(basename "$f" .md)"
-    printf '%-9s %-9s seen %-3s %s\n    id: %s\n' "${status%% *}" "$kind" "$seen" "$sum" "$f"
+    ui_detail "$(printf '%-9s %-9s seen %-3s %s' "${status%% *}" "$kind" "$seen" "$sum")"
+    ui_detail "    id: $f"
   done <<EOF
 $(feedback_notes)
 EOF
   if [ "$n" -eq 0 ]; then
-    echo "None yet."
-    [ "$(feedback_mode)" != off ] || echo "Agents keep notes only once it's on. Run: $WIKI_CMD setup feedback"
+    ui_detail "None yet."
+    [ "$(feedback_mode)" != off ] || ui_item warn "Agents keep notes only once it's on. Run: $(typed "$WIKI_CMD setup feedback")"
     return 0
   fi
   echo
@@ -6334,7 +6344,7 @@ cmd_pages() {
   is_wiki "$root" || die "$(tilde "$root") is not a wiki. $WIKI_CMD status lists the wikis here."
   [ "$data" = 0 ] || style_off
   if [ ! -d "$root/wiki" ]; then
-    [ "$data" = 1 ] || echo "No pages yet."
+    [ "$data" = 1 ] || ui_detail "No pages yet."
     return 0
   fi
   (cd "$root" && LC_ALL=C find wiki -type f -name '*.md' ! -path '*/.*' | LC_ALL=C sort | tr '\n' '\0' | LC_ALL=C xargs -0 awk '
@@ -6360,7 +6370,7 @@ cmd_pages() {
       if ($0 ~ /^# /) { head = $0; sub(/^#[ \t]+/, "", head); sub(/[ \t#]+$/, "", head); gsub(/[*_`]/, "", head); gsub(/\t/, " ", head) }
     }
     END { flush() }
-  ' /dev/null) | if [ "$data" = 1 ]; then cat; else awk -F '\t' '{ printf "%-44s %s\n", $1, $4 } END { if (NR == 0) print "No pages yet." }'; fi
+  ' /dev/null) | if [ "$data" = 1 ]; then cat; else awk -F '\t' '{ printf "%-44s %s\n", $1, $4 } END { if (NR == 0) print "No pages yet." }' | ui_table --no-head; fi
 }
 
 cmd_open() {
@@ -6394,22 +6404,21 @@ cmd_open() {
     line="$(open_ledger "$d" | grep -E '^(open|overdue)\|' || true)"
     [ -n "$line" ] || continue
     wikis=$((wikis + 1))
-    echo "== ${d##*/}"
+    ui_stage OPEN "${d##*/}"
     for want in overdue open; do
       while IFS='|' read -r state kind detail status name; do
         [ "$state" = "$want" ] || continue
-        if [ "$state" = overdue ]; then n_over=$((n_over + 1)); printf '  OVERDUE  %s (due %s)\n' "$name" "$detail"
-        elif [ "$kind" = due ]; then printf '           %s (due %s)\n' "$name" "$detail"
-        else printf '           %s (waiting on %s)\n' "$name" "${detail:-?}"; fi
+        if [ "$state" = overdue ]; then n_over=$((n_over + 1)); ui_item warn "OVERDUE  $name (due $detail)"
+        elif [ "$kind" = due ]; then ui_detail "$name (due $detail)"
+        else ui_detail "$name (waiting on ${detail:-?})"; fi
         n_open=$((n_open + 1))
       done <<EOF2
 $line
 EOF2
     done
   done
-  if [ "$n_open" = 0 ]; then echo "Nothing open."; return 0; fi
-  echo
-  echo "$n_open open in $wikis wiki(s), $n_over past their date."
+  if [ "$n_open" = 0 ]; then ui_item ok "Nothing open."; return 0; fi
+  ui_detail "$n_open open in $wikis wiki(s), $n_over past their date."
 }
 
 # open_counts: "<open> <overdue>" across the collection, open counting the overdue too.
@@ -6517,10 +6526,10 @@ cmd_skills() {
     *) die "skills commands: list, link" ;;
   esac
   if [ -z "$(collection_skills)" ]; then
-    echo "No team skills yet. When a procedure keeps coming up, an agent proposes one, and it lands in <wiki>/skills/."
+    ui_detail "No team skills yet. When a procedure keeps coming up, an agent proposes one, and it lands in <wiki>/skills/."
     return 0
   fi
-  printf '%-22s %-26s %-9s %s\n' "WIKI" "SKILL" "LINKED" "DESCRIPTION"
+  { printf '%-22s %-26s %-9s %s\n' "WIKI" "SKILL" "LINKED" "DESCRIPTION"
   while IFS="$TAB" read -r wiki name src dest; do
     [ -n "$dest" ] || continue
     if [ "$SKILLS_DIR/$dest" -ef "$src" ]; then state=yes
@@ -6530,7 +6539,8 @@ cmd_skills() {
   done <<EOF
 $(collection_skills)
 EOF
-  [ "$(skills_unlinked)" -eq 0 ] || echo "Link them for Claude Code: $WIKI_CMD skills link"
+  } | ui_table
+  [ "$(skills_unlinked)" -eq 0 ] || ui_item warn "Link them for Claude Code: $(typed "$WIKI_CMD skills link")"
 }
 
 # ---- tips -------------------------------------------------------------------
@@ -6729,10 +6739,10 @@ cmd_tips() {
       case " $TIPS_ORDER " in *" $id "*) ;; *) die "no tip called $id. Tips: $TIPS_ORDER" ;; esac
       if [ "$mode" = mute ]; then
         tip_set "muted:$id"
-        echo "tip $id muted. $WIKI_CMD tips --unmute $id brings it back."
+        ui_item ok "tip $id muted. $(typed "$WIKI_CMD tips --unmute $id") brings it back."
       else
         [ ! -f "$TIPS_STATE" ] || { awk -v k="muted:$id" '$1 != k' "$TIPS_STATE" > "$TIPS_STATE.tmp" && mv "$TIPS_STATE.tmp" "$TIPS_STATE"; }
-        echo "tip $id unmuted"
+        ui_item ok "tip $id unmuted"
       fi
       ;;
     next)
@@ -6744,14 +6754,14 @@ cmd_tips() {
       ;;
     list)
       line="$(tips_due all)"
-      if [ -z "$line" ]; then echo "No tips right now: nothing in your wikis points at an unused feature."; return 0; fi
+      if [ -z "$line" ]; then ui_detail "No tips right now: nothing in your wikis points at an unused feature."; return 0; fi
       while IFS="$TAB" read -r id text; do
-        if [ -n "$(tip_get "muted:$id")" ]; then printf '%s (muted)\n' "$id"; else printf '%s\n' "$id"; fi
-        printf '  %s\n\n' "$text"
+        if [ -n "$(tip_get "muted:$id")" ]; then ui_stage TIP "$id (muted)"; else ui_stage TIP "$id"; fi
+        ui_detail "$text"
       done <<EOF
 $line
 EOF
-      echo "Mute one for good: $WIKI_CMD tips --mute <name>"
+      ui_next "mute one for good: $(typed "$WIKI_CMD tips --mute <name>")"
       ;;
   esac
 }
@@ -7156,13 +7166,13 @@ cmd_extensions() {
       if [ "$1" = add ]; then
         ext_set "$2" on
         setup_mark "extension.$2"
-        echo "${M_OK}on: $2. $WIKI_CMD $2 --help has its commands."
-        d="$(ext_ready "$2")" || echo "${M_WARN}$2 isn't set up yet: $d"
+        ui_item ok "on: $2. $WIKI_CMD $2 --help has its commands."
+        d="$(ext_ready "$2")" || ui_item warn "$2 isn't set up yet: $d"
       elif ! ext_on "$2"; then
-        echo "$2 is already off."
+        ui_item ok "$2 is already off."
       else
         ext_set "$2" off
-        echo "off: $2. Its settings are kept, for when you turn it on again."
+        ui_item ok "off: $2. Its settings are kept, for when you turn it on again."
       fi
       return 0
       ;;
@@ -7179,12 +7189,12 @@ cmd_extensions() {
         [ -f "$f" ] || continue
         any=1
         d="${f##*/}"; d="${d%.status}"
-        printf '== %s: %s, %s\n' "$d" "$(cut -f 1 "$f")" "$(cut -f 2 "$f")"
-        sed 's/^/  /' "${f%.status}.log" 2>/dev/null || true
+        ui_stage LOG "$d: $(cut -f 1 "$f")" "$(cut -f 2 "$f")"
+        { cat "${f%.status}.log" 2>/dev/null || true; } | while IFS= read -r l; do ui_detail "$l"; done
         case "$(cut -f 1 "$f")" in ok) ;; *) bad=1 ;; esac
       done
-      [ "$any" = 1 ] || echo "$2 hasn't been run for an event yet."
-      [ "$bad" = 0 ] || echo "Once that is fixed, run it again with: $WIKI_CMD extensions tick"
+      [ "$any" = 1 ] || ui_detail "$2 hasn't been run for an event yet."
+      [ "$bad" = 0 ] || ui_item warn "Once that is fixed, run it again with: $(typed "$WIKI_CMD extensions tick")"
       return 0
       ;;
     tick)
@@ -7246,21 +7256,22 @@ cmd_extensions() {
       ;;
     *) die_usage "extensions takes path, add <name>, remove <name>, setup <name>, log <name>, tick, every, or nothing" ;;
   esac
+  ui_stage EXTENSIONS "what this machine has"
   for f in "$EXT_DIR"/wiki-*; do
     [ -f "$f" ] || continue
     any=1
     n="${f##*/wiki-}"
     if ! ext_name_ok "$n"; then
-      printf '%-14s ignored: a name is lowercase letters, digits and dashes. Rename %s\n' "$n" "$(tilde "$f")"
+      ui_item warn "$(printf '%-14s ignored: a name is lowercase letters, digits and dashes. Rename %s' "$n" "$(tilde "$f")")"
     elif is_builtin "$n"; then
-      printf "%-14s ignored: %s is a command of llm-wiki's own. Rename %s\\n" "$n" "$n" "$(tilde "$f")"
+      ui_item warn "$(printf "%-14s ignored: %s is a command of llm-wiki's own. Rename %s" "$n" "$n" "$(tilde "$f")")"
     elif [ ! -x "$f" ]; then
-      printf '%-14s not executable. Run: chmod +x %s\n' "$n" "$f"
+      ui_item warn "$(printf '%-14s not executable. Run: ' "$n")$(typed "chmod +x $f")"
     else
       d="$(ext_about "$f")"
-      printf '%-14s %s%s\n' "$n" "${d:-(no description)}" "$(ext_runs_on "$f")"
-      d="$(ext_ready "$n")" || printf '%-14s %snot ready: %s\n' "" "$M_WARN" "$d"
-      ext_notes "$f" | while IFS= read -r d; do printf '%-14s %s%s\n' "" "$M_WARN" "$d"; done
+      ui_item ok "$(printf '%-14s %s%s' "$n" "${d:-(no description)}" "$(ext_runs_on "$f")")"
+      d="$(ext_ready "$n")" || ui_item warn "$(printf '%-14s not ready: %s' "$n" "$d")"
+      ext_notes "$f" | while IFS= read -r d; do ui_item warn "$(printf '%-14s %s' "$n" "$d")"; done
     fi
   done
   for f in "$EXT_SHIPPED"/wiki-*; do
@@ -7271,15 +7282,14 @@ cmd_extensions() {
     any=1
     d="$(ext_about "$f")"
     if ext_on "$n"; then
-      printf '%-14s %s%s\n' "$n" "${d:-(no description)}" "$(ext_runs_on "$f")"
-      d="$(ext_ready "$n")" || printf '%-14s %snot ready: %s\n' "" "$M_WARN" "$d"
-    else printf '%-14s off. %s Turn it on: %s extensions add %s\n' "$n" "${d:-}" "$WIKI_CMD" "$n"; fi
+      ui_item ok "$(printf '%-14s %s%s' "$n" "${d:-(no description)}" "$(ext_runs_on "$f")")"
+      d="$(ext_ready "$n")" || ui_item warn "$(printf '%-14s not ready: %s' "$n" "$d")"
+    else ui_detail "$(printf '%-14s off. %s Turn it on: ' "$n" "${d:-}")$(typed "$WIKI_CMD extensions add $n")"; fi
   done
-  [ "$any" = 1 ] || echo "No extensions on this machine."
-  echo
-  echo "An extension is an executable named wiki-<name> in $(tilde "$EXT_DIR")."
-  echo "$WIKI_CMD <name> runs it. docs/extensions.md says what it is given."
-  [ -z "$(ext_wanting tick)" ] || echo "Runs on tick come every $(ext_every_all), from session start. $WIKI_CMD extensions every changes that."
+  [ "$any" = 1 ] || ui_detail "No extensions on this machine."
+  ui_detail "An extension is an executable named wiki-<name> in $(tilde "$EXT_DIR")."
+  ui_detail "$WIKI_CMD <name> runs it. docs/extensions.md says what it is given."
+  [ -z "$(ext_wanting tick)" ] || ui_detail "Runs on tick come every $(ext_every_all), from session start. $(typed "$WIKI_CMD extensions every") changes that."
 }
 
 # ---- completion -------------------------------------------------------------
@@ -8084,22 +8094,22 @@ cmd_delegation() {
     *) die "delegation commands: show, off, ask, auto, log" ;;
   esac
   if [ ! -f "$DELEG_FILE" ]; then
-    echo "no $(tilde "$DELEG_FILE") yet. Mode is ask by default. $WIKI_CMD setup delegation creates it."
+    ui_detail "no $(tilde "$DELEG_FILE") yet. Mode is ask by default. $(typed "$WIKI_CMD setup delegation") creates it."
     return 0
   fi
-  echo "delegation: mode $(deleg_mode)   ($(tilde "$DELEG_FILE"))"
-  sed -n '/^## Auto/,$p' "$DELEG_FILE" | grep '^- ' | sed 's/^- /  auto: /' || true
+  ui_stage DELEGATION "mode $(deleg_mode)" "$(tilde "$DELEG_FILE")"
+  sed -n '/^## Auto/,$p' "$DELEG_FILE" | grep '^- ' | sed 's/^- /auto: /' | while IFS= read -r l; do ui_detail "$l"; done || true
   if [ ! -s "$DELEG_LOG" ]; then
-    echo "no handoffs logged yet"
+    ui_detail "no handoffs logged yet"
     return 0
   fi
   echo
-  printf '%-44s %5s %5s %6s %7s %5s\n' "KIND (MODEL)" "RUNS" "OK" "FIXED" "REDONE" "OPEN"
+  { printf '%-44s %5s %5s %6s %7s %5s\n' "KIND (MODEL)" "RUNS" "OK" "FIXED" "REDONE" "OPEN"
   awk -F, 'NR > 1 && NF >= 6 {
       kind = $3; for (i = 4; i <= NF - 3; i++) kind = kind "," $i
       k = kind " (" $(NF - 2) ")"; n[k]++; r[k "|" $NF]++
     }
-    END { for (k in n) printf "%-44s %5d %5d %6d %7d %5d\n", substr(k, 1, 44), n[k], r[k "|ok"], r[k "|fixed"], r[k "|redone"], r[k "|started"] }' "$DELEG_LOG" | sort
+    END { for (k in n) printf "%-44s %5d %5d %6d %7d %5d\n", substr(k, 1, 44), n[k], r[k "|ok"], r[k "|fixed"], r[k "|redone"], r[k "|started"] }' "$DELEG_LOG" | sort; } | ui_table
   # A "started" row is written by the plugin's hook when a handoff begins. It has no
   # outcome yet: the agent adds one, once it has checked the work.
   open="$(awk -F, 'NR > 1 && NF >= 6 && $NF == "started" { n++ } END { print n + 0 }' "$DELEG_LOG")"
@@ -9134,13 +9144,11 @@ setup_cursor() {
 
 # Stubs for one release, for what moved to its own repository. Remove them after that.
 cmd_relay() {
-  echo "error: wiki relay is now its own command, relay, from https://github.com/broxgit/llm-relay. Install it as its README says, and run: relay setup. Then use: relay ${*:-run}" >&2
-  exit 1
+  die "wiki relay is now its own command, relay, from https://github.com/broxgit/llm-relay. Install it as its README says, and run: $(typed_err "relay setup"). Then use: $(typed_err "relay ${*:-run}")"
 }
 
 setup_copilot_cowork() {
-  echo "error: wiki setup copilot-cowork is now relay setup, from https://github.com/broxgit/llm-relay. Install it as its README says, and run: relay setup" >&2
-  exit 1
+  die "wiki setup copilot-cowork is now relay setup, from https://github.com/broxgit/llm-relay. Install it as its README says, and run: $(typed_err "relay setup")"
 }
 
 cmd_setup() {
@@ -9353,7 +9361,7 @@ case "$cmd" in
   collections)
     collections | while IFS="$TAB" read -r n f r; do
       printf '%-10s %s%s%s\n' "$n" "$(tilde "$f")" "${r:+  matches: }$r" "$([ "$f" = "$WIKIS_DIR" ] && echo '  <- here')"
-    done
+    done | ui_table --no-head
     [ -f "$COLLECTIONS_FILE" ] || echo "Only the default. $WIKI_CMD setup collections adds another, such as one for work." >&2
     exit 0
     ;;
@@ -9479,7 +9487,8 @@ case "$cmd" in
     if [ "$want_all" = 1 ]; then cmd_upgrade_all; else need_target; cmd_upgrade_one "$(resolve "$target")"; fi
     ;;
   unlock) need_target; cmd_unlock "$(resolve "$target")" ;;
-  claude) if [ "$want_print" = 1 ]; then claude_line; printf '\n'; else cmd_claude; fi ;;
+  # The line is for pasting into another agent's instruction file: a card at a terminal, the line alone otherwise.
+  claude) if [ "$want_print" = 1 ]; then ui_card "$(claude_line)"; else cmd_claude; fi ;;
   patterns) cmd_patterns ;;
   link) cmd_link "$( [ "$want_yes" = 1 ] && echo --yes)" ;;
   stats) cmd_stats "${target:-30d}" ;;

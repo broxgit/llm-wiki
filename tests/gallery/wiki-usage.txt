@@ -1,4 +1,4 @@
-Usage: wiki <command> [options]
+[1mUsage: wiki <command> [options][0m
 
   setup                Walk through every setting, step by step. Safe to rerun.
   setup --new          Only what's new since you last ran it, such as after a template update.

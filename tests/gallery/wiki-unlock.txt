@@ -1,1 +1,1 @@
-unlocked: <tmp>/wikis/demo
+[32m✓[0m unlocked: <tmp>/wikis/demo

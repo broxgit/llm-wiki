@@ -1,2 +1,2 @@
-delegation: mode ask   (<tmp>/wikis/delegation.md)
-no handoffs logged yet
+[34m●[0m [1m[44m[97m DELEGATION [0m  [1mmode ask[0m[2m · <tmp>/wikis/delegation.md[0m
+[2m│[0m     no handoffs logged yet
