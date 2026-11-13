@@ -1,0 +1,3 @@
+helper: off, because LLM_WIKI_NO_GO is set
+This checkout names release 8270fc99fbba, protocol 16, for darwin-arm64.
+Fetched automatically at session start: on

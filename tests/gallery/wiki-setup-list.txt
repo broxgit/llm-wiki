@@ -1,0 +1,29 @@
+collection          <tmp>/wikis
+git                 not a repo
+claude              missing
+completion          off[33m  <- new[0m
+delegation.mode     ask[33m  <- new[0m
+palette             default[33m  <- new[0m
+theme               auto[33m  <- new[0m
+feedback            off[33m  <- new[0m
+extensions          on: none[33m  <- new[0m
+compile             by sessions (background compile is off)
+helper              off, because LLM_WIKI_NO_GO is set, fetched at session start: on[33m  <- new[0m
+journal.enabled     yes[2m  (default)[0m[33m  <- new[0m
+journal.commit      no[2m  (default)[0m[33m  <- new[0m
+journal.entries     yes[2m  (default)[0m[33m  <- new[0m
+journal.format      standup[2m  (default)[0m[33m  <- new[0m
+journal.since       lastworkday[2m  (default)[0m[33m  <- new[0m
+journal.code_dirs   ~/dev[2m  (default)[0m[33m  <- new[0m
+journal.day_starts  HH:MM[2m  (default)[0m[33m  <- new[0m
+journal.workdays    12345[2m  (default)[0m[33m  <- new[0m
+journal.depth       4[2m  (default)[0m[33m  <- new[0m
+journal.authors     (none)[2m  (default)[0m[33m  <- new[0m
+journal.exclude     (none)[2m  (default)[0m[33m  <- new[0m
+journal.save        no[2m  (default)[0m[33m  <- new[0m
+journal.keep_days   0[2m  (default)[0m[33m  <- new[0m
+journal.max_commits 15[2m  (default)[0m[33m  <- new[0m
+(git questions not yet answered on this machine)
+
+Change one:    [36mwiki setup journal.<key>[0m   or   [36mwiki setup git.identity[0m
+Or a section:  [36mwiki setup collection | collections | tools | git | claude | plugin | permissions | upgrade | skills | completion | delegation | feedback | palette | theme | helper | chat | journal | microsoft-copilot[0m

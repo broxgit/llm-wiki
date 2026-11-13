@@ -1,0 +1,5 @@
+confluence     off. Watch Confluence pages and tell your wiki when one changes. It can also publish a wiki to a space, if you choose. Turn it on: wiki extensions add confluence
+jira           off. Check the Jira tickets your open items wait on, and close the ones that are done. Turn it on: wiki extensions add jira
+
+An extension is an executable named wiki-<name> in ~/.local/share/llm-wiki/extensions.
+wiki <name> runs it. docs/extensions.md says what it is given.

@@ -6,6 +6,12 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 
 ## Next
 
+### One look for every command: the kit
+
+- **Why:** decided on 2026-11-13: the timeline look picked for `relay mr` (a question, stages on a rail, items, a card to paste, YOUR TURN and its steps) becomes the house style of llm-wiki, llm-relay and any llm tool after them, so no command looks plainer than the others. Conventions version 4 names the pieces and the colour roles, and `ui.sh` draws them, one file that each tool carries byte for byte.
+- **Sketch:** done: the guide, the kit, the gallery and the lint, which only reports for now. Next, `relay mr` in llm-relay as the pilot, then every other command in both tools, fixing "Cowork" to "Copilot Cowork" in llm-relay as each moves. Then one pass over the docs and skills, then switching the lint on in both. `scripts/gallery.sh` lists the commands still to move, and `tests/ui-lint.sh --report` the functions. In llm-wiki: `status`, `setup` (every section), `update`, `news`, `extensions`, and the commands that print with no style at all, such as `open`, `pages`, `helper`, `skills`, `tips` and `--help`.
+- **Open:** how `wiki status`'s table and to-do list map onto stages and items without changing a word an agent reads. Whether a light theme can be detected on macOS's Terminal, which sets no `COLORFGBG`.
+
 ### Port wiki.sh to Go, one command at a time
 
 - **Why:** see the first step under Done. The aim is one binary that needs no Bash 3.2 workarounds and no Python.
