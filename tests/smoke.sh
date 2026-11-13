@@ -4293,7 +4293,8 @@ for v in "COLORTERM=" "COLORTERM=truecolor" "COLORTERM=truecolor LLM_THEME=light
   [ -n "$plainw" ] && [ "$sw" = "$plainw" ] && ok "every piece, ${v#COLORTERM=}: stripped, the words are the plain words" || bad "every piece, $v: stripped, the words are the plain words" "$(diff <(printf '%s\n' "$sw") <(printf '%s\n' "$plainw") | head -n 10)"
 done
 # A wait: one line, redrawn by a ticker while something runs, with a spinner that turns and a clock.
-out="$(kit 'ui_wait_start "go build: running..." "nothing more to answer"; sleep 1.1; ui_wait_stop; ui_item ok "go build: passed" 1s' $on $utf)"
+# Long enough for the clock to pass a second on a slow runner: CI's macOS once drew five frames in 1.1s, all at 0s.
+out="$(kit 'ui_wait_start "go build: running..." "nothing more to answer"; sleep 2.5; ui_wait_stop; ui_item ok "go build: passed" 2s' $on $utf)"
 case "$out" in *"⠋${ESC}[0m go build: running..."*"⠙${ESC}[0m go build: running..."*"1s · nothing more to answer"*) ok "a wait's spinner turns and its clock counts" ;; *) bad "a wait's spinner turns and its clock counts" "$(printf '%s' "$out" | tr '\r' '\n' | cat -v | head -n 8)" ;; esac
 case "${out##*$'\r'}" in "${ESC}[K${ESC}[32m✓${ESC}[0m go build: passed"*) ok "and ui_wait_stop takes its line away for the result" ;; *) bad "and ui_wait_stop takes its line away for the result" "$(printf '%s' "${out##*$'\r'}" | cat -v)" ;; esac
 [ "$(kit 'ui_wait_start x; sleep 0.3; ui_wait_stop; echo finished' LLM_WIKI_STYLE=off $utf)" = finished ] && ok "with style off, in a pipe, a wait draws nothing" || bad "with style off, in a pipe, a wait draws nothing"
