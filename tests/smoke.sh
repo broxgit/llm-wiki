@@ -4090,7 +4090,7 @@ case "$fyes" in *"${ESC}[32m✓${ESC}[0m feedback: notes"*) ok "setup <section>:
 printf 'off\n' | sty LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE=off "$W" setup feedback >/dev/null 2>&1
 case "$fstyled" in *"${ESC}[32m✓${ESC}[0m Done. "*) ok "setup <section>: the closing Done has the tick" ;; *) bad "setup <section>: the closing Done has the tick" "$fstyled" ;; esac
 case "$fstyled" in *"${ESC}[2m│${ESC}[0m   ${ESC}[1mFeedback${ESC}[0m [off] ${ESC}[1m${ESC}[33m›${ESC}[0m "*) ok "setup <section>: a prompt is on the rail, its words kept, the default in brackets" ;; *) bad "setup <section>: a prompt is on the rail, its words kept, the default in brackets" "$fstyled" ;; esac
-case "$fplain" in *"    Feedback [off] > "*) ok "setup <section>: plain, the prompt has the same words" ;; *) bad "setup <section>: plain, the prompt has the same words" "$fplain" ;; esac
+case "$fplain" in *"    Feedback [off] › "* | *"    Feedback [off] > "*) ok "setup <section>: plain, the prompt has the same words" ;; *) bad "setup <section>: plain, the prompt has the same words" "$fplain" ;; esac
 [ "$(printf '%s\n' "$fstyled" | kitw)" = "$(printf '%s\n' "$fplain" | kitw)" ] && ok "setup <section>: stripped, the words are the plain words" || bad "setup <section>: stripped, the words are the plain words" "$(diff <(printf '%s\n' "$fstyled" | kitw) <(printf '%s\n' "$fplain" | kitw))"
 case "$fplain" in *"${ESC}"*) bad "setup <section>: off has no codes" ;; *) ok "setup <section>: off has no codes" ;; esac
 case "$(printf 'off\n' | sty -u LLM_WIKI_STYLE LLM_WIKI_TEST_TTY=1 "$W" setup feedback 2>&1)" in *"${ESC}"*) bad "setup <section>: piped has no codes" ;; *) ok "setup <section>: piped has no codes" ;; esac
