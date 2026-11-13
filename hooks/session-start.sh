@@ -275,6 +275,6 @@ $waiting note(s) in raw/ are being compiled in the background now, by a run that
 elif [ "$waiting" -gt 0 ]; then
   ctx="$ctx
 
-$waiting note(s) in raw/ are waiting to be compiled$([ "$waiting" -gt 10 ] && echo ". That's more than ten, so do the user's request first and compile at the next pause" || echo ", before the user's request"), as one batch if there are five or more: see the handbook's session start and rules/compile.md."
+$waiting note(s) in raw/ are waiting to be compiled. The user's request comes first: answer it, then compile them at the first pause, as one batch if there are five or more. See the handbook's session start and rules/compile.md."
 fi
 emit "$ctx"

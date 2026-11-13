@@ -10,6 +10,13 @@ Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title i
 - `wiki setup theme` or `LLM_THEME=light` makes them read on a light background. `auto`, the default, reads `COLORFGBG` where it's set.
 - Commands move to a new timeline look one at a time, the same in llm-relay. `bash ui.sh`, in the llm-wiki folder, shows it now.
 
+## 2026-12-07: session start leaves your agents' rules alone
+
+- A session in another collection, or with `WIKIS_DIR` set, no longer rewrites the agents' rule files. They name your default collection.
+- A new wiki links to its own collection's shared wiki, not to `~/wikis/global`.
+- An out-of-date handbook is the second line of session start, and the agent tells you. Waiting notes are compiled after it has answered you.
+- Do: run `wiki upgrade --all`, for handbook version 35.
+
 ## 2026-12-06: a colour-blind palette
 
 - `wiki` can show blue for ok and magenta for an error instead of green and red. The marks and words are the same.

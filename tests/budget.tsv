@@ -3,7 +3,7 @@
 find: a word in an index line, a page and a note	217
 hook: a branch named for a ticket, no wiki	1465
 hook: a clone with a wiki	862
-hook: a clone with two notes waiting	1031
+hook: a clone with two notes waiting	1085
 hook: a folder a pattern sets to none	304
 hook: a folder holding more than 30 folders	1236
 hook: a folder holding nothing	1305
@@ -16,11 +16,11 @@ mcp: INSTRUCTIONS	1305
 skill: the description	197
 start: a branch named for a ticket, no wiki	1022
 start: a clone with a wiki	765
-start: a clone with two notes waiting	870
+start: a clone with two notes waiting	871
 start: a ticket folder with pages that mention it	1326
 start: a ticket folder, two wikis, no pattern	1447
-template/AGENTS.md	15337
-template/rules/compile.md	10755
+template/AGENTS.md	15555
+template/rules/compile.md	10785
 template/rules/conflicts.md	1581
 template/rules/delegation.md	4985
 template/rules/feedback.md	2202
