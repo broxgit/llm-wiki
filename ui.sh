@@ -10,7 +10,7 @@
 # LLM_PALETTE and LLM_THEME, which every llm tool reads, win over the files.
 #
 # Commands print through the pieces: ui_question and ui_keys, ui_stage, ui_item, ui_detail,
-# ui_card, ui_turn, ui_step, ui_next, typed, ui_wait, die. Never a colour code or an S_ variable:
+# ui_card, ui_turn, ui_step, ui_next, typed, ui_wait_start and ui_wait_stop, die. Never a colour code or an S_ variable:
 # a lint test fails on one outside this file. Run it on its own to see every piece: bash ui.sh
 
 : "${STYLE_OVERRIDE:=}" "${STYLE_PALETTE_FILE:=}" "${STYLE_THEME_FILE:=}"
@@ -136,13 +136,16 @@ style_set() {
   M_WARN="${S_BOLD}${S_WARN}!${S_OFF} "
 }
 STYLE=no STYLE_ERR=no
+# _UI_LIVE: whether a wait may draw at a terminal with style off. style_off says no: an agent's
+# shell can be a pseudo-terminal, and it reads every byte.
+_UI_LIVE=yes
 if style_wanted 1; then STYLE=yes; fi
 if style_wanted 2; then STYLE_ERR=yes; fi
 _UI_RAIL=no _UI_ACC=0
 style_set
 # style_off: for a command whose output an agent or a program reads. Nothing is styled, errors included.
 style_off() {
-  STYLE=no STYLE_ERR=no
+  STYLE=no STYLE_ERR=no _UI_LIVE=no
   style_set
 }
 # UI_TRACE names a file each piece appends its name to, so the gallery can tell a command on the
@@ -362,11 +365,18 @@ typed() {
 typed_err() {
   if [ "$STYLE_ERR" = yes ]; then printf '%s%s\033[0m' "$_E_TYPED" "$*"; else printf '%s' "$*"; fi
 }
-# ui_wait <tick> <what> [<aside>]: the one line a wait keeps up to date, at a terminal only, with
-# a spinner. ui_wait_clear takes it away.
+# _ui_live: whether a wait draws. With style on, it does. With style off, only at a terminal, as
+# plain words, so a long wait never looks like a hang; in a pipe or a file, and after style_off,
+# never.
+_ui_live() {
+  [ "$STYLE" = yes ] && return 0
+  [ "$_UI_LIVE" = yes ] && [ -t 1 ]
+}
+# ui_wait <tick> <what> [<aside>]: draws the one line a wait keeps up to date, once, with the
+# spinner's frame for the tick. For a loop that redraws it itself. ui_wait_clear takes it away.
 ui_wait() {
   local f
-  [ "$STYLE" = yes ] || return 0
+  _ui_live || return 0
   if style_utf8; then
     case $(($1 % 4)) in 0) f="⠋" ;; 1) f="⠙" ;; 2) f="⠸" ;; *) f="⠴" ;; esac
   else
@@ -374,7 +384,33 @@ ui_wait() {
   fi
   printf '\r\033[K%s%s%s %s  %s%s%s' "$S_TYPED" "$f" "$S_OFF" "$2" "$S_DIM" "${3:-}" "$S_OFF"
 }
-ui_wait_clear() { [ "$STYLE" != yes ] || printf '\r\033[K'; }
+ui_wait_clear() { _ui_live || return 0; printf '\r\033[K'; }
+# ui_wait_start <what> [<aside>]: a wait for something that runs in the foreground, such as a
+# check: the same line, with a spinner that turns and a clock, redrawn by a ticker in the
+# background five times a second. ui_wait_stop ends it and takes the line away. The ticker stops
+# by itself if the tool exits first.
+ui_wait_start() {
+  local what="$1" aside="${2:-}" parent=$$ start=$SECONDS i=0
+  _ui_t ui_wait
+  _UI_WAIT_PID=""
+  _ui_live || return 0
+  (
+    trap 'exit 0' TERM
+    while kill -0 "$parent" 2>/dev/null; do
+      ui_wait "$i" "$what" "$((SECONDS - start))s${aside:+$_G_SEP$aside}"
+      i=$((i + 1))
+      sleep 0.2
+    done
+  ) &
+  _UI_WAIT_PID=$!
+}
+ui_wait_stop() {
+  [ -n "${_UI_WAIT_PID:-}" ] || return 0
+  kill "$_UI_WAIT_PID" 2>/dev/null || true
+  wait "$_UI_WAIT_PID" 2>/dev/null || true
+  _UI_WAIT_PID=""
+  ui_wait_clear
+}
 # _ui_error <words>: error: and the words, on standard error, styled as standard error is.
 _ui_error() {
   _ui_t ui_error

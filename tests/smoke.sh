@@ -4214,6 +4214,12 @@ for v in "COLORTERM=" "COLORTERM=truecolor" "COLORTERM=truecolor LLM_THEME=light
   sw="$(env $v STYLE_OVERRIDE=on $utf COLUMNS=50 bash "$REPO/ui.sh" 2>/dev/null | ui_words_ext)"
   [ -n "$plainw" ] && [ "$sw" = "$plainw" ] && ok "every piece, ${v#COLORTERM=}: stripped, the words are the plain words" || bad "every piece, $v: stripped, the words are the plain words" "$(diff <(printf '%s\n' "$sw") <(printf '%s\n' "$plainw") | head -n 10)"
 done
+# A wait: one line, redrawn by a ticker while something runs, with a spinner that turns and a clock.
+out="$(kit 'ui_wait_start "go build: running..." "nothing more to answer"; sleep 1.1; ui_wait_stop; ui_item ok "go build: passed" 1s' $on $utf)"
+case "$out" in *"⠋${ESC}[0m go build: running..."*"⠙${ESC}[0m go build: running..."*"1s · nothing more to answer"*) ok "a wait's spinner turns and its clock counts" ;; *) bad "a wait's spinner turns and its clock counts" "$(printf '%s' "$out" | tr '\r' '\n' | cat -v | head -n 8)" ;; esac
+case "${out##*$'\r'}" in "${ESC}[K${ESC}[32m✓${ESC}[0m go build: passed"*) ok "and ui_wait_stop takes its line away for the result" ;; *) bad "and ui_wait_stop takes its line away for the result" "$(printf '%s' "${out##*$'\r'}" | cat -v)" ;; esac
+[ "$(kit 'ui_wait_start x; sleep 0.3; ui_wait_stop; echo finished' LLM_WIKI_STYLE=off $utf)" = finished ] && ok "with style off, in a pipe, a wait draws nothing" || bad "with style off, in a pipe, a wait draws nothing"
+case "$(kit 'ui_wait_start x; ui_wait_stop; echo "$_UI_LIVE"; style_off; echo "$_UI_LIVE"' LLM_WIKI_STYLE=off $utf)" in *yes*no*) ok "style_off stops a wait drawing at a terminal too" ;; *) bad "style_off stops a wait drawing at a terminal too" ;; esac
 out="$(kit 'ui_item ok x; ui_card y; style_off; ui_item ok z; ui_card w' $on $utf)"
 case "$out" in *"${ESC}[32m✓${ESC}[0m x"*"- z"*) case "${out#*- z}" in *"$ESC"*) bad "style_off turns every piece plain" ;; *) ok "style_off turns every piece plain" ;; esac ;; *) bad "style_off turns every piece plain" "$(printf '%s' "$out" | cat -v)" ;; esac
 # The gallery: what every command a person reads prints, as kept in tests/gallery.
@@ -4225,6 +4231,15 @@ out="$("$REPO/tests/ui-lint.sh" "$KS/bad.sh" 2>&1)"; code=$?
 [ "$code" = 1 ] && ok "the lint fails on a colour code, an S_ variable or a version 2 piece" || bad "the lint fails on a colour code, an S_ variable or a version 2 piece" "$out"
 case "$out" in *"f "*"1 line(s)"*"g "*"1 line(s)"*) ok "and names the function each is in, not a comment" ;; *) bad "and names the function each is in, not a comment" "$out" ;; esac
 "$REPO/tests/ui-lint.sh" "$REPO/ui.sh" >/dev/null 2>&1 && ok "the kit itself is allowed its codes" || bad "the kit itself is allowed its codes"
+printf 'up() {\n  printf "\\x1B[1m"\n}\nfg() {\n  tput setaf 1\n}\nbg() {\n  tput setab 2\n}\nraw() {\n  echo "%s[0m"\n}\nfine() {\n  echo "\\x1B is not a code here"\n}\n' "$ESC" > "$KS/more.sh"
+out="$("$REPO/tests/ui-lint.sh" --functions "$KS/more.sh" 2>&1 | paste -sd ' ' -)"
+while read -r f what; do case " $out " in *" $f "*) ok "the lint catches $what" ;; *) bad "the lint catches $what" "$out" ;; esac; done <<'EOF'
+up \x1B[ in capitals
+fg tput setaf
+bg tput setab
+raw an escape byte itself
+EOF
+case " $out " in *" fine "*) bad "and not \\x1B without a [" "$out" ;; *) ok "and not \\x1B without a [" ;; esac
 left="$("$REPO/tests/ui-lint.sh" --functions)"
 if [ "$UI_LINT" = on ]; then
   [ -z "$left" ] && ok "the lint: nothing prints without the kit" || bad "the lint: nothing prints without the kit" "$("$REPO/tests/ui-lint.sh")"

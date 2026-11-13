@@ -35,7 +35,7 @@ A command is made of these, in this order. Each is a function in `ui.sh`.
 Three more, for inside a line and for the edges:
 
 - `typed "<words>"`: something the user can type. Nothing else takes typed's colour. `typed_err` for a line on standard error.
-- `ui_wait <tick> "<what>" "<aside>"`: one line kept up to date during a wait, with a spinner, at a terminal only. `ui_wait_clear` takes it away.
+- `ui_wait_start "<what>" "<aside>"`, then `ui_wait_stop`: one line kept up to date while something runs, with a spinner that turns and a clock, redrawn in the background. With style off it is the same line without colour, at a terminal only, so a long wait never looks like a hang; in a pipe, a file or for an agent it draws nothing. `ui_wait <tick>` and `ui_wait_clear` draw one frame, for a loop that redraws it itself.
 - `die "<words>"`, `die_usage "<words>"`, `say_warn_err "<words>"`: an error, a usage error, a warning, on standard error, styled as standard error is.
 
 What the pieces look like, with the codes left out, at a terminal:
@@ -111,7 +111,7 @@ A blank line between groups. Marks in front, not words at the end. A column as w
 
 ## The kit: `ui.sh`
 
-Kit version 1. sha256 `0e7fb98accc3f4d4b8232e7a8fd89819440c3465275730b09a6519bb8e96bc1a`.
+Kit version 1. sha256 `d2f0d7d4ea2e4aa0243b4f0e6a8be358ad2712c1a0c9d9e598c8b620976e70be`.
 
 `ui.sh` is in Bash 3.2 and has no dependency. llm-wiki keeps the original. Every other tool carries it byte for byte, beside its script, and sources it after setting three variables, which are all a tool changes:
 
@@ -126,8 +126,8 @@ llm-relay points both files at its settings file. A tool must work with no other
 
 Three checks hold it together:
 
-- **The copies.** The line above gives the kit's sha256. Each tool's smoke test fails when its `ui.sh` doesn't have it. Since every tool keeps a copy of this guide, every copy of the kit is the same. When the other tool's checkout sits beside this one, the test compares the two files as well.
-- **The lint.** `tests/ui-lint.sh` fails on a colour code (`\033[`, `\e[`, `\x1b[`), an `S_` or `M_` variable, or a call to version 2's pieces (`say_ok`, `say_warn`, `say_head`, `say_dim`, `say_next`) anywhere outside `ui.sh`, and names the function each is in. Until every command has moved to the pieces, the smoke test runs it as a report, which lists what is left, and doesn't fail on it.
+- **The copies.** The line above gives the kit's sha256. Each tool's smoke test fails when its `ui.sh` doesn't have it, so a copy can't be edited on its own. When the other tool's checkout sits beside this one, the test compares the two files as well. What no test catches is a change made in one tool and never copied to the other, with its guide: each tool's CI sees only its own repository, and the smoke tests never use the network. Copying both files in the same sitting is the rule that covers it. A check in CI that fetched the other repository's kit would fail every change until both had merged, so there isn't one.
+- **The lint.** `tests/ui-lint.sh` fails on a colour code (`\033[`, `\e[`, `\x1b[` in either case, `tput setaf` or `setab`, or an escape byte itself), an `S_` or `M_` variable, or a call to version 2's pieces (`say_ok`, `say_warn`, `say_head`, `say_dim`, `say_next`) anywhere outside `ui.sh`, and names the function each is in. Until every command has moved to the pieces, the smoke test runs it as a report, which lists what is left, and doesn't fail on it.
 - **The gallery.** `scripts/gallery.sh` runs every command a person reads against fakes, at a terminal's settings, and keeps what each printed in `tests/gallery/`, with an index that says which pieces each used. A command on the old look shows there as `old look`. Run it after changing what a command prints, look at the difference, and commit it. `scripts/gallery.sh --check` fails when what a command prints no longer matches its file, and the smoke test runs that.
 
 Version 2's helpers, `say_ok`, `say_warn`, `say_head`, `say_dim` and `say_next`, are still in the kit until every command has moved, and print as they did. Don't use them in new work.
