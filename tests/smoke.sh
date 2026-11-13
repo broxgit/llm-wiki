@@ -3789,7 +3789,7 @@ git -C "$WIKIS_DIR" add -A >/dev/null 2>&1; git -C "$WIKIS_DIR" commit -qm "smok
 set_version "$WIKIS_DIR/demo/AGENTS.md" 1
 git -C "$WIKIS_DIR" commit -qam "smoke: an old handbook" >/dev/null 2>&1; git -C "$WIKIS_DIR" push -q >/dev/null 2>&1
 out="$("$W" update --wikis-only </dev/null 2>&1)"
-case "$out" in *"== Collection here"*"Upgraded"*"pushed"*) ok "update --wikis-only upgrades the collection and pushes" ;; *) bad "update --wikis-only upgrades the collection and pushes" "$out" ;; esac
+case "$out" in *"COLLECTION  here"*"Upgraded"*"pushed"*) ok "update --wikis-only upgrades the collection and pushes" ;; *) bad "update --wikis-only upgrades the collection and pushes" "$out" ;; esac
 check "and the upgrade reached the remote" bash -c "git --git-dir='$T/remote.git' log --oneline -1 | grep -q 'handbook v'"
 case "$out" in *"paste this into each"*"Run wiki start in this repository"*) ok "update says how to bring open sessions up to date" ;; *) bad "update says how to bring open sessions up to date" "$out" ;; esac
 set_version "$WIKIS_DIR/demo/AGENTS.md" 1
@@ -3951,7 +3951,7 @@ expect "--all prints the history" "First body" env XDG_STATE_HOME="$N/state" LLM
 printf '# News\n\n## 2026-01-04: Fourth\n\nFourth body.\n\n## 2026-01-03: Third\n\nThird body.\n\n## 2026-01-02: Second\n\nSecond body.\n' > "$N/NEWS.md"
 case "$(news status 2>&1)" in *"llm-wiki: 2 new thing(s)"*) ok "status counts what's new since the last read" ;; *) bad "status counts what's new since the last read" "$(news status 2>&1)" ;; esac
 out="$(news update --wikis-only 2>&1 </dev/null)"
-case "$out" in *"What's new in llm-wiki"*"Fourth body"*"Third body"*"== Next"*) ok "update prints what's new since the last read" ;; *) bad "update prints what's new since the last read" "$out" ;; esac
+case "$out" in *"NEWS  "*"Fourth body"*"Third body"*"NEXT  "*) ok "update prints what's new since the last read" ;; *) bad "update prints what's new since the last read" "$out" ;; esac
 case "$out" in *"Second body"*) bad "update leaves out what's been read" "$out" ;; *) ok "update leaves out what's been read" ;; esac
 case "$(news news 2>&1)" in *"Nothing new"*) ok "update marks it read" ;; *) bad "update marks it read" "" ;; esac
 printf '# News\n\n## 2026-01-05: Renamed\n\nBody.\n' > "$N/NEWS.md"
@@ -4129,13 +4129,13 @@ upd() { sty WIKIS_DIR="$UW/wikis" XDG_STATE_HOME="$UW/state" LLM_WIKI_NEWS_FILE=
 up_prep; uplain="$(upd LLM_WIKI_STYLE=off)"
 up_prep; upstyled="$(upd LLM_WIKI_STYLE=on $UTF)"
 upmarks() { strip | sed -E 's/^(✓|\+|!) /- /'; }
-case "$upstyled" in *"${ESC}[1m== Collection "*"${ESC}[1m== What changed${ESC}[0m"*"${ESC}[1m== What's new in llm-wiki${ESC}[0m"*"${ESC}[1m== Next${ESC}[0m"*) ok "update: the headings are bold, with their ==" ;; *) bad "update: the headings are bold, with their ==" "$upstyled" ;; esac
+case "$upstyled" in *" COLLECTION ${ESC}[0m"*" CHANGED ${ESC}[0m"*" NEWS ${ESC}[0m"*" NEXT ${ESC}[0m"*) ok "update: a timeline, COLLECTION, CHANGED, NEWS and NEXT" ;; *) bad "update: a timeline, COLLECTION, CHANGED, NEWS and NEXT" "$upstyled" ;; esac
 case "$upstyled" in *"${ESC}[32m✓${ESC}[0m pushed "*" commit(s)"*) ok "update: a step that succeeded has the tick in place of the dash" ;; *) bad "update: a step that succeeded has the tick in place of the dash" "$upstyled" ;; esac
 case "$upstyled" in *"${ESC}[1m${ESC}[33m!${ESC}[0m New settings to look at: ${ESC}[36m"*"setup --new${ESC}[0m"*) ok "update: what is left has the warning mark, its command cyan" ;; *) bad "update: what is left has the warning mark, its command cyan" "$upstyled" ;; esac
 case "$upstyled" in *"${ESC}[1m${ESC}[33m!${ESC}[0m Sessions already open"*"paste this into each:"*) ok "update: the note about open sessions has the warning mark" ;; *) bad "update: the note about open sessions has the warning mark" "$upstyled" ;; esac
-case "$upstyled" in *"${ESC}[1m## 2026-01-02: Second \`entry\`${ESC}[0m"*) ok "update: a NEWS title is bold" ;; *) bad "update: a NEWS title is bold" "$upstyled" ;; esac
-printf '%s\n' "$upstyled" | grep -qxF 'Body with `ticks`.' && printf '%s\n' "$upstyled" | grep -qxF -- '- Do: run `wiki x`.' && ok "update: a NEWS entry's body is printed exactly as written" || bad "update: a NEWS entry's body is printed exactly as written" "$upstyled"
-[ "$(printf '%s\n' "$upstyled" | upmarks)" = "$uplain" ] && ok "update: stripped, with the marks back to '- ', the words are the plain words" || bad "update: stripped, with the marks back to '- ', the words are the plain words" "$(diff <(printf '%s\n' "$upstyled" | upmarks) <(printf '%s\n' "$uplain"))"
+case "$upstyled" in *" NEWS ${ESC}[0m  ${ESC}[1m2026-01-02: Second \`entry\`${ESC}[0m"*) ok "update: a NEWS entry is a NEWS stage with its title" ;; *) bad "update: a NEWS entry is a NEWS stage with its title" "$upstyled" ;; esac
+case "$upstyled" in *"│${ESC}[0m     Body with \`ticks\`."*"│${ESC}[0m     - Do: run \`wiki x\`."*) ok "update: a NEWS entry's lines are as written, on the rail" ;; *) bad "update: a NEWS entry's lines are as written, on the rail" "$upstyled" ;; esac
+[ "$(printf '%s\n' "$upstyled" | kitw)" = "$(printf '%s\n' "$uplain" | kitw)" ] && ok "update: stripped, the words are the plain words" || bad "update: stripped, the words are the plain words" "$(diff <(printf '%s\n' "$upstyled" | kitw) <(printf '%s\n' "$uplain" | kitw))"
 case "$uplain" in *"${ESC}"*) bad "update: off has no codes" ;; *) ok "update: off has no codes" ;; esac
 up_prep; case "$(upd -u LLM_WIKI_STYLE)" in *"${ESC}"*) bad "update: piped has no codes" ;; *) ok "update: piped has no codes" ;; esac
 # A push that fails says what to run, and the command is cyan.
@@ -4143,7 +4143,7 @@ git -C "$UW/wikis" config remote.origin.pushurl "$UW/no-such-remote.git"
 up_prep; uplain="$(upd LLM_WIKI_STYLE=off)"
 up_prep; upstyled="$(upd LLM_WIKI_STYLE=on $UTF)"
 case "$upstyled" in *"${ESC}[1m${ESC}[33m!${ESC}[0m the push failed. Run: ${ESC}[36mgit -C "*" push${ESC}[0m"*) ok "update: a failed push has the warning mark and its Run: command is cyan" ;; *) bad "update: a failed push has the warning mark and its Run: command is cyan" "$upstyled" ;; esac
-[ "$(printf '%s\n' "$upstyled" | upmarks)" = "$uplain" ] && ok "update: the failed push's words are the plain words too" || bad "update: the failed push's words are the plain words too" "$(diff <(printf '%s\n' "$upstyled" | upmarks) <(printf '%s\n' "$uplain"))"
+[ "$(printf '%s\n' "$upstyled" | kitw)" = "$(printf '%s\n' "$uplain" | kitw)" ] && ok "update: the failed push's words are the plain words too" || bad "update: the failed push's words are the plain words too" "$(diff <(printf '%s\n' "$upstyled" | kitw) <(printf '%s\n' "$uplain" | kitw))"
 # update in a clone, with the plugin installed too: it pulls, refreshes the plugin's copy, and says to restart.
 UU="$UW/src"; mkdir -p "$UU" "$UW/bin" "$HOME/.cursor"
 (cd "$REPO" && tar cf - --exclude .git --exclude tests .) | (cd "$UU" && tar xf -)
@@ -4153,10 +4153,10 @@ printf '{"version":2,"plugins":{"llm-wiki@mk":[{"scope":"user","installPath":"%s
 printf '#!/bin/sh\nexit 0\n' > "$UW/bin/claude" && chmod +x "$UW/bin/claude"
 cl() { rm -rf "$UW/state"; env XDG_STATE_HOME="$UW/state" LLM_WIKI_NEWS_FILE="$UW/NEWS.md" LLM_WIKI_NO_GO=1 PATH="$UW/bin:$PATH" "$@" "$UW/clone/wiki.sh" update </dev/null 2>&1; }
 cplain="$(cl LLM_WIKI_STYLE=off)"; cstyled="$(cl LLM_WIKI_STYLE=on $UTF)"
-case "$cstyled" in *"${ESC}[1m== Updating llm-wiki${ESC}[0m"*) ok "update in a clone: the first heading is bold" ;; *) bad "update in a clone: the first heading is bold" "$cstyled" ;; esac
+case "$cstyled" in *" UPDATE ${ESC}[0m  ${ESC}[1mllm-wiki${ESC}[0m"*) ok "update in a clone: it starts with an UPDATE stage" ;; *) bad "update in a clone: it starts with an UPDATE stage" "$cstyled" ;; esac
 case "$cstyled" in *"${ESC}[32m✓${ESC}[0m pulled "*"${ESC}[32m✓${ESC}[0m updated the installed plugin's copy (llm-wiki@mk) too"*) ok "update in a clone: the pull and the plugin's refresh have the tick" ;; *) bad "update in a clone: the pull and the plugin's refresh have the tick" "$cstyled" ;; esac
 case "$cstyled" in *"${ESC}[1m${ESC}[33m!${ESC}[0m Quit and reopen the Claude app and Cursor"*) ok "update in a clone: the restart has the warning mark" ;; *) bad "update in a clone: the restart has the warning mark" "$cstyled" ;; esac
-[ "$(printf '%s\n' "$cstyled" | upmarks)" = "$cplain" ] && ok "update in a clone: the words are the plain words" || bad "update in a clone: the words are the plain words" "$(diff <(printf '%s\n' "$cstyled" | upmarks) <(printf '%s\n' "$cplain"))"
+[ "$(printf '%s\n' "$cstyled" | kitw)" = "$(printf '%s\n' "$cplain" | kitw)" ] && ok "update in a clone: the words are the plain words" || bad "update in a clone: the words are the plain words" "$(diff <(printf '%s\n' "$cstyled" | kitw) <(printf '%s\n' "$cplain" | kitw))"
 printf '#!/bin/sh\nexit 1\n' > "$UW/bin/claude"
 cstyled="$(cl LLM_WIKI_STYLE=on $UTF)"
 case "$cstyled" in *"${ESC}[1m${ESC}[33m!${ESC}[0m couldn't update the installed plugin's copy (llm-wiki@mk): ${ESC}[36mclaude plugin update llm-wiki@mk${ESC}[0m"*) ok "update in a clone: a failed plugin refresh has the mark and its command in cyan" ;; *) bad "update in a clone: a failed plugin refresh has the mark and its command in cyan" "$cstyled" ;; esac
@@ -5772,11 +5772,11 @@ if command -v go >/dev/null 2>&1 && [ -n "$HPLAT" ]; then
   expect "but not one that speaks another" "helper: none" "$HW" helper
   cp "$T/release-good" "$REL/llm-wiki-$HPLAT"
   out="$("$HW" update --wikis-only 2>&1)"
-  case "$out" in *"== Helper"*"- helper $HSRC installed for $HPLAT"*) ok "wiki update fetches the helper for its version" ;; *) bad "wiki update fetches the helper for its version" "$out" ;; esac
+  case "$out" in *"HELPER  "*"- helper $HSRC installed for $HPLAT"*) ok "wiki update fetches the helper for its version" ;; *) bad "wiki update fetches the helper for its version" "$out" ;; esac
   expect "and then uses it" "helper: release $HSRC" "$HW" helper
   rm -f "$REL/llm-wiki-$HPLAT" "$HDIR/$HSRC/llm-wiki"
   out="$("$HW" update --wikis-only 2>&1)"
-  case "$out" in *"== Helper"*"couldn't be downloaded"*"Nothing is lost"*) ok "an update that can't fetch says so and carries on" ;; *) bad "an update that can't fetch says so and carries on" "$out" ;; esac
+  case "$out" in *"HELPER  "*"couldn't be downloaded"*"Nothing is lost"*) ok "an update that can't fetch says so and carries on" ;; *) bad "an update that can't fetch says so and carries on" "$out" ;; esac
   # Session start fetches a missing helper by itself, in the background.
   hwait() { local i=0; while [ "$i" -lt 100 ]; do [ -x "$HDIR/$HSRC/llm-wiki" ] && return 0; sleep 0.1; i=$((i + 1)); done; return 1; }
   hgone() { rm -f "$HDIR/$HSRC/llm-wiki"; [ -z "${1:-}" ] || rm -f "$HDIR/$HSRC/.tried"; }
