@@ -824,14 +824,18 @@ expect "and status says the fix isn't working" "accepted fix(es) not working" "$
 expect "and so does the report" "seen again since, so not working" "$W" report
 # Every call to action ends with its fix: a command, a request for an agent, or a step.
 fixless() { "$W" "$1" 2>&1 | fixes "$2"; }
-fixes() { awk -v h="$1" '$0 == h { on = 1; next } on && /^#/ { on = 0 } on && /^- / && !/(Run: |Ask an agent: |Do: )/ { print "no fix: " $0 }'; }
+# fixes <heading>: each item under the heading, a line that starts the heading's words, with no
+# fix. An item is a "- " line, indented under a stage of the kit.
+fixes() { awk -v h="$1" 'index($0, h) == 1 { on = 1; next } on && /^#/ { on = 0 } on && /^ *- / && !/(Run: |Ask an agent: |Do: )/ { print "no fix: " $0 }'; }
 out="$("$W" report 2>&1)"
 lacks "every Needs you line in report ends with its fix" "no fix:" fixless report '## Needs you'
 case "$out" in *"resolve the conflict in demo's wiki/conflict-test.md: <your decision>"*) ok "a conflict names its page and what to ask" ;; *) bad "a conflict names its page and what to ask" "$out" ;; esac
 case "$out" in *"show me the proposed fix 'Wrap errors' in demo"*) ok "a proposal says how to answer it" ;; *) bad "a proposal says how to answer it" "$out" ;; esac
 out="$("$W" status 2>&1)"
-lacks "every To do line in status ends with its fix" "no fix:" fixless status 'To do:'
-case "$out" in *"To do:"*"Ask an agent: \"look again at the patterns marked AGAIN in demo\""*) ok "status gathers the calls to action under To do" ;; *) bad "status gathers the calls to action under To do" "$out" ;; esac
+lacks "every TO DO line in status ends with its fix" "no fix:" fixless status 'TO DO  '
+case "$out" in *"TO DO  "*"Ask an agent: \"look again at the patterns marked AGAIN in demo\""*) ok "status gathers the calls to action under TO DO" ;; *) bad "status gathers the calls to action under TO DO" "$out" ;; esac
+n="$(printf '%s\n' "$out" | awk 'index($0, "TO DO  ") == 1 { on = 1; next } on && /^ *- / { n++ } END { print n + 0 }')"
+[ "$n" -gt 0 ] && ok "and the fix check sees the $n items under it" || bad "and the fix check sees the items under it" "$out"
 cp "$T/patterns.bak" "$WIKIS_DIR/demo/patterns.md"
 printf '\n## Pin versions\n- kind: correction\n- rule: Pin versions.\n- status: accepted 2026-10-01: a convention\n- seen: 2026-09-20 api raw/a.md\n' >> "$WIKIS_DIR/demo/patterns.md"
 lacks "an accepted fix not seen since isn't flagged" "AGAIN" "$W" patterns
@@ -860,7 +864,7 @@ expect "and ends with a count" "3 open in 1 wiki(s), 1 past their date." "$W" op
 out="$("$W" open 2>&1)"
 case "$out" in *"OVERDUE"*"Confirm the hook"*) ok "an overdue entry comes before the others in its wiki" ;; *) bad "an overdue entry comes before the others in its wiki" "$out" ;; esac
 expect "status counts what is open and what is past its date" "- open: 3 item(s) waiting on someone or a date, 1 past its date. Run: " "$W" status
-lacks "every To do line in status still ends with its fix" "no fix:" fixless status 'To do:'
+lacks "every TO DO line in status still ends with its fix" "no fix:" fixless status 'TO DO  '
 lacks "lint has no finding for a well-formed open.md" "open.md entry not understood" "$W" lint demo
 printf '\n## No kind here\n- status: open\n\n## Due without a date\n- kind: due\n- due: next week\n- status: open\n' >> "$OPEN"
 expect "lint reports an entry with no kind" "No kind here (kind is missing or not waiting or due)" "$W" lint demo
@@ -3951,8 +3955,10 @@ case "$styled" in *"${ESC}[1m${ESC}[33m!${ESC}[0m demo: 6 notes waiting."*) ok "
 case "$styled" in *"Ask an agent: ${ESC}[36m\"compile demo\"${ESC}[0m"*"Run: ${ESC}[36m"*) ok "the quoted request and what follows Run: are cyan" ;; *) bad "the quoted request and what follows Run: are cyan" "$styled" ;; esac
 case "$plain" in *"${ESC}"*) bad "off, status has no codes" "$plain" ;; *) ok "off, status has no codes" ;; esac
 case "$(printf '%s' "$plain" | sty "$W" status 2>&1)" in *"${ESC}"*) bad "piped, status has no codes" ;; *) ok "piped, status has no codes" ;; esac
-nomark="$(printf '%s\n' "$styled" | strip | sed 's/^! /- /')"
-[ "$nomark" = "$plain" ] && ok "with the codes stripped, and the mark back to '- ', the words are the plain words" || bad "with the codes stripped, the words are the plain words" "$(diff <(printf '%s\n' "$nomark") <(printf '%s\n' "$plain"))"
+sw="$(printf '%s\n' "$styled" | bash -c ". '$REPO/ui.sh'; ui_words")"; pw="$(printf '%s\n' "$plain" | bash -c ". '$REPO/ui.sh'; ui_words")"
+[ -n "$pw" ] && [ "$sw" = "$pw" ] && ok "with the codes and the kit's glyphs stripped, the words are the plain words" || bad "with the codes and the kit's glyphs stripped, the words are the plain words" "$(diff <(printf '%s\n' "$sw") <(printf '%s\n' "$pw"))"
+case "$styled" in *" TO DO ${ESC}[0m"*"${ESC}[2m│${ESC}[0m   ${ESC}[1m${ESC}[33m!${ESC}[0m demo: 6 notes waiting."*) ok "the to-do list is a TO DO stage, an item on its rail for each" ;; *) bad "the to-do list is a TO DO stage, an item on its rail for each" "$styled" ;; esac
+case "$plain" in *"TO DO  "*" item(s), each with its fix"$'\n'"    - demo: 6 notes waiting."*) ok "plain, the stage says how many, and each item is a '- ' line under it" ;; *) bad "plain, the stage says how many, and each item is a '- ' line under it" "$plain" ;; esac
 out="$(sty LLM_WIKI_STYLE=on NO_COLOR=1 "$W" status 2>&1)"
 case "$out" in *"${ESC}["*) ok "LLM_WIKI_STYLE=on wins over NO_COLOR" ;; *) bad "LLM_WIKI_STYLE=on wins over NO_COLOR" "$out" ;; esac
 out="$(sty -u LLM_WIKI_STYLE NO_COLOR=1 TERM=xterm "$W" status 2>&1)"
@@ -4198,6 +4204,18 @@ printf '# x\ntheme=light\n' > "$KS/theme"; printf 'palette=colorblind\n' > "$KS/
 [ "$(ok24 TF="$KS/theme" LLM_THEME=nonsense)" = "0;135;60" ] && ok "an LLM_THEME that is no theme is passed over" || bad "an LLM_THEME that is no theme is passed over"
 [ "$(ok24 PF="$KS/palette")" = "86;140;255" ] && ok "the palette setting is read from the tool's file" || bad "the palette setting is read from the tool's file" "$(ok24 PF="$KS/palette")"
 [ "$(kit 'ui_item ok x' $on $utf PF="$KS/palette")" = "${ESC}[34m✓${ESC}[0m x" ] && ok "colorblind with the 16 colours is a blue tick" || bad "colorblind with the 16 colours is a blue tick" "$(kit 'ui_item ok x' $on $utf PF="$KS/palette" | cat -v)"
+# A table stays a table: a bold header, and a note from "  <- " on in the warn colour.
+tbl="$(printf 'WIKI  V\ndemo  v1  <- compile due  <- lint due\nx     v2\n' | kit 'ui_table' $on $utf)"
+[ "$tbl" = "${ESC}[1mWIKI  V${ESC}[0m
+demo  v1${ESC}[33m  <- compile due  <- lint due${ESC}[0m
+x     v2" ] && ok "a table's header is bold and its notes take the warn colour" || bad "a table's header is bold and its notes take the warn colour" "$(printf '%s' "$tbl" | cat -v)"
+[ "$(printf 'a  <- b\n' | kit 'ui_table --no-head' $on $utf)" = "a${ESC}[33m  <- b${ESC}[0m" ] && ok "--no-head leaves the first row a row" || bad "--no-head leaves the first row a row"
+[ "$(printf 'WIKI\ndemo  <- x\n' | kit 'ui_table' LLM_WIKI_STYLE=off $utf)" = "WIKI
+demo  <- x" ] && ok "plain, a table is its rows as they are" || bad "plain, a table is its rows as they are"
+[ "$(kit 'ui_prompt "Feedback" off' LLM_WIKI_STYLE=off $utf)" = "Feedback [off] › " ] && ok "plain, a typed answer's prompt is the question, the default in brackets, and ›" || bad "plain, a typed answer's prompt" "$(kit 'ui_prompt "Feedback" off' LLM_WIKI_STYLE=off $utf)"
+[ "$(kit 'ui_prompt "Feedback" off' $on $utf)" = "${ESC}[1mFeedback${ESC}[0m [off] ${ESC}[1m${ESC}[33m›${ESC}[0m " ] && ok "at a terminal, the question is bold and the prompt yellow" || bad "at a terminal, the question is bold and the prompt yellow" "$(kit 'ui_prompt "Feedback" off' $on $utf | cat -v)"
+[ "$(kit 'ui_prompt "Name"' LLM_WIKI_STYLE=off $utf)" = "Name › " ] && ok "with no default, no brackets" || bad "with no default, no brackets"
+case "$(kit 'ui_stage A x' $on $utf)" in *"${ESC}[2m${ESC}[0m"*) bad "a stage with nothing after its summary has no empty muted span" ;; *) ok "a stage with nothing after its summary has no empty muted span" ;; esac
 # A card: wrapped at spaces only, so a URL is never split, and tinted to the terminal's width.
 card="$(kit "ui_card '$long'" $on $utf COLUMNS=60)"
 printf '%s\n' "$card" | grep -q 'https://gitlab.com/example/group/platform/camera-detection-event-aggregator/-/merge_requests/20 ' && ok "a card never splits a URL" || bad "a card never splits a URL" "$(printf '%s' "$card" | cat -v)"

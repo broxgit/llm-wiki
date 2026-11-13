@@ -324,9 +324,14 @@ func TestSameAsTheBash(t *testing.T) {
 		}
 		var todo string
 		for _, line := range r.Todos {
-			todo += "- " + line + "\n"
+			todo += "    - " + line + "\n"
 		}
-		if _, rest, ok := strings.Cut(text, "\nTo do:\n"); !ok || !strings.HasPrefix(rest, todo) {
+		// wiki.sh prints them as the kit's TO DO stage, a line with their count, then an item each.
+		_, rest, ok := strings.Cut(text, "\nTO DO  ")
+		if ok {
+			_, rest, ok = strings.Cut(rest, "\n")
+		}
+		if !ok || !strings.HasPrefix(rest, todo) {
 			t.Errorf("the to-do lines:\n%s\nthe Bash's:\n%s", todo, rest)
 		}
 	}

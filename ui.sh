@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# ui.sh: how the llm tools look at a terminal. Kit version 1, for docs/conventions.md version 4.
+# ui.sh: how the llm tools look at a terminal. Kit version 2, for docs/conventions.md version 4.
 # llm-wiki keeps the original. Every other tool carries this file byte for byte, and a test holds
 # the copies together, so change it in llm-wiki first and copy it in the same sitting. Bash 3.2.
 #
@@ -9,8 +9,9 @@
 #   STYLE_THEME_FILE    a file that may hold a line theme=auto, theme=dark or theme=light
 # LLM_PALETTE and LLM_THEME, which every llm tool reads, win over the files.
 #
-# Commands print through the pieces: ui_question and ui_keys, ui_stage, ui_item, ui_detail,
-# ui_card, ui_turn, ui_step, ui_next, typed, ui_wait_start and ui_wait_stop, die. Never a colour code or an S_ variable:
+# Commands print through the pieces: ui_question, ui_keys and ui_prompt, ui_stage, ui_item,
+# ui_detail, ui_table, ui_card, ui_turn, ui_step, ui_next, typed, ui_wait_start and
+# ui_wait_stop, die. Never a colour code or an S_ variable:
 # a lint test fails on one outside this file. Run it on its own to see every piece: bash ui.sh
 
 : "${STYLE_OVERRIDE:=}" "${STYLE_PALETTE_FILE:=}" "${STYLE_THEME_FILE:=}"
@@ -205,6 +206,12 @@ ui_keys() {
   done
   printf '%s%s%s%s ' "$out" "$S_BOLD$S_WARN" "$_G_PROMPT" "$S_OFF"
 }
+# ui_prompt <question> [<default>]: a question answered by typing a line: the question, the
+# default in brackets, and the prompt, with no line end. The caller reads the line.
+ui_prompt() {
+  _ui_t ui_prompt
+  printf '%s%s%s%s %s%s%s ' "$S_BOLD" "$1" "$S_OFF" "${2:+ [$2]}" "$S_BOLD$S_WARN" "$_G_PROMPT" "$S_OFF"
+}
 # ui_stage [--ok|--warn|--error] <LABEL> <summary> [<more>...]: a step of the command's work, as
 # a dot on a rail with a coloured label, then one line: the summary, and the rest muted, joined
 # by " · ". Each stage takes the next accent; --error takes the error colour, and --ok and --warn
@@ -232,7 +239,7 @@ ui_stage() {
     case "$_UI_ACC" in 1) dot="$_U_A1" pill="$_P_A1" ;; 2) dot="$_U_A2" pill="$_P_A2" ;; 3) dot="$_U_A3" pill="$_P_A3" ;; *) dot="$_U_A4" pill="$_P_A4" ;; esac
   fi
   case "$state" in ok) lead="$S_BOLD$S_OK" ;; warn) lead="$S_BOLD$S_WARN" ;; error) lead="$S_BOLD$S_ERR" ;; *) lead="$S_BOLD" ;; esac
-  printf '%s%s%s %s %s %s  %s%s%s%s%s%s\n' "$dot" "$_G_DOT" "$S_OFF" "$pill" "$label" "$S_OFF" "$lead" "$first" "$S_OFF" "$S_DIM" "$rest" "$S_OFF"
+  printf '%s%s%s %s %s %s  %s%s%s%s\n' "$dot" "$_G_DOT" "$S_OFF" "$pill" "$label" "$S_OFF" "$lead" "$first" "$S_OFF" "${rest:+$S_DIM$rest$S_OFF}"
 }
 # ui_item ok|warn|error <text> [<aside>]: one thing that was done, with its mark: ✓ ! or ✗. The
 # aside, such as a time, is muted and right-aligned in a column. Plain, the mark is "- ".
@@ -264,6 +271,27 @@ ui_detail() {
   done
   _ui_rail
   printf '%s  %s\n' "${_UI_PRE:-}" "$out"
+}
+# ui_table [--no-head]: a table, read from standard input with its columns already lined up. A
+# table stays a table: the first line is its header, in bold, unless --no-head, and a note at the
+# end of a row, from "  <- " on, takes the warn colour. Plain, it is printed as it is.
+ui_table() {
+  local l head=yes
+  [ "${1:-}" != --no-head ] || head=no
+  _ui_t ui_table
+  while IFS= read -r l || [ -n "$l" ]; do
+    if [ "$STYLE" != yes ]; then
+      printf '%s\n' "$l"
+    elif [ "$head" = yes ]; then
+      printf '%s%s%s\n' "$S_BOLD" "$l" "$S_OFF"
+      head=no
+    else
+      case "$l" in
+        *"  <- "*) printf '%s%s  <- %s%s\n' "${l%%  <- *}" "$S_WARN" "${l#*  <- }" "$S_OFF" ;;
+        *) printf '%s\n' "$l" ;;
+      esac
+    fi
+  done
 }
 # _ui_card_line <text> <inner>: one line of a card, padded to the card's width.
 _ui_card_line() {

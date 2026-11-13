@@ -27,13 +27,15 @@ A command is made of these, in this order. Each is a function in `ui.sh`.
 | question | `ui_question "<question>" "<detail>"...`, then `ui_keys yes no` | a yellow `?` label, the question in bold, the details indented, a detail that starts `- ` as a bullet. Then the answers: `[y]es` in the ok colour, `[n]o` in the error colour, any other key in typed's, and a `›` prompt | `? <question>`, the details, `[y]es  [n]o  ›` |
 | stage | `ui_stage [--ok\|--warn\|--error] LABEL "<summary>" "<more>"...` | a dot on a rail and a label in capitals on a coloured ground, such as CHECKS, PACKED or SENT. Then one line: the summary in bold, the rest muted, joined by ` · `. Each stage takes the next accent. `--error` makes the dot and label the error colour, and `--ok` and `--warn` colour the summary | `LABEL  <summary> · <more>`, a blank line between stages |
 | item | `ui_item ok\|warn\|error "<text>" "<aside>"` | on the stage's rail, a `✓` `!` or `✗`, the text, and the aside, such as a time, muted and right-aligned in a column | `- <text>  <aside>`, indented |
+| table | `ui_table [--no-head]`, reading the rows | a table stays a table. Its first line, the header, is bold, unless `--no-head`, and a note at the end of a row, from `  <- ` on, takes the warn colour | the rows as they are |
 | detail | `ui_detail "<part>"...` | a line of facts under a stage or an item, parts joined by a muted ` · ` | the same, indented |
 | card | `ui_card "<text>"` | text to paste somewhere, on a tinted card as wide as the terminal (up to 88 columns). It wraps at spaces only, so a URL or a path is never split: a word longer than the line runs past the card's edge | the text as it is |
 | your turn | `ui_turn`, then `ui_step [--optional] [--done] [--emoji E] N "<title>" "<aside>"` | the rail ends at `◆ YOUR TURN`. Each step has its number on a label, the title in bold, and an aside: muted, or in the ok colour with `--done`, for what the tool already did. `--optional` greys the number. Emoji are allowed here, in a step's aside, and nowhere else | `YOUR TURN`, then `  N  <title>  <aside>`, no emoji |
 | next | `ui_next "<step>"` | `Next:` in bold, in typed's colour, and the one step, as the command's last line | `Next: <step>` |
 
-Three more, for inside a line and for the edges:
+Four more, for inside a line and for the edges:
 
+- `ui_prompt "<question>" "<default>"`: a question answered by typing a line, such as a setting: the question in bold, the default in brackets, and the `›` prompt, with no line end. The caller reads the answer. A question answered by one key is `ui_question` and `ui_keys`.
 - `typed "<words>"`: something the user can type. Nothing else takes typed's colour. `typed_err` for a line on standard error.
 - `ui_wait_start "<what>" "<aside>"`, then `ui_wait_stop`: one line kept up to date while something runs, with a spinner that turns and a clock, redrawn in the background. With style off it is the same line without colour, at a terminal only, so a long wait never looks like a hang; in a pipe, a file or for an agent it draws nothing. `ui_wait <tick>` and `ui_wait_clear` draw one frame, for a loop that redraws it itself.
 - `die "<words>"`, `die_usage "<words>"`, `say_warn_err "<words>"`: an error, a usage error, a warning, on standard error, styled as standard error is.
@@ -111,7 +113,7 @@ A blank line between groups. Marks in front, not words at the end. A column as w
 
 ## The kit: `ui.sh`
 
-Kit version 1. sha256 `d2f0d7d4ea2e4aa0243b4f0e6a8be358ad2712c1a0c9d9e598c8b620976e70be`.
+Kit version 2. sha256 `0cc1611ee7c4f541244de4d5713c67e25c97196ff2756bc3a33ed6ed3822eb1a`.
 
 `ui.sh` is in Bash 3.2 and has no dependency. llm-wiki keeps the original. Every other tool carries it byte for byte, beside its script, and sources it after setting three variables, which are all a tool changes:
 

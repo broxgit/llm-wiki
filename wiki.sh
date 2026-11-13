@@ -2939,33 +2939,19 @@ EOF
 todo_add() { STATUS_TODO="$STATUS_TODO- $1
 "; }
 
-# status_style_table: the table with its header in bold and its "<-" notes in yellow.
-# Not a word changes. LC_ALL=C, so awk counts bytes.
-status_style_table() {
-  LC_ALL=C awk -v b="$S_BOLD" -v y="$S_WARN" -v o="$S_OFF" '
-    NR == 1 { print b $0 o; next }
-    { i = index($0, "  <- ")
-      if (i == 0) { print; next }
-      rest = substr($0, i)
-      j = index(rest, "  covers: ")
-      if (j) print substr($0, 1, i - 1) y substr(rest, 1, j - 1) o substr(rest, j)
-      else print substr($0, 1, i - 1) y rest o }'
-}
-
-# status_style_todo: each "- " becomes the warning mark. What follows "Run: " and the
-# quoted request after "Ask an agent: " are what the reader can type: cyan.
-status_style_todo() {
-  LC_ALL=C awk -v m="$M_WARN" -v c="$S_TYPED" -v o="$S_OFF" '
-    { line = $0; sub(/^- /, "", line)
-      i = index(line, "Run: ")
-      a = index(line, "Ask an agent: \"")
-      if (i) { line = substr(line, 1, i + 4) c substr(line, i + 5) o }
-      else if (a) {
-        pre = substr(line, 1, a + 13); rest = substr(line, a + 15)
-        e = index(rest, "\"")
-        if (e) line = pre c "\"" substr(rest, 1, e) o substr(rest, e + 1)
-      }
-      print m line }'
+# status_todo_text <line>: one line of the to-do list, with what the reader can type in typed's
+# colour: what follows "Run: ", or the quoted request after "Ask an agent: ". Not a word changes.
+status_todo_text() {
+  local l="$1" pre rest
+  case "$l" in
+    *"Run: "*) printf '%sRun: %s' "${l%%Run: *}" "$(typed "${l#*Run: }")" ;;
+    *'Ask an agent: "'*'"'*)
+      pre="${l%%Ask an agent: \"*}"
+      rest="${l#*Ask an agent: \"}"
+      printf '%sAsk an agent: %s%s' "$pre" "$(typed "\"${rest%%\"*}\"")" "${rest#*\"}"
+      ;;
+    *) printf '%s' "$l" ;;
+  esac
 }
 
 # status_table <template version>: the table of status, one row per wiki, adding its
@@ -3096,15 +3082,11 @@ cmd_status() {
   done)"
   # The compiled helper makes the table and counts the other collections' notes. When
   # it isn't sure it answers nothing, and the Bash does it all.
-  if [ "$STYLE" = yes ]; then
-    # The table goes through a file, so what it adds to STATUS_TODO stays here.
-    f="$(mktemp)"
-    { status_helper "$tv" "$others" || status_table "$tv"; } > "$f"
-    status_style_table < "$f"
-    rm -f "$f"
-  else
-    status_helper "$tv" "$others" || status_table "$tv"
-  fi
+  # The table goes through a file, so what it adds to STATUS_TODO stays here.
+  f="$(mktemp)"
+  { status_helper "$tv" "$others" || status_table "$tv"; } > "$f"
+  ui_table < "$f"
+  rm -f "$f"
   # What agents recorded as waiting or due, from each wiki's open.md.
   n="$(open_counts)"
   if [ "${n%% *}" -gt 0 ]; then
@@ -3183,8 +3165,14 @@ EOF2
   fi
   if [ -n "$STATUS_TODO" ]; then
     echo
-    say_head "To do:"
-    if [ "$STYLE" = yes ]; then printf '%s' "$STATUS_TODO" | status_style_todo; else printf '%s' "$STATUS_TODO"; fi
+    n="$(printf '%s' "$STATUS_TODO" | grep -c .)"
+    ui_stage --warn "TO DO" "$n item(s), each with its fix"
+    while IFS= read -r b; do
+      [ -n "$b" ] || continue
+      ui_item warn "$(status_todo_text "${b#- }")"
+    done <<EOF2
+$STATUS_TODO
+EOF2
   fi
 }
 
