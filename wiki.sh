@@ -1070,6 +1070,10 @@ place_all() {
   PLACE_NOTE="$PLACE_NOTE ${bt}rules/workflows.md$bt in the handbook has the questions."
 }
 
+# The words that have the shape of a ticket key and aren't one, such as release-2026.
+# ticket_find and recall_words both leave them out.
+TICKET_NOT_KEYS=" release rel version ver v sprint hotfix feature feat fix bugfix bug issue issues pr mr patch task story build test step phase part py python node go java "
+
 # ticket_find <folder>: the ticket a session there is working on, and where that was
 # read, as "<key> folder" or "<key> branch". The folder's name comes first, such as
 # VID-74003 for ~/tickets/VID-74003 or ~/tickets/VID-74003-fix-dns, then the folder
@@ -1079,7 +1083,7 @@ place_all() {
 # has the shape of a key and isn't one, so the commonest of those words are left out.
 ticket_find() {
   local d cand b re='^([A-Za-z][A-Za-z0-9]*-[0-9]+)(-.*)?$' bre='(^|[/_-])([A-Za-z][A-Za-z0-9]*-[0-9]+)([^0-9]|$)' w
-  local notkeys=" release rel version ver v sprint hotfix feature feat fix bugfix bug issue issues pr mr patch task story build test step phase part py python node go java "
+  local notkeys="$TICKET_NOT_KEYS"
   d="$(cd "$1" 2>/dev/null && pwd)" || return 0
   for cand in "${d##*/}" "$(basename "$(dirname "$d")")"; do
     if [[ $cand =~ $re ]]; then printf '%s folder' "${BASH_REMATCH[1]}"; return 0; fi
@@ -1104,34 +1108,202 @@ ticket_key() { local t; t="$(ticket_find "$1")"; printf '%s' "${t% *}"; }
 # session by its clones can't find a page filed under another repository's wiki, and
 # a session that isn't handed the page doesn't go looking. VID-7400 is not VID-74003.
 recall_key() {
-  local key="$1" max="${2:-5}" d tmp f
+  [ -n "${1:-}" ] || return 0
+  recall_core "$1" "" 0 "${2:-5}"
+}
+
+# The ordinary words that say nothing about what a message is for. Only words of five
+# letters or more are weak words, so the short ones aren't here.
+RECALL_STOP=" about decide decided deciding session sessions work works worked working above after again almost along already also always among another around asked because before being below between both bring cannot change changes check could doing during either enough every everything first found going great hello having help here maybe might never other please quite really right shall should since some something still sure take tell thank thanks their there these thing things think those though three through today under until using usually very want wants were what whatever when where whether which while whose with within without would write wrote wiki wikis note notes page pages file files "
+
+# recall_words <file>: the words of a message that are worth a search, one a line, tab
+# separated: S and a strong word, or W and a weak one. By byte, so the same on any locale.
+# A strong word is a ticket key (LETTERS-digits, but not release-2026) or a name out of
+# code: eight bytes or more with an underscore, a lowercase letter then a capital, or a
+# letter then a digit. A weak word is an ordinary word of five letters or more that isn't
+# in the stop list, with a plural s taken off. All are lowercase. The first 4000 bytes of
+# the message are read, and at most 6 strong words and 12 weak ones are kept.
+recall_words() {
+  [ -f "$1" ] || return 0
+  LC_ALL=C head -c 4000 "$1" 2>/dev/null | LC_ALL=C awk -v notkeys="$TICKET_NOT_KEYS" -v stop="$RECALL_STOP" '
+    function strong_name(s) {
+      sub(/^_+/, "", s); sub(/_+$/, "", s)
+      return length(s) >= 8 && (s ~ /_/ || s ~ /[a-z][A-Z]/ || s ~ /[A-Za-z][0-9]/)
+    }
+    function add_strong(w) { w = tolower(w); if (!(w in sseen) && ns < 6) { sseen[w] = 1; sl[++ns] = w } }
+    {
+      gsub(/[^A-Za-z0-9_-]+/, " ")
+      n = split($0, tok, " ")
+      for (i = 1; i <= n; i++) {
+        t = tok[i]; gsub(/^-+/, "", t); gsub(/-+$/, "", t)
+        if (t == "") continue
+        if (t ~ /^[A-Za-z][A-Za-z0-9]*-[0-9]+$/) {
+          p = tolower(substr(t, 1, index(t, "-") - 1))
+          if (length(p) >= 2 && index(notkeys, " " p " ") == 0) { add_strong(t); continue }
+        }
+        m = split(t, piece, "-")
+        for (j = 1; j <= m; j++) {
+          w = piece[j]
+          if (strong_name(w)) { sub(/^_+/, "", w); sub(/_+$/, "", w); add_strong(w); continue }
+          if (w !~ /^[A-Za-z]+$/) continue
+          w = tolower(w)
+          if (length(w) < 5 || index(stop, " " w " ") > 0) continue
+          if (length(w) >= 6 && w ~ /s$/) w = substr(w, 1, length(w) - 1)
+          if (!(w in wseen) && nw < 12) { wseen[w] = 1; wl[++nw] = w }
+        }
+      }
+    }
+    END {
+      for (i = 1; i <= ns; i++) printf "S\t%s\n", sl[i]
+      for (i = 1; i <= nw; i++) printf "W\t%s\n", wl[i]
+    }'
+}
+
+# recall_text <file> [max]: what to hand a session for the words of the message in a file:
+# up to max lines (4), best first, nothing when nothing fits. One strong word is enough,
+# in an index line, a page's text or a note waiting to be compiled. Weak words need two,
+# on one line, of the index or of a waiting note, and aren't searched for in page text, which is
+# noisy and slow. Never fails: any error means nothing.
+recall_text() {
+  local words strong weak
+  words="$(recall_words "$1" 2>/dev/null || true)"
+  [ -n "$words" ] || return 0
+  strong="$(printf '%s\n' "$words" | LC_ALL=C awk -F'\t' '$1 == "S" { printf "%s ", $2 }')"
+  weak="$(printf '%s\n' "$words" | LC_ALL=C awk -F'\t' '$1 == "W" { printf "%s ", $2 }')"
+  recall_core "${strong% }" "${weak% }" 1 "${2:-4}" 2>/dev/null || true
+}
+
+# recall_core <strong words> <weak words> <notes 0|1> <max>: the search itself, over every
+# wiki of the collection that has an index, in a few passes however many wikis there are:
+# one grep for page text, one awk over the index lines and the notes. The words are
+# lowercase, separated by spaces. A word matches whole: VID-7400 is not VID-74003. Rows
+# are scored, best first: a strong word in an index line, in a page's text (a page with an
+# index line), or in a note; then two weak words in an index line; then in a note. Notes
+# that a compile has recorded are left out. The lines are the ones session start prints
+# for a ticket: "- <wiki> wiki: [Title](~/.../page.md): summary", and for a note
+# "- <wiki> wiki, a note not compiled yet: ~/.../raw/<name>.md: <its first line that
+# mentions a word>".
+recall_core() {
+  local strong="$1" weak="$2" notes="$3" max="$4" d f w n tmp nwords=0
+  local kind a b c e line pend
+  local tab="$TAB"
   local LC_ALL=C
-  [ -n "$key" ] && [ -d "$WIKIS_DIR" ] || return 0
+  local wdirs=()
+  [ -d "$WIKIS_DIR" ] || return 0
+  for w in $weak; do nwords=$((nwords + 1)); done
+  # One weak word alone is never enough.
+  [ -n "$strong" ] || [ "$nwords" -ge 2 ] || return 0
   tmp="$(mktemp -d 2>/dev/null)" || return 0
-  : > "$tmp/out"
+  : > "$tmp/manifest"
+  : > "$tmp/pages"
   for d in "$WIKIS_DIR"/*/; do
     d="${d%/}"
     is_wiki "$d" || continue
-    : > "$tmp/pages"
-    if [ -d "$d/wiki" ]; then
-      { grep -r -l -i -E --include='*.md' -- "$key([^0-9]|\$)" "$d/wiki" 2>/dev/null || true; } \
-        | while IFS= read -r f; do printf '%s\n' "${f#"$d"/}"; done > "$tmp/pages"
+    printf 'i\t%s\t%s\n' "${d##*/}" "$d" >> "$tmp/manifest"
+    [ ! -d "$d/wiki" ] || wdirs[${#wdirs[@]}]="$d/wiki"
+    if [ "$notes" = 1 ]; then
+      # Only regular .md files: raw/ also holds PDFs, and a folder or a broken link
+      # named like a note isn't one. Newest first, so the newest of equals comes first.
+      set --
+      for f in "$d"/raw/*.md; do
+        if [ -f "$f" ]; then set -- "${f##*/}" ${1+"$@"}; fi
+      done
+      for f in ${1+"$@"}; do printf 'n\t%s\t%s\t%s\n' "${d##*/}" "$d" "$f" >> "$tmp/manifest"; done
     fi
-    awk -v key="$key" -v wiki="${d##*/}" -v root="$(tilde "$d")" '
-      BEGIN { re = tolower(key) "([^0-9]|$)"; gsub(/&/, "\\\\&", root) }
-      FILENAME == ARGV[1] { inpage[$0] = 1; next }
-      /^- \[/ {
-        line = $0; score = 0
-        if (tolower(line) ~ re) score = 2
-        path = line; sub(/^[^(]*\(/, "", path); sub(/\).*/, "", path)
-        if (path in inpage && score == 0) score = 1
-        if (score == 0) next
-        sub(/^- /, "", line)
-        sub(/\]\(/, "](" root "/", line)
-        printf "%d\t- %s wiki: %s\n", score, wiki, line
-      }' "$tmp/pages" "$d/index.md" >> "$tmp/out" 2>/dev/null || true
   done
-  sort -t "$(printf '\t')" -k1,1nr -s "$tmp/out" | head -n "$max" | cut -f 2-
+  if [ -n "$strong" ] && [ ${#wdirs[@]} -gt 0 ]; then
+    set --
+    for w in $strong; do set -- "$@" -e "$w"; done
+    # Whole words, whatever their case, in the pages of every wiki: one grep.
+    grep -r -l -i -w -F --include='*.md' "$@" -- "${wdirs[@]}" 2>/dev/null > "$tmp/pages" || true
+  fi
+  awk -F"$tab" -v strong="$strong" -v weak="$weak" -v home="$HOME" '
+    function hasword(s, w,   off, i, n, b, a) {
+      off = 0; n = length(w)
+      while ((i = index(substr(s, off + 1), w)) > 0) {
+        i += off
+        b = (i > 1) ? substr(s, i - 1, 1) : " "
+        a = substr(s, i + n, 1); if (a == "") a = " "
+        if (b !~ /[a-z0-9_]/ && a !~ /[a-z0-9_]/) return 1
+        off = i
+      }
+      return 0
+    }
+    function norm(s) { s = tolower(s); gsub(/[^a-z]/, " ", s); return " " s " " }
+    function nweak(s,   i, c) { s = norm(s); c = 0; for (i = 1; i <= nW; i++) if (index(s, " " W[i]) > 0) c++; return c }
+    function strongin(low,   i) { for (i = 1; i <= nS; i++) if (index(low, S[i]) > 0 && hasword(low, S[i])) return 1; return 0 }
+    function tilde(p) { return (index(p, home "/") == 1) ? "~/" substr(p, length(home) + 2) : p }
+    function do_index(w, dir,   f, line, low, path, sc, root, out, t) {
+      f = dir "/index.md"; root = tilde(dir); gsub(/&/, "\\\\&", root)
+      while ((getline line < f) > 0) {
+        if (line !~ /^- \[/) continue
+        low = tolower(line)
+        path = line; sub(/^[^(]*\(/, "", path); sub(/\).*/, "", path)
+        sc = 0
+        if (nS && strongin(low)) sc = 4000
+        else if (nS && ((dir "/" path) in inpage)) sc = 3000
+        else if (nW >= 2) { t = line; sub(/\]\([^)]*\)/, "]", t); sc = nweak(t); sc = (sc >= 2) ? sc * 10 + 1 : 0 }
+        if (!sc) continue
+        out = line; sub(/^- /, "", out); sub(/\]\(/, "](" root "/", out); gsub(/\t/, " ", out)
+        printf "%d\tI\t- %s wiki: %s\n", sc, w, out
+      }
+      close(f)
+    }
+    function do_note(w, dir, name,   f, line, low, fm, n, best, bline, sfirst, shit, i, s, sc, shown, c) {
+      f = dir "/raw/" name; fm = 0; n = 0; shit = 0; best = 0; bline = ""; sfirst = ""
+      while ((getline line < f) > 0) {
+        n++
+        if (n == 1 && line == "---") { fm = 1; continue }
+        if (fm) { if (line == "---") fm = 0; continue }
+        if (nS && !shit) { low = tolower(line); if (strongin(low)) { shit = 1; sfirst = line } }
+        # Ordinary words count on one line, as in an index line: a long note holds two of
+        # almost any five words somewhere. The line a note was captured on says nothing.
+        if (nW >= 2 && line !~ /^Captured:/) {
+          c = nweak(line)
+          if (c > best) { best = c; bline = line }
+        }
+      }
+      close(f)
+      if (shit) { sc = 3000; shown = sfirst } else if (best >= 2) { sc = best * 10; shown = bline } else return
+      sub(/^[ \t]+/, "", shown); gsub(/\t/, " ", shown); shown = substr(shown, 1, 120)
+      printf "%d\tN\t%s\t%s\t%s\t%s\n", sc, w, tilde(dir), name, shown
+    }
+    BEGIN {
+      nS = split(strong, S, " "); nW = split(weak, W, " ")
+      for (i = 1; i <= nS; i++) S[i] = tolower(S[i])
+    }
+    FILENAME == ARGV[1] { inpage[$0] = 1; next }
+    $1 == "i" { do_index($2, $3); next }
+    $1 == "n" { do_note($2, $3, $4); next }
+  ' "$tmp/pages" "$tmp/manifest" > "$tmp/rows" 2>/dev/null || true
+  sort -t "$tab" -k1,1nr -s "$tmp/rows" > "$tmp/sorted" 2>/dev/null || true
+  n=0
+  local key wn=0 wbest=0 wc
+  while IFS="$tab" read -r key kind a b c e; do
+    [ "$n" -lt "$max" ] || break
+    # A hit found by ordinary words alone has the number of different ones it holds in
+    # its key, tens and up: at most three of them, and only those within one word of the
+    # best, which is never fewer than two. Rows come best first.
+    if [ "$key" -lt 1000 ]; then
+      wc=$((key / 10))
+      [ "$wn" -lt 3 ] || continue
+      [ "$wbest" -eq 0 ] || [ "$wc" -ge $((wbest - 1)) ] || continue
+    fi
+    if [ "$kind" = I ]; then
+      [ "$key" -ge 1000 ] || { [ "$wbest" -ne 0 ] || wbest=$wc; wn=$((wn + 1)); }
+      printf '%s\n' "$a"
+    else
+      # a is the wiki, b its folder as written, c the note, e the line. Which notes are
+      # compiled is asked once for a wiki, and only for one a note was found in.
+      pend="$tmp/pending.${a//[^A-Za-z0-9._-]/_}"
+      if [ ! -f "$pend" ]; then pending_files "$WIKIS_DIR/$a" > "$pend" 2>/dev/null || true; fi
+      grep -qxF -- "$WIKIS_DIR/$a/raw/$c" "$pend" 2>/dev/null || continue
+      [ "$key" -ge 1000 ] || { [ "$wbest" -ne 0 ] || wbest=$wc; wn=$((wn + 1)); }
+      line="$(printf '%s' "$e" | sed -E "s/$FIND_CUT//")"
+      printf -- '- %s wiki, a note not compiled yet: %s/raw/%s: %s\n' "$a" "$b" "$c" "$line"
+    fi
+    n=$((n + 1))
+  done < "$tmp/sorted"
   rm -rf "$tmp"
 }
 
@@ -3807,7 +3979,8 @@ agy_hooks() {
       { "matcher": "*", "hooks": [{ "type": "command", "command": "$h tool", "timeout": 5 }] }
     ],
     "PreInvocation": [
-      { "type": "command", "command": "$h invoke", "timeout": 5 }
+      { "type": "command", "command": "$h invoke", "timeout": 5 },
+      { "type": "command", "command": "$(agy_cmd) __agy-prompt", "timeout": 10 }
     ]
   }
 }
@@ -3933,6 +4106,127 @@ print(p[7:] if p.startswith("file://") else p)' 2>/dev/null || true)"
     | python3 -c 'import json, sys; print(json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": sys.stdin.read()}}]}))'
 }
 
+# ---- What a message finds --------------------------------------------------------
+# A session that isn't handed a page mostly doesn't go looking for one. When the user
+# sends a message, the agents' hooks search every wiki for its words, and the session is
+# handed the pages and notes that fit, beside the message. recall_text does the search;
+# prompt_recall decides whether to hand anything over; cmd_prompt_hook reads an agent's
+# JSON and writes its reply. Claude Code, Codex and Antigravity all come through here.
+
+# prompt_recall <session id> <folder> <message file>: the text to hand over, or nothing.
+# Nothing in a background compile's own session, with no collection, in a folder a pattern
+# sets to no wiki, for a message already searched for, or when nothing fits. A page or
+# note is named once a session: what a session has been handed is kept in a small file per
+# session, and files older than a week are swept. The text is facts, not orders, and
+# stays under 1,200 bytes: it is the list that is cut, never a line. It never fails.
+prompt_recall() {
+  local sid="$1" dir="$2" tf="$3" sdir state last sum hits fresh line out given n=0 wiki word
+  local LC_ALL=C
+  local intro="A search of your wikis for the words in this message found these. They were written by earlier sessions and can be out of date: check a figure against the code before you quote it."
+  [ -z "${LLM_WIKI_BACKGROUND:-}" ] || return 0
+  [ -f "$tf" ] || return 0
+  case "$sid" in '' | *[!A-Za-z0-9_-]*) return 0 ;; esac
+  [ -n "$dir" ] && [ -d "$dir" ] || dir="$PWD"
+  [ -n "${pick:-}" ] || [ -n "${LLM_WIKI_FIXED_DIR:-}" ] || set_collection "$(collection_for "$dir")"
+  [ -d "$WIKIS_DIR" ] || return 0
+  if workflow_for "$dir" && [ "$WF_WHAT" = none ]; then return 0; fi
+  sdir="${XDG_STATE_HOME:-$HOME/.local/state}/llm-wiki/recall"
+  state="$sdir/$sid.seen"
+  last="$sdir/$sid.last"
+  sum="$(cksum < "$tf" | cut -d ' ' -f 1,2)"
+  # Antigravity asks before every step of the model, not once a message.
+  [ "$(cat "$last" 2>/dev/null)" != "$sum" ] || return 0
+  if [ ! -e "$last" ] && [ ! -e "$state" ]; then
+    mkdir -p "$sdir" 2>/dev/null || true
+    # Sessions end without telling anyone, so old files are swept as a new one starts.
+    find "$sdir" -type f -mtime +7 -exec rm -f {} + 2>/dev/null || true
+  fi
+  printf '%s\n' "$sum" > "$last" 2>/dev/null || true
+  hits="$(recall_text "$tf" 12 2>/dev/null || true)"
+  [ -n "$hits" ] || return 0
+  fresh="$hits"
+  if [ -s "$state" ]; then fresh="$(printf '%s\n' "$hits" | grep -vxFf "$state" || true)"; fi
+  [ -n "$fresh" ] || return 0
+  out="$intro"
+  given=""
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    [ "$n" -lt 4 ] || break
+    [ $((${#out} + ${#line} + 1)) -lt 1200 ] || break
+    out="$out"$'\n'"$line"
+    given="$given$line"$'\n'
+    n=$((n + 1))
+  done <<EOF2
+$fresh
+EOF2
+  [ "$n" -gt 0 ] || return 0
+  printf '%s' "$given" >> "$state" 2>/dev/null || true
+  # Logged as a search that found something is, so that use of the wiki stays measurable.
+  wiki="$(printf '%s\n' "$given" | sed -n '1s/^- \([^ ]*\) wiki.*/\1/p')"
+  word="$(recall_words "$tf" 2>/dev/null | sed -n "1s/^[SW]$TAB//p")"
+  stats_log "${wiki:-$SHARED}" recall-found "$word"
+  printf '%s' "$out"
+}
+
+# __prompt-hook <claude|codex|agy>: an agent's hook for a user's message. Reads its JSON on
+# stdin, which names the message, the session and the folder, and replies as that agent
+# wants context: additionalContext for Claude Code and Codex, a system message step for
+# Antigravity, which always gets a reply since its exit codes aren't documented. Claude
+# Code and Codex get nothing at all when there is nothing to hand over. With no python3
+# it does nothing. It never fails.
+cmd_prompt_hook() {
+  local style="$1" tf fields sid dir ctx
+  if ! command -v python3 >/dev/null 2>&1; then
+    [ "$style" != agy ] || echo '{}'
+    return 0
+  fi
+  ctx=""
+  tf="$(mktemp 2>/dev/null)" || tf=""
+  if [ -n "$tf" ]; then
+    fields="$(PROMPT_FILE="$tf" STYLE="$style" python3 -c '
+import json, os, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    d = {}
+if not isinstance(d, dict):
+    d = {}
+if os.environ["STYLE"] == "agy":
+    text, sid, cwd = d.get("lastUserInput"), d.get("conversationId"), d.get("cwd")
+    if not cwd:
+        p = d.get("workspacePaths")
+        cwd = p[0] if isinstance(p, list) and p else ""
+    if isinstance(cwd, str) and cwd.startswith("file://"):
+        cwd = cwd[7:]
+else:
+    text, sid, cwd = d.get("prompt"), d.get("session_id"), d.get("cwd")
+if not isinstance(text, str) or not isinstance(sid, str):
+    sys.exit(0)
+with open(os.environ["PROMPT_FILE"], "wb") as f:
+    f.write(text[:4000].encode("utf-8", "replace"))
+print(sid + "\t" + (cwd if isinstance(cwd, str) else ""))' 2>/dev/null || true)"
+    if [ -n "$fields" ]; then
+      IFS="$TAB" read -r sid dir <<EOF2
+$fields
+EOF2
+      ctx="$( (prompt_recall "$sid" "$dir" "$tf") 2>/dev/null || true)"
+    fi
+    rm -f "$tf"
+  fi
+  if [ -z "$ctx" ]; then
+    [ "$style" != agy ] || echo '{}'
+    return 0
+  fi
+  printf '%s' "$ctx" | STYLE="$style" python3 -c '
+import json, os, sys
+t = sys.stdin.read()
+if os.environ["STYLE"] == "agy":
+    r = {"injectSteps": [{"systemMessage": {"systemMessage": t}}]}
+else:
+    r = {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": t}}
+print(json.dumps(r))' 2>/dev/null || { [ "$style" != agy ] || echo '{}'; }
+}
+
 # ---- Codex -------------------------------------------------------------------
 # OpenAI's Codex installs plugins from marketplaces: a folder with
 # .agents/plugins/marketplace.json, whose plugins each have a .codex-plugin/plugin.json.
@@ -3978,7 +4272,8 @@ codex_hooks() {
 {
     "hooks": {
       "SessionStart": [{ "hooks": [{ "type": "command", "command": "\\"$c\\" __codex-start", "timeout": 30 }] }],
-      "PostCompact": [{ "hooks": [{ "type": "command", "command": "\\"$c\\" __codex-start", "timeout": 30 }] }]
+      "PostCompact": [{ "hooks": [{ "type": "command", "command": "\\"$c\\" __codex-start", "timeout": 30 }] }],
+      "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "\\"$c\\" __codex-prompt", "timeout": 10 }] }]
     }
   }
 EOF2
@@ -7845,10 +8140,12 @@ report_use() {
       if ($3 ~ /^hit/) h++
       else if ($3 ~ /^miss/) m++
       else if ($3 == "search-found") f++
+      else if ($3 == "recall-found") r++
       else if ($3 == "search-none") { none++; if ($4 != "" && !seen[$4]++ && n < 8) { words = words (n ? ", " : "") $4; n++ } }
     }
     END {
       if (f + none) printf "- Searches: %d, of which %d found nothing%s\n", f + none, none, (words == "" ? "" : ": " words)
+      if (r) printf "- Handed over at a message, from a search of its words: %d time(s)\n", r
       if (h + m) printf "- Logged by sessions as answered or not: %d and %d. Most sessions do not log, so this is not a hit rate.\n", h, m
     }' "$STATS_FILE"
 }
@@ -7971,7 +8268,8 @@ cmd_report() {
 # plugin's hooks and the MCP server log a hit when a session opens a wiki's page, once
 # per wiki per session (hooks/reminders.py, log_lookup in mcp/server.py). Handbooks before
 # v29 asked agents to log it by hand, hit or miss. wiki find logs its own searches there
-# too: date,wiki,search-found|search-none,word. stats sums them.
+# too: date,wiki,search-found|search-none,word. stats sums them. A hook that hands a session what
+# a message found logs date,wiki,recall-found,word, and stats counts those apart: they aren't lookups.
 STATS_FILE="$WIKIS_DIR/stats.csv"
 
 cmd_stats() {
@@ -7987,6 +8285,7 @@ cmd_stats() {
     NR == 1 && $1 == "date" { next }
     $1 < from || NF < 3 { next }
     $3 == "search-found" { found++; next }
+    $3 == "recall-found" { recalled++; next }
     $3 == "search-none" { none++; if ($4 != "" && !seen[$4]++ && c < 8) { words = words (c ? ", " : "") $4; c++ } next }
     { n[$2]++; if ($3 ~ /^hit/) h[$2]++; total++; hits += ($3 ~ /^hit/) }
     END {
@@ -7997,6 +8296,7 @@ cmd_stats() {
         printf "%-26s %7d %5d %6d %5.0f%%\n", "all", total, hits, total - hits, 100 * hits / total
       }
       if (found + none) printf "Searches: %d, of which %d found nothing%s\n", found + none, none, (words == "" ? "" : ": " words)
+      if (recalled) printf "Handed over at a message, from a search of its words: %d time(s)\n", recalled
     }' "$STATS_FILE"
   echo "A session opening a wiki's page logs a hit, once per wiki per session, where the plugin's hook runs. Misses were logged by hand under older handbooks, so a rate says little now. The weekly report counts page reads from transcripts."
 }
@@ -9081,7 +9381,7 @@ setup_codex() {
   case "$state" in
     current) echo "${M_OK}The llm-wiki plugin for Codex is up to date." ;;
     old)
-      if codex_write; then echo "${M_OK}Updated the llm-wiki plugin for Codex. New sessions use it."; fi ;;
+      if codex_write; then echo "${M_OK}Updated the llm-wiki plugin for Codex. New sessions use it. It has a new hook, which finds what a message needs in your wikis, and Codex runs it only once you trust it: run codex in a terminal, type /hooks and trust it. The desktop app doesn't ask."; fi ;;
     missing)
       echo "Codex is installed. An llm-wiki plugin points its sessions at your wikis, and loads the wiki's index and agreements at the start and after compaction, like the Claude Code plugin."
       if [ -n "$(codex_line)" ]; then
@@ -9092,7 +9392,7 @@ setup_codex() {
       if ask_yn "Add it?" y; then
         [ ! -f "$CODEX_DIR/AGENTS.md" ] || cp "$CODEX_DIR/AGENTS.md" "$CODEX_DIR/AGENTS.md.bak-$(date +%Y%m%d-%H%M%S)"
         if codex_write; then
-          echo "  ${M_WARN}added. Codex runs its hooks only once you trust them, and the desktop app doesn't ask. Run codex in a terminal once: it says 2 hooks need review. Type /hooks and trust both."
+          echo "  ${M_WARN}added. Codex runs its hooks only once you trust them, and the desktop app doesn't ask. Run codex in a terminal once: it says 3 hooks need review. Type /hooks and trust them all."
         else
           echo "  ${M_WARN}couldn't install it."
         fi
@@ -9334,7 +9634,17 @@ case "$cmd" in
   # The session hook asks which pages mention the ticket a session is working on: the
   # key and where it was read (folder or branch) on the first line, then the pages.
   # Nothing at all when there are none.
+  # With --text <file> it searches for the words of a message instead, for the hooks that
+  # run when the user sends one: at most --max lines (4), best first, and nothing at all
+  # when nothing fits. It never fails.
   __recall)
+    if [ "${1:-}" = --text ]; then
+      rmax=4
+      [ "${3:-}" != --max ] || rmax="${4:-4}"
+      case "$rmax" in '' | *[!0-9]*) rmax=4 ;; esac
+      recall_text "${2:-}" "$rmax" 2>/dev/null || true
+      exit 0
+    fi
     tkey="$(ticket_find "${1:-$PWD}")"
     thits="$(recall_key "${tkey% *}")"
     [ -z "$thits" ] || printf '%s\n%s\n' "$tkey" "$thits"
@@ -9359,6 +9669,10 @@ case "$cmd" in
     ;;
   __agy-start) cmd_agy_start; exit 0 ;;
   __codex-start) cmd_codex_start; exit 0 ;;
+  # The hooks that hand a session what a message finds in the wikis.
+  __prompt-hook) cmd_prompt_hook claude || true; exit 0 ;;
+  __codex-prompt) cmd_prompt_hook codex || true; exit 0 ;;
+  __agy-prompt) cmd_prompt_hook agy || true; exit 0 ;;
   __cursor-start) cmd_cursor_start; exit 0 ;;
   deps) cmd_deps "$@"; exit 0 ;;
   permissions)

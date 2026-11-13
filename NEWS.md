@@ -4,6 +4,13 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-12-08: your message finds its pages
+
+- When you send a message, the agent is handed the pages and notes, in any wiki, that fit its words. It used to have to go looking, and mostly didn't.
+- A ticket key or a name out of code is enough by itself, ordinary words need two. A page or note is named once a session, and nothing is added when none fit.
+- It works in Claude Code, Codex and Antigravity.
+- Do: in Codex, run `wiki setup codex`, then `codex` in a terminal, type `/hooks` and trust the new hook.
+
 ## 2026-12-07: session start leaves your agents' rules alone
 
 - A session in another collection, or with `WIKIS_DIR` set, no longer rewrites the agents' rule files. They name your default collection.
