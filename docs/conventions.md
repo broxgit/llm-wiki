@@ -1,4 +1,4 @@
-Conventions version 2. llm-wiki keeps the original. llm-relay holds a copy: change it here first, then change the copy in the same sitting.
+Conventions version 3. llm-wiki keeps the original. llm-relay holds a copy: change it here first, then change the copy in the same sitting.
 
 # Conventions for commands
 
@@ -17,6 +17,21 @@ Agents' shells can be pseudo-terminals, where "is a terminal" is true. So a comm
 A tool whose every command may be run by an assistant, as llm-relay's can, has a second way to apply the same rule: it calls `style_off` whenever standard input isn't a terminal, whatever the variable says.
 
 The compiled helper in `cmd/` and `internal/` always prints plain text. `wiki.sh` adds style on the way out.
+
+### The palette
+
+One setting, `palette`, with two values. `default` is the table below. `colorblind` follows Okabe–Ito in spirit, within the terminal's 16 colours:
+
+| Role | `default` | `colorblind` |
+|---|---|---|
+| ok (the tick) | green, 32 | blue, 34 |
+| a warning | bold yellow, 33 | bold yellow, 33 (it reads as orange in most themes) |
+| an error | red, 31 | magenta, 35 |
+| something to type | cyan, 36 | cyan, 36 |
+
+Marks and words don't change: they already carry the meaning without colour. The order that decides the palette: `LLM_PALETTE` (one variable, read by every llm-* tool), then the tool's own setting, then `default`. A value that isn't a palette's name is ignored, so the next one decides. Each tool keeps its own setting where it keeps its others, and asks about it in its setup.
+
+Code names a role (`S_OK`, `S_WARN`, `S_TYPED`, `C_ERR`, `M_OK`), never a colour code. A new palette, or a new role such as one for a richer colour mode, is a change to `style_set` alone.
 
 ### The words never change
 
@@ -56,11 +71,12 @@ A blank line between groups. Marks in front, not words at the end. A column as w
 
 ## The helpers to copy
 
-Bash 3.2 compatible. Change only the first line, `STYLE_OVERRIDE`, to the tool's own variable. A smoke test in llm-wiki checks that this block is the one in `wiki.sh`.
+Bash 3.2 compatible. Change only the first two lines after the version line: `STYLE_OVERRIDE` to the tool's own variable, and `STYLE_PALETTE_FILE` to the file that holds its `palette=` setting. A smoke test in llm-wiki checks that this block is the one in `wiki.sh`.
 
 ```bash
-# --- style helpers: docs/conventions.md, version 2. Copy, don't edit. ---
-STYLE_OVERRIDE="${LLM_WIKI_STYLE:-}" # the one line a tool changes: its own variable
+# --- style helpers: docs/conventions.md, version 3. Copy, don't edit. ---
+STYLE_OVERRIDE="${LLM_WIKI_STYLE:-}" # a line a tool changes: its own variable
+STYLE_PALETTE_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/llm-wiki/palette" # a line a tool changes: its own setting, a file holding palette=default or palette=colorblind
 # style_wanted <fd>: style on? LLM_<TOOL>_STYLE=on or off decides; else a terminal, no NO_COLOR, TERM not dumb.
 style_wanted() {
   case "$STYLE_OVERRIDE" in on) return 0 ;; off) return 1 ;; esac
@@ -70,12 +86,31 @@ style_utf8() {
   case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in *[Uu][Tt][Ff]-8* | *[Uu][Tt][Ff]8*) return 0 ;; esac
   return 1
 }
+# style_palette: sets PALETTE. LLM_PALETTE (every llm-* tool reads it), then the tool's own setting, then default.
+style_palette() {
+  local l
+  PALETTE="${LLM_PALETTE:-}"
+  case "$PALETTE" in default | colorblind) return 0 ;; esac
+  PALETTE=""
+  if [ -r "$STYLE_PALETTE_FILE" ]; then
+    while IFS= read -r l || [ -n "$l" ]; do case "$l" in palette=*) PALETTE="${l#palette=}" ;; esac; done < "$STYLE_PALETTE_FILE"
+  fi
+  case "$PALETTE" in colorblind) ;; *) PALETTE=default ;; esac
+}
+# style_set: the colour of each role, by palette. Call sites use the roles, never a code.
 style_set() {
-  S_BOLD="" S_DIM="" S_GREEN="" S_YELLOW="" S_CYAN="" S_OFF="" M_OK="" M_WARN=""
+  S_BOLD="" S_DIM="" S_OK="" S_WARN="" S_TYPED="" S_OFF="" M_OK="" M_WARN=""
+  style_palette
+  # C_ERR is a bare code: standard error may be styled when standard output isn't.
+  if [ "$PALETTE" = colorblind ]; then C_ERR=35; else C_ERR=31; fi
   [ "$STYLE" = yes ] || return 0
-  S_BOLD=$'\033[1m' S_DIM=$'\033[2m' S_GREEN=$'\033[32m' S_YELLOW=$'\033[33m' S_CYAN=$'\033[36m' S_OFF=$'\033[0m'
-  if style_utf8; then M_OK="${S_GREEN}✓${S_OFF} "; else M_OK="${S_GREEN}+${S_OFF} "; fi
-  M_WARN="${S_BOLD}${S_YELLOW}!${S_OFF} "
+  S_BOLD=$'\033[1m' S_DIM=$'\033[2m' S_OFF=$'\033[0m'
+  case "$PALETTE" in
+    colorblind) S_OK=$'\033[34m' S_WARN=$'\033[33m' S_TYPED=$'\033[36m' ;;
+    *) S_OK=$'\033[32m' S_WARN=$'\033[33m' S_TYPED=$'\033[36m' ;;
+  esac
+  if style_utf8; then M_OK="${S_OK}✓${S_OFF} "; else M_OK="${S_OK}+${S_OFF} "; fi
+  M_WARN="${S_BOLD}${S_WARN}!${S_OFF} "
 }
 STYLE=no STYLE_ERR=no
 if style_wanted 1; then STYLE=yes; fi
@@ -87,15 +122,15 @@ say_ok() { printf '%s%s\n' "$M_OK" "$*"; }
 say_warn() { printf '%s%s\n' "$M_WARN" "$*"; }
 say_head() { printf '%s%s%s\n' "$S_BOLD" "$*" "$S_OFF"; }
 say_dim() { printf '%s%s%s\n' "$S_DIM" "$*" "$S_OFF"; }
-say_next() { printf '%sNext:%s %s\n' "$S_BOLD$S_CYAN" "$S_OFF" "$*"; }
-typed() { printf '%s%s%s' "$S_CYAN" "$*" "$S_OFF"; }
+say_next() { printf '%sNext:%s %s\n' "$S_BOLD$S_TYPED" "$S_OFF" "$*"; }
+typed() { printf '%s%s%s' "$S_TYPED" "$*" "$S_OFF"; }
 die() {
-  if [ "$STYLE_ERR" = yes ]; then printf '\033[31merror:\033[0m %s\n' "$*" >&2; else echo "error: $*" >&2; fi
+  if [ "$STYLE_ERR" = yes ]; then printf '\033[%sm%s\033[0m %s\n' "$C_ERR" "error:" "$*" >&2; else echo "error: $*" >&2; fi
   exit 1
 }
 # die_usage <words>: the tool was called wrongly: an unknown command or option, a missing argument. Exits 2.
 die_usage() {
-  if [ "$STYLE_ERR" = yes ]; then printf '\033[31merror:\033[0m %s\n' "$*" >&2; else echo "error: $*" >&2; fi
+  if [ "$STYLE_ERR" = yes ]; then printf '\033[%sm%s\033[0m %s\n' "$C_ERR" "error:" "$*" >&2; else echo "error: $*" >&2; fi
   exit 2
 }
 # say_warn_err <words>: a warning on standard error, styled as standard error is, whatever standard output is.
@@ -122,7 +157,7 @@ def sgr(code, text, fd=1):
     return "\033[%sm%s\033[0m" % (code, text) if style_on(fd) else text
 def bold(t): return sgr("1", t)
 def dim(t): return sgr("2", t)
-def typed(t, fd=1): return sgr("36", t, fd)
+def typed(t, fd=1): return sgr("36", t, fd)  # a Python tool picks its palette the same way: LLM_PALETTE, its setting, default
 def warn_mark(fd=1): return sgr("1;33", "!", fd) + " "
 def error(msg, code=1): sys.stderr.write(sgr("31", "error:", 2) + " " + msg + "\n"); sys.exit(code)
 def usage_error(msg): error(msg, 2)
