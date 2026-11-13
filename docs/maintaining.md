@@ -43,6 +43,7 @@ hooks/
   hooks.json       The plugin's hooks: session-start.sh at session start, pre-tool-use.sh before tool calls.
   session-start.sh Finds the session's wiki, points the session at it, keeps the wiki command current, and writes the session's reminders.
   pre-tool-use.sh  Hands a session the wiki reminders that apply to a tool call. reminders.py does the matching.
+  user-prompt.sh   At UserPromptSubmit, hands a session the pages and notes the user's message finds. wiki.sh does the search (`__recall --text`) and the once-a-session bookkeeping (`__prompt-hook`); Codex's `__codex-prompt` and Antigravity's `__agy-prompt` come through the same code.
   pre-commit       The secret scan that wiki.sh installs in wiki repos.
 ```
 

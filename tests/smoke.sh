@@ -2037,12 +2037,13 @@ ALLOW='{"decision": "allow"}'
 is() { local name="$1" want="$2" got="$3"; if [ "$got" = "$want" ]; then ok "$name"; else bad "$name" "wanted: $want
 got: $got"; fi; }
 check "setup installs the tool-call hooks beside the plugin" test -x "$AP/hooks/agy-hook.sh" -a -f "$AP/hooks/reminders.py"
-check "hooks.json has PreToolUse for every tool (the docs' matcher *), and PreInvocation" python3 -c "
+check "hooks.json has PreToolUse for every tool (the docs' matcher *), and PreInvocation, which also runs the search for a message" python3 -c "
 import json, sys
 h = json.load(open(sys.argv[1]))['llm-wiki']
 m = h['PreToolUse'][0]
 assert m['matcher'] == '*' and m['hooks'][0]['type'] == 'command' and m['hooks'][0]['command'].endswith('hooks/agy-hook.sh tool')
 assert h['PreInvocation'][0]['command'].endswith('hooks/agy-hook.sh invoke')
+assert h['PreInvocation'][1]['command'].endswith(' __agy-prompt') and h['PreInvocation'][1]['timeout'] == 10
 assert h['SessionStart'][0]['command'].endswith(' __agy-start')" "$AP/hooks.json"
 rm "$AP/hooks/agy-hook.sh"
 expect "a plugin without them is old" "plugin old" "$W" setup --list
@@ -2161,10 +2162,11 @@ EOF
 chmod +x "$T/bin/codex"
 printf '# Mine\n\nKeep this.\n\nMy knowledge wikis live in ~/old. Run the old line.\n\nAnd this.\n' > "$HOME/.codex/AGENTS.md"
 out="$(printf 'y\n' | PATH="$T/bin:$PATH" in_tty "$W" setup codex 2>&1)"
-case "$out" in *"replaces the wiki line"*"/hooks and trust both"*) ok "setup codex installs it and says to trust its hooks" ;; *) bad "setup codex installs it and says to trust its hooks" "$out" ;; esac
+case "$out" in *"replaces the wiki line"*"/hooks and trust them all"*) ok "setup codex installs it and says to trust its hooks" ;; *) bad "setup codex installs it and says to trust its hooks" "$out" ;; esac
 check "it adds the marketplace and the plugin with the codex command" grep -qx "plugin add llm-wiki@llm-wiki" "$T/codex.log"
 check "its marketplace lists the plugin" python3 -c "import json,sys; p=json.load(open(sys.argv[1]))['plugins'][0]; assert p['name']=='llm-wiki' and p['source']=={'source':'local','path':'./plugins/llm-wiki'}" "$HOME/.codex/llm-wiki/.agents/plugins/marketplace.json"
 check "its hooks run __codex-start at SessionStart and PostCompact" python3 -c "import json,sys; h=json.load(open(sys.argv[1]))['hooks']['hooks']; assert all(h[e][0]['hooks'][0]['command'].endswith(' __codex-start') for e in ('SessionStart','PostCompact'))" "$HOME/.codex/llm-wiki/plugins/llm-wiki/.codex-plugin/plugin.json"
+check "and one at UserPromptSubmit that runs __codex-prompt, for the search of a message" python3 -c "import json,sys; h=json.load(open(sys.argv[1]))['hooks']['hooks']['UserPromptSubmit'][0]['hooks'][0]; assert h['command'].endswith(' __codex-prompt') and h['timeout'] == 10" "$HOME/.codex/llm-wiki/plugins/llm-wiki/.codex-plugin/plugin.json"
 check "the old line is replaced in place, and the rest of AGENTS.md stays" python3 -c "import sys; t=open(sys.argv[1]).read(); assert t.startswith('# Mine\n\nKeep this.\n\nMy knowledge wikis live in') and 'plugin' in t.split('\n')[4] and t.endswith('\n\nAnd this.\n') and 'old line' not in t" "$HOME/.codex/AGENTS.md"
 check "it links the llm-wiki skill" test -f "$HOME/.codex/skills/llm-wiki/SKILL.md"
 check "and the slash commands as skills" test -f "$HOME/.codex/skills/wiki-compile/SKILL.md"
@@ -5537,6 +5539,190 @@ check "the folder's ticket comes before the branch's" test -z "$("$W" __recall "
 lacks "a folder that uses no wiki is handed no pages" "A search of every wiki" hook "$RC" '{"source":"startup"}'
 lacks "nor by wiki start" "===== Pages that mention" env -C "$RC" "$W" start
 "$W" workflows remove "$RC" >/dev/null 2>&1
+# What a message finds. When the user sends one, the words they typed are searched for in
+# every wiki: a ticket key or a name out of code on its own, ordinary words two at a time.
+# __recall --text reads the message from a file.
+"$W" new tfmsg >/dev/null 2>&1
+mkdir -p "$WIKIS_DIR/tfmsg/wiki/concepts" "$WIKIS_DIR/tfmsg/raw"
+printf -- '# Billing\n\nThe nightly job calls reconcile_ledger_totals before it posts.\n' > "$WIKIS_DIR/tfmsg/wiki/concepts/billing.md"
+printf -- '# Quota\n\nThe limit changed in MSG-88, and again later.\n' > "$WIKIS_DIR/tfmsg/wiki/concepts/quota.md"
+printf -- '# Plan\n\nNothing here.\n' > "$WIKIS_DIR/tfmsg/wiki/concepts/plan.md"
+printf -- '# Invoices\n\nNothing here.\n' > "$WIKIS_DIR/tfmsg/wiki/concepts/invoices.md"
+printf -- '# Gateway\n\nNothing here.\n' > "$WIKIS_DIR/tfmsg/wiki/concepts/gateway.md"
+cat >> "$WIKIS_DIR/tfmsg/index.md" <<'EOF'
+
+## Concepts
+- [Invoice retries](wiki/concepts/invoices.md): How the invoice queue retries failed payments.
+- [Billing run](wiki/concepts/billing.md): The nightly billing run.
+- [Gateway notes](wiki/concepts/gateway.md): Timeouts at the payment gateway.
+- [MSG-77 plan](wiki/concepts/plan.md): Order of work for MSG-77.
+- [Quota](wiki/concepts/quota.md): The limits on a customer.
+EOF
+printf 'Observed the warehouse sync dropping parcels overnight.\nThe parcels lacked a carrier code.\n' > "$WIKIS_DIR/tfmsg/raw/2026-01-05-sync.md"
+printf 'The warehouse sync dropped parcels too, last week.\n' > "$WIKIS_DIR/tfmsg/raw/2026-01-04-done.md"
+printf 'Talked about MSG-99 with the team.\n' > "$WIKIS_DIR/tfmsg/raw/2026-01-06-key.md"
+printf 'warehouse and parcels, in a PDF.\n' > "$WIKIS_DIR/tfmsg/raw/2026-01-07-scan.pdf"
+printf '\n## [2026-01-04] ingest | done\n- source: raw/2026-01-04-done.md\n' >> "$WIKIS_DIR/tfmsg/log.md"
+# A wiki with no index is skipped, and so is a folder that only looks like a note.
+mkdir -p "$WIKIS_DIR/tfnoindex/wiki" "$WIKIS_DIR/tfmsg/raw/folder.md"
+: > "$WIKIS_DIR/tfnoindex/AGENTS.md"
+printf 'MSG-77 and warehouse parcels\n' > "$WIKIS_DIR/tfnoindex/wiki/x.md"
+eq() { if [ "$3" = "$2" ]; then ok "$1"; else bad "$1" "wanted: $2
+got: $3"; fi; }
+msg() { printf '%s' "$1" > "$T/msg.txt"; "$W" __recall --text "$T/msg.txt"; }
+out="$(msg 'What does MSG-77 need?')"
+case "$out" in "- tfmsg wiki: [MSG-77 plan]("*"/tfmsg/wiki/concepts/plan.md): Order of work for MSG-77.") ok "a ticket key in a message finds a page by its index line" ;; *) bad "a ticket key in a message finds a page by its index line" "$out" ;; esac
+out="$(msg 'Why did msg-88 change the limit?')"
+case "$out" in "- tfmsg wiki: [Quota]("*"/tfmsg/wiki/concepts/quota.md): The limits on a customer.") ok "and finds a page by its text, whatever the case" ;; *) bad "and finds a page by its text, whatever the case" "$out" ;; esac
+out="$(msg 'Where is reconcile_ledger_totals called?')"
+case "$out" in "- tfmsg wiki: [Billing run]("*"/tfmsg/wiki/concepts/billing.md): The nightly billing run.") ok "a name out of code finds a page by its text" ;; *) bad "a name out of code finds a page by its text" "$out" ;; esac
+out="$(msg 'Why do the invoice retries stall?')"
+case "$out" in "- tfmsg wiki: [Invoice retries]("*"/tfmsg/wiki/concepts/invoices.md): How the invoice queue retries failed payments.") ok "two ordinary words in one index line find it" ;; *) bad "two ordinary words in one index line find it" "$out" ;; esac
+check "one ordinary word doesn't" test -z "$(msg 'Tell me about the gateway')"
+check "nor do two in different index lines" test -z "$(msg 'Is the billing gateway ready?')"
+out="$(msg 'The warehouse parcels went missing')"
+case "$out" in "- tfmsg wiki, a note not compiled yet: "*"/tfmsg/raw/2026-01-05-sync.md: Observed the warehouse sync dropping parcels overnight.") ok "two ordinary words in a note waiting to be compiled find it, with its first line that has one" ;; *) bad "two ordinary words in a note waiting to be compiled find it, with its first line that has one" "$out" ;; esac
+case "$out" in *"done.md"* | *"scan.pdf"* | *"folder.md"*) bad "a note a compile recorded, a PDF and a folder aren't listed" "$out" ;; *) ok "a note a compile recorded, a PDF and a folder aren't listed" ;; esac
+out="$(msg 'What was MSG-99 about?')"
+case "$out" in "- tfmsg wiki, a note not compiled yet: "*"/tfmsg/raw/2026-01-06-key.md: Talked about MSG-99 with the team.") ok "a ticket key finds a note by itself" ;; *) bad "a ticket key finds a note by itself" "$out" ;; esac
+case "$(msg 'MSG-77 warehouse parcels')" in *"tfnoindex"*) bad "a wiki with no index is skipped" ;; *"[MSG-77 plan]"*) ok "a wiki with no index is skipped" ;; *) bad "a wiki with no index is skipped" ;; esac
+check "a message with nothing in it that fits gives no output" test -z "$(msg 'Please tidy the headers and should it work, thanks')"
+check "and exits 0" sh -c '"$1" __recall --text "$2" >/dev/null' _ "$W" "$T/msg.txt"
+check "stop words alone find nothing" test -z "$(msg 'about their should would there where which these those other')"
+check "and words under five letters" test -z "$(msg 'gate bill note plan limit')"
+check "a missing file gives nothing" test -z "$("$W" __recall --text "$T/no-such-file" 2>&1)"
+check "and exits 0" "$W" __recall --text "$T/no-such-file"
+: > "$T/empty.txt"
+check "an empty file gives nothing" test -z "$("$W" __recall --text "$T/empty.txt" 2>&1)"
+check "no file named gives nothing" test -z "$("$W" __recall --text 2>&1)"
+for i in 1 2 3 4 5 6; do printf -- '- [MSG-55 page %s](wiki/concepts/plan.md): All about MSG-55.\n' "$i" >> "$WIKIS_DIR/tfmsg/index.md"; done
+check "at most four lines, however many fit" test "$(msg 'MSG-55 and MSG-77 and MSG-99 and MSG-88' | wc -l | tr -d ' ')" = 4
+out="$(msg 'MSG-88 and MSG-77' | head -n 1)"
+case "$out" in *"[MSG-77 plan]"*) ok "the best come first: a strong word in an index line over one in a page's text" ;; *) bad "the best come first" "$out" ;; esac
+check "__recall with a folder still names a ticket's key" test "$("$W" __recall "$RC" | head -n 1)" = "RECALL-42 folder"
+# Ordinary words alone rank by how many different ones a hit holds, and are kept in check.
+"$W" new tfrank >/dev/null 2>&1
+cat >> "$WIKIS_DIR/tfrank/index.md" <<'EOF'
+
+## Concepts
+- [Three pages](wiki/concepts/plan.md): zephyr quartz marimba.
+- [Two pages](wiki/concepts/plan.md): zephyr quartz.
+- [Four pages A](wiki/concepts/plan.md): zephyr quartz marimba tundra.
+EOF
+printf 'zephyr quartz marimba tundra, all in one note.\n' > "$WIKIS_DIR/tfrank/raw/2026-02-01-four.md"
+out="$(msg 'zephyr quartz marimba tundra')"
+case "$out" in *"[Four pages A]("*$'\n'*"[Three pages]("*) ok "ordinary words rank a hit by how many different ones it holds, most first" ;; *) bad "ordinary words rank a hit by how many different ones it holds, most first" "$out" ;; esac
+case "$out" in *"[Two pages]"*) bad "a hit with two words is dropped when the best has four" "$out" ;; *) ok "a hit with two words is dropped when the best has four" ;; esac
+case "$out" in *"[Four pages A]"*"a note not compiled yet: "*"2026-02-01-four.md"*) ok "of equal count, a page comes before a note" ;; *) bad "of equal count, a page comes before a note" "$out" ;; esac
+out="$(msg 'zephyr quartz')"
+case "$out" in *"[Two pages]"*) ok "two words are enough when nothing holds more" ;; *) bad "two words are enough when nothing holds more" "$out" ;; esac
+for i in B C D; do printf -- '- [Four pages %s](wiki/concepts/plan.md): zephyr quartz marimba tundra.\n' "$i" >> "$WIKIS_DIR/tfrank/index.md"; done
+check "at most three hits come from ordinary words alone" test "$(msg 'zephyr quartz marimba tundra' | wc -l | tr -d ' ')" = 3
+out="$(msg 'MSG-77 zephyr quartz marimba tundra')"
+case "$out" in "- tfmsg wiki: [MSG-77 plan]("*) ok "a strong word's hit still ranks first, with three more from ordinary words" ;; *) bad "a strong word's hit still ranks first" "$out" ;; esac
+check "and the overall cap of four holds" test "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 4
+printf -- '- [Seen at work](wiki/concepts/plan.md): a session that works and worked.\n' >> "$WIKIS_DIR/tfrank/index.md"
+check "session and work carry no signal: a line holding them is not found by them" test -z "$(msg 'Does the session keep it, as it works and worked?')"
+check "a word and its plural are one word" test -z "$(msg 'zephyr zephyrs')"
+out="$(msg 'zephyrs quartzes marimbas')"
+case "$out" in *"[Three pages]"*) ok "and match each other in a hit" ;; *) bad "and match each other in a hit" "$out" ;; esac
+rm -rf "$WIKIS_DIR/tfrank"
+# A waiting note plays by the rule of an index line: its ordinary words count on one line.
+"$W" new tfnote >/dev/null 2>&1
+mkdir -p "$WIKIS_DIR/tfnote/raw"
+printf 'Captured: ocelot fennel\nThe ocelot walks alone.\nThe fennel grows nearby.\n' > "$WIKIS_DIR/tfnote/raw/2026-03-01-split.md"
+out="$(msg 'ocelot fennel')"
+case "$out" in *"2026-03-01-split.md"*) bad "a note whose two words are on different lines isn't found" "$out" ;; *) ok "a note whose two words are on different lines isn't found" ;; esac
+printf 'The ocelot sleeps.\nThe ocelot ate fennel at dusk.\n' > "$WIKIS_DIR/tfnote/raw/2026-03-02-same.md"
+printf 'Ocelot, fennel and walnut together.\n' > "$WIKIS_DIR/tfnote/raw/2026-03-03-three.md"
+printf 'An ocelot.\nSome fennel.\nA walnut.\n' > "$WIKIS_DIR/tfnote/raw/2026-03-04-wide.md"
+out="$(msg 'ocelot fennel')"
+case "$out" in *"2026-03-02-same.md: The ocelot ate fennel at dusk.") ok "a note whose two words share a line is, and that line is the one shown" ;; *"2026-03-02-same.md"*) bad "a note whose two words share a line is found, with that line" "$out" ;; *) bad "a note whose two words share a line is found" "$out" ;; esac
+out="$(msg 'ocelot fennel walnut')"
+case "$out" in "- tfnote wiki, a note not compiled yet: "*"2026-03-03-three.md: Ocelot, fennel and walnut together."$'\n'*"2026-03-02-same.md"*) ok "a note with a three-word line outranks one with a two-word line" ;; *) bad "a note with a three-word line outranks one with a two-word line" "$out" ;; esac
+case "$out" in *"2026-03-04-wide.md"*) bad "three words spread over three lines don't count as three" "$out" ;; *) ok "three words spread over three lines don't count as three" ;; esac
+rm -rf "$WIKIS_DIR/tfnote"
+# The hook for Claude Code: UserPromptSubmit, the message in prompt, the session in session_id.
+check "hooks.json runs it at UserPromptSubmit, with a 10 second timeout" python3 -c "
+import json, sys
+h = json.load(open(sys.argv[1]))['hooks']['UserPromptSubmit'][0]['hooks'][0]
+assert h['type'] == 'command' and h['command'].endswith('hooks/user-prompt.sh\"') and h['timeout'] == 10" "$REPO/hooks/hooks.json"
+rm -rf "$HOME/.local/state/llm-wiki/recall"
+uphook() {
+  local json
+  json="$(python3 -c 'import json, sys; print(json.dumps({"hook_event_name": "UserPromptSubmit", "session_id": sys.argv[1], "cwd": sys.argv[2], "prompt": sys.argv[3]}))' "$2" "$1" "$3")"
+  printf '%s' "$json" | CLAUDE_PLUGIN_ROOT="$REPO" bash "$REPO/hooks/user-prompt.sh"
+}
+upctx() { python3 -c 'import json, sys
+d = json.load(sys.stdin)["hookSpecificOutput"]
+assert d["hookEventName"] == "UserPromptSubmit"
+print(d["additionalContext"], end="")'; }
+out="$(uphook "$T/tickets/plain" s-1 'What does MSG-77 need?' | upctx)"
+case "$out" in "A search of your wikis for the words in this message found these. They were written by earlier sessions and can be out of date: check a figure against the code before you quote it."$'\n'"- tfmsg wiki: [MSG-77 plan]("*"/tfmsg/wiki/concepts/plan.md): Order of work for MSG-77.") ok "the prompt hook hands over the lines, as facts, with the sentence" ;; *) bad "the prompt hook hands over the lines, as facts, with the sentence" "$out" ;; esac
+check "the same message twice in a session gives nothing the second time" test -z "$(uphook "$T/tickets/plain" s-1 'What does MSG-77 need?')"
+check "and so does another message that finds the same page" test -z "$(uphook "$T/tickets/plain" s-1 'Remind me of MSG-77, please')"
+out="$(uphook "$T/tickets/plain" s-2 'What does MSG-77 need?' | upctx)"
+case "$out" in *"[MSG-77 plan]"*) ok "another session is handed it again" ;; *) bad "another session is handed it again" "$out" ;; esac
+out="$(uphook "$T/tickets/plain" s-1 'MSG-77 and MSG-88' | upctx)"
+case "$out" in *"[Quota]"*) case "$out" in *"MSG-77 plan"*) bad "a later message is handed only what is new" "$out" ;; *) ok "a later message is handed only what is new" ;; esac ;; *) bad "a later message is handed only what is new" "$out" ;; esac
+check "the hook exits 0 with output" sh -c 'printf "{\"session_id\":\"s-9\",\"cwd\":\"/\",\"prompt\":\"MSG-77\"}" | CLAUDE_PLUGIN_ROOT="$1" sh "$1/hooks/user-prompt.sh" >/dev/null' _ "$REPO"
+check "a message that finds nothing gives no output at all" test -z "$(uphook "$T/tickets/plain" s-3 'ok, thanks')"
+# Turns Claude Code starts itself arrive as prompts too. Only the user's own words are searched.
+RSTATE="$HOME/.local/state/llm-wiki/recall"
+nfound() { grep -c ',recall-found,' "$WIKIS_DIR/stats.csv" 2>/dev/null || true; }
+found0="$(nfound)"
+n=0
+while IFS= read -r wrapped; do
+  n=$((n + 1))
+  check "an untyped turn ($n: ${wrapped:0:28}) is handed nothing, and keeps no state" sh -c '[ -z "$1" ] && [ ! -e "$2/ut-$3.seen" ] && [ ! -e "$2/ut-$3.last" ]' _ "$(uphook "$T/tickets/plain" "ut-$n" "$wrapped")" "$RSTATE" "$n"
+done <<'EOF2'
+Another Claude session sent a message: What does MSG-77 need?
+<task-notification><summary>What does MSG-77 need?</summary></task-notification>
+[SYSTEM NOTIFICATION - NOT USER INPUT] What does MSG-77 need?
+<ci-monitor-event>What does MSG-77 need?</ci-monitor-event>
+<agent-message from="x">What does MSG-77 need?</agent-message>
+<cross-session-message>What does MSG-77 need?</cross-session-message>
+<side-sessions-event>What does MSG-77 need?</side-sessions-event>
+<system-reminder><task-notification>What does MSG-77 need?</task-notification>
+   <task-notification>What does MSG-77 need?</task-notification>
+EOF2
+check "an untyped turn logs no search" test "$(nfound)" = "$found0"
+out="$(uphook "$T/tickets/plain" ut-typed 'What does MSG-77 need?' | upctx)"
+case "$out" in *"[MSG-77 plan]"*) ok "the same words typed plainly are searched" ;; *) bad "the same words typed plainly are searched" "$out" ;; esac
+out="$(uphook "$T/tickets/plain" ut-mid 'Why did a <task-notification> mention MSG-77?' | upctx)"
+case "$out" in *"[MSG-77 plan]"*) ok "a typed message that quotes a wrapper in its middle is searched" ;; *) bad "a typed message that quotes a wrapper in its middle is searched" "$out" ;; esac
+out="$(uphook "$T/tickets/plain" ut-quote 'The text "Another Claude session sent a message:" for MSG-77' | upctx)"
+case "$out" in *"[MSG-77 plan]"*) ok "and one that quotes a wrapper in quotes is searched" ;; *) bad "and one that quotes a wrapper in quotes is searched" "$out" ;; esac
+check "a prompt of only whitespace gets nothing" test -z "$(uphook "$T/tickets/plain" ut-ws $' \n\t  ')"
+check "malformed JSON gives nothing" test -z "$(printf 'not json {' | CLAUDE_PLUGIN_ROOT="$REPO" sh "$REPO/hooks/user-prompt.sh" 2>&1)"
+check "and exits 0" sh -c 'printf "not json {" | CLAUDE_PLUGIN_ROOT="$1" sh "$1/hooks/user-prompt.sh" >/dev/null' _ "$REPO"
+check "as does empty input" sh -c 'CLAUDE_PLUGIN_ROOT="$1" sh "$1/hooks/user-prompt.sh" </dev/null >/dev/null' _ "$REPO"
+mkdir -p "$T/nopy"
+check "with no python3 on the PATH the hook says nothing" test -z "$(printf '{"session_id":"np-1","cwd":"/","prompt":"What does MSG-77 need?"}' | env PATH="$T/nopy" CLAUDE_PLUGIN_ROOT="$REPO" /bin/sh "$REPO/hooks/user-prompt.sh" 2>&1)"
+check "and exits 0" sh -c 'printf "{\"session_id\":\"np-2\",\"cwd\":\"/\",\"prompt\":\"MSG-77\"}" | env PATH="$2" CLAUDE_PLUGIN_ROOT="$1" /bin/sh "$1/hooks/user-prompt.sh" >/dev/null' _ "$REPO" "$T/nopy"
+check "a message with no session gives nothing" test -z "$(printf '{"cwd":"/","prompt":"MSG-77"}' | CLAUDE_PLUGIN_ROOT="$REPO" sh "$REPO/hooks/user-prompt.sh" 2>&1)"
+check "a background compile's own session is handed nothing" test -z "$(LLM_WIKI_BACKGROUND=1 uphook "$T/tickets/plain" s-4 'What does MSG-77 need?')"
+check "no collection gives nothing" test -z "$(WIKIS_DIR="$T/no-collection" uphook "$T/tickets/plain" s-5 'What does MSG-77 need?')"
+"$W" workflows add "$RC" none >/dev/null 2>&1
+check "a folder a pattern sets to no wiki is handed nothing" test -z "$(uphook "$RC" s-6 'What does MSG-77 need?')"
+"$W" workflows remove "$RC" >/dev/null 2>&1
+out="$(uphook "$T/tickets/plain" s-7 'MSG-55 and MSG-77 and MSG-99 and MSG-88' | upctx)"
+check "it stays under 1,200 bytes with many hits" test "${#out}" -lt 1200 -a "${#out}" -gt 300
+case "$out" in *"- tfmsg wiki"*) ok "and still hands over a list, cut by the line" ;; *) bad "and still hands over a list, cut by the line" "$out" ;; esac
+check "it logs a search that handed something over" grep -q ',tfmsg,recall-found,msg-77$' "$WIKIS_DIR/stats.csv"
+expect "and stats counts it apart from lookups" "Handed over at a message, from a search of its words: " "$W" stats
+check "a state file a week old is swept" sh -c 'touch -t 202001010000 "$1/old.seen" && printf "{\"session_id\":\"s-8\",\"cwd\":\"/\",\"prompt\":\"MSG-77\"}" | CLAUDE_PLUGIN_ROOT="$2" sh "$2/hooks/user-prompt.sh" >/dev/null; test ! -e "$1/old.seen"' _ "$HOME/.local/state/llm-wiki/recall" "$REPO"
+# The same through Codex's and Antigravity's own payloads.
+out="$(printf '{"session_id":"cx-1","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"What does MSG-77 need?"}' "$T/tickets/plain" | "$W" __codex-prompt | upctx)"
+case "$out" in "A search of your wikis"*"[MSG-77 plan]"*) ok "the Codex hook replies with additionalContext" ;; *) bad "the Codex hook replies with additionalContext" "$out" ;; esac
+check "and nothing when nothing is found" test -z "$(printf '{"session_id":"cx-2","cwd":"/","prompt":"ok"}' | "$W" __codex-prompt)"
+agyp() { printf '{"conversationId":"%s","workspacePaths":["file://%s"],"hookEventName":"PreInvocation","lastUserInput":"%s","invocationNum":1}' "$1" "$T/tickets/plain" "$2" | "$W" __agy-prompt; }
+out="$(agyp ag-1 'What does MSG-77 need?')"
+check "the Antigravity hook injects a system message" python3 -c 'import json, sys; m = json.loads(sys.argv[1])["injectSteps"][0]["systemMessage"]["systemMessage"]; assert "[MSG-77 plan]" in m' "$out"
+eq "and before the next step of the same message it says nothing" '{}' "$(agyp ag-1 'What does MSG-77 need?')"
+eq "a message that finds nothing gets an empty reply" '{}' "$(agyp ag-2 'ok')"
+eq "bad JSON gets an empty reply" '{}' "$(printf 'not json' | "$W" __agy-prompt)"
+rm -rf "$WIKIS_DIR/tfmsg" "$WIKIS_DIR/tfnoindex" "$HOME/.local/state/llm-wiki/recall"
 rm -rf "$WIKIS_DIR/tfrecall"
 rm -rf "$T/tickets"
 fi
