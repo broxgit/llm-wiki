@@ -248,6 +248,16 @@ except Exception:
   fi
   printf 'hook: a message with a code name, one page\t%s\n' "$(prompt_item budget-1 'What is charge_retry_limit set to?')"
   printf 'hook: a message with two ordinary words, a page and a note\t%s\n' "$(prompt_item budget-2 'Which leaves do quokkas eat?')"
+  # A ticket key of a project a wiki already holds keys of, in a page no word of the message
+  # finds: the Jira extension is offered, then, set up, named. A wiki of its own, made after
+  # every item above, so none of them changes.
+  W new vid-seen >/dev/null 2>&1
+  printf '# Index\n\n## Concepts\n- [Old work](wiki/concepts/old.md): the earlier tickets, such as VID-70001.\n' > "$H/wikis/vid-seen/index.md" 2>/dev/null || true
+  printf 'hook: a ticket key, the Jira extension not set up\t%s\n' "$(prompt_item budget-3 'Please look at VID-74003 for me')"
+  W extensions add jira >/dev/null 2>&1
+  mkdir -p "$H/.config/llm-wiki"
+  printf 'site = https://acme.atlassian.net\ntoken_cmd = echo x\n' > "$H/.config/llm-wiki/atlassian"
+  printf 'hook: a ticket key, the Jira extension set up\t%s\n' "$(prompt_item budget-4 'Please look at VID-74003 for me')"
 }
 
 # problems <measured file> <record file>: one line for each item whose numbers differ,
