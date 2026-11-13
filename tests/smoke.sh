@@ -2877,6 +2877,77 @@ exit 0"*) ok "and they are the newest five, .md only, without the compiled and t
   printf 'heron\0\n' > "$FD/alpha/raw/2026-08-08-nul.md"
   fsame "find, helper and Bash: a note with a NUL byte" bash heron
   rm -rf "$FD/alpha/raw" "$FD/Beta/raw"
+  # Found by an independent review of the two copies: cases where the Bash was wrong
+  # and the helper right. fwiki <name>: a wiki with a handbook, an index and a raw/.
+  fwiki() { mkdir -p "$FD/$1/raw" "$FD/$1/wiki"; printf '# Handbook\n' > "$FD/$1/AGENTS.md"; printf '# Index\n' > "$FD/$1/index.md"; }
+  # A log.md with no final newline: its last source ran into the next line of
+  # compiled_stems' output, and no note counted as waiting.
+  fwiki gamma
+  printf '# Log\n- source: raw/2026-01-01-done.md' > "$FD/gamma/log.md"
+  printf 'egret, compiled\n' > "$FD/gamma/raw/2026-01-01-done.md"
+  printf 'egret, waiting\n' > "$FD/gamma/raw/2026-02-02-pend.md"
+  fsame "find, helper and Bash: a log.md with no final newline" helper egret
+  out="$(frun "" "$RC" egret)"
+  case "$out" in "gamma:
+  waiting to be compiled:
+    raw/2026-02-02-pend.md: egret, waiting
+exit 0"*) ok "and the note after it is still found, and the compiled one isn't" ;; *) bad "and the note after it is still found, and the compiled one isn't" "$out" ;; esac
+  out="$(cd "$RC" && env -u WIKIS_DIR LLM_WIKI_NO_GO=1 "$W" pending gamma 2>&1)"
+  case "$out" in *"2026-01-01-done.md"*) bad "wiki pending leaves the compiled one out too" "$out" ;; *"2026-02-02-pend.md"*) ok "wiki pending leaves the compiled one out too" ;; *) bad "wiki pending leaves the compiled one out too" "$out" ;; esac
+  rm -rf "$FD/gamma"
+  # A byte that isn't UTF-8 in log.md, in a UTF-8 locale with LC_ALL unset: BSD sed
+  # stopped there, and every source after it counted as not compiled.
+  fwiki delta
+  printf '# Log caf\351\n- source: raw/2026-01-01-done.md\n' > "$FD/delta/log.md"
+  printf 'An ibis, compiled.\n' > "$FD/delta/raw/2026-01-01-done.md"
+  a="$(cd "$RC" && env -u WIKIS_DIR -u LC_ALL LANG=en_US.UTF-8 LLM_WIKI_NO_GO=1 "$W" find ibis 2>&1)"
+  b="$(cd "$RC" && env -u WIKIS_DIR -u LC_ALL LANG=en_US.UTF-8 LLM_WIKI_GO="$T/bin/llm-wiki" "$W" find ibis 2>&1)"
+  if [ "$a" = "$b" ] && [ "$a" = "no mentions in any index or page: ibis" ]; then ok "find, helper and Bash: a log.md that isn't UTF-8, with LC_ALL unset"; else bad "find, helper and Bash: a log.md that isn't UTF-8, with LC_ALL unset" "$(printf 'Bash: %s\nhelper: %s' "$a" "$b")"; fi
+  rm -rf "$FD/delta"
+  # In raw/, a folder, a broken link and a pipe named like notes are not notes. The
+  # Bash's grep failed on the first two and hid every note, and hung on the pipe.
+  fwiki epsilon
+  mkdir "$FD/epsilon/raw/2026-01-01-folder.md"
+  ln -s /nonexistent/target.md "$FD/epsilon/raw/2026-01-02-broken.md"
+  mkfifo "$FD/epsilon/raw/2026-01-03-pipe.md"
+  printf 'A stork by a link.\n' > "$T/stork-target.md"
+  ln -s "$T/stork-target.md" "$FD/epsilon/raw/2026-01-04-link.md"
+  printf 'A stork was seen.\n' > "$FD/epsilon/raw/2026-02-02-good.md"
+  fsame "find, helper and Bash: a folder, a broken link and a pipe named like notes" helper stork
+  out="$(frun "" "$RC" stork)"
+  case "$out" in "epsilon:
+  waiting to be compiled:
+    raw/2026-02-02-good.md: A stork was seen.
+    raw/2026-01-04-link.md: A stork by a link.
+exit 0"*) ok "and the real notes among them are found, a linked one included" ;; *) bad "and the real notes among them are found, a linked one included" "$out" ;; esac
+  if [ "$(id -u)" != 0 ]; then
+    printf 'A stork nobody can read.\n' > "$FD/epsilon/raw/2026-03-03-secret.md"
+    chmod 000 "$FD/epsilon/raw/2026-03-03-secret.md"
+    fsame "find, helper and Bash: a note that can't be read" bash stork
+    expect "and the notes that can be read are still found" "raw/2026-02-02-good.md: A stork was seen." frun "" "$RC" stork
+    chmod 644 "$FD/epsilon/raw/2026-03-03-secret.md"
+  fi
+  rm -rf "$FD/epsilon"
+  # A note counts as compiled by a sources: line, an item under one, or a summary page.
+  fwiki zeta2
+  mkdir -p "$FD/zeta2/wiki/sources"
+  printf -- '---\nsources: [raw/2026-01-01-a.md]\n---\npage\n' > "$FD/zeta2/wiki/p.md"
+  printf -- '---\nsources:\n  - raw/2026-01-02-b.md\n---\npage\n' > "$FD/zeta2/wiki/q.md"
+  printf 'summary\n' > "$FD/zeta2/wiki/sources/2026-01-03-c.md"
+  for i in 2026-01-01-a 2026-01-02-b 2026-01-03-c 2026-01-04-d; do printf 'crane %s\n' "$i" > "$FD/zeta2/raw/$i.md"; done
+  fsame "find, helper and Bash: notes compiled by a sources line, a list item and a summary page" helper crane
+  out="$(frun "" "$RC" crane)"
+  case "$out" in "zeta2:
+  waiting to be compiled:
+    raw/2026-01-04-d.md: crane 2026-01-04-d
+exit 0"*) ok "and only the note none of them names is waiting" ;; *) bad "and only the note none of them names is waiting" "$out" ;; esac
+  # A note's line is cut as a page's is, and a note may end without a newline.
+  printf '%s notebyte:\303\251 and on\n' "$(printf '%0109d' 0)" > "$FD/zeta2/raw/2026-05-05-cut.md"
+  printf 'crane with a carriage return\r\n' > "$FD/zeta2/raw/2026-05-06-crlf.md"
+  printf 'crane with no final newline' > "$FD/zeta2/raw/2026-05-07-nonl.md"
+  fsame "find, helper and Bash: a note's line cut inside a character" helper notebyte
+  fsame "find, helper and Bash: notes with CRLF and with no final newline" helper crane
+  rm -rf "$FD/zeta2" "$T/stork-target.md"
   fsame "find, helper and Bash: a word that matches nothing" helper zzznothing
   expect "and the helper says so, and logs it against the shared wiki" "no mentions in any index or page: zzznothing
 exit 0
