@@ -131,6 +131,9 @@ TV="$(sed -n 's/^Handbook version \([0-9][0-9]*\).*/\1/p' "$REPO/template/AGENTS
 pass=0
 fail=0
 skip=0
+# fresh <command>: run as a person would, with WIKIS_DIR not in the environment. A session
+# start with it set is an override and leaves the agents' global files alone.
+fresh() { env -u WIKIS_DIR LLM_WIKI_DEFAULT_DIR="$WIKIS_DIR" "$@"; }
 
 # A section run only to set up a part counts its failures, not its passes.
 section_mode=run
@@ -428,8 +431,21 @@ chmod 755 "$WIKIS_DIR/demo/raw"
 for i in 01 02 03 04 05 06 07 08 09 10 11; do printf 'Captured: 2026-01-01\n\nNote %s.\n' "$i" > "$WIKIS_DIR/bulk/raw/2026-01-01-0000$i-note-$i.md"; done
 "$W" cover bulk bulkrepo >/dev/null
 mkdir -p "$T/projects/bulkrepo" && git -C "$T/projects/bulkrepo" init -q
-expect "with more than ten waiting, the session does the request first" "more than ten, so do the user's request first" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; hook '$T/projects/bulkrepo' | context"
-lacks "with a few waiting, it compiles first" "more than ten" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; hook '$T/projects/web' | context"
+expect "with many waiting, the session does the request first" "The user's request comes first" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; hook '$T/projects/bulkrepo' | context"
+lacks "and a few waiting say the same, with no more-than-ten rule" "more than ten" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; hook '$T/projects/web' | context"
+lacks "the hook no longer says to compile before the user's request" "before the user's request" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; hook '$T/projects/web' | context"
+expect "and says the request comes first for a few notes too" "request comes first" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; hook '$T/projects/web' | context"
+out="$("$W" start bulkrepo 2>&1)"
+case "$out" in *"before the user's request"*|*"more than ten"*) bad "start no longer says to compile before the user's request" "$out" ;; *) ok "start no longer says to compile before the user's request" ;; esac
+case "$out" in *"Answer the user's request first, then compile them at the first pause, as one batch if there are five or more."*) ok "start says the request comes first" ;; *) bad "start says the request comes first" "$out" ;; esac
+"$W" new behindw >/dev/null; set_version "$WIKIS_DIR/behindw/AGENTS.md" "$((TV - 1))"
+out="$("$W" start behindw 2>&1)"
+want="handbook: this wiki's is v$((TV - 1)) and the tool's is v$TV. Tell the user so in your first reply, and that \`$W update\` brings every wiki up to date. Don't upgrade unless they ask."
+[ "$(printf '%s\n' "$out" | sed -n 2p)" = "$want" ] && ok "a handbook behind is the second line of start, a fact to tell the user" || bad "a handbook behind is the second line of start, a fact to tell the user" "$out"
+case "$out" in *"Run \`$W upgrade --all\`, commit and push"*|*", behind v"*) bad "and the old order to upgrade is gone" "$out" ;; *) ok "and the old order to upgrade is gone" ;; esac
+out="$("$W" start demo 2>&1)"
+case "$out" in *"handbook:"*) bad "a current handbook says nothing" "$out" ;; *) ok "a current handbook says nothing" ;; esac
+rm -r "$WIKIS_DIR/behindw"
 fi
 
 if section "Team skills"; then
@@ -1070,13 +1086,13 @@ expect "and says which one, by the folder it is in" "and a session in " "$W" sta
 lacks "and the hook starts nothing then" "in the background" bg_hook
 "$W" lock bg --release >/dev/null
 expect "compile off turns it off" "compile: off" "$W" compile off
-expect "off, start leaves the notes to the session" "Compile them before the user's request" "$W" start bg
+expect "off, start leaves the notes to the session, after the request" "Answer the user's request first, then compile them" "$W" start bg
 refuse "compile rejects an unknown option" "$W" compile bg --nope
 printf 'auto=off\nagent=no-such-agent-here\n' > "$BGC"
 lacks "off, start says nothing about a missing agent" "isn't a command in this shell" "$W" start bg
 printf 'auto=on\nagent=no-such-agent-here\n' > "$BGC"
 expect "on with its agent missing, start says why nothing started" "no-such-agent-here isn't a command in this shell" "$W" start bg
-expect "and still leaves the notes to the session" "Compile them before the user's request" "$W" start bg
+expect "and still leaves the notes to the session, after the request" "Answer the user's request first, then compile them" "$W" start bg
 # A stand-in for Claude Code, which unlike another agent is run headless with a tool
 # list. It keeps its arguments and logs the waiting notes as compiled.
 mkdir -p "$T/claude-bin"
@@ -1121,7 +1137,7 @@ printf 'auto=on\nagent=%s\n' "$T/claude-blocked/claude" > "$BGC"
 n="$(grep -c ',bg,' "$BGR")"
 out="$("$W" start bg 2>&1)"
 case "$out" in *"claude can't be run from this shell, so it didn't start"*) ok "on with Claude Code it can't run, start says why nothing started" ;; *) bad "on with Claude Code it can't run, start says why nothing started" "$out" ;; esac
-case "$out" in *"Compile them before the user's request"*) ok "and leaves the notes to the session" ;; *) bad "and leaves the notes to the session" "$out" ;; esac
+case "$out" in *"Answer the user's request first, then compile them"*) ok "and leaves the notes to the session, after the request" ;; *) bad "and leaves the notes to the session, after the request" "$out" ;; esac
 case "$out" in *"in the background now"*) bad "and doesn't say a run has them" "$out" ;; *) ok "and doesn't say a run has them" ;; esac
 lacks "the hook starts nothing either" "in the background" bg_hook
 out="$("$W" compile bg 2>&1)" && bad "compile says it can't run Claude Code" "$out" || case "$out" in *"claude can't be run from this shell"*) ok "compile says it can't run Claude Code" ;; *) bad "compile says it can't run Claude Code" "$out" ;; esac
@@ -1945,8 +1961,8 @@ out="$(printf 'not json' | "$W" __agy-start)"
 case "$out" in *'"injectSteps"'*"Not in a repository"*) ok "bad input still gets a reply, for the shared wiki" ;; *) bad "bad input still gets a reply, for the shared wiki" "$out" ;; esac
 check "the hook doesn't create the plugin by itself" test ! -e "$HOME/.gemini/config/plugins/llm-wiki"
 mkdir -p "$HOME/.gemini/config/plugins/llm-wiki" && printf '{}' > "$HOME/.gemini/config/plugins/llm-wiki/plugin.json"
-printf '{}' | "$W" __agy-start >/dev/null
-expect "once installed, the hook keeps the plugin current" "plugin current" "$W" setup --list
+printf '{}' | fresh "$W" __agy-start >/dev/null
+expect "once installed, the hook keeps the plugin current" "plugin current" fresh "$W" setup --list
 # A file the state is worked out from, which this shell can't read, as in another
 # agent's sandbox. It used to come out as "old", and setup would write the plugin again.
 if [ "$(id -u)" != 0 ]; then
@@ -1969,7 +1985,7 @@ check "an inline command becomes one to run, by a path the agent can use" grep -
 lacks "and nothing Claude-only is left in them" 'ARGUMENTS\|CLAUDE_PLUGIN_ROOT\|^!`\|,,' cat "$A/wiki-compile/SKILL.md" "$A/wiki-save/SKILL.md" "$A/wiki-standup/SKILL.md" "$A/wiki-status/SKILL.md"
 mkdir -p "$A/wiki-mine" "$A/wiki-gone" && echo "mine" > "$A/wiki-mine/SKILL.md" && sed 's/wiki-status/wiki-gone/' "$A/wiki-status/SKILL.md" > "$A/wiki-gone/SKILL.md"
 echo "an edit" >> "$A/wiki-save/SKILL.md"
-printf '{}' | "$W" __agy-start >/dev/null
+printf '{}' | fresh "$W" __agy-start >/dev/null
 check "a skill it didn't make is left alone" grep -qx mine "$A/wiki-mine/SKILL.md"
 check "one it made for a command that's gone is removed" test ! -e "$A/wiki-gone"
 lacks "and an edited one is made again" "an edit" cat "$A/wiki-save/SKILL.md"
@@ -2012,7 +2028,7 @@ mkdir -p "$T/projects/agyrem/payments" && git -C "$T/projects/agyrem" init -q
 RD="$HOME/.local/state/llm-wiki/reminders"
 LOG="$HOME/.local/state/llm-wiki/agy-hooks.log"
 export TMPDIR="$T/tmp"; mkdir -p "$TMPDIR"
-agy_start() { printf '{"workspacePaths":["file://%s"],"conversationId":"%s"}' "$T/projects/agyrem" "$1" | "$W" __agy-start >/dev/null; }
+agy_start() { printf '{"workspacePaths":["file://%s"],"conversationId":"%s"}' "$T/projects/agyrem" "$1" | fresh "$W" __agy-start >/dev/null; }
 # agy <tool|invoke> <json>: what Antigravity's hook replies.
 agy() { printf '%s' "$2" | sh "$AP/hooks/agy-hook.sh" "$1"; }
 # call <conversation> <tool name> <args json>
@@ -2031,7 +2047,7 @@ assert h['SessionStart'][0]['command'].endswith(' __agy-start')" "$AP/hooks.json
 rm "$AP/hooks/agy-hook.sh"
 expect "a plugin without them is old" "plugin old" "$W" setup --list
 agy_start c-1
-expect "and the next conversation brings them back" "plugin current" "$W" setup --list
+expect "and the next conversation brings them back" "plugin current" fresh "$W" setup --list
 check "a conversation's reminders are written when it starts" grep -q "git push" "$RD/agy-c-1.tsv"
 check "and nothing is queued yet" test ! -e "$RD/agy-c-1.pending"
 before="$(find "$HOME/.gemini" "$T/projects/agyrem" -type f | sort | cksum)"
@@ -2177,7 +2193,7 @@ expect "skills link links new team skills for Codex too" "tidy-logs (from global
 rm -r "$WIKIS_DIR/global/skills/tidy-logs"; "$W" skills link >/dev/null
 check "and removes them there when they're gone" test ! -e "$HOME/.codex/skills/tidy-logs"
 rm "$HOME/.codex/skills/llm-wiki"
-printf '{"cwd":"%s","hook_event_name":"SessionStart"}' "$T/projects/web" | "$W" __codex-start >/dev/null
+printf '{"cwd":"%s","hook_event_name":"SessionStart"}' "$T/projects/web" | fresh "$W" __codex-start >/dev/null
 check "each session start relinks the skill" test -f "$HOME/.codex/skills/llm-wiki/SKILL.md"
 rm -rf "$HOME/.codex" "$T/bin/codex" "$T/codex.log"
 fi
@@ -2607,6 +2623,44 @@ refuse "--collection with an unknown name fails" nw "$RC" status --collection no
 expect "the Claude Code hook routes the session to its collection" "/jobapp, for the repository jobapp" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; unset WIKIS_DIR; hook '$RA' | context"
 expect "WIKIS_DIR in the environment still wins" "$WIKIS_DIR" bash -c "cd '$RA' && WIKIS_DIR='$WIKIS_DIR' '$W' __collection"
 check "status in the default mentions the other collection" bash -c "cd '$RC' && env -u WIKIS_DIR WIKIS_DIR='$WIKIS_DIR' '$W' status | grep -q 'also:    collection work'"
+
+# A new wiki links to its own collection's shared wiki, never to another's.
+CWT="$(printf '%s' "$CW" | sed "s#^$HOME#~#")"
+check "a wiki made in another collection links to that collection's shared wiki" grep -qxF -- "- global: $CWT/global | knowledge that holds across projects: tooling, conventions, glossary" "$CW/jobapp/links.md"
+check "and one made in ~/wikis keeps the template's line" bash -c "env -u WIKIS_DIR '$W' new linkdefault >/dev/null 2>&1; cmp -s '$HOME/wikis/linkdefault/links.md' '$REPO/template/links.md'"
+printf '# jobapp shared index\n' >> "$CW/global/index.md"
+expect "start in that collection loads its shared index, not the default's" "===== $CWT/global/index.md" nw "$RA" start
+# shellcheck disable=SC2088
+lacks "and names no ~/wikis/global" "~/wikis/global" nw "$RA" start
+rm "$CW/jobapp/links.md"; WIKIS_DIR="$CW" "$W" upgrade jobapp >/dev/null 2>&1
+check "upgrade puts a missing links.md back pointing at its own collection" grep -qF -- "- global: $CWT/global " "$CW/jobapp/links.md"
+printf '# Linked wikis\n\n- global: ~/wikis/global | mine\n' > "$CW/jobapp/links.md"; WIKIS_DIR="$CW" "$W" upgrade jobapp >/dev/null 2>&1
+check "and one the user has is left alone" grep -qxF -- "- global: ~/wikis/global | mine" "$CW/jobapp/links.md"
+AMP="$T/wikis&co"; WIKIS_DIR="$AMP" "$W" init >/dev/null 2>&1; WIKIS_DIR="$AMP" "$W" new ampapp >/dev/null 2>&1
+check "a collection path with an & in it is written as it is" grep -qF -- "- global: $AMP/global | " "$AMP/ampapp/links.md"
+
+# Session start never rewrites an agent's global rule: a rule is about the person, not the session.
+GL="$T/gl"; mkdir -p "$GL/agy/config/plugins/llm-wiki/rules" "$GL/codex/llm-wiki/plugins/llm-wiki/.codex-plugin"
+printf '{}' > "$GL/agy/config/plugins/llm-wiki/plugin.json"; printf 'AGY RULE\n' > "$GL/agy/config/plugins/llm-wiki/rules/AGENTS.md"
+printf '{}' > "$GL/codex/llm-wiki/plugins/llm-wiki/.codex-plugin/plugin.json"
+printf '# Mine\n\nMy knowledge wikis live in ~/old. Old line.\n' > "$GL/codex/AGENTS.md"
+cp "$GL/agy/config/plugins/llm-wiki/rules/AGENTS.md" "$GL/agy.before"; cp "$GL/codex/AGENTS.md" "$GL/codex.before"
+gstart() { printf '{"workspacePaths":["%s"],"conversationId":"g1","cwd":"%s"}' "$RA" "$RA" | env LLM_WIKI_AGY_HOME="$GL/agy" CODEX_HOME="$GL/codex" "$@" >/dev/null 2>&1; }
+gstart env WIKIS_DIR="$CW" "$W" __agy-start
+check "an Antigravity session start with WIKIS_DIR set leaves its rule as it was" cmp -s "$GL/agy.before" "$GL/agy/config/plugins/llm-wiki/rules/AGENTS.md"
+check "and writes no other file of the plugin" test ! -e "$GL/agy/config/plugins/llm-wiki/hooks.json" -a ! -e "$GL/agy/config/plugins/llm-wiki/hooks"
+gstart env WIKIS_DIR="$CW" "$W" __codex-start
+check "a Codex session start with WIKIS_DIR set leaves ~/.codex/AGENTS.md as it was" cmp -s "$GL/codex.before" "$GL/codex/AGENTS.md"
+gstart env -u WIKIS_DIR "$W" __agy-start
+check "with two collections, a session in the second's folder leaves the Antigravity rule naming the default" bash -c "grep -qF 'live in ~/wikis, ' '$GL/agy/config/plugins/llm-wiki/rules/AGENTS.md' && ! grep -qF '$CW' '$GL/agy/config/plugins/llm-wiki/rules/AGENTS.md'"
+gstart env -u WIKIS_DIR "$W" __codex-start
+check "and the Codex rule too" bash -c "grep -qF 'live in ~/wikis, ' '$GL/codex/AGENTS.md' && ! grep -qF '$CW' '$GL/codex/AGENTS.md' && grep -q '^# Mine' '$GL/codex/AGENTS.md'"
+printf 'AGY RULE\n' > "$GL/agy/config/plugins/llm-wiki/rules/AGENTS.md"
+LLM_WIKI_AGY_HOME="$GL/agy" in_tty env WIKIS_DIR="$CW" "$W" setup antigravity </dev/null >/dev/null 2>&1
+check "setup antigravity still writes the rule, naming the default collection" bash -c "grep -qF 'live in ~/wikis, ' '$GL/agy/config/plugins/llm-wiki/rules/AGENTS.md'"
+GH="$T/gl/home"; mkdir -p "$GH"
+HOME="$GH" WIKIS_DIR="$CW" "$W" claude >/dev/null 2>&1
+check "wiki claude still writes its line, naming the default collection" bash -c "grep -qF 'live in ~/wikis, ' '$GH/.claude/CLAUDE.md'"
 
 # which with no name: the repository here, from its remote or its folder.
 expect "which with no name covers the repository here" "/jobapp" nw "$RA" which

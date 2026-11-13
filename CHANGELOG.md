@@ -4,6 +4,14 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v35 (2026-11-14)
+
+The user's request comes before a compile, and a failed write never costs them their answer.
+
+- Session start used to say to compile waiting notes before the user's request, unless more than ten were waiting. In an agent whose sandbox refuses the lock or the capture, that cost one session its whole reply. Now the request always comes first: compile at the first pause after answering, as one batch when five or more are waiting. `wiki find` already searches notes not compiled yet, so nothing in them is out of reach meanwhile.
+- If a wiki command that writes fails (a lock, a capture, a sync), the agent says so in one line and carries on with what you asked.
+- Do: run `wiki upgrade --all`.
+
 ## v34 (2026-11-13)
 
 A session outside a git repository asks where it belongs, once, and remembers the answer.

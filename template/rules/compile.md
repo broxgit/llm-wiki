@@ -23,7 +23,7 @@ Once you hold the lock, read the last 10 entries of `log.md`.
 
 ## Ingest
 
-Trigger: session start, a pause, five notes waiting, or the user says "ingest" or "compile".
+Trigger: a pause (the first one after session start included), five notes waiting, or the user says "ingest" or "compile".
 
 With a named source, ingest that source. With none, ingest every pending file in `raw/` in filename order. That is oldest first. A raw file is pending until it is compiled: until an ingest entry in `log.md` names it in a `- source:` line, a page lists it in `sources:`, or, in a wiki from before handbook v24, `wiki/sources/` has a page of the same name, extension aside. Check with `wiki.sh pending <wiki>`. Don't open files to check. Ignore dotfiles.
 
