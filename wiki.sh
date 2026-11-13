@@ -246,74 +246,16 @@ Set WIKIS_DIR to keep wikis somewhere other than ~/wikis.
 EOF
 }
 
-# --- style helpers: docs/conventions.md, version 3. Copy, don't edit. ---
-STYLE_OVERRIDE="${LLM_WIKI_STYLE:-}" # a line a tool changes: its own variable
-STYLE_PALETTE_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/llm-wiki/palette" # a line a tool changes: its own setting, a file holding palette=default or palette=colorblind
-# style_wanted <fd>: style on? LLM_<TOOL>_STYLE=on or off decides; else a terminal, no NO_COLOR, TERM not dumb.
-style_wanted() {
-  case "$STYLE_OVERRIDE" in on) return 0 ;; off) return 1 ;; esac
-  [ -t "$1" ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ]
+# How it looks: ui.sh, the kit shared with llm-relay, which docs/conventions.md describes. Commands
+# print through its pieces, never a colour code. These three lines are all a tool sets.
+# shellcheck disable=SC2034 # ui.sh reads them
+{
+  STYLE_OVERRIDE="${LLM_WIKI_STYLE:-}"
+  STYLE_PALETTE_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/llm-wiki/palette"
+  STYLE_THEME_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/llm-wiki/theme"
 }
-style_utf8() {
-  case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in *[Uu][Tt][Ff]-8* | *[Uu][Tt][Ff]8*) return 0 ;; esac
-  return 1
-}
-# style_palette: sets PALETTE. LLM_PALETTE (every llm-* tool reads it), then the tool's own setting, then default.
-style_palette() {
-  local l
-  PALETTE="${LLM_PALETTE:-}"
-  case "$PALETTE" in default | colorblind) return 0 ;; esac
-  PALETTE=""
-  if [ -r "$STYLE_PALETTE_FILE" ]; then
-    while IFS= read -r l || [ -n "$l" ]; do case "$l" in palette=*) PALETTE="${l#palette=}" ;; esac; done < "$STYLE_PALETTE_FILE"
-  fi
-  case "$PALETTE" in colorblind) ;; *) PALETTE=default ;; esac
-}
-# style_set: the colour of each role, by palette. Call sites use the roles, never a code.
-style_set() {
-  S_BOLD="" S_DIM="" S_OK="" S_WARN="" S_TYPED="" S_OFF="" M_OK="" M_WARN=""
-  style_palette
-  # C_ERR is a bare code: standard error may be styled when standard output isn't.
-  if [ "$PALETTE" = colorblind ]; then C_ERR=35; else C_ERR=31; fi
-  [ "$STYLE" = yes ] || return 0
-  S_BOLD=$'\033[1m' S_DIM=$'\033[2m' S_OFF=$'\033[0m'
-  case "$PALETTE" in
-    colorblind) S_OK=$'\033[34m' S_WARN=$'\033[33m' S_TYPED=$'\033[36m' ;;
-    *) S_OK=$'\033[32m' S_WARN=$'\033[33m' S_TYPED=$'\033[36m' ;;
-  esac
-  if style_utf8; then M_OK="${S_OK}✓${S_OFF} "; else M_OK="${S_OK}+${S_OFF} "; fi
-  M_WARN="${S_BOLD}${S_WARN}!${S_OFF} "
-}
-STYLE=no STYLE_ERR=no
-if style_wanted 1; then STYLE=yes; fi
-if style_wanted 2; then STYLE_ERR=yes; fi
-style_set
-# style_off: for a command whose output an agent or a program reads. Nothing is styled, errors included.
-style_off() { STYLE=no STYLE_ERR=no; style_set; }
-say_ok() { printf '%s%s\n' "$M_OK" "$*"; }
-say_warn() { printf '%s%s\n' "$M_WARN" "$*"; }
-say_head() { printf '%s%s%s\n' "$S_BOLD" "$*" "$S_OFF"; }
-say_dim() { printf '%s%s%s\n' "$S_DIM" "$*" "$S_OFF"; }
-say_next() { printf '%sNext:%s %s\n' "$S_BOLD$S_TYPED" "$S_OFF" "$*"; }
-typed() { printf '%s%s%s' "$S_TYPED" "$*" "$S_OFF"; }
-die() {
-  if [ "$STYLE_ERR" = yes ]; then printf '\033[%sm%s\033[0m %s\n' "$C_ERR" "error:" "$*" >&2; else echo "error: $*" >&2; fi
-  exit 1
-}
-# die_usage <words>: the tool was called wrongly: an unknown command or option, a missing argument. Exits 2.
-die_usage() {
-  if [ "$STYLE_ERR" = yes ]; then printf '\033[%sm%s\033[0m %s\n' "$C_ERR" "error:" "$*" >&2; else echo "error: $*" >&2; fi
-  exit 2
-}
-# say_warn_err <words>: a warning on standard error, styled as standard error is, whatever standard output is.
-say_warn_err() {
-  if [ "$STYLE_ERR" = yes ]; then printf '\033[1m\033[33m!\033[0m %s\n' "$*" >&2; else printf '%s\n' "$*" >&2; fi
-}
-# typed_err <command>: something to type, inside a line that goes to standard error.
-typed_err() {
-  if [ "$STYLE_ERR" = yes ]; then printf '\033[36m%s\033[0m' "$*"; else printf '%s' "$*"; fi
-}
-# --- end of style helpers ---
+# shellcheck source=ui.sh
+. "$REPO/ui.sh"
 # need_value "$@", in a flag's arm: without it, shift fails and set -e ends the script with no message.
 need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 
@@ -4697,6 +4639,33 @@ setup_palette() {
   setup_mark palette
 }
 
+# ---- theme ------------------------------------------------------------------
+# One setting, kept per machine in $STYLE_THEME_FILE (ui.sh reads it): auto, dark or light, so
+# cards and labels read on the terminal's background. LLM_THEME overrides it.
+theme_setting() {
+  local m
+  m="$(sed -n 's/^theme=//p' "$STYLE_THEME_FILE" 2>/dev/null | tail -n 1)"
+  case "$m" in dark | light) printf '%s' "$m" ;; *) printf auto ;; esac
+}
+
+setup_theme() {
+  local cur
+  setup_due theme || return 0
+  section "Theme"
+  echo "Colours are picked to read on a dark terminal or a light one. auto takes the terminal's word for it where"
+  echo "it gives one (COLORFGBG), and dark otherwise. Say light if your terminal has a light background."
+  echo "LLM_THEME=auto, dark or light overrides this, for every llm-* tool, in one shell."
+  cur="$(theme_setting)"
+  while :; do
+    ask "Theme (auto, dark, light)" "$cur"
+    case "$ANSWER" in auto | dark | light) break ;; *) echo "  Answer auto, dark or light." ;; esac
+  done
+  mkdir -p "$(dirname "$STYLE_THEME_FILE")"
+  printf '# The terminal'"'"'s background: auto, dark or light. Written by %s setup theme.\ntheme=%s\n' "$WIKI_CMD" "$ANSWER" > "$STYLE_THEME_FILE"
+  echo "  ${M_OK}theme: $ANSWER"
+  setup_mark theme
+}
+
 # ---- obsidian ---------------------------------------------------------------
 # The wikis are plain markdown, so Obsidian can browse them: one vault over the whole
 # collection, for search, links and the graph. Agents still maintain the pages. This
@@ -8404,6 +8373,7 @@ setup_pending() {
   setup_done delegation.mode || echo delegation.mode
   setup_done feedback || echo feedback
   setup_done palette || echo palette
+  setup_done theme || echo theme
   if [ -d "$(obsidian_dir)" ] && [ "$(obsidian_state)" != ours ]; then setup_done obsidian || echo obsidian; fi
   for k in "$EXT_SHIPPED"/wiki-*; do
     [ -f "$k" ] || continue
@@ -8824,6 +8794,9 @@ setup_list() {
   printf '%-19s %s' "palette" "$(palette_setting)${LLM_PALETTE:+ (LLM_PALETTE=$LLM_PALETTE overrides it)}"
   case "$pending" in *" palette "*) printf '%s' "$new_note" ;; esac
   printf '\n'
+  printf '%-19s %s' "theme" "$(theme_setting)${LLM_THEME:+ (LLM_THEME=$LLM_THEME overrides it)}"
+  case "$pending" in *" theme "*) printf '%s' "$new_note" ;; esac
+  printf '\n'
   printf '%-19s %s' "feedback" "$(feedback_mode)"
   case "$pending" in *" feedback "*) printf '%s' "$new_note" ;; esac
   printf '\n'
@@ -8858,7 +8831,7 @@ setup_list() {
   [ "$(agy_state)" = none ] || tools="$tools | antigravity"
   [ "$(codex_state)" = none ] || tools="$tools | codex"
   [ "$(cursor_state)" = none ] || tools="$tools | cursor"
-  echo "Or a section:  $(typed "$WIKI_CMD setup collection | collections | tools | git | claude | plugin | permissions$tools | upgrade | skills | completion | delegation | feedback | palette | helper | chat | journal | microsoft-copilot")"
+  echo "Or a section:  $(typed "$WIKI_CMD setup collection | collections | tools | git | claude | plugin | permissions$tools | upgrade | skills | completion | delegation | feedback | palette | theme | helper | chat | journal | microsoft-copilot")"
 }
 
 # Antigravity's grants: what lets Gemini read and write the wikis and run wiki.sh
@@ -9143,7 +9116,7 @@ Usage: $WIKI_CMD setup [--new | --list | <section> | <setting>]
   setup            Walk through every setting. Enter keeps what you have.
   setup --new      Only what's missing, out of date, or added since you last ran it.
   setup --list     Print current values without asking anything.
-  setup <section>  Just one section: collection, collections, tools, git, claude, permissions, antigravity, codex, cursor, upgrade, delegation, feedback, palette, chat, obsidian, extensions, journal.
+  setup <section>  Just one section: collection, collections, tools, git, claude, permissions, antigravity, codex, cursor, upgrade, delegation, feedback, palette, theme, chat, obsidian, extensions, journal.
   setup chat --yes Add the Chat tab's server without asking, for an agent the user told to. The app must be closed.
   setup microsoft-copilot --repo OWNER/REPO
                    Set up a Microsoft 365 Copilot agent that reads a wiki repository on GitHub. --help for its options.
@@ -9152,7 +9125,7 @@ Usage: $WIKI_CMD setup [--new | --list | <section> | <setting>]
 EOF
         return 0
         ;;
-      collection | collections | tools | git | claude | plugin | permissions | antigravity | codex | cursor | upgrade | skills | completion | journal | delegation | feedback | palette | helper | obsidian | extensions | chat | git.identity) what="$a" ;;
+      collection | collections | tools | git | claude | plugin | permissions | antigravity | codex | cursor | upgrade | skills | completion | journal | delegation | feedback | palette | theme | helper | obsidian | extensions | chat | git.identity) what="$a" ;;
       journal.*)
         [ -n "$(journal_field "${a#journal.}" 2)" ] || die "no journal setting called ${a#journal.}. Settings: $JOURNAL_KEYS"
         what="$a"
@@ -9182,6 +9155,7 @@ EOF
     delegation) SETUP_MODE=all; setup_delegation ;;
     feedback) SETUP_MODE=all; setup_feedback ;;
     palette) SETUP_MODE=all; setup_palette ;;
+    theme) SETUP_MODE=all; setup_theme ;;
     helper) SETUP_MODE=all; setup_helper ;;
     obsidian) SETUP_MODE=all; setup_obsidian ;;
     extensions) SETUP_MODE=all; setup_extensions ;;
@@ -9217,6 +9191,7 @@ EOF
       setup_delegation
       setup_feedback
       setup_palette
+      setup_theme
       setup_chat
       setup_skills
       setup_completion

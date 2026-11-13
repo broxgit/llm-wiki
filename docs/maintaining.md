@@ -14,6 +14,7 @@ ROADMAP.md         Planned improvements, untested areas, and what was decided ag
 CHANGELOG.md       What each handbook version changed. upgrade prints the parts you missed.
 NEWS.md            What's new outside the handbook. update and news print what this machine hasn't seen.
 wiki.sh            Setup and upkeep. Run it with no arguments for the commands.
+ui.sh              The kit: how every command looks at a terminal. llm-relay carries a copy. docs/conventions.md.
 go.mod cmd/ internal/  The compiled helper, llm-wiki, which wiki.sh uses for ported commands when it's built. See below.
 template/          The scaffold, copied whole to start a wiki.
   AGENTS.md        The core handbook. Loaded in every session.
@@ -29,10 +30,13 @@ skills/llm-wiki/   The Claude skill that finds, runs, and scaffolds wikis.
 mcp/server.py      A local MCP server for sessions with no file access. wiki mcp starts it where there is no compiled helper; it runs wiki.sh.
 commands/          The plugin's slash commands. wiki.sh also makes skills from them for Antigravity, Codex and Cursor.
 tests/smoke.sh     Smoke tests for wiki.sh, the hook and the secret scan. CI runs them.
+tests/ui-lint.sh   Fails on a colour code outside ui.sh. A report until every command has moved to the kit.
+tests/gallery/     What each command a person reads prints, kept by scripts/gallery.sh.
 .github/workflows/ CI: shellcheck, plugin validation, and the smoke tests on Linux and macOS.
 helper.lock        The released helper for this commit: its compiler, source hash and a SHA-256 per platform.
 scripts/
   helper.sh        Builds the helper for release and writes helper.lock. CI checks it and publishes.
+  gallery.sh       Renders every command a person reads into tests/gallery/. --check compares.
   migrate-to-plugin.sh  Moves a machine from the clone-and-line setup to the plugin.
   microsoft_copilot_setup.py  wiki setup microsoft-copilot: a read-only GitHub App and a Microsoft 365 Copilot agent. Pins Microsoft's toolkit version.
 hooks/
@@ -103,6 +107,12 @@ The table of `wiki status` is ported (`status`, in `internal/status`): a row for
 `wiki capture` is ported whole (`capture`, in `internal/capture`), the first port that writes. `cmd_capture` hands the helper its arguments after `--`, with `$HOME`, `$PWD` and `--tty` when stdin is a terminal, and the Bash it falls back to is `capture_note`. The note is on stdin, and stdin can be read once, so a refusal can't be a failure: the helper's first line says which answer follows, `captured` and the line to print, or `refused` and what `cmd_capture` dies with. The helper returns an error, and the Bash answers, only before it reads stdin or writes: on an argument with a line break, which `sed` and `$( )` treat their own way, and on a `--file` it can't read, where the Bash stops at its `cat` with `cat`'s words. The slug is made under `LC_ALL=C` in both: ASCII letters lowered, and each run of other bytes one dash. A note's permissions are copied with the rest: the Bash copies a temporary file, so a note that came with its `Captured:` line is `0600`, from `mktemp`, and one that got the line here takes the umask's. The helper's MCP server saves a note through the package and runs no `wiki.sh` for it; where the package returns an error it runs `wiki.sh capture`. `mcp/server.py` runs `wiki.sh capture` as before.
 
 `wiki feedback add` is ported the same way (`feedback-add`, in `internal/feedback`): `feedback_add` asks the helper, whose first line is `said` or `refused`, and the Bash it falls back to is `feedback_note`. The rest of `wiki feedback` (list, show, send, dismiss) stays Bash. `wiki.sh` passes what only it knows: the notes' folder, the mode file, the kinds, and the three lines a note carries about the machine, the commit, the handbook version and `feedback_system`'s line with the bash and git here. The details are on stdin, so the helper looks at everything that could send it to the Bash before it reads them: an argument with a line break, a `--file` it can't read, a folder of notes it can't write in, a note it can't read, and a note with the same summary whose `Seen:` count the shell would read its own way or whose last line doesn't end, where BSD and GNU `sed` differ. `feedback_note` runs under `LC_ALL=C`, exported as `status_table` does: the order of the notes, which letters match whatever their case, and the slug are by byte in both, and its `mkdir` is quiet, so a folder that can't be made is one refusal from both. One difference on purpose: the Bash drops a NUL byte from details on stdin, and bash 4.4 and later say so on stderr. The helper drops it and says nothing. The helper's MCP server keeps a note through the package with what `cmd_mcp` passes in `LLM_WIKI_FEEDBACK_*`, read once when the server starts, so a commit made while it runs isn't in the note's `llm-wiki:` line. There a NUL byte in the details goes to `wiki.sh`, since the server shows stderr.
+
+## Change how a command looks
+
+Read `docs/conventions.md` first. A command prints through the pieces in `ui.sh`, never a colour code: `tests/ui-lint.sh` lists what still doesn't. After the change, run `scripts/gallery.sh`, look at what changed in `tests/gallery/`, and commit it: the smoke test fails while the gallery is behind.
+
+A change to `ui.sh` itself raises the kit's version in its second line and in `docs/conventions.md`, puts its new sha256 there, and is copied byte for byte to llm-relay, with the guide, in the same sitting. The smoke test prints the sha256 it expects.
 
 ## Change the rules
 

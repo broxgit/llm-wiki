@@ -1,0 +1,1 @@
+error: wiki relay is now its own command, relay, from https://github.com/broxgit/llm-relay. Install it as its README says, and run: relay setup. Then use: relay run

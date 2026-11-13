@@ -63,6 +63,7 @@ read -r -d '' PARTS <<'TABLE' || true
 3 | Update | Two clones merge index.md and log.md
 2 | News |
 2 | Terminal style |
+2 | The kit |
 2 | What moved to llm-relay |
 2 | Extensions | Collection
 2 | Jira extension | Collection
@@ -109,6 +110,8 @@ unset XDG_CONFIG_HOME XDG_STATE_HOME XDG_DATA_HOME XDG_CACHE_HOME
 export WIKIS_DIR="$T/wikis"
 # Nothing here may depend on a terminal: style is off unless a test turns it on.
 export LLM_WIKI_STYLE=off
+# The colours come from the terminal and two settings: none of the runner's own may leak in.
+unset COLORTERM COLORFGBG LLM_PALETTE LLM_THEME
 # The fixtures are dated with `date -u`, and the report's range ends on the journal's
 # day, which is the local date, or the day before until day_starts. One clock for both:
 # UTC here, and day_starts 00:00 once the collection exists. Without it the report
@@ -3966,7 +3969,8 @@ case "$out" in *"${ESC}[31merror:${ESC}[0m"*) ok "an error from a command a pers
 out="$(sty LLM_WIKI_STYLE=off "$W" stale x 2>&1 || true)"
 case "$out" in "error: "*) ok "off, an error is plain" ;; *) bad "off, an error is plain" "$out" ;; esac
 # The tick: ✓ in a UTF-8 locale, + in any other.
-blk="$(sed -n '/^# --- style helpers/,/^# --- end of style helpers/p' "$W")"
+# What wiki.sh sets before it sources the kit, and the kit.
+blk="STYLE_OVERRIDE=\"\${LLM_WIKI_STYLE:-}\" STYLE_PALETTE_FILE=\"\${XDG_CONFIG_HOME:-\$HOME/.config}/llm-wiki/palette\" STYLE_THEME_FILE=\"\${XDG_CONFIG_HOME:-\$HOME/.config}/llm-wiki/theme\"; . '$REPO/ui.sh'"
 tick() { env "$@" LLM_WIKI_STYLE=on bash -c "$blk"$'\n''say_ok done' | strip; }
 [ "$(tick LC_ALL=en_US.UTF-8)" = "✓ done" ] && ok "a UTF-8 locale gets ✓" || bad "a UTF-8 locale gets ✓" "$(tick LC_ALL=en_US.UTF-8)"
 [ "$(tick LC_ALL=C)" = "+ done" ] && ok "a locale that isn't UTF-8 gets +" || bad "a locale that isn't UTF-8 gets +" "$(tick LC_ALL=C)"
@@ -3990,6 +3994,15 @@ grep -qx 'palette' "$SW/palcfg/llm-wiki/setup" && ok "setup palette is recorded,
 case "$(sty XDG_CONFIG_HOME="$SW/palcfg" LLM_WIKI_STYLE=off "$W" setup --list 2>&1)" in *"palette             colorblind"*) ok "setup --list shows the palette" ;; *) bad "setup --list shows the palette" ;; esac
 pn="$(printf 'x\nbogus\ndefault\n' | sty XDG_CONFIG_HOME="$SW/palcfg2" LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE=off "$W" setup palette 2>&1)"
 case "$pn" in *"Answer default or colorblind."*"palette: default"*) ok "setup palette refuses a value that is no palette" ;; *) bad "setup palette refuses a bad value" "$pn" ;; esac
+# wiki setup theme: the same, for the terminal's background, which ui.sh reads.
+tw="$(printf 'light\n' | sty XDG_CONFIG_HOME="$SW/thcfg" LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE=off "$W" setup theme 2>&1)"
+case "$tw" in *"theme: light"*) ok "setup theme takes the answer" ;; *) bad "setup theme takes the answer" "$tw" ;; esac
+grep -qx 'theme=light' "$SW/thcfg/llm-wiki/theme" && ok "setup theme writes the setting" || bad "setup theme writes the setting"
+grep -qx 'theme' "$SW/thcfg/llm-wiki/setup" && ok "setup theme is recorded, so --new won't ask again" || bad "setup theme is recorded"
+case "$(sty XDG_CONFIG_HOME="$SW/thcfg" LLM_WIKI_STYLE=off "$W" setup --list 2>&1)" in *"theme               light"*) ok "setup --list shows the theme" ;; *) bad "setup --list shows the theme" ;; esac
+case "$(env XDG_CONFIG_HOME="$SW/thcfg" LLM_WIKI_STYLE=on COLORTERM=truecolor bash -c "$blk"$'\n''say_ok done')" in *"38;2;0;135;60m"*) ok "and the kit reads it: ok is the light theme's green" ;; *) bad "and the kit reads it: ok is the light theme's green" ;; esac
+tn="$(printf 'grey\nauto\n' | sty XDG_CONFIG_HOME="$SW/thcfg2" LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE=off "$W" setup theme 2>&1)"
+case "$tn" in *"Answer auto, dark or light."*"theme: auto"*) ok "setup theme refuses a value that is no theme" ;; *) bad "setup theme refuses a bad value" "$tn" ;; esac
 # wiki setup, in its forms. A mark goes in front of a line, after any indent. With the
 # codes stripped and the marks taken off, what a terminal shows is the piped words.
 nomarks() { strip | sed -E 's/(^|  )(✓|\+|!) /\1/'; }
@@ -4084,15 +4097,10 @@ printf '#!/bin/sh\nexit 1\n' > "$UW/bin/claude"
 cstyled="$(cl LLM_WIKI_STYLE=on $UTF)"
 case "$cstyled" in *"${ESC}[1m${ESC}[33m!${ESC}[0m couldn't update the installed plugin's copy (llm-wiki@mk): ${ESC}[36mclaude plugin update llm-wiki@mk${ESC}[0m"*) ok "update in a clone: a failed plugin refresh has the mark and its command in cyan" ;; *) bad "update in a clone: a failed plugin refresh has the mark and its command in cyan" "$cstyled" ;; esac
 rm -rf "$HOME/.cursor" "$HOME/.claude/plugins/installed_plugins.json"
-# One text, two scripts: the guide's block is the one wiki.sh runs.
-doc="$(sed -n '/^# --- style helpers/,/^# --- end of style helpers/p' "$REPO/docs/conventions.md")"
-[ -n "$blk" ] && [ "$blk" = "$doc" ] && ok "the helper block in wiki.sh is the block in docs/conventions.md, byte for byte" || bad "the helper block in wiki.sh is the block in docs/conventions.md, byte for byte"
 # A step of setup piped a two-line message into head -n 1. When head left first, the second
 # line's write failed and setup stopped midway: seen once in CI, on Linux.
 lacks "setup doesn't pipe a message of several lines into head" "cmd_claude | head" cat "$W"
 case "$(head -n 1 "$REPO/docs/conventions.md")" in "Conventions version "[0-9]*) ok "the guide's first line gives its version" ;; *) bad "the guide's first line gives its version" ;; esac
-v="$(head -n 1 "$REPO/docs/conventions.md" | sed 's/^Conventions version \([0-9]*\).*/\1/')"
-case "$blk" in "# --- style helpers: docs/conventions.md, version $v. "*) ok "and the helper block names the same version" ;; *) bad "and the helper block names the same version" "$v" ;; esac
 # Version 2: what a usage error exits with, and warnings on standard error.
 exits() { local want="$1"; shift; "$@" >/dev/null 2>&1; [ "$?" -eq "$want" ]; }
 check "an unknown command exits 2: called wrongly, not tried and failed" exits 2 sty "$W" nosuchcommand
@@ -4119,6 +4127,125 @@ check "the guide says what a usage error exits with" grep -q '2 called wrongly' 
 check "that --yes isn't owed where the question is the safeguard" grep -q 'a tool may have no `--yes` where the question is the safeguard' "$REPO/docs/conventions.md"
 check "and gives the same pair in Python" grep -q 'def warn_err' "$REPO/docs/conventions.md"
 grep -q 'docs/conventions.md' "$REPO/AGENTS.md" && ok "AGENTS.md points at the guide" || bad "AGENTS.md points at the guide"
+fi
+
+if section "The kit"; then
+# ui.sh: the pieces every command prints through. docs/conventions.md has the rules.
+ESC=$'\033'
+KS="$T/kit"; mkdir -p "$KS"
+# kit <code> [<env>...]: run code with the kit loaded, as a tool would, and print what it printed.
+kit() { local code="$1"; shift; env "$@" bash -c "STYLE_OVERRIDE=\"\${LLM_WIKI_STYLE:-}\" STYLE_PALETTE_FILE=\"\${PF:-}\" STYLE_THEME_FILE=\"\${TF:-}\"; . '$REPO/ui.sh'"$'\n'"$code" 2>&1; }
+on="LLM_WIKI_STYLE=on"; utf="LANG=en_US.UTF-8"
+ui_words_ext() { bash -c "STYLE_OVERRIDE=off; . '$REPO/ui.sh'; ui_words"; }
+ksha() { if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d ' ' -f 1; else sha256sum "$1" | cut -d ' ' -f 1; fi; }
+# One kit, held to the guide: its sha256 is the one docs/conventions.md gives, so every tool that
+# keeps a copy of the guide keeps the same kit.
+kv="$(sed -n 's/^Kit version \([0-9][0-9]*\)\. sha256 `\([0-9a-f]*\)`\.$/\1 \2/p' "$REPO/docs/conventions.md")"
+[ "${kv#* }" = "$(ksha "$REPO/ui.sh")" ] && ok "ui.sh is the kit docs/conventions.md names, byte for byte" || bad "ui.sh is the kit docs/conventions.md names, byte for byte" "the guide says ${kv#* }, ui.sh is $(ksha "$REPO/ui.sh"): raise the kit's version and put its sha256 in the guide"
+case "$(sed -n 2p "$REPO/ui.sh")" in *"Kit version ${kv%% *}, for docs/conventions.md version $(head -n 1 "$REPO/docs/conventions.md" | sed 's/^Conventions version \([0-9]*\).*/\1/')."*) ok "ui.sh names the kit's version and the guide's" ;; *) bad "ui.sh names the kit's version and the guide's" "$(sed -n 2p "$REPO/ui.sh")" ;; esac
+# llm-relay carries a copy. When its checkout sits beside this one on the same kit version, the two are one file.
+rd=""
+for c in "${LLM_RELAY_DIR:-}" "$REPO/../llm-relay" "$(cd "$REPO" && cd "$(git rev-parse --git-common-dir 2>/dev/null)/../.." 2>/dev/null && pwd)/llm-relay"; do [ -n "$c" ] && [ -f "$c/ui.sh" ] && rd="$c" && break; done
+if [ -z "$rd" ]; then skipped "llm-relay's copy of ui.sh: no checkout of llm-relay with one beside this one"
+elif [ "$(sed -n 2p "$rd/ui.sh")" != "$(sed -n 2p "$REPO/ui.sh")" ]; then skipped "llm-relay's copy of ui.sh is another kit version: $(sed -n 2p "$rd/ui.sh" | sed 's/^# ui.sh: [^.]*\. //')"
+else cmp -s "$rd/ui.sh" "$REPO/ui.sh" && ok "llm-relay's ui.sh is this one, byte for byte" || bad "llm-relay's ui.sh is this one, byte for byte" "$rd/ui.sh differs: copy it there"; fi
+check "wiki.sh sources the kit" grep -q '^\. "\$REPO/ui.sh"$' "$W"
+lacks "and keeps no style helpers of its own" "^style_set() {" cat "$W"
+# Plain: the words, no codes, a mark as "- ".
+out="$(kit 'ui_stage CHECKS "5 passed" "0 failed" 64s; ui_item ok "go build" 17s; ui_item error "go vet"; ui_detail a b; ui_turn; ui_step --emoji "📋" 1 Paste "on your clipboard"; ui_next "reply done"' LLM_WIKI_STYLE=off $utf)"
+want="CHECKS  5 passed · 0 failed · 64s
+    - go build$(printf '%26s' '')17s
+    - go vet
+      a · b
+
+YOUR TURN
+
+  1  Paste  on your clipboard
+
+Next: reply done"
+[ "$out" = "$want" ] && ok "plain, a stage, items, a detail, a turn, a step and next are words alone" || bad "plain, the pieces are words alone" "$(diff <(printf '%s\n' "$want") <(printf '%s\n' "$out"))"
+case "$out" in *"$ESC"* | *"📋"* | *"│"* | *"●"* | *"◆"*) bad "plain has no codes, emoji or glyphs" "$out" ;; *) ok "plain has no codes, emoji or glyphs" ;; esac
+[ "$(kit 'ui_question "Run it?" "- go build" "on the Mac"; ui_keys yes no' LLM_WIKI_STYLE=off $utf)" = "? Run it?
+   - go build
+   on the Mac
+
+   [y]es  [n]o  › " ] && ok "plain, a question keeps its ? and its [y]es [n]o" || bad "plain, a question keeps its ? and its [y]es [n]o" "$(kit 'ui_question "Run it?" "- go build"; ui_keys yes no' LLM_WIKI_STYLE=off $utf)"
+[ "$(kit 'ui_keys "Enter=finish" "s=copy the Slackbot prompt"' LLM_WIKI_STYLE=off $utf)" = "   [Enter] finish  [s] copy the Slackbot prompt  › " ] && ok "a key that isn't a word's first letter is named" || bad "a key that isn't a word's first letter is named"
+long="Read https://gitlab.com/example/group/platform/camera-detection-event-aggregator/-/merge_requests/20 and say what you think, then reply."
+[ "$(kit "ui_card '$long'" LLM_WIKI_STYLE=off $utf)" = "$long" ] && ok "plain, a card is its text as it is" || bad "plain, a card is its text as it is"
+# At a terminal, 16 colours: the roles' codes.
+s16="$(kit 'ui_question "Run it?" "- go build"; ui_keys yes no; echo; ui_stage CHECKS "5 passed"; ui_item ok "go build" 17s; ui_item warn skipped; ui_item error failed; ui_stage --error SENT "not sent"; ui_turn; ui_step 1 Paste; ui_next "reply done"' $on $utf)"
+case "$s16" in *"${ESC}[1m${ESC}[43m${ESC}[30m ? ${ESC}[0m ${ESC}[1m${ESC}[33mRun it?"*) ok "a question has a yellow ? label and the question in bold yellow" ;; *) bad "a question has a yellow ? label" "$(printf '%s' "$s16" | cat -v)" ;; esac
+case "$s16" in *"${ESC}[1m${ESC}[32m[y]${ESC}[0mes  ${ESC}[1m${ESC}[31m[n]${ESC}[0mo"*) ok "[y] takes the ok colour and [n] the error colour" ;; *) bad "[y] takes the ok colour and [n] the error colour" "$(printf '%s' "$s16" | cat -v)" ;; esac
+case "$s16" in *"${ESC}[34m●${ESC}[0m ${ESC}[1m${ESC}[44m${ESC}[97m CHECKS ${ESC}[0m"*) ok "a stage is a dot and a label in its accent" ;; *) bad "a stage is a dot and a label in its accent" "$(printf '%s' "$s16" | cat -v)" ;; esac
+case "$s16" in *"${ESC}[2m│${ESC}[0m   ${ESC}[32m✓${ESC}[0m go build${ESC}[2m"*"17s${ESC}[0m"*) ok "an item sits on the rail with a green ✓ and a muted time" ;; *) bad "an item sits on the rail with a green ✓ and a muted time" "$(printf '%s' "$s16" | cat -v)" ;; esac
+case "$s16" in *"${ESC}[1m${ESC}[33m!${ESC}[0m skipped"*"${ESC}[1m${ESC}[31m✗${ESC}[0m failed"*) ok "a warning is a bold yellow ! and a failure a bold red ✗" ;; *) bad "a warning is a bold yellow ! and a failure a bold red ✗" "$(printf '%s' "$s16" | cat -v)" ;; esac
+case "$s16" in *"${ESC}[31m●${ESC}[0m ${ESC}[1m${ESC}[41m${ESC}[97m SENT ${ESC}[0m  ${ESC}[1m${ESC}[31mnot sent"*) ok "a stage that failed takes the error colour" ;; *) bad "a stage that failed takes the error colour" "$(printf '%s' "$s16" | cat -v)" ;; esac
+case "$s16" in *"${ESC}[33m◆${ESC}[0m ${ESC}[1m${ESC}[33mYOUR TURN"*"${ESC}[1m${ESC}[36mNext:${ESC}[0m reply done"*) ok "the rail ends at ◆ YOUR TURN, and Next: is bold cyan" ;; *) bad "the rail ends at ◆ YOUR TURN, and Next: is bold cyan" "$(printf '%s' "$s16" | cat -v)" ;; esac
+case "$s16" in *"38;2;"*) bad "with no COLORTERM, only the 16 colours" ;; *) ok "with no COLORTERM, only the 16 colours" ;; esac
+# 24-bit where the terminal says so, by palette and theme.
+ok24() { kit 'ui_item ok x' $on $utf COLORTERM=truecolor "$@" | sed -n "s/^${ESC}\[38;2;\([0-9;]*\)m.*/\1/p"; }
+[ "$(ok24)" = "80;220;140" ] && ok "COLORTERM=truecolor gives 24-bit colour" || bad "COLORTERM=truecolor gives 24-bit colour" "$(ok24)"
+[ "$(kit 'ui_item ok x' $on $utf COLORTERM=24bit | cat -v)" = "$(kit 'ui_item ok x' $on $utf COLORTERM=truecolor | cat -v)" ] && ok "and so does COLORTERM=24bit" || bad "and so does COLORTERM=24bit"
+[ "$(ok24 LLM_THEME=light)" = "0;135;60" ] && ok "LLM_THEME=light gives the light theme's colours" || bad "LLM_THEME=light gives the light theme's colours" "$(ok24 LLM_THEME=light)"
+[ "$(ok24 LLM_PALETTE=colorblind)" = "86;140;255" ] && ok "LLM_PALETTE=colorblind makes ok blue" || bad "LLM_PALETTE=colorblind makes ok blue" "$(ok24 LLM_PALETTE=colorblind)"
+[ "$(ok24 COLORFGBG='0;15')" = "0;135;60" ] && ok "auto reads a light background from COLORFGBG" || bad "auto reads a light background from COLORFGBG" "$(ok24 COLORFGBG='0;15')"
+[ "$(ok24 COLORFGBG='15;0')" = "80;220;140" ] && ok "and a dark one" || bad "and a dark one"
+printf '# x\ntheme=light\n' > "$KS/theme"; printf 'palette=colorblind\n' > "$KS/palette"
+[ "$(ok24 TF="$KS/theme")" = "0;135;60" ] && ok "the theme setting is read from the tool's file" || bad "the theme setting is read from the tool's file" "$(ok24 TF="$KS/theme")"
+[ "$(ok24 TF="$KS/theme" LLM_THEME=dark)" = "80;220;140" ] && ok "LLM_THEME wins over the setting" || bad "LLM_THEME wins over the setting"
+[ "$(ok24 TF="$KS/theme" LLM_THEME=nonsense)" = "0;135;60" ] && ok "an LLM_THEME that is no theme is passed over" || bad "an LLM_THEME that is no theme is passed over"
+[ "$(ok24 PF="$KS/palette")" = "86;140;255" ] && ok "the palette setting is read from the tool's file" || bad "the palette setting is read from the tool's file" "$(ok24 PF="$KS/palette")"
+[ "$(kit 'ui_item ok x' $on $utf PF="$KS/palette")" = "${ESC}[34m✓${ESC}[0m x" ] && ok "colorblind with the 16 colours is a blue tick" || bad "colorblind with the 16 colours is a blue tick" "$(kit 'ui_item ok x' $on $utf PF="$KS/palette" | cat -v)"
+# A card: wrapped at spaces only, so a URL is never split, and tinted to the terminal's width.
+card="$(kit "ui_card '$long'" $on $utf COLUMNS=60)"
+printf '%s\n' "$card" | grep -q 'https://gitlab.com/example/group/platform/camera-detection-event-aggregator/-/merge_requests/20 ' && ok "a card never splits a URL" || bad "a card never splits a URL" "$(printf '%s' "$card" | cat -v)"
+[ "$(printf '%s\n' "$card" | wc -l | tr -d ' ')" = 5 ] && ok "a card wraps its text, with a tinted line above and below" || bad "a card wraps its text, with a tinted line above and below" "$(printf '%s' "$card" | cat -v)"
+case "$(printf '%s\n' "$card" | sed -n 1p)" in "${ESC}[100m${ESC}[97m$(printf '%60s' '')${ESC}[0m") ok "a card is as wide as the terminal" ;; *) bad "a card is as wide as the terminal" "$(printf '%s' "$card" | sed -n 1p | cat -v)" ;; esac
+[ "$(printf '%s\n' "$card" | ui_words_ext)" = "$(printf '%s\n' "$long" | ui_words_ext)" ] && ok "a card's words are its text's words" || bad "a card's words are its text's words"
+case "$(kit "ui_card '$long'" $on $utf COLUMNS=60 LLM_THEME=light)" in "${ESC}[47m${ESC}[30m"*) ok "on a light theme, a card is light" ;; *) bad "on a light theme, a card is light" ;; esac
+# The emoji is the your-turn steps' alone, and only at a UTF-8 terminal.
+case "$(kit 'ui_step --emoji "📋" 1 Paste "on your clipboard"' $on $utf)" in *"📋 on your clipboard"*) ok "a step's aside can have an emoji at a terminal" ;; *) bad "a step's aside can have an emoji at a terminal" ;; esac
+case "$(kit 'ui_step --emoji "📋" 1 Paste "on your clipboard"' $on LANG=C LC_ALL=C)" in *"📋"*) bad "but not where the locale isn't UTF-8" ;; *) ok "but not where the locale isn't UTF-8" ;; esac
+case "$(kit 'ui_stage A x; ui_item ok y; ui_stage B z; ui_turn' $on LANG=C LC_ALL=C)" in *"|${ESC}[0m   ${ESC}[32m+"*"*"*) ok "where the locale isn't UTF-8, the rail is | and the tick +" ;; *) bad "where the locale isn't UTF-8, the rail is | and the tick +" "$(kit 'ui_stage A x; ui_item ok y' $on LANG=C LC_ALL=C | cat -v)" ;; esac
+# Same words: the whole kit, at a terminal in every depth and theme, has the plain words.
+plainw="$(env STYLE_OVERRIDE=off $utf bash "$REPO/ui.sh" 2>/dev/null | ui_words_ext)"
+for v in "COLORTERM=" "COLORTERM=truecolor" "COLORTERM=truecolor LLM_THEME=light" "COLORTERM=truecolor LLM_PALETTE=colorblind"; do
+  sw="$(env $v STYLE_OVERRIDE=on $utf COLUMNS=50 bash "$REPO/ui.sh" 2>/dev/null | ui_words_ext)"
+  [ -n "$plainw" ] && [ "$sw" = "$plainw" ] && ok "every piece, ${v#COLORTERM=}: stripped, the words are the plain words" || bad "every piece, $v: stripped, the words are the plain words" "$(diff <(printf '%s\n' "$sw") <(printf '%s\n' "$plainw") | head -n 10)"
+done
+# A wait: one line, redrawn by a ticker while something runs, with a spinner that turns and a clock.
+out="$(kit 'ui_wait_start "go build: running..." "nothing more to answer"; sleep 1.1; ui_wait_stop; ui_item ok "go build: passed" 1s' $on $utf)"
+case "$out" in *"⠋${ESC}[0m go build: running..."*"⠙${ESC}[0m go build: running..."*"1s · nothing more to answer"*) ok "a wait's spinner turns and its clock counts" ;; *) bad "a wait's spinner turns and its clock counts" "$(printf '%s' "$out" | tr '\r' '\n' | cat -v | head -n 8)" ;; esac
+case "${out##*$'\r'}" in "${ESC}[K${ESC}[32m✓${ESC}[0m go build: passed"*) ok "and ui_wait_stop takes its line away for the result" ;; *) bad "and ui_wait_stop takes its line away for the result" "$(printf '%s' "${out##*$'\r'}" | cat -v)" ;; esac
+[ "$(kit 'ui_wait_start x; sleep 0.3; ui_wait_stop; echo finished' LLM_WIKI_STYLE=off $utf)" = finished ] && ok "with style off, in a pipe, a wait draws nothing" || bad "with style off, in a pipe, a wait draws nothing"
+case "$(kit 'ui_wait_start x; ui_wait_stop; echo "$_UI_LIVE"; style_off; echo "$_UI_LIVE"' LLM_WIKI_STYLE=off $utf)" in *yes*no*) ok "style_off stops a wait drawing at a terminal too" ;; *) bad "style_off stops a wait drawing at a terminal too" ;; esac
+out="$(kit 'ui_item ok x; ui_card y; style_off; ui_item ok z; ui_card w' $on $utf)"
+case "$out" in *"${ESC}[32m✓${ESC}[0m x"*"- z"*) case "${out#*- z}" in *"$ESC"*) bad "style_off turns every piece plain" ;; *) ok "style_off turns every piece plain" ;; esac ;; *) bad "style_off turns every piece plain" "$(printf '%s' "$out" | cat -v)" ;; esac
+# The gallery: what every command a person reads prints, as kept in tests/gallery.
+if out="$("$REPO/scripts/gallery.sh" --check 2>&1)"; then ok "the gallery is current: $out"; else bad "the gallery is current" "$out"; fi
+# The lint. It is on once every command has moved to the pieces; until then it reports.
+UI_LINT=report
+printf 'f() {\n  printf "\\033[1mx"\n}\n# say_ok in a comment\ng() { say_ok y; echo "$S_BOLD"; }\n' > "$KS/bad.sh"
+out="$("$REPO/tests/ui-lint.sh" "$KS/bad.sh" 2>&1)"; code=$?
+[ "$code" = 1 ] && ok "the lint fails on a colour code, an S_ variable or a version 2 piece" || bad "the lint fails on a colour code, an S_ variable or a version 2 piece" "$out"
+case "$out" in *"f "*"1 line(s)"*"g "*"1 line(s)"*) ok "and names the function each is in, not a comment" ;; *) bad "and names the function each is in, not a comment" "$out" ;; esac
+"$REPO/tests/ui-lint.sh" "$REPO/ui.sh" >/dev/null 2>&1 && ok "the kit itself is allowed its codes" || bad "the kit itself is allowed its codes"
+printf 'up() {\n  printf "\\x1B[1m"\n}\nfg() {\n  tput setaf 1\n}\nbg() {\n  tput setab 2\n}\nraw() {\n  echo "%s[0m"\n}\nfine() {\n  echo "\\x1B is not a code here"\n}\n' "$ESC" > "$KS/more.sh"
+out="$("$REPO/tests/ui-lint.sh" --functions "$KS/more.sh" 2>&1 | paste -sd ' ' -)"
+while read -r f what; do case " $out " in *" $f "*) ok "the lint catches $what" ;; *) bad "the lint catches $what" "$out" ;; esac; done <<'EOF'
+up \x1B[ in capitals
+fg tput setaf
+bg tput setab
+raw an escape byte itself
+EOF
+case " $out " in *" fine "*) bad "and not \\x1B without a [" "$out" ;; *) ok "and not \\x1B without a [" ;; esac
+left="$("$REPO/tests/ui-lint.sh" --functions)"
+if [ "$UI_LINT" = on ]; then
+  [ -z "$left" ] && ok "the lint: nothing prints without the kit" || bad "the lint: nothing prints without the kit" "$("$REPO/tests/ui-lint.sh")"
+else
+  skipped "the lint is a report until every command has moved: $(printf '%s\n' "$left" | grep -c .) function(s) left, such as $(printf '%s\n' "$left" | head -n 3 | paste -sd ',' - | sed 's/,/, /g')"
+fi
 fi
 
 if section "What moved to llm-relay"; then

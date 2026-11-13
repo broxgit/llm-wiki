@@ -1,0 +1,2 @@
+delegation: mode ask   (<tmp>/wikis/delegation.md)
+no handoffs logged yet

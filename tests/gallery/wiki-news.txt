@@ -1,0 +1,4 @@
+## YYYY-MM-DD: An entry
+
+- Something you would notice.
+- Do: run `wiki status`.

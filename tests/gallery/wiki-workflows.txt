@@ -1,0 +1,5 @@
+No patterns yet. A session in a folder that isn't a git repository asks, and the answer is kept here.
+
+Add one:    wiki workflows add '<pattern>' inside|none|<wiki>
+Remove one: wiki workflows remove '<pattern>'
+Try one:    wiki workflows check <folder>

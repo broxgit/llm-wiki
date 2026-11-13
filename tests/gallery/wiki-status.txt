@@ -1,0 +1,7 @@
+[1mWIKI                       HANDBOOK  WAITING  LOCK[0m
+demo                       v<handbook>       3        free
+global                     v<handbook>       0        free
+
+[1mTo do:[0m
+[1m[33m![0m open: 1 item(s) waiting on someone or a date. Run: [36mwiki open[0m
+[1m[33m![0m setup: never run on this machine. Run: [36mwiki setup[0m

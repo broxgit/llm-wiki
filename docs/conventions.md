@@ -1,12 +1,12 @@
-Conventions version 3. llm-wiki keeps the original. llm-relay holds a copy: change it here first, then change the copy in the same sitting.
+Conventions version 4. llm-wiki keeps the original. llm-relay holds a copy: change it here first, then change the copy in the same sitting.
 
 # Conventions for commands
 
-How llm-wiki's commands, and any tool that wants to look like them, talk to a person and to a program. Read it before you change what a command prints. Most of it describes what `wiki.sh` already does. Where a rule is for new work, it says so. It takes two minutes.
+How the llm tools (llm-wiki, llm-relay, and any tool that joins them) talk to a person and to a program. Read it before you change what a command prints. It takes three minutes.
 
-## Style
+Every command looks the same way: a timeline. A question at the top when there is one, then the work as stages on a rail, then what the user does now. The look lives in one file, `ui.sh`, the kit, and commands print through its pieces. No command writes a colour code.
 
-### When style is on
+## When style is on
 
 Colour and marks are on only when standard output is a terminal, `NO_COLOR` is unset, `TERM` isn't `dumb`, and the command isn't one an agent reads (below). An error's style is decided the same way, by standard error.
 
@@ -16,49 +16,89 @@ Agents' shells can be pseudo-terminals, where "is a terminal" is true. So a comm
 
 A tool whose every command may be run by an assistant, as llm-relay's can, has a second way to apply the same rule: it calls `style_off` whenever standard input isn't a terminal, whatever the variable says.
 
-The compiled helper in `cmd/` and `internal/` always prints plain text. `wiki.sh` adds style on the way out.
+The compiled helper in `cmd/` and `internal/` always prints plain text, and knows nothing of the kit. Where a ported command's output has parts that a person sees, the helper already hands them to `wiki.sh` as tagged lines (the `row` and `todo` lines of `status`), and `wiki.sh` prints each through a piece. A new port does the same: tag what each line is, never style it, and never add a tag for looks alone.
 
-### The palette
+## The pieces
 
-One setting, `palette`, with two values. `default` is the table below. `colorblind` follows Okabe–Ito in spirit, within the terminal's 16 colours:
+A command is made of these, in this order. Each is a function in `ui.sh`.
 
-| Role | `default` | `colorblind` |
-|---|---|---|
-| ok (the tick) | green, 32 | blue, 34 |
-| a warning | bold yellow, 33 | bold yellow, 33 (it reads as orange in most themes) |
-| an error | red, 31 | magenta, 35 |
-| something to type | cyan, 36 | cyan, 36 |
+| Piece | Call | At a terminal | Plain |
+|---|---|---|---|
+| question | `ui_question "<question>" "<detail>"...`, then `ui_keys yes no` | a yellow `?` label, the question in bold, the details indented, a detail that starts `- ` as a bullet. Then the answers: `[y]es` in the ok colour, `[n]o` in the error colour, any other key in typed's, and a `›` prompt | `? <question>`, the details, `[y]es  [n]o  ›` |
+| stage | `ui_stage [--ok\|--warn\|--error] LABEL "<summary>" "<more>"...` | a dot on a rail and a label in capitals on a coloured ground, such as CHECKS, PACKED or SENT. Then one line: the summary in bold, the rest muted, joined by ` · `. Each stage takes the next accent. `--error` makes the dot and label the error colour, and `--ok` and `--warn` colour the summary | `LABEL  <summary> · <more>`, a blank line between stages |
+| item | `ui_item ok\|warn\|error "<text>" "<aside>"` | on the stage's rail, a `✓` `!` or `✗`, the text, and the aside, such as a time, muted and right-aligned in a column | `- <text>  <aside>`, indented |
+| detail | `ui_detail "<part>"...` | a line of facts under a stage or an item, parts joined by a muted ` · ` | the same, indented |
+| card | `ui_card "<text>"` | text to paste somewhere, on a tinted card as wide as the terminal (up to 88 columns). It wraps at spaces only, so a URL or a path is never split: a word longer than the line runs past the card's edge | the text as it is |
+| your turn | `ui_turn`, then `ui_step [--optional] [--done] [--emoji E] N "<title>" "<aside>"` | the rail ends at `◆ YOUR TURN`. Each step has its number on a label, the title in bold, and an aside: muted, or in the ok colour with `--done`, for what the tool already did. `--optional` greys the number. Emoji are allowed here, in a step's aside, and nowhere else | `YOUR TURN`, then `  N  <title>  <aside>`, no emoji |
+| next | `ui_next "<step>"` | `Next:` in bold, in typed's colour, and the one step, as the command's last line | `Next: <step>` |
 
-Marks and words don't change: they already carry the meaning without colour. The order that decides the palette: `LLM_PALETTE` (one variable, read by every llm-* tool), then the tool's own setting, then `default`. A value that isn't a palette's name is ignored, so the next one decides. Each tool keeps its own setting where it keeps its others, and asks about it in its setup.
+Three more, for inside a line and for the edges:
 
-Code names a role (`S_OK`, `S_WARN`, `S_TYPED`, `C_ERR`, `M_OK`), never a colour code. A new palette, or a new role such as one for a richer colour mode, is a change to `style_set` alone.
+- `typed "<words>"`: something the user can type. Nothing else takes typed's colour. `typed_err` for a line on standard error.
+- `ui_wait_start "<what>" "<aside>"`, then `ui_wait_stop`: one line kept up to date while something runs, with a spinner that turns and a clock, redrawn in the background. With style off it is the same line without colour, at a terminal only, so a long wait never looks like a hang; in a pipe, a file or for an agent it draws nothing. `ui_wait <tick>` and `ui_wait_clear` draw one frame, for a loop that redraws it itself.
+- `die "<words>"`, `die_usage "<words>"`, `say_warn_err "<words>"`: an error, a usage error, a warning, on standard error, styled as standard error is.
 
-### The words never change
+What the pieces look like, with the codes left out, at a terminal:
 
-Style goes around the text and never replaces it. A mark is added in front, and may take the place of a list's `- `, but never of a word. A state stays a word at a terminal too: `ready`, not only a tick. Agents and skills are told to expect the words, and people paste them into chats and issues. With the codes stripped, a terminal's output is its piped output, except for a mark where a `- ` was.
+```
+ ?  Run this branch's code on your Mac?
+   !20 at c5f91b7 by a teammate · git hooks off
+   • go build, vet, test and mod tidy
 
-### The vocabulary
+   [y]es  [n]o  › y
 
-| What | How it looks |
-|---|---|
-| Done, or ready | a green `✓` in front (`+` where the locale isn't UTF-8) |
-| Needs something | a bold yellow `!` in front. What it needs is normal weight, with the command in cyan |
-| An error | `error:` in red, on standard error |
-| A heading for a group | bold |
-| Context, an aside such as a size or a path | dim. Never the fix, and never anything the reader needs to act |
-| Something the user can type | cyan, and nothing else is cyan |
-| The one next step | `Next:` in bold cyan, as the command's last line, when there is exactly one. A list of several to-dos has no `Next:` |
-| A wait | one line kept up to date, with a spinner and a clock. llm-wiki doesn't use one yet |
+●  CHECKS   5 passed · 0 failed · 64s
+│   ✓ go build                          17s
+│   ✗ pre-commit, 10 files              31s
+│
+●  SENT   OneDrive · Documents/Cowork/relay/mrs/camera-events-20
+│
+◆ YOUR TURN
 
-The terminal's own 16 colours, so they follow the user's theme. No 256-colour or true-colour codes, and no dependency.
+   1   Paste into Copilot Cowork  📋 already on your clipboard
 
-### What never gets style
+  Use remote-pair-run to review this merge request, following its section on
+  merge requests.
 
-A file, a report, the clipboard, a log, anything an agent or another program reads, and text that came from somewhere else. A `NEWS.md` entry is printed as written: its backticks stay backticks, and only the line around it may be bold. Text from elsewhere that is shown at a terminal goes between dim rules, so nothing in it can pass for the tool's own words.
+Next: back in Copilot Cowork, reply done
+```
 
-### Layout
+`bash ui.sh` draws every piece in the terminal it runs in, with the palette and theme in force.
 
-A blank line between groups. Marks in front, not words at the end. A column as wide as its longest label. A table row gets no mark, since that would shift the columns.
+## The words never change
+
+Style goes around the text and never replaces it. A label is a word, such as CHECKS or YOUR TURN, never only a colour or a glyph, and it is the same word in plain output. A mark is added in front, and takes the place of a list's `- `, but never of a word. A state stays a word too: `5 passed · 0 failed`, not only a tick. Agents and skills are told to expect the words, and people paste them into chats and issues.
+
+So a terminal's output and its plain output have the same words. Strip the codes, drop the glyphs that are only decoration (`│ ● ◆ · ›`, the marks `✓ ! ✗ •`, and a step's emoji), and the words are the plain words, in order, though the spacing and the line breaks differ. `ui_words` does that, and the tests hold each command to it.
+
+## Colours are roles
+
+Code names a role, never a colour. The kit decides the colour of each role from the palette, the theme and what the terminal can show.
+
+| Role | What takes it | `default`, dark | `colorblind`, dark |
+|---|---|---|---|
+| ok | a `✓`, a summary that went well, `[y]` | green | blue |
+| warn | a `!`, the question's label, YOUR TURN | yellow | orange |
+| error | a `✗`, `error:`, a stage that failed, `[n]` | red | reddish purple |
+| accent | each stage's dot and label, in turn: four of them | blue, magenta, green, pink | Okabe-Ito sky blue, orange, bluish green, reddish purple |
+| typed | something the user can type, `Next:`, a step's number | cyan | cyan |
+| muted | an aside: a time, a size, a path, the rail. Never the fix, and never anything the reader needs to act | grey | grey |
+
+A card's ground is a tint of the terminal's background, and a label's ink is chosen to read on its ground.
+
+- **Depth.** 24-bit colour where `COLORTERM` is `truecolor` or `24bit`. Anywhere else, the nearest of the terminal's 16 colours: green 32, yellow 33, red 31, cyan 36, dim for muted, and blue, magenta, green and cyan for the accents (blue 34, yellow, magenta 35 and cyan in `colorblind`). No 256-colour codes, and no dependency.
+- **Palette.** `default` or `colorblind`, which follows Okabe-Ito in spirit. `LLM_PALETTE` decides, read by every llm tool, then the tool's own setting, `palette` (`wiki setup palette` in llm-wiki), then `default`. Marks and words don't change: they already carry the meaning without colour.
+- **Theme.** `auto`, `dark` or `light`, so cards and labels read on a light background too. `LLM_THEME` decides, then the tool's own setting, `theme` (`wiki setup theme`), then `auto`. `auto` reads `COLORFGBG` where the terminal sets it, and is dark otherwise.
+
+A value that isn't one of a setting's names is passed over, so the next one decides. Each tool keeps its settings where it keeps its others, and asks about them in its setup.
+
+## What never gets style
+
+A file, a report, the clipboard, a log, anything an agent or another program reads, and text that came from somewhere else. A card is drawn at a terminal only: what goes on the clipboard is the text as it is. A `NEWS.md` entry is printed as written: its backticks stay backticks, and only the line around it may be bold. Text from elsewhere that is shown at a terminal goes between muted rules, so nothing in it can pass for the tool's own words.
+
+## Layout
+
+A blank line between groups. Marks in front, not words at the end. A column as wide as its longest label. A table row gets no mark, since that would shift the columns. A table stays a table: its header may be bold and a note in it may take a role, but its rows don't become items.
 
 ## Beyond style
 
@@ -69,82 +109,30 @@ A blank line between groups. Marks in front, not words at the end. A column as w
 - **A program's input is plain and stable.** Output another program reads has no style, no mark, no wrapping and no wording that changes between versions. For new work, give it a flag of its own, so the words for people can change without breaking a caller.
 - **Voice.** Plain words, in the present tense. Say what happened, then what to do. Don't apologise and don't shout.
 
-## The helpers to copy
+## The kit: `ui.sh`
 
-Bash 3.2 compatible. Change only the first two lines after the version line: `STYLE_OVERRIDE` to the tool's own variable, and `STYLE_PALETTE_FILE` to the file that holds its `palette=` setting. A smoke test in llm-wiki checks that this block is the one in `wiki.sh`.
+Kit version 1. sha256 `d2f0d7d4ea2e4aa0243b4f0e6a8be358ad2712c1a0c9d9e598c8b620976e70be`.
+
+`ui.sh` is in Bash 3.2 and has no dependency. llm-wiki keeps the original. Every other tool carries it byte for byte, beside its script, and sources it after setting three variables, which are all a tool changes:
 
 ```bash
-# --- style helpers: docs/conventions.md, version 3. Copy, don't edit. ---
-STYLE_OVERRIDE="${LLM_WIKI_STYLE:-}" # a line a tool changes: its own variable
-STYLE_PALETTE_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/llm-wiki/palette" # a line a tool changes: its own setting, a file holding palette=default or palette=colorblind
-# style_wanted <fd>: style on? LLM_<TOOL>_STYLE=on or off decides; else a terminal, no NO_COLOR, TERM not dumb.
-style_wanted() {
-  case "$STYLE_OVERRIDE" in on) return 0 ;; off) return 1 ;; esac
-  [ -t "$1" ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ]
-}
-style_utf8() {
-  case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in *[Uu][Tt][Ff]-8* | *[Uu][Tt][Ff]8*) return 0 ;; esac
-  return 1
-}
-# style_palette: sets PALETTE. LLM_PALETTE (every llm-* tool reads it), then the tool's own setting, then default.
-style_palette() {
-  local l
-  PALETTE="${LLM_PALETTE:-}"
-  case "$PALETTE" in default | colorblind) return 0 ;; esac
-  PALETTE=""
-  if [ -r "$STYLE_PALETTE_FILE" ]; then
-    while IFS= read -r l || [ -n "$l" ]; do case "$l" in palette=*) PALETTE="${l#palette=}" ;; esac; done < "$STYLE_PALETTE_FILE"
-  fi
-  case "$PALETTE" in colorblind) ;; *) PALETTE=default ;; esac
-}
-# style_set: the colour of each role, by palette. Call sites use the roles, never a code.
-style_set() {
-  S_BOLD="" S_DIM="" S_OK="" S_WARN="" S_TYPED="" S_OFF="" M_OK="" M_WARN=""
-  style_palette
-  # C_ERR is a bare code: standard error may be styled when standard output isn't.
-  if [ "$PALETTE" = colorblind ]; then C_ERR=35; else C_ERR=31; fi
-  [ "$STYLE" = yes ] || return 0
-  S_BOLD=$'\033[1m' S_DIM=$'\033[2m' S_OFF=$'\033[0m'
-  case "$PALETTE" in
-    colorblind) S_OK=$'\033[34m' S_WARN=$'\033[33m' S_TYPED=$'\033[36m' ;;
-    *) S_OK=$'\033[32m' S_WARN=$'\033[33m' S_TYPED=$'\033[36m' ;;
-  esac
-  if style_utf8; then M_OK="${S_OK}✓${S_OFF} "; else M_OK="${S_OK}+${S_OFF} "; fi
-  M_WARN="${S_BOLD}${S_WARN}!${S_OFF} "
-}
-STYLE=no STYLE_ERR=no
-if style_wanted 1; then STYLE=yes; fi
-if style_wanted 2; then STYLE_ERR=yes; fi
-style_set
-# style_off: for a command whose output an agent or a program reads. Nothing is styled, errors included.
-style_off() { STYLE=no STYLE_ERR=no; style_set; }
-say_ok() { printf '%s%s\n' "$M_OK" "$*"; }
-say_warn() { printf '%s%s\n' "$M_WARN" "$*"; }
-say_head() { printf '%s%s%s\n' "$S_BOLD" "$*" "$S_OFF"; }
-say_dim() { printf '%s%s%s\n' "$S_DIM" "$*" "$S_OFF"; }
-say_next() { printf '%sNext:%s %s\n' "$S_BOLD$S_TYPED" "$S_OFF" "$*"; }
-typed() { printf '%s%s%s' "$S_TYPED" "$*" "$S_OFF"; }
-die() {
-  if [ "$STYLE_ERR" = yes ]; then printf '\033[%sm%s\033[0m %s\n' "$C_ERR" "error:" "$*" >&2; else echo "error: $*" >&2; fi
-  exit 1
-}
-# die_usage <words>: the tool was called wrongly: an unknown command or option, a missing argument. Exits 2.
-die_usage() {
-  if [ "$STYLE_ERR" = yes ]; then printf '\033[%sm%s\033[0m %s\n' "$C_ERR" "error:" "$*" >&2; else echo "error: $*" >&2; fi
-  exit 2
-}
-# say_warn_err <words>: a warning on standard error, styled as standard error is, whatever standard output is.
-say_warn_err() {
-  if [ "$STYLE_ERR" = yes ]; then printf '\033[1m\033[33m!\033[0m %s\n' "$*" >&2; else printf '%s\n' "$*" >&2; fi
-}
-# typed_err <command>: something to type, inside a line that goes to standard error.
-typed_err() {
-  if [ "$STYLE_ERR" = yes ]; then printf '\033[36m%s\033[0m' "$*"; else printf '%s' "$*"; fi
-}
-# --- end of style helpers ---
+STYLE_OVERRIDE="${LLM_WIKI_STYLE:-}"  # the tool's own on/off variable
+STYLE_PALETTE_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/llm-wiki/palette"  # a file that may hold palette=
+STYLE_THEME_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/llm-wiki/theme"  # a file that may hold theme=
+. "$REPO/ui.sh"
 ```
 
-In Python, the same rules:
+llm-relay points both files at its settings file. A tool must work with no other llm tool installed, which is why each carries its own copy rather than sourcing another's.
+
+Three checks hold it together:
+
+- **The copies.** The line above gives the kit's sha256. Each tool's smoke test fails when its `ui.sh` doesn't have it, so a copy can't be edited on its own. When the other tool's checkout sits beside this one, the test compares the two files as well. What no test catches is a change made in one tool and never copied to the other, with its guide: each tool's CI sees only its own repository, and the smoke tests never use the network. Copying both files in the same sitting is the rule that covers it. A check in CI that fetched the other repository's kit would fail every change until both had merged, so there isn't one.
+- **The lint.** `tests/ui-lint.sh` fails on a colour code (`\033[`, `\e[`, `\x1b[` in either case, `tput setaf` or `setab`, or an escape byte itself), an `S_` or `M_` variable, or a call to version 2's pieces (`say_ok`, `say_warn`, `say_head`, `say_dim`, `say_next`) anywhere outside `ui.sh`, and names the function each is in. Until every command has moved to the pieces, the smoke test runs it as a report, which lists what is left, and doesn't fail on it.
+- **The gallery.** `scripts/gallery.sh` runs every command a person reads against fakes, at a terminal's settings, and keeps what each printed in `tests/gallery/`, with an index that says which pieces each used. A command on the old look shows there as `old look`. Run it after changing what a command prints, look at the difference, and commit it. `scripts/gallery.sh --check` fails when what a command prints no longer matches its file, and the smoke test runs that.
+
+Version 2's helpers, `say_ok`, `say_warn`, `say_head`, `say_dim` and `say_next`, are still in the kit until every command has moved, and print as they did. Don't use them in new work.
+
+A Python tool follows the same rules, with the 16 colours:
 
 ```python
 import os, sys
@@ -155,45 +143,15 @@ def style_on(fd=1):
     return os.isatty(fd) and not os.environ.get("NO_COLOR") and os.environ.get("TERM", "dumb") != "dumb"
 def sgr(code, text, fd=1):
     return "\033[%sm%s\033[0m" % (code, text) if style_on(fd) else text
-def bold(t): return sgr("1", t)
-def dim(t): return sgr("2", t)
-def typed(t, fd=1): return sgr("36", t, fd)  # a Python tool picks its palette the same way: LLM_PALETTE, its setting, default
+def typed(t, fd=1): return sgr("36", t, fd)
 def warn_mark(fd=1): return sgr("1;33", "!", fd) + " "
 def error(msg, code=1): sys.stderr.write(sgr("31", "error:", 2) + " " + msg + "\n"); sys.exit(code)
 def usage_error(msg): error(msg, 2)
 def warn_err(msg): sys.stderr.write(warn_mark(2) + msg + "\n")
 ```
 
-Pass `2` as `fd` for anything inside a line that goes to standard error: `typed("wiki status", 2)`.
-
-An extension run for an event writes to a log and is never styled: don't call these there.
-
-## Before and after: `wiki status`
-
-Piped, and what an agent gets:
-
-```
-WIKI                       HANDBOOK  WAITING  LOCK
-demo                       v33       6        free  <- compile due
-
-To do:
-- demo: 6 notes waiting. Ask an agent: "compile demo"
-- open: 8 item(s) waiting on someone or a date. Run: wiki open
-```
-
-At a terminal, with the codes left out. The header and `To do:` are bold, the `<-` note is yellow, each `!` is bold yellow, and `"compile demo"` and `wiki open` are cyan:
-
-```
-WIKI                       HANDBOOK  WAITING  LOCK
-demo                       v33       6        free  <- compile due
-
-To do:
-! demo: 6 notes waiting. Ask an agent: "compile demo"
-! open: 8 item(s) waiting on someone or a date. Run: wiki open
-```
-
-Every word is the same.
+Pass `2` as `fd` for anything inside a line that goes to standard error: `typed("wiki status", 2)`. An extension run for an event writes to a log and is never styled: don't call these there.
 
 ## Changing this guide
 
-Raise the version on the first line, and change the copy in llm-relay in the same sitting, so the two never disagree. A change to the helper block changes it in both scripts too. Don't make a third copy: a new tool copies this file and names its own `STYLE_OVERRIDE`.
+Raise the version on the first line, and change the copy in llm-relay in the same sitting, so the two never disagree. A change to `ui.sh` raises the kit's version and its sha256 above, and is copied to llm-relay in the same sitting. Don't make a third copy of the kit's code inside a script: a new tool copies `ui.sh` and this file, and sets its own three variables.

@@ -1,0 +1,9 @@
+handbook: already v<handbook>, nothing to replace
+done:     <tmp>/wikis/demo
+
+== What changed
+Nothing. demo was already on handbook v<handbook>.
+
+== Next
+- New settings to look at: wiki setup --new
+- Settings any time: wiki setup --list
