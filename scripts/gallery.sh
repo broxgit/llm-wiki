@@ -124,10 +124,9 @@ env STYLE_OVERRIDE=off bash "$REPO/ui.sh" 2>&1 | normalize >"$DEST.new/kit-plain
   echo
   echo "What each command a person reads prints at a terminal, made by \`scripts/gallery.sh\`. Don't edit these files: run it again. \`cat\` a file at a terminal to see the look. \`kit-*.txt\` are \`ui.sh\`'s own pieces, in each depth and theme."
   echo
-  echo "| Command | Look | Pieces | File |"
-  echo "|---|---|---|---|"
-  awk -F '\t' '{ printf "| `%s` | %s | %s | [%s](%s) |\n", $1, $2, $3, $4, $4 }' "$INDEX"
-  echo
+  # A list with a blank line between entries, not a table, so pull requests that each move one
+  # command don't touch neighbouring lines.
+  awk -F '\t' '{ printf "- `%s`: %s. Pieces: %s. [%s](%s)\n\n", $1, $2, $3, $4, $4 }' "$INDEX"
   echo "Plain by design, since an agent or a program reads them: \`start\`, \`capture\`, \`sync\`, \`find\`, \`which\`, \`pending\`, \`patterns\`, \`lint\`, \`index\`, \`log\`, \`lock\`, \`compile\`, \`mcp\`, \`journal\`, \`standup\`, \`tour\`, \`report\`, \`stats\`, \`completion\`, and every command that begins \`__\`."
 } >"$DEST.new/README.md"
 
