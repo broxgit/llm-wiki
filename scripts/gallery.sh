@@ -6,8 +6,9 @@
 #   scripts/gallery.sh --check    render into a temp folder and fail on any difference
 #
 # Each command runs against fakes in a temp folder with its own HOME, at a UTF-8 terminal's
-# settings with the 16 colours, 80 columns wide. Temp paths, dates and times, and the handbook's
-# version are replaced by placeholders, so a file changes only when what the command prints does.
+# settings with the 16 colours, 80 columns wide. Temp paths, dates and times, the handbook's
+# version and the helper's release and platform are replaced by placeholders, so a file changes
+# only when what the command prints does.
 # ui.sh is drawn too, in each depth and theme. The index, tests/gallery/README.md, says which of
 # the kit's pieces each command used: "kit" when it prints through them alone, "old look" when it
 # uses version 2's helpers or codes of its own, "unstyled" when a person reads it and nothing in
@@ -51,7 +52,8 @@ TV="$(sed -n 's/^Handbook version \([0-9][0-9]*\).*/\1/p' "$REPO/template/AGENTS
 normalize() {
   LC_ALL=C sed -E -e "s#$T#<tmp>#g" -e "s#$REPO#<repo>#g" -e "s#$HOME#<home>#g" \
     -e 's/[0-9]{4}-[0-9]{2}-[0-9]{2}/YYYY-MM-DD/g' -e 's/[0-9]{2}:[0-9]{2}(:[0-9]{2})?/HH:MM/g' \
-    -e "s/(v|version )$TV([^0-9]|\$)/\1<handbook>\2/g"
+    -e "s/(v|version )$TV([^0-9]|\$)/\1<handbook>\2/g" \
+    -e 's/release [0-9a-f]{12}, protocol [0-9]+, for [a-z0-9]+-[a-z0-9_]+/release <release>, protocol <n>, for <platform>/g'
 }
 # look <trace> <output>: from the pieces the run called. kit: the kit's pieces and nothing else.
 # old look: version 2's helpers, or codes of its own. mixed: both. unstyled: nothing at all,
