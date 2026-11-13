@@ -3971,6 +3971,25 @@ tick() { env "$@" LLM_WIKI_STYLE=on bash -c "$blk"$'\n''say_ok done' | strip; }
 [ "$(tick LC_ALL=en_US.UTF-8)" = "✓ done" ] && ok "a UTF-8 locale gets ✓" || bad "a UTF-8 locale gets ✓" "$(tick LC_ALL=en_US.UTF-8)"
 [ "$(tick LC_ALL=C)" = "+ done" ] && ok "a locale that isn't UTF-8 gets +" || bad "a locale that isn't UTF-8 gets +" "$(tick LC_ALL=C)"
 [ "$(tick LC_ALL= LC_CTYPE= LANG=)" = "+ done" ] && ok "no locale set gets +" || bad "no locale set gets +" "$(tick LC_ALL= LC_CTYPE= LANG=)"
+# The palette: LLM_PALETTE, then the setting, then default.
+pal() { local cfg="$SW/palcfg"; mkdir -p "$cfg/llm-wiki"; env -u LLM_PALETTE XDG_CONFIG_HOME="$cfg" LLM_WIKI_STYLE=on "$@" bash -c "$blk"$'\n''say_ok done; typed x; echo; die oops' 2>&1 || true; }
+rm -rf "$SW/palcfg"
+case "$(pal LANG=en_US.UTF-8)" in *"${ESC}[32m✓"*"${ESC}[31merror:"*) ok "palette: default is a green tick and a red error" ;; *) bad "palette: default is a green tick and a red error" "$(pal LANG=en_US.UTF-8)" ;; esac
+case "$(pal LANG=en_US.UTF-8 LLM_PALETTE=colorblind)" in *"${ESC}[34m✓"*"${ESC}[36mx"*"${ESC}[35merror:"*) ok "palette: LLM_PALETTE=colorblind is a blue tick and a magenta error, typed text stays cyan" ;; *) bad "palette: LLM_PALETTE=colorblind" "$(pal LANG=en_US.UTF-8 LLM_PALETTE=colorblind)" ;; esac
+mkdir -p "$SW/palcfg/llm-wiki"; printf 'palette=colorblind\n' > "$SW/palcfg/llm-wiki/palette"
+case "$(pal LANG=en_US.UTF-8)" in *"${ESC}[34m✓"*) ok "palette: the setting is read" ;; *) bad "palette: the setting is read" ;; esac
+case "$(pal LANG=en_US.UTF-8 LLM_PALETTE=default)" in *"${ESC}[32m✓"*"${ESC}[31merror:"*) ok "palette: LLM_PALETTE beats the setting" ;; *) bad "palette: LLM_PALETTE beats the setting" ;; esac
+case "$(pal LANG=en_US.UTF-8 LLM_PALETTE=nonsense)" in *"${ESC}[34m✓"*) ok "palette: a value that is no palette falls through to the setting" ;; *) bad "palette: a bad LLM_PALETTE falls through" ;; esac
+case "$(pal LANG=en_US.UTF-8 LLM_PALETTE=colorblind | strip)" in "✓ done"*"x"*"error: oops"*) ok "palette: the words and marks are the same" ;; *) bad "palette: the words and marks are the same" ;; esac
+rm -rf "$SW/palcfg"
+# wiki setup palette: asked once per machine, kept where setup --list shows it.
+pw="$(printf 'colorblind\n' | sty XDG_CONFIG_HOME="$SW/palcfg" LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE=off "$W" setup palette 2>&1)"
+case "$pw" in *"palette: colorblind"*) ok "setup palette takes the answer" ;; *) bad "setup palette takes the answer" "$pw" ;; esac
+grep -qx 'palette=colorblind' "$SW/palcfg/llm-wiki/palette" && ok "setup palette writes the setting" || bad "setup palette writes the setting"
+grep -qx 'palette' "$SW/palcfg/llm-wiki/setup" && ok "setup palette is recorded, so --new won't ask again" || bad "setup palette is recorded"
+case "$(sty XDG_CONFIG_HOME="$SW/palcfg" LLM_WIKI_STYLE=off "$W" setup --list 2>&1)" in *"palette             colorblind"*) ok "setup --list shows the palette" ;; *) bad "setup --list shows the palette" ;; esac
+pn="$(printf 'x\nbogus\ndefault\n' | sty XDG_CONFIG_HOME="$SW/palcfg2" LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE=off "$W" setup palette 2>&1)"
+case "$pn" in *"Answer default or colorblind."*"palette: default"*) ok "setup palette refuses a value that is no palette" ;; *) bad "setup palette refuses a bad value" "$pn" ;; esac
 # wiki setup, in its forms. A mark goes in front of a line, after any indent. With the
 # codes stripped and the marks taken off, what a terminal shows is the piped words.
 nomarks() { strip | sed -E 's/(^|  )(✓|\+|!) /\1/'; }

@@ -246,8 +246,9 @@ Set WIKIS_DIR to keep wikis somewhere other than ~/wikis.
 EOF
 }
 
-# --- style helpers: docs/conventions.md, version 2. Copy, don't edit. ---
-STYLE_OVERRIDE="${LLM_WIKI_STYLE:-}" # the one line a tool changes: its own variable
+# --- style helpers: docs/conventions.md, version 3. Copy, don't edit. ---
+STYLE_OVERRIDE="${LLM_WIKI_STYLE:-}" # a line a tool changes: its own variable
+STYLE_PALETTE_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/llm-wiki/palette" # a line a tool changes: its own setting, a file holding palette=default or palette=colorblind
 # style_wanted <fd>: style on? LLM_<TOOL>_STYLE=on or off decides; else a terminal, no NO_COLOR, TERM not dumb.
 style_wanted() {
   case "$STYLE_OVERRIDE" in on) return 0 ;; off) return 1 ;; esac
@@ -257,12 +258,29 @@ style_utf8() {
   case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in *[Uu][Tt][Ff]-8* | *[Uu][Tt][Ff]8*) return 0 ;; esac
   return 1
 }
+# style_palette: sets PALETTE. LLM_PALETTE (every llm-* tool reads it), then the tool's own setting, then default.
+style_palette() {
+  local l
+  PALETTE="${LLM_PALETTE:-}"
+  case "$PALETTE" in default | colorblind) return 0 ;; esac
+  PALETTE=""
+  if [ -r "$STYLE_PALETTE_FILE" ]; then
+    while IFS= read -r l || [ -n "$l" ]; do case "$l" in palette=*) PALETTE="${l#palette=}" ;; esac; done < "$STYLE_PALETTE_FILE"
+  fi
+  case "$PALETTE" in colorblind) ;; *) PALETTE=default ;; esac
+}
+# style_set: the colour of each role, by palette. Call sites use the roles, never a code.
 style_set() {
-  S_BOLD="" S_DIM="" S_GREEN="" S_YELLOW="" S_CYAN="" S_OFF="" M_OK="" M_WARN=""
+  S_BOLD="" S_DIM="" S_OK="" S_WARN="" S_ERR="" S_TYPED="" S_OFF="" M_OK="" M_WARN=""
+  style_palette
   [ "$STYLE" = yes ] || return 0
-  S_BOLD=$'\033[1m' S_DIM=$'\033[2m' S_GREEN=$'\033[32m' S_YELLOW=$'\033[33m' S_CYAN=$'\033[36m' S_OFF=$'\033[0m'
-  if style_utf8; then M_OK="${S_GREEN}✓${S_OFF} "; else M_OK="${S_GREEN}+${S_OFF} "; fi
-  M_WARN="${S_BOLD}${S_YELLOW}!${S_OFF} "
+  S_BOLD=$'\033[1m' S_DIM=$'\033[2m' S_OFF=$'\033[0m'
+  case "$PALETTE" in
+    colorblind) S_OK=$'\033[34m' S_WARN=$'\033[33m' S_ERR=$'\033[35m' S_TYPED=$'\033[36m' ;;
+    *) S_OK=$'\033[32m' S_WARN=$'\033[33m' S_ERR=$'\033[31m' S_TYPED=$'\033[36m' ;;
+  esac
+  if style_utf8; then M_OK="${S_OK}✓${S_OFF} "; else M_OK="${S_OK}+${S_OFF} "; fi
+  M_WARN="${S_BOLD}${S_WARN}!${S_OFF} "
 }
 STYLE=no STYLE_ERR=no
 if style_wanted 1; then STYLE=yes; fi
@@ -274,15 +292,17 @@ say_ok() { printf '%s%s\n' "$M_OK" "$*"; }
 say_warn() { printf '%s%s\n' "$M_WARN" "$*"; }
 say_head() { printf '%s%s%s\n' "$S_BOLD" "$*" "$S_OFF"; }
 say_dim() { printf '%s%s%s\n' "$S_DIM" "$*" "$S_OFF"; }
-say_next() { printf '%sNext:%s %s\n' "$S_BOLD$S_CYAN" "$S_OFF" "$*"; }
-typed() { printf '%s%s%s' "$S_CYAN" "$*" "$S_OFF"; }
+say_next() { printf '%sNext:%s %s\n' "$S_BOLD$S_TYPED" "$S_OFF" "$*"; }
+typed() { printf '%s%s%s' "$S_TYPED" "$*" "$S_OFF"; }
+# style_err_code: the palette's error colour as a code, for standard error, which may be styled when standard output isn't.
+style_err_code() { if [ "$PALETTE" = colorblind ]; then printf '35'; else printf '31'; fi; }
 die() {
-  if [ "$STYLE_ERR" = yes ]; then printf '\033[31merror:\033[0m %s\n' "$*" >&2; else echo "error: $*" >&2; fi
+  if [ "$STYLE_ERR" = yes ]; then printf '\033[%sm%s\033[0m %s\n' "$(style_err_code)" "error:" "$*" >&2; else echo "error: $*" >&2; fi
   exit 1
 }
 # die_usage <words>: the tool was called wrongly: an unknown command or option, a missing argument. Exits 2.
 die_usage() {
-  if [ "$STYLE_ERR" = yes ]; then printf '\033[31merror:\033[0m %s\n' "$*" >&2; else echo "error: $*" >&2; fi
+  if [ "$STYLE_ERR" = yes ]; then printf '\033[%sm%s\033[0m %s\n' "$(style_err_code)" "error:" "$*" >&2; else echo "error: $*" >&2; fi
   exit 2
 }
 # say_warn_err <words>: a warning on standard error, styled as standard error is, whatever standard output is.
@@ -2980,7 +3000,7 @@ todo_add() { STATUS_TODO="$STATUS_TODO- $1
 # status_style_table: the table with its header in bold and its "<-" notes in yellow.
 # Not a word changes. LC_ALL=C, so awk counts bytes.
 status_style_table() {
-  LC_ALL=C awk -v b="$S_BOLD" -v y="$S_YELLOW" -v o="$S_OFF" '
+  LC_ALL=C awk -v b="$S_BOLD" -v y="$S_WARN" -v o="$S_OFF" '
     NR == 1 { print b $0 o; next }
     { i = index($0, "  <- ")
       if (i == 0) { print; next }
@@ -2993,7 +3013,7 @@ status_style_table() {
 # status_style_todo: each "- " becomes the warning mark. What follows "Run: " and the
 # quoted request after "Ask an agent: " are what the reader can type: cyan.
 status_style_todo() {
-  LC_ALL=C awk -v m="$M_WARN" -v c="$S_CYAN" -v o="$S_OFF" '
+  LC_ALL=C awk -v m="$M_WARN" -v c="$S_TYPED" -v o="$S_OFF" '
     { line = $0; sub(/^- /, "", line)
       i = index(line, "Run: ")
       a = index(line, "Ask an agent: \"")
@@ -4648,6 +4668,33 @@ setup_feedback() {
   done
   feedback_set "$ANSWER" && echo "  $([ "$ANSWER" = off ] || printf %s "$M_OK")feedback: $ANSWER"
   setup_mark feedback
+}
+
+# ---- palette ----------------------------------------------------------------
+# One setting, kept per machine in $STYLE_PALETTE_FILE (the style helpers read it):
+# default, or colorblind. LLM_PALETTE overrides it. docs/conventions.md has the roles.
+palette_setting() {
+  local m
+  m="$(sed -n 's/^palette=//p' "$STYLE_PALETTE_FILE" 2>/dev/null | head -n 1)"
+  case "$m" in colorblind) printf colorblind ;; *) printf default ;; esac
+}
+
+setup_palette() {
+  local cur
+  setup_due palette || return 0
+  section "Colours"
+  echo "default keeps green for ok and red for an error. colorblind uses blue and magenta instead, which stay apart"
+  echo "for most kinds of colour blindness. Marks and words are the same either way."
+  echo "LLM_PALETTE=default or colorblind overrides this, for every llm-* tool, in one shell."
+  cur="$(palette_setting)"
+  while :; do
+    ask "Palette (default, colorblind)" "$cur"
+    case "$ANSWER" in default | colorblind) break ;; *) echo "  Answer default or colorblind." ;; esac
+  done
+  mkdir -p "$(dirname "$STYLE_PALETTE_FILE")"
+  printf '# Colours: default or colorblind. Written by %s setup palette.\npalette=%s\n' "$WIKI_CMD" "$ANSWER" > "$STYLE_PALETTE_FILE"
+  echo "  ${M_OK}palette: $ANSWER"
+  setup_mark palette
 }
 
 # ---- obsidian ---------------------------------------------------------------
@@ -8356,6 +8403,7 @@ setup_pending() {
   if in_git_repo "$WIKIS_DIR"; then setup_done git.identity || echo git.identity; fi
   setup_done delegation.mode || echo delegation.mode
   setup_done feedback || echo feedback
+  setup_done palette || echo palette
   if [ -d "$(obsidian_dir)" ] && [ "$(obsidian_state)" != ours ]; then setup_done obsidian || echo obsidian; fi
   for k in "$EXT_SHIPPED"/wiki-*; do
     [ -f "$k" ] || continue
@@ -8749,7 +8797,7 @@ setup_journal() {
 setup_list() {
   local k v pending new_note
   pending=" $(setup_pending | tr '\n' ' ')"
-  new_note="${S_YELLOW}  <- new${S_OFF}"
+  new_note="${S_WARN}  <- new${S_OFF}"
   echo "collection          $(tilde "$WIKIS_DIR")$([ -d "$WIKIS_DIR" ] || echo ' (missing)')"
   if in_git_repo "$WIKIS_DIR"; then
     echo "git                 remote $(git -C "$WIKIS_DIR" remote get-url origin 2>/dev/null || echo none)"
@@ -8773,6 +8821,9 @@ setup_list() {
   printf '%-19s %s' "delegation.mode" "$(deleg_mode)"
   case "$pending" in *" delegation.mode "*) printf '%s' "$new_note" ;; esac
   printf '\n'
+  printf '%-19s %s' "palette" "$(palette_setting)${LLM_PALETTE:+ (LLM_PALETTE=$LLM_PALETTE overrides it)}"
+  case "$pending" in *" palette "*) printf '%s' "$new_note" ;; esac
+  printf '\n'
   printf '%-19s %s' "feedback" "$(feedback_mode)"
   case "$pending" in *" feedback "*) printf '%s' "$new_note" ;; esac
   printf '\n'
@@ -8788,7 +8839,7 @@ setup_list() {
   case "$pending" in *" extension."* | *" extensions.every "*) printf '%s' "$new_note" ;; esac
   printf '\n'
   printf '%-19s %s\n' "compile" "$(compile_auto_on && echo "in the background at session start" || echo "by sessions (background compile is off)")"
-  printf '%-19s %s' "helper" "$(cmd_helper | sed -n '1s/^helper: //p' | { if [ "$STYLE" = yes ]; then sed -E "s/(Run: |own: )(.*)\$/\1${S_CYAN}\2${S_OFF}/"; else cat; fi; }), fetched at session start: $(helper_auto_on && echo on || echo off)"
+  printf '%-19s %s' "helper" "$(cmd_helper | sed -n '1s/^helper: //p' | { if [ "$STYLE" = yes ]; then sed -E "s/(Run: |own: )(.*)\$/\1${S_TYPED}\2${S_OFF}/"; else cat; fi; }), fetched at session start: $(helper_auto_on && echo on || echo off)"
   case "$pending" in *" helper "*) printf '%s' "$new_note" ;; esac
   printf '\n'
   case "$(chat_state)" in none) ;; unreadable) unknown_state chat "$CLAUDE_DESKTOP_CONFIG" ;; *) echo "chat                server $(chat_state)" ;; esac
@@ -8807,7 +8858,7 @@ setup_list() {
   [ "$(agy_state)" = none ] || tools="$tools | antigravity"
   [ "$(codex_state)" = none ] || tools="$tools | codex"
   [ "$(cursor_state)" = none ] || tools="$tools | cursor"
-  echo "Or a section:  $(typed "$WIKI_CMD setup collection | collections | tools | git | claude | plugin | permissions$tools | upgrade | skills | completion | delegation | feedback | helper | chat | journal | microsoft-copilot")"
+  echo "Or a section:  $(typed "$WIKI_CMD setup collection | collections | tools | git | claude | plugin | permissions$tools | upgrade | skills | completion | delegation | feedback | palette | helper | chat | journal | microsoft-copilot")"
 }
 
 # Antigravity's grants: what lets Gemini read and write the wikis and run wiki.sh
@@ -9092,7 +9143,7 @@ Usage: $WIKI_CMD setup [--new | --list | <section> | <setting>]
   setup            Walk through every setting. Enter keeps what you have.
   setup --new      Only what's missing, out of date, or added since you last ran it.
   setup --list     Print current values without asking anything.
-  setup <section>  Just one section: collection, collections, tools, git, claude, permissions, antigravity, codex, cursor, upgrade, delegation, feedback, chat, obsidian, extensions, journal.
+  setup <section>  Just one section: collection, collections, tools, git, claude, permissions, antigravity, codex, cursor, upgrade, delegation, feedback, palette, chat, obsidian, extensions, journal.
   setup chat --yes Add the Chat tab's server without asking, for an agent the user told to. The app must be closed.
   setup microsoft-copilot --repo OWNER/REPO
                    Set up a Microsoft 365 Copilot agent that reads a wiki repository on GitHub. --help for its options.
@@ -9101,7 +9152,7 @@ Usage: $WIKI_CMD setup [--new | --list | <section> | <setting>]
 EOF
         return 0
         ;;
-      collection | collections | tools | git | claude | plugin | permissions | antigravity | codex | cursor | upgrade | skills | completion | journal | delegation | feedback | helper | obsidian | extensions | chat | git.identity) what="$a" ;;
+      collection | collections | tools | git | claude | plugin | permissions | antigravity | codex | cursor | upgrade | skills | completion | journal | delegation | feedback | palette | helper | obsidian | extensions | chat | git.identity) what="$a" ;;
       journal.*)
         [ -n "$(journal_field "${a#journal.}" 2)" ] || die "no journal setting called ${a#journal.}. Settings: $JOURNAL_KEYS"
         what="$a"
@@ -9130,6 +9181,7 @@ EOF
     journal) SETUP_MODE=all; setup_journal ;;
     delegation) SETUP_MODE=all; setup_delegation ;;
     feedback) SETUP_MODE=all; setup_feedback ;;
+    palette) SETUP_MODE=all; setup_palette ;;
     helper) SETUP_MODE=all; setup_helper ;;
     obsidian) SETUP_MODE=all; setup_obsidian ;;
     extensions) SETUP_MODE=all; setup_extensions ;;
@@ -9164,6 +9216,7 @@ EOF
       setup_upgrade
       setup_delegation
       setup_feedback
+      setup_palette
       setup_chat
       setup_skills
       setup_completion

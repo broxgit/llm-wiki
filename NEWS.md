@@ -4,6 +4,11 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-12-06: a colour-blind palette
+
+- `wiki` can show blue for ok and magenta for an error instead of green and red. The marks and words are the same.
+- Do: run `wiki setup palette` and answer `colorblind`, or set `LLM_PALETTE=colorblind` in your shell. `wiki setup --new` asks once.
+
 ## 2026-12-05: search finds a note before it is compiled
 
 - `wiki find` also searches the notes waiting to be compiled, newest first. A saved note used to be invisible to search until a compile.
