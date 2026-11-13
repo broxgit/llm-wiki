@@ -317,3 +317,42 @@ func TestSearchNotes(t *testing.T) {
 		t.Error("a NUL in a note gave no error")
 	}
 }
+
+// In raw/, a folder and a broken link named like notes are not notes, and a note
+// counts as compiled by a sources: line, an item under one, or a summary page.
+func TestSearchNotesAmongOtherThings(t *testing.T) {
+	root := collection(t)
+	if err := os.MkdirAll(root+"/demo/raw/2026-01-01-folder.md", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/nonexistent/target.md", root+"/demo/raw/2026-01-02-broken.md"); err != nil {
+		t.Fatal(err)
+	}
+	write(t, root+"/stork-target.md", "A stork by a link.\n")
+	if err := os.Symlink(root+"/stork-target.md", root+"/demo/raw/2026-01-04-link.md"); err != nil {
+		t.Fatal(err)
+	}
+	write(t, root+"/demo/raw/2026-02-02-good.md", "A stork was seen.\n")
+	got, _, err := Search(Options{Wikis: root, Word: "stork"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "demo:\n  waiting to be compiled:\n    raw/2026-02-02-good.md: A stork was seen.\n    raw/2026-01-04-link.md: A stork by a link.\n"
+	if got != want {
+		t.Errorf("got %q\nwant %q", got, want)
+	}
+	write(t, root+"/zeta/wiki/p.md", "---\nsources: [raw/2026-01-01-a.md]\n---\npage\n")
+	write(t, root+"/zeta/wiki/q.md", "---\nsources:\n  - raw/2026-01-02-b.md\n---\npage\n")
+	write(t, root+"/zeta/wiki/sources/2026-01-03-c.md", "summary\n")
+	write(t, root+"/zeta/log.md", "# Log\n- source: raw/2026-01-05-e.md")
+	for _, n := range []string{"2026-01-01-a", "2026-01-02-b", "2026-01-03-c", "2026-01-04-d", "2026-01-05-e"} {
+		write(t, root+"/zeta/raw/"+n+".md", "crane "+n+"\n")
+	}
+	got, _, err = Search(Options{Wikis: root, Word: "crane"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "zeta:\n  waiting to be compiled:\n    raw/2026-01-04-d.md: crane 2026-01-04-d\n"; got != want {
+		t.Errorf("got %q\nwant %q", got, want)
+	}
+}

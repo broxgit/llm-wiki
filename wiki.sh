@@ -2472,16 +2472,21 @@ PENDING_SHOW_BYTES=150000
 # before v24 exists, so older wikis need no migration.
 compiled_stems() {
   local r="$1"
+  # By byte, whatever the caller's locale: BSD sed stops at a byte that isn't UTF-8
+  # under a UTF-8 locale, and every source after it then counted as not compiled.
   {
-    sed -n 's#^- source: raw/##p' "$r/log.md" 2>/dev/null
+    LC_ALL=C sed -n 's#^- source: raw/##p' "$r/log.md" 2>/dev/null
+    # A log.md with no final newline leaves its last name without one, and the next
+    # line of output would be joined to it.
+    echo
     # The sources: line, and the list items under it when the list is one a line,
     # which is how Obsidian rewrites it. grep finds the pages, so links are followed
     # as they always were.
-    grep -rl --include='*.md' '^sources:' "$r/wiki" 2>/dev/null | tr '\n' '\0' \
-      | xargs -0 awk '/^sources:/ { print; on = 1; next } on && /^[ \t]*- / { print; next } { on = 0 }' /dev/null 2>/dev/null \
-      | grep -o 'raw/[^],"[:space:]]*' | sed 's#^raw/##' || true
-  } | sed 's/\.[A-Za-z0-9]*$//'
-  [ ! -d "$r/wiki/sources" ] || ls "$r/wiki/sources" 2>/dev/null | sed -n 's/\.md$//p'
+    LC_ALL=C grep -rl --include='*.md' '^sources:' "$r/wiki" 2>/dev/null | tr '\n' '\0' \
+      | LC_ALL=C xargs -0 awk '/^sources:/ { print; on = 1; next } on && /^[ \t]*- / { print; next } { on = 0 }' /dev/null 2>/dev/null \
+      | LC_ALL=C grep -o 'raw/[^],"[:space:]]*' | LC_ALL=C sed 's#^raw/##' || true
+  } | LC_ALL=C sed 's/\.[A-Za-z0-9]*$//'
+  [ ! -d "$r/wiki/sources" ] || ls "$r/wiki/sources" 2>/dev/null | LC_ALL=C sed -n 's/\.md$//p'
 }
 
 # pending_files <wiki root>: raw files not compiled yet, oldest first.
@@ -3250,7 +3255,7 @@ cmd_find() {
 # case, and where a page's line is cut don't depend on the locale, and the compiled
 # helper can print the same. A line is cut at a byte, and never inside a character.
 find_search() {
-  local word="$1" d hits pages f line n notes
+  local word="$1" d hits pages f line n notes cands nl=$'\n'
   local LC_ALL=C
   for d in "$WIKIS_DIR"/*/; do
     d="${d%/}"
@@ -3280,19 +3285,29 @@ EOF2
     # otherwise never be found again. Only .md notes: raw/ also holds PDFs and the like.
     notes=""
     n=0
+    # The notes that mention the word, among the files that are notes: a folder, a
+    # broken link or a pipe named like one isn't read. What grep prints is what
+    # counts, not how it ended: one note that can't be read fails it.
+    set --
+    for f in "$d"/raw/*.md; do
+      if [ -f "$f" ]; then set -- "$@" "$f"; fi
+    done
+    cands=""
+    [ $# -eq 0 ] || cands="$(LC_ALL=C grep -l -i -F -- "$word" "$@" 2>/dev/null || true)"
     # Which notes are compiled is asked only when a note mentions the word: that reads
     # every page of the wiki, and most searches find no note at all.
-    if LC_ALL=C grep -l -i -F -- "$word" "$d"/raw/*.md >/dev/null 2>&1; then
-    while IFS= read -r f; do
-      [ -n "$f" ] && [ "$n" -lt "$FIND_PAGES" ] || continue
-      case "$f" in *.md) ;; *) continue ;; esac
-      line="$(LC_ALL=C awk -v w="$word" 'NR == 1 && /^---$/ { fm = 1; next } fm && /^---$/ { fm = 0; next }
-        !fm && index(tolower($0), tolower(w)) { print; exit }' "$f" | LC_ALL=C sed 's/^[[:space:]]*//' | LC_ALL=C cut -c 1-120 | LC_ALL=C sed -E "s/$FIND_CUT//")"
-      [ -n "$line" ] || continue
-      notes="$notes    ${f#"$d"/}: $line"$'\n'
-      n=$((n + 1))
-    done <<EOF3
-$(pending_files "$d" | LC_ALL=C sort -r)
+    if [ -n "$cands" ]; then
+      while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        [ "$n" -lt "$FIND_PAGES" ] || break
+        case "$nl$cands$nl" in *"$nl$f$nl"*) ;; *) continue ;; esac
+        line="$(LC_ALL=C awk -v w="$word" 'NR == 1 && /^---$/ { fm = 1; next } fm && /^---$/ { fm = 0; next }
+          !fm && index(tolower($0), tolower(w)) { print; exit }' "$f" 2>/dev/null | LC_ALL=C sed 's/^[[:space:]]*//' | LC_ALL=C cut -c 1-120 | LC_ALL=C sed -E "s/$FIND_CUT//" || true)"
+        [ -n "$line" ] || continue
+        notes="$notes    ${f#"$d"/}: $line"$'\n'
+        n=$((n + 1))
+      done <<EOF3
+$(LC_ALL=C pending_files "$d" | LC_ALL=C sort -r)
 EOF3
     fi
     [ -n "$hits$pages$notes" ] || continue
