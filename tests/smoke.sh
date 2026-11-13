@@ -5648,6 +5648,9 @@ import json, sys
 h = json.load(open(sys.argv[1]))['hooks']['UserPromptSubmit'][0]['hooks'][0]
 assert h['type'] == 'command' and h['command'].endswith('hooks/user-prompt.sh\"') and h['timeout'] == 10" "$REPO/hooks/hooks.json"
 rm -rf "$HOME/.local/state/llm-wiki/recall"
+# These checks are about the pages. A ticket key also brings an offer of the Jira extension,
+# which the checks after them are about, so here it is muted.
+"$W" tips --mute ext-jira >/dev/null 2>&1
 uphook() {
   local json
   json="$(python3 -c 'import json, sys; print(json.dumps({"hook_event_name": "UserPromptSubmit", "session_id": sys.argv[1], "cwd": sys.argv[2], "prompt": sys.argv[3]}))' "$2" "$1" "$3")"
@@ -5722,6 +5725,172 @@ check "the Antigravity hook injects a system message" python3 -c 'import json, s
 eq "and before the next step of the same message it says nothing" '{}' "$(agyp ag-1 'What does MSG-77 need?')"
 eq "a message that finds nothing gets an empty reply" '{}' "$(agyp ag-2 'ok')"
 eq "bad JSON gets an empty reply" '{}' "$(printf 'not json' | "$W" __agy-prompt)"
+# A ticket or an Atlassian page in the message. The Jira and Confluence extensions are offered
+# once when they aren't set up, and named when they are. This machine is its own HOME, and
+# every setting of theirs is out of the environment, so only what a check writes counts.
+AH="$T/atlhome"
+mkdir -p "$AH/.config/llm-wiki"
+# What says a key-shaped word is a ticket: a key of that project already in a wiki. The
+# checks below use VID and PAY from this wiki, and MSG from the one above.
+"$W" new tfatl >/dev/null 2>&1
+printf -- '- [Tickets](wiki/concepts/t.md): VID-1 was the last one, and PAY-3 followed it.\n' >> "$WIKIS_DIR/tfatl/index.md"
+mkdir -p "$WIKIS_DIR/tfatl/raw"
+printf 'Talked about NTE-5 with the team.\n' > "$WIKIS_DIR/tfatl/raw/2026-01-01-nte.md"
+actx() { python3 -c 'import json, sys
+t = sys.stdin.read()
+print(json.loads(t)["hookSpecificOutput"]["additionalContext"] if t.strip() else "", end="")'; }
+atl() {
+  local json
+  json="$(python3 -c 'import json, sys; print(json.dumps({"hook_event_name": "UserPromptSubmit", "session_id": sys.argv[1], "cwd": sys.argv[2], "prompt": sys.argv[3]}))' "$2" "$1" "$3")"
+  printf '%s' "$json" | env -u JIRA_URL -u JIRA_EMAIL -u JIRA_API_TOKEN -u ATLASSIAN_SITE -u ATLASSIAN_EMAIL -u ATLASSIAN_API_TOKEN -u CONFLUENCE_URL -u CONFLUENCE_API_TOKEN -u CONFLUENCE_SPACE \
+    HOME="${AHOME:-$AH}" LLM_WIKI_CMD=wiki CLAUDE_PLUGIN_ROOT="$REPO" bash "$REPO/hooks/user-prompt.sh" | actx
+}
+atlw() { env HOME="$AH" LLM_WIKI_CMD=wiki "$W" "$@"; }
+dago() { date -u -d "$1 days ago" +%Y-%m-%d 2>/dev/null || date -u -v-"$1"d +%Y-%m-%d; }
+ATIPS="$AH/.config/llm-wiki/tips"
+AP="$T/tickets/plain"
+ALL=""
+out="$(atl "$AP" at-1 'Please look at VID-74003 for me')"
+ALL="$ALL$out"
+case "$out" in "The user's message names a Jira ticket (VID-74003). llm-wiki has a Jira extension that isn't set up on this machine. Offer once, in one line, to walk them through it: they run \`wiki extensions add jira\`, then \`wiki extensions setup jira\`, in a terminal. If they say no, run \`wiki tips --mute ext-jira\` so it isn't offered again.") ok "a ticket key with the Jira extension off gets one offer line, naming the key" ;; *) bad "a ticket key with the Jira extension off gets one offer line, naming the key" "$out" ;; esac
+check "the same session, asked again, gets nothing" test -z "$(atl "$AP" at-1 'And again VID-74003, and VID-5')"
+check "a second session within the week gets nothing" test -z "$(atl "$AP" at-2 'VID-74003 is blocked')"
+check "the offer is remembered with the tips, to the day" grep -q "^shown:ext-jira $(date -u +%Y-%m-%d)\$" "$ATIPS"
+printf 'shown:ext-jira %s\n' "$(dago 6)" > "$ATIPS"
+check "a session 6 days after the offer gets nothing" test -z "$(atl "$AP" at-3 'VID-74003 is blocked')"
+printf 'shown:ext-jira %s\n' "$(dago 8)" > "$ATIPS"
+out="$(atl "$AP" at-4 'VID-74003 is blocked')"
+case "$out" in *"isn't set up on this machine"*"tips --mute ext-jira"*) ok "and one 8 days after gets it again" ;; *) bad "and one 8 days after gets it again" "$out" ;; esac
+expect "tips --mute takes ext-jira" "tip ext-jira muted" atlw tips --mute ext-jira
+refuse "and still refuses a name that is no tip" atlw tips --mute ext-nosuch
+printf 'shown:ext-jira %s\nmuted:ext-jira %s\n' "$(dago 30)" "$(dago 1)" > "$ATIPS"
+check "after wiki tips --mute ext-jira no session gets the offer" test -z "$(atl "$AP" at-5 'VID-74003 is blocked')"
+check "even a long while after" test -z "$(atl "$AP" at-6 'VID-2 and VID-4')"
+expect "tips --mute completes the offers" "ext-confluence" atlw __complete 3 tips --mute ""
+atlw tips --unmute ext-jira >/dev/null 2>&1
+rm -f "$ATIPS"
+# On, and nothing set.
+atlw extensions add jira >/dev/null 2>&1
+out="$(atl "$AP" at-7 'Please look at VID-74003 for me')"
+ALL="$ALL$out"
+case "$out" in "The user's message names a Jira ticket (VID-74003). llm-wiki has a Jira extension that isn't set up on this machine. Offer once, in one line, to walk them through it: they run \`wiki extensions setup jira\` in a terminal. If they say no, run \`wiki tips --mute ext-jira\` so it isn't offered again.") ok "with it on and not set up, the offer is to run setup, with no add" ;; *) bad "with it on and not set up, the offer is to run setup, with no add" "$out" ;; esac
+rm -f "$ATIPS"
+# Set up: the shared sign-in, and a token command that would leave a mark if it were run.
+printf 'site = https://acme.atlassian.net\ntoken_cmd = touch %s/token-ran; echo FAKETOKEN-9f3a41c7\n' "$T" > "$AH/.config/llm-wiki/atlassian"
+out="$(atl "$AP" at-8 'Please look at VID-74003 for me')"
+ALL="$ALL$out"
+case "$out" in "The user's message names a Jira ticket (VID-74003). The Jira extension is set up: \`wiki jira show VID-74003\` prints it.") ok "with it set up, the line names the command that prints the ticket" ;; *) bad "with it set up, the line names the command that prints the ticket" "$out" ;; esac
+expect "and that command is one jira has" "jira show <KEY>" atlw jira --help
+check "deciding that never ran the token command" test ! -e "$T/token-ran"
+check "the same ticket again in the session gets nothing" test -z "$(atl "$AP" at-8 'Is VID-74003 done?')"
+out="$(atl "$AP" at-8 'Is VID-74003 done, or VID-74004?')"
+case "$out" in *"(VID-74004). "*"jira show VID-74004\` prints it."*) case "$out" in *"VID-74003"*) bad "a new ticket in the session is named alone" "$out" ;; *) ok "a new ticket in the session is named alone" ;; esac ;; *) bad "a new ticket in the session is named alone" "$out" ;; esac
+out="$(atl "$AP" at-9 'Is VID-74003 done?')"
+case "$out" in *"names a Jira ticket (VID-74003). The Jira extension is set up"*) ok "another session is told again" ;; *) bad "another session is told again" "$out" ;; esac
+out="$(atl "$AP" at-10 'Compare VID-2, VID-3, VID-4 and VID-5')"
+case "$out" in *"names Jira tickets (VID-2, VID-3, VID-4). The Jira extension is set up: \`wiki jira show VID-2 VID-3 VID-4\` prints each.") ok "several tickets are named together, three at most" ;; *) bad "several tickets are named together, three at most" "$out" ;; esac
+check "utf-8, SHA-256, a lowercase vid-2 and the like are not tickets" test -z "$(atl "$AP" at-11 'Is utf-8 ok? sha-256, SHA-256, UTF-8, ISO-8601, RFC-2119, CVE-2024-1234, HTTP-2 and vid-2 and x-request-id')"
+check "nor is a key inside a longer word" test -z "$(atl "$AP" at-12 'See aVID-74003 and VID-74003x and VID-7_ and my-VID-5')"
+# A key-shaped word is a ticket only when something says so. Each phrase gets a machine of
+# its own, so that the week an offer rests can't hide a false one.
+n=0
+while IFS= read -r phrase; do
+  n=$((n + 1))
+  mkdir -p "$T/atlneg$n"
+  check "not a ticket, on a machine with nothing offered: $phrase" test -z "$(AHOME="$T/atlneg$n" atl "$AP" "atn-$n" "$phrase")"
+done <<'EOF2'
+COVID-19 numbers
+use GPT-4 for this
+H-264 video on an RTX-4090
+port to ARM-64
+SOC-2 audit
+US-1 route
+ES-2022, TS-5, WCAG-2, OAUTH-2
+see https://example.com/?q=ABC-123
+EOF2
+check "a key in a link that isn't Jira's is nothing, even when a wiki holds the project" test -z "$(AHOME="$T/atlneg26" atl "$AP" atn-url 'see https://example.com/?q=VID-5 and https://github.com/acme/x/tree/PAY-9-fix')"
+# The rules that do say so. Rule 1, a Jira link, is above (ABC-12, in no wiki). Rule 2, the
+# folder or the branch:
+mkdir -p "$T/atlf/QQQ-500" "$T/atlb"
+git init -q "$T/atlb" && git -C "$T/atlb" symbolic-ref HEAD refs/heads/feature/RRR-600-x
+mkdir -p "$T/atlneg20" "$T/atlneg21" "$T/atlneg22"
+out="$(AHOME="$T/atlneg20" atl "$T/atlf/QQQ-500" atn-20 'QQQ-501 looks related, as does QQQ-500')"
+case "$out" in "The user's message names Jira tickets (QQQ-501, QQQ-500). llm-wiki has a Jira extension"*) ok "a folder named for a key makes a key of its project a ticket" ;; *) bad "a folder named for a key makes a key of its project a ticket" "$out" ;; esac
+check "and a key of another project there is not" test -z "$(AHOME="$T/atlneg21" atl "$T/atlf/QQQ-500" atn-21 'WWW-77 and GPT-4')"
+out="$(AHOME="$T/atlneg22" atl "$T/atlb" atn-22 'what does RRR-601 change?')"
+case "$out" in "The user's message names a Jira ticket (RRR-601)."*) ok "a branch named for a key does too" ;; *) bad "a branch named for a key does too" "$out" ;; esac
+# Rule 3, a wiki holds a key of the project: a page's index line (VID), a note (NTE).
+mkdir -p "$T/atlneg23"
+out="$(AHOME="$T/atlneg23" atl "$AP" atn-23 'Is NTE-9 in the same state?')"
+case "$out" in "The user's message names a Jira ticket (NTE-9)."*) ok "a key of a project a waiting note holds is a ticket" ;; *) bad "a key of a project a waiting note holds is a ticket" "$out" ;; esac
+# Rule 4, the extension is ready and its settings name projects.
+mkdir -p "$T/atlneg24/.config/llm-wiki"
+env HOME="$T/atlneg24" "$W" extensions add jira >/dev/null 2>&1
+printf 'site = https://acme.atlassian.net\ntoken_cmd = touch %s/token-ran4; echo x\n' "$T" > "$T/atlneg24/.config/llm-wiki/atlassian"
+check "ready, with no projects named, an unknown project's key is nothing" test -z "$(AHOME="$T/atlneg24" atl "$AP" atn-24 'OPS-5 failed')"
+printf 'projects = ops, PLT\n' > "$T/atlneg24/.config/llm-wiki/jira"
+out="$(AHOME="$T/atlneg24" atl "$AP" atn-25 'OPS-5 failed')"
+case "$out" in "The user's message names a Jira ticket (OPS-5). The Jira extension is set up: "*"jira show OPS-5\` prints it.") ok "ready, a key of a project its settings name is a ticket" ;; *) bad "ready, a key of a project its settings name is a ticket" "$out" ;; esac
+check "and one of another project is not" test -z "$(AHOME="$T/atlneg24" atl "$AP" atn-26 'GPT-4 and XYZ-5')"
+check "reading the projects never ran the token command" test ! -e "$T/token-ran4"
+mkdir -p "$T/atlneg25"
+check "named projects don't count while the extension isn't set up" test -z "$(AHOME="$T/atlneg25" JIRA_PROJECTS=OPS atl "$AP" atn-27 'OPS-5 failed')"
+out="$(atl "$AP" at-13 'The ticket is at https://jira.corp.example/browse/ABC-12?filter=3, please read it.')"
+case "$out" in "The user's message names a Jira ticket (ABC-12). The Jira extension is set up: "*"jira show ABC-12\` prints it.") ok "a /browse/KEY link counts, on any host" ;; *) bad "a /browse/KEY link counts, on any host" "$out" ;; esac
+out="$(atl "$AP" at-14 'The board is https://acme.atlassian.net/jira/software/projects/ABC/boards/1')"
+case "$out" in "The user's message links to Jira. The Jira extension is set up: \`wiki jira --help\` lists what it can do.") ok "a link on the Atlassian site with no key says only where its commands are" ;; *) bad "a link on the Atlassian site with no key says only where its commands are" "$out" ;; esac
+check "a link to somewhere else is nothing" test -z "$(atl "$AP" at-15 'See https://example.com/browse-all and https://github.com/acme/repo/issues/12')"
+# The Jira extension's own site counts, whatever its name.
+printf 'url = https://tracker.acme.example\n' > "$AH/.config/llm-wiki/jira"
+out="$(atl "$AP" at-16 'Open https://tracker.acme.example/secure/Dashboard.jspa')"
+case "$out" in *"links to Jira."*) ok "a link on the site the Jira extension is set to counts" ;; *) bad "a link on the site the Jira extension is set to counts" "$out" ;; esac
+rm -f "$AH/.config/llm-wiki/jira"
+# Confluence.
+out="$(atl "$AP" at-17 'Read https://acme.atlassian.net/wiki/spaces/ENG/pages/123/Plan?token=pagetoken_77abc first')"
+ALL="$ALL$out"
+case "$out" in "The user's message links to a Confluence page. llm-wiki has a Confluence extension that isn't set up on this machine. Offer once, in one line, to walk them through it: they run \`wiki extensions add confluence\`, then \`wiki extensions setup confluence\`, in a terminal. If they say no, run \`wiki tips --mute ext-confluence\` so it isn't offered again.") ok "a Confluence link gets the Confluence offer and not the Jira one" ;; *) bad "a Confluence link gets the Confluence offer and not the Jira one" "$out" ;; esac
+check "the offer never repeats the link" test -z "$(printf '%s' "$ALL" | grep pagetoken_77abc)"
+check "a second Confluence offer in the week gets nothing" test -z "$(atl "$AP" at-18 'And https://acme.atlassian.net/wiki/spaces/ENG/pages/124/Notes')"
+atlw extensions add confluence >/dev/null 2>&1
+rm -f "$ATIPS"
+printf 'space = ENG\n' > "$AH/.config/llm-wiki/confluence"
+out="$(atl "$AP" at-19 'Read https://acme.atlassian.net/wiki/spaces/ENG/pages/123/Plan first')"
+case "$out" in "The user's message links to a Confluence page. The Confluence extension is set up: \`wiki confluence --help\` lists what it can do.") ok "with Confluence set up, a link says where its commands are, as it has none that reads a page" ;; *) bad "with Confluence set up, a link says where its commands are" "$out" ;; esac
+expect "and that command exists" "confluence check" atlw confluence --help
+check "the same page again in the session gets nothing" test -z "$(atl "$AP" at-19 'Read https://acme.atlassian.net/wiki/spaces/ENG/pages/123/Plan again')"
+out="$(atl "$AP" at-19 'And https://acme.atlassian.net/wiki/spaces/ENG/pages/125/Other')"
+case "$out" in *"links to a Confluence page. The Confluence extension is set up"*) ok "another page in the session is named" ;; *) bad "another page in the session is named" "$out" ;; esac
+printf 'url = https://wiki.acme.example\nspace = ENG\n' > "$AH/.config/llm-wiki/confluence"
+out="$(atl "$AP" at-20 'Read https://wiki.acme.example/display/ENG/Plan')"
+case "$out" in *"links to a Confluence page."*) ok "a link on the site the Confluence extension is set to counts" ;; *) bad "a link on the site the Confluence extension is set to counts" "$out" ;; esac
+out="$(atl "$AP" at-21 'VID-9 is in https://acme.atlassian.net/wiki/spaces/ENG/pages/9/Plan')"
+case "$out" in "The user's message names a Jira ticket (VID-9)."*$'\n'"The user's message links to a Confluence page."*) ok "a ticket and a page get a line each, the ticket first" ;; *) bad "a ticket and a page get a line each, the ticket first" "$out" ;; esac
+# Where it isn't for.
+check "an untyped turn naming a key gets nothing" test -z "$(atl "$AP" at-22 '<task-notification><summary>VID-74003 finished</summary></task-notification>')"
+check "and keeps no state" test ! -e "$AH/.local/state/llm-wiki/recall/at-22.seen"
+"$W" workflows add "$RC" none >/dev/null 2>&1
+check "a folder a pattern sets to no wiki gets nothing" test -z "$(atl "$RC" at-23 'Please look at VID-74003 for me')"
+"$W" workflows remove "$RC" >/dev/null 2>&1
+check "the token never appears in anything handed over" test -z "$(printf '%s' "$ALL" | grep FAKETOKEN)"
+# Through Codex's and Antigravity's own hooks.
+rm -f "$ATIPS"
+printf 'site = https://acme.atlassian.net\n' > "$AH/.config/llm-wiki/atlassian"
+printf 'token_cmd = echo x\n' >> "$AH/.config/llm-wiki/atlassian"
+out="$(printf '{"session_id":"at-cx","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"Look at VID-74003"}' "$AP" | env HOME="$AH" "$W" __codex-prompt | actx)"
+case "$out" in "The user's message names a Jira ticket (VID-74003). The Jira extension is set up: \`"*"jira show VID-74003\` prints it.") ok "the Codex hook hands over the same line" ;; *) bad "the Codex hook hands over the same line" "$out" ;; esac
+out="$(printf '{"conversationId":"at-ag","workspacePaths":["file://%s"],"hookEventName":"PreInvocation","lastUserInput":"Look at VID-74003","invocationNum":1}' "$AP" | env HOME="$AH" "$W" __agy-prompt)"
+check "and the Antigravity hook" python3 -c 'import json, sys; m = json.loads(sys.argv[1])["injectSteps"][0]["systemMessage"]["systemMessage"]; assert "jira show VID-74003" in m' "$out"
+# The line comes first, and the whole stays under the cap with pages found too.
+rm -rf "$AH/.config" "$AH/.local"
+mkdir -p "$AH/.config/llm-wiki"
+out="$(atl "$AP" at-24 'MSG-55 and MSG-77 and MSG-99 and MSG-88 in https://acme.atlassian.net/wiki/spaces/E/pages/1/P')"
+case "$out" in "The user's message names Jira tickets (MSG-55, MSG-77, MSG-99). llm-wiki has a Jira extension"*"A search of your wikis"*"- tfmsg wiki"*) ok "the line comes before the list found" ;; *) bad "the line comes before the list found" "$out" ;; esac
+check "and the whole stays under 1,200 bytes" test "${#out}" -lt 1200 -a "${#out}" -gt 500
+atlw extensions add jira >/dev/null 2>&1
+printf 'site = https://acme.atlassian.net\ntoken_cmd = echo x\n' > "$AH/.config/llm-wiki/atlassian"
+out="$(atl "$AP" at-25 'MSG-55 and MSG-77 and MSG-99 and MSG-88 in https://acme.atlassian.net/wiki/spaces/E/pages/1/P')"
+check "set up, too" test "${#out}" -lt 1200 -a "${#out}" -gt 400
+case "$out" in "The user's message names Jira tickets (MSG-55, MSG-77, MSG-99). The Jira extension is set up:"*"A search of your wikis"*) ok "with the line first" ;; *) bad "with the line first" "$out" ;; esac
 rm -rf "$WIKIS_DIR/tfmsg" "$WIKIS_DIR/tfnoindex" "$HOME/.local/state/llm-wiki/recall"
 rm -rf "$WIKIS_DIR/tfrecall"
 rm -rf "$T/tickets"

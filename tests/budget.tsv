@@ -13,6 +13,8 @@ hook: a ticket folder with no wikis	1590
 hook: a ticket folder with pages that mention it	1652
 hook: a ticket folder, two wikis, no pattern	1382
 hook: a ticket folder, two wikis, pattern recorded	1190
+hook: a ticket key, the Jira extension not set up	358
+hook: a ticket key, the Jira extension set up	129
 list: the fixture wikis	68
 mcp: INSTRUCTIONS	1305
 skill: the description	197

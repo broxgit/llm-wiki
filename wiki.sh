@@ -4071,14 +4071,287 @@ print(p[7:] if p.startswith("file://") else p)' 2>/dev/null || true)"
 # prompt_recall decides whether to hand anything over; cmd_prompt_hook reads an agent's
 # JSON and writes its reply. Claude Code, Codex and Antigravity all come through here.
 
+# The Jira and Confluence extensions are useful and hard to find. When the user's message
+# names a ticket or links a page, the session is handed one line: where the extension
+# stands and what to do. Not set up: offer it once, in a line. Set up: the command that
+# reads what was named. Nothing here asks the network: ready is what the extension says
+# of itself from its settings and the presence of a token, as `extensions` asks it.
+# Things shaped like a ticket key that are not one, by their project part.
+ATL_NOT_KEYS="UTF ISO SHA RFC CVE CWE HTTP HTTPS AES MD TLS SSL IEEE ANSI UTC GMT PEP IPV WPA"
+# How long an offer that was made rests, on this machine, in new sessions too.
+ATL_OFFER_DAYS=7
+
+# atl_conf_get <file> <key>: a `key = value` setting from a file of them, or nothing.
+atl_conf_get() {
+  [ -f "$1" ] || return 0
+  sed -n "s/^[[:space:]]*$2[[:space:]]*=[[:space:]]*//p" "$1" 2>/dev/null | head -n 1 | sed 's/[[:space:]]*#.*//; s/[[:space:]]*$//'
+}
+
+# atl_scan <message file> <jira sites> <confluence sites>: what the message names, one a
+# line: "K<TAB>KEY" for a ticket, "J" for a Jira link with no key in it, "C<TAB>URL" for a
+# Confluence page. The sites are addresses, space separated: the ones the extensions are
+# set to, on top of *.atlassian.net.
+atl_scan() {
+  ATL_FILE="$1" ATL_JIRA_SITES="$2" ATL_CONF_SITES="$3" ATL_SKIP="$ATL_NOT_KEYS" python3 -c '
+import os, re, sys
+from urllib.parse import urlparse
+text = open(os.environ["ATL_FILE"], "rb").read().decode("utf-8", "replace")
+skip = set(os.environ["ATL_SKIP"].split())
+def hosts(name):
+    out = set()
+    for u in os.environ.get(name, "").split():
+        h = urlparse(u if "//" in u else "//" + u).hostname
+        if h:
+            out.add(h.lower())
+    return out
+jh, ch = hosts("ATL_JIRA_SITES"), hosts("ATL_CONF_SITES")
+keys, pages, plain_link = [], [], False
+def add(k):
+    if k not in keys:
+        keys.append(k)
+for m in re.finditer(r"https?://[^\s<>\"\x27)\]]+", text):
+    u = m.group(0).rstrip(".,;:!?")
+    p = urlparse(u)
+    h = (p.hostname or "").lower()
+    cloud = h.endswith(".atlassian.net")
+    if p.path.startswith("/wiki/") and (cloud or h in ch):
+        kind = "c"
+    elif h in ch and h not in jh:
+        kind = "c"
+    elif "/browse/" in p.path or cloud or h in jh:
+        kind = "j"
+    else:
+        continue
+    if kind == "c":
+        if u not in pages:
+            pages.append(u)
+        continue
+    k = re.search(r"/browse/([A-Za-z][A-Za-z0-9]+-[0-9]+)", p.path) or re.search(r"selectedIssue=([A-Za-z][A-Za-z0-9]+-[0-9]+)", p.query)
+    if k:
+        add(k.group(1).upper())
+    else:
+        plain_link = True
+# A key in a link counted above or not at all. In the words around the links, a key-shaped
+# word is only a candidate: the shell asks whether anything says it is a ticket.
+cands = []
+for m in re.finditer(r"(?<![A-Za-z0-9_-])([A-Z][A-Z0-9]+)-([0-9]+)(?![A-Za-z0-9_]|-[A-Za-z0-9])", re.sub(r"https?://\S+", " ", text)):
+    k = m.group(1) + "-" + m.group(2)
+    if m.group(1) not in skip and k not in keys and k not in cands:
+        cands.append(k)
+for k in keys[:3]:
+    print("K\t" + k)
+for k in cands[:6]:
+    print("T\t" + k)
+if plain_link and not keys:
+    print("J")
+for u in pages[:3]:
+    print("C\t" + u)' 2>/dev/null || true
+}
+
+# atl_state <name>: where an extension stands: none (nothing by that name here), off (it
+# ships and isn't turned on), notready (on, and it says it isn't set up) or ready.
+atl_state() {
+  local f
+  if f="$(ext_file "$1" 2>/dev/null)"; then
+    [ -x "$f" ] || { echo none; return 0; }
+    if ext_ready "$1" >/dev/null 2>&1; then echo ready; else echo notready; fi
+  elif ext_shipped "$1" >/dev/null 2>&1; then
+    echo off
+  else
+    echo none
+  fi
+}
+
+# atl_offer_ok <name> <state file>: whether an offer for it may be made now: not muted,
+# not made in the last week on this machine, and not made in this session.
+atl_offer_ok() {
+  local when
+  [ -z "$(tip_get "muted:ext-$1")" ] || return 1
+  when="$(tip_get "shown:ext-$1")"
+  [ -z "$when" ] || [[ "$when" < "$(days_ago "$ATL_OFFER_DAYS")" ]] || return 1
+  [ ! -s "$2" ] || ! grep -qxF "atl-offer:$1" "$2" || return 1
+}
+
+# atl_offer_line <name> <Name> <state>: the offer, as facts and one thing to say.
+atl_offer_line() {
+  local c="$WIKI_CMD" how
+  if [ "$3" = off ]; then
+    how="they run \`$c extensions add $1\`, then \`$c extensions setup $1\`, in a terminal"
+  else
+    how="they run \`$c extensions setup $1\` in a terminal"
+  fi
+  printf '%s' "llm-wiki has a $2 extension that isn't set up on this machine. Offer once, in one line, to walk them through it: $how. If they say no, run \`$c tips --mute ext-$1\` so it isn't offered again."
+}
+
+# atl_prefix_known <PREFIX>...: whether any wiki of the collection holds a key of one of
+# these projects, PREFIX-digits as a whole word, in an index, a page or a note. One grep,
+# which stops at the first hit.
+atl_prefix_known() {
+  local alt="" p d where=()
+  [ -d "$WIKIS_DIR" ] || return 1
+  for p in "$@"; do alt="$alt${alt:+|}$p"; done
+  for d in "$WIKIS_DIR"/*/; do
+    d="${d%/}"
+    is_wiki "$d" || continue
+    where[${#where[@]}]="$d/index.md"
+    [ ! -d "$d/wiki" ] || where[${#where[@]}]="$d/wiki"
+    [ ! -d "$d/raw" ] || where[${#where[@]}]="$d/raw"
+  done
+  [ ${#where[@]} -gt 0 ] || return 1
+  grep -r -q -w -E --include='*.md' "($alt)-[0-9]+" -- "${where[@]}" 2>/dev/null
+}
+
+# atl_evidence <folder> <llm-wiki config folder> <key>...: the keys, of those a
+# message holds outside any Jira link, that something says are tickets: the folder or
+# its branch is named for one of that project, the Jira extension is ready and its
+# settings name the project, or a wiki already holds a key of that project. A word
+# shaped like a key, such as COVID-19 or GPT-4, is none of these. Prints the keys.
+atl_evidence() {
+  local dir="$1" cfg="$2" k p tk tp projects rest="" ok="" jst=""
+  shift 2
+  tk="$(ticket_key "$dir" 2>/dev/null || true)"
+  tp="$(printf '%s' "${tk%%-*}" | tr 'a-z' 'A-Z')"
+  projects="${JIRA_PROJECTS:-$(atl_conf_get "$cfg/jira" projects)}"
+  projects="$(printf '%s' "$projects" | tr 'a-z,' 'A-Z ')"
+  for k in "$@"; do
+    p="${k%%-*}"
+    if [ -n "$tp" ] && [ "$p" = "$tp" ]; then ok="$ok $k"; continue; fi
+    case " $projects " in
+      *" $p "*)
+        [ -n "$jst" ] || jst="$(atl_state jira)"
+        if [ "$jst" = ready ]; then ok="$ok $k"; continue; fi ;;
+    esac
+    rest="$rest $k"
+  done
+  if [ -n "$rest" ]; then
+    # shellcheck disable=SC2086
+    set -- $rest
+    if [ $# -eq 1 ]; then
+      ! atl_prefix_known "${1%%-*}" || ok="$ok $1"
+    else
+      p=""
+      for k in "$@"; do p="$p ${k%%-*}"; done
+      # shellcheck disable=SC2086
+      if atl_prefix_known $p; then
+        for k in "$@"; do ! atl_prefix_known "${k%%-*}" || ok="$ok $k"; done
+      fi
+    fi
+  fi
+  printf '%s' "${ok# }"
+}
+
+# atlassian_notice <message file> <session state file> <folder>: the lines to hand over
+# for what the message names, or nothing. Records what it hands over in the session's
+# state and, for an offer, in the tips state, where a mute lives too. Never more than
+# 1,000 bytes. It never fails.
+atlassian_notice() {
+  local tf="$1" state="$2" dir="$3" cfg jsites csites scan keys="" cands="" fresh="" pages="" link=0 line st c out="" k u n jkeys
+  local LC_ALL=C
+  command -v python3 >/dev/null 2>&1 || return 0
+  cfg="${XDG_CONFIG_HOME:-$HOME/.config}/llm-wiki"
+  jsites="${JIRA_URL:-} ${ATLASSIAN_SITE:-} $(atl_conf_get "$cfg/jira" url) $(atl_conf_get "$cfg/atlassian" site)"
+  csites="${CONFLUENCE_URL:-} ${ATLASSIAN_SITE:-} $(atl_conf_get "$cfg/confluence" url) $(atl_conf_get "$cfg/atlassian" site) $(atl_conf_get "$cfg/jira" url)"
+  scan="$(atl_scan "$tf" "$jsites" "$csites")"
+  [ -n "$scan" ] || return 0
+  while IFS="$TAB" read -r k u; do
+    case "$k" in
+      K) keys="$keys${keys:+ }$u" ;;
+      T) cands="$cands${cands:+ }$u" ;;
+      J) link=1 ;;
+      C) pages="$pages$u"$'\n' ;;
+    esac
+  done <<EOF2
+$scan
+EOF2
+  # A key out in the open is a ticket only when something says so.
+  if [ -n "$cands" ]; then
+    # shellcheck disable=SC2086
+    jkeys="$(atl_evidence "$dir" "$cfg" $cands)"
+    n=0
+    for k in $keys; do n=$((n + 1)); done
+    for k in $jkeys; do
+      [ "$n" -lt 3 ] || break
+      keys="$keys${keys:+ }$k"
+      n=$((n + 1))
+    done
+  fi
+  c="$WIKI_CMD"
+  if [ -n "$keys" ] || [ "$link" = 1 ]; then
+    st="$(atl_state jira)"
+    n=0
+    for k in $keys; do n=$((n + 1)); done
+    if [ "$n" -gt 1 ]; then line="The user's message names Jira tickets (${keys// /, })."
+    elif [ "$n" = 1 ]; then line="The user's message names a Jira ticket ($keys)."
+    else line="The user's message links to Jira."; fi
+    case "$st" in
+      off | notready)
+        if atl_offer_ok jira "$state"; then
+          line="$line $(atl_offer_line jira Jira "$st")"
+          if [ "${#line}" -lt 1000 ]; then
+            out="$line"
+            printf 'atl-offer:jira\n' >> "$state" 2>/dev/null || true
+            tip_set "shown:ext-jira" 2>/dev/null || true
+          fi
+        fi ;;
+      ready)
+        if [ -n "$keys" ]; then
+          for k in $keys; do
+            if [ ! -s "$state" ] || ! grep -qxF "atl-ready:jira:$k" "$state"; then fresh="$fresh${fresh:+ }$k"; fi
+          done
+          if [ -n "$fresh" ]; then
+            n=0
+            for k in $fresh; do n=$((n + 1)); done
+            if [ "$n" -gt 1 ]; then out="The user's message names Jira tickets (${fresh// /, }). The Jira extension is set up: \`$c jira show $fresh\` prints each."
+            else out="The user's message names a Jira ticket ($fresh). The Jira extension is set up: \`$c jira show $fresh\` prints it."; fi
+            for k in $fresh; do printf 'atl-ready:jira:%s\n' "$k" >> "$state" 2>/dev/null || true; done
+          fi
+        elif [ ! -s "$state" ] || ! grep -qxF "atl-ready:jira:link" "$state"; then
+          out="$line The Jira extension is set up: \`$c jira --help\` lists what it can do."
+          printf 'atl-ready:jira:link\n' >> "$state" 2>/dev/null || true
+        fi ;;
+    esac
+  fi
+  if [ -n "$pages" ]; then
+    st="$(atl_state confluence)"
+    line="The user's message links to a Confluence page."
+    case "$st" in
+      off | notready)
+        if atl_offer_ok confluence "$state"; then
+          line="$line $(atl_offer_line confluence Confluence "$st")"
+          if [ $((${#out} + ${#line})) -lt 1000 ]; then
+            out="$out${out:+$'\n'}$line"
+            printf 'atl-offer:confluence\n' >> "$state" 2>/dev/null || true
+            tip_set "shown:ext-confluence" 2>/dev/null || true
+          fi
+        fi ;;
+      ready)
+        fresh=""
+        while IFS= read -r u; do
+          [ -n "$u" ] || continue
+          if [ ! -s "$state" ] || ! grep -qxF "atl-page:$u" "$state"; then fresh="$fresh$u"$'\n'; fi
+        done <<EOF2
+$pages
+EOF2
+        if [ -n "$fresh" ] && [ $((${#out} + 200)) -lt 1000 ]; then
+          out="$out${out:+$'\n'}$line The Confluence extension is set up: \`$c confluence --help\` lists what it can do."
+          printf '%s' "$fresh" | sed 's/^/atl-page:/' >> "$state" 2>/dev/null || true
+        fi ;;
+    esac
+  fi
+  [ -z "$out" ] || printf '%s' "$out"
+  return 0
+}
+
 # prompt_recall <session id> <folder> <message file>: the text to hand over, or nothing.
 # Nothing in a background compile's own session, with no collection, in a folder a pattern
 # sets to no wiki, for a message already searched for, or when nothing fits. A page or
 # note is named once a session: what a session has been handed is kept in a small file per
 # session, and files older than a week are swept. The text is facts, not orders, and
-# stays under 1,200 bytes: it is the list that is cut, never a line. It never fails.
+# stays under 1,200 bytes: it is the list that is cut, never a line. A ticket or an
+# Atlassian page in the message adds a line before the list (atlassian_notice), and that
+# may be all there is. It never fails.
 prompt_recall() {
-  local sid="$1" dir="$2" tf="$3" sdir state last sum hits fresh line out given n=0 wiki word
+  local sid="$1" dir="$2" tf="$3" sdir state last sum hits fresh line out given n=0 wiki word atl
   local LC_ALL=C
   local intro="A search of your wikis for the words in this message found these. They were written by earlier sessions and can be out of date: check a figure against the code before you quote it."
   [ -z "${LLM_WIKI_BACKGROUND:-}" ] || return 0
@@ -4100,12 +4373,14 @@ prompt_recall() {
     find "$sdir" -type f -mtime +7 -exec rm -f {} + 2>/dev/null || true
   fi
   printf '%s\n' "$sum" > "$last" 2>/dev/null || true
+  # A ticket or a page of Atlassian's in the message comes first, and may be all there is.
+  atl="$(atlassian_notice "$tf" "$state" "$dir" 2>/dev/null || true)"
   hits="$(recall_text "$tf" 12 2>/dev/null || true)"
-  [ -n "$hits" ] || return 0
+  [ -n "$hits" ] || { printf '%s' "$atl"; return 0; }
   fresh="$hits"
   if [ -s "$state" ]; then fresh="$(printf '%s\n' "$hits" | grep -vxFf "$state" || true)"; fi
-  [ -n "$fresh" ] || return 0
-  out="$intro"
+  [ -n "$fresh" ] || { printf '%s' "$atl"; return 0; }
+  out="${atl:+$atl$'\n'}$intro"
   given=""
   while IFS= read -r line; do
     [ -n "$line" ] || continue
@@ -4117,7 +4392,7 @@ prompt_recall() {
   done <<EOF2
 $fresh
 EOF2
-  [ "$n" -gt 0 ] || return 0
+  [ "$n" -gt 0 ] || { printf '%s' "$atl"; return 0; }
   printf '%s' "$given" >> "$state" 2>/dev/null || true
   # Logged as a search that found something is, so that use of the wiki stays measurable.
   wiki="$(printf '%s\n' "$given" | sed -n '1s/^- \([^ ]*\) wiki.*/\1/p')"
@@ -4139,6 +4414,12 @@ cmd_prompt_hook() {
     return 0
   fi
   ctx=""
+  # The command a session is told to run, as each agent's own session start names it.
+  case "$style" in
+    codex) WIKI_CMD="$(tilde "$(codex_cmd)")" ;;
+    agy) WIKI_CMD="$(agy_cmd)" ;;
+    *) if from_plugin; then WIKI_CMD="$(tilde "$(plugin_cmd)")"; fi ;;
+  esac
   tf="$(mktemp 2>/dev/null)" || tf=""
   if [ -n "$tf" ]; then
     fields="$(PROMPT_FILE="$tf" STYLE="$style" python3 -c '
@@ -6861,6 +7142,8 @@ EOF
 TIPS_STATE="${XDG_CONFIG_HOME:-$HOME/.config}/llm-wiki/tips"
 TIPS_COOLDOWN_DAYS=14
 TIPS_ORDER="harvest seed share-skill standup backfill stats stale find delegation"
+# What `tips --mute` takes: those, and the offers a message can bring (prompt_recall).
+TIPS_MUTABLE="$TIPS_ORDER ext-jira ext-confluence"
 
 # tip_get <key>: the date recorded for used:<cmd>, shown:<tip> or muted:<tip>.
 tip_get() { [ -f "$TIPS_STATE" ] && awk -v k="$1" '$1 == k { d = $2 } END { if (d) print d }' "$TIPS_STATE"; return 0; }
@@ -7046,7 +7329,7 @@ cmd_tips() {
   done
   case "$mode" in
     mute | unmute)
-      case " $TIPS_ORDER " in *" $id "*) ;; *) die "no tip called $id. Tips: $TIPS_ORDER" ;; esac
+      case " $TIPS_MUTABLE " in *" $id "*) ;; *) die "no tip called $id. Tips: $TIPS_MUTABLE" ;; esac
       if [ "$mode" = mute ]; then
         tip_set "muted:$id"
         ui_item ok "tip $id muted. $(typed "$WIKI_CMD tips --unmute $id") brings it back."
@@ -7636,7 +7919,7 @@ cmd_complete() {
   case "$prev" in
     --since) printf '%s\n' $RANGES; return 0 ;;
     --format) printf 'standup\nsummary\ndetailed\n'; return 0 ;;
-    --mute | --unmute) printf '%s\n' $TIPS_ORDER; return 0 ;;
+    --mute | --unmute) printf '%s\n' $TIPS_MUTABLE; return 0 ;;
     --wiki) wiki_names; return 0 ;;
     --repo | --from | --dir) echo __dirs__; return 0 ;;
   esac
