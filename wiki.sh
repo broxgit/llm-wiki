@@ -271,13 +271,15 @@ style_palette() {
 }
 # style_set: the colour of each role, by palette. Call sites use the roles, never a code.
 style_set() {
-  S_BOLD="" S_DIM="" S_OK="" S_WARN="" S_ERR="" S_TYPED="" S_OFF="" M_OK="" M_WARN=""
+  S_BOLD="" S_DIM="" S_OK="" S_WARN="" S_TYPED="" S_OFF="" M_OK="" M_WARN=""
   style_palette
+  # C_ERR is a bare code: standard error may be styled when standard output isn't.
+  if [ "$PALETTE" = colorblind ]; then C_ERR=35; else C_ERR=31; fi
   [ "$STYLE" = yes ] || return 0
   S_BOLD=$'\033[1m' S_DIM=$'\033[2m' S_OFF=$'\033[0m'
   case "$PALETTE" in
-    colorblind) S_OK=$'\033[34m' S_WARN=$'\033[33m' S_ERR=$'\033[35m' S_TYPED=$'\033[36m' ;;
-    *) S_OK=$'\033[32m' S_WARN=$'\033[33m' S_ERR=$'\033[31m' S_TYPED=$'\033[36m' ;;
+    colorblind) S_OK=$'\033[34m' S_WARN=$'\033[33m' S_TYPED=$'\033[36m' ;;
+    *) S_OK=$'\033[32m' S_WARN=$'\033[33m' S_TYPED=$'\033[36m' ;;
   esac
   if style_utf8; then M_OK="${S_OK}✓${S_OFF} "; else M_OK="${S_OK}+${S_OFF} "; fi
   M_WARN="${S_BOLD}${S_WARN}!${S_OFF} "
@@ -294,15 +296,13 @@ say_head() { printf '%s%s%s\n' "$S_BOLD" "$*" "$S_OFF"; }
 say_dim() { printf '%s%s%s\n' "$S_DIM" "$*" "$S_OFF"; }
 say_next() { printf '%sNext:%s %s\n' "$S_BOLD$S_TYPED" "$S_OFF" "$*"; }
 typed() { printf '%s%s%s' "$S_TYPED" "$*" "$S_OFF"; }
-# style_err_code: the palette's error colour as a code, for standard error, which may be styled when standard output isn't.
-style_err_code() { if [ "$PALETTE" = colorblind ]; then printf '35'; else printf '31'; fi; }
 die() {
-  if [ "$STYLE_ERR" = yes ]; then printf '\033[%sm%s\033[0m %s\n' "$(style_err_code)" "error:" "$*" >&2; else echo "error: $*" >&2; fi
+  if [ "$STYLE_ERR" = yes ]; then printf '\033[%sm%s\033[0m %s\n' "$C_ERR" "error:" "$*" >&2; else echo "error: $*" >&2; fi
   exit 1
 }
 # die_usage <words>: the tool was called wrongly: an unknown command or option, a missing argument. Exits 2.
 die_usage() {
-  if [ "$STYLE_ERR" = yes ]; then printf '\033[%sm%s\033[0m %s\n' "$(style_err_code)" "error:" "$*" >&2; else echo "error: $*" >&2; fi
+  if [ "$STYLE_ERR" = yes ]; then printf '\033[%sm%s\033[0m %s\n' "$C_ERR" "error:" "$*" >&2; else echo "error: $*" >&2; fi
   exit 2
 }
 # say_warn_err <words>: a warning on standard error, styled as standard error is, whatever standard output is.
