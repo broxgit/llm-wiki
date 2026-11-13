@@ -287,6 +287,10 @@ With the plugin, a session in a repository that has no wiki offers to do this.
 
 The copies are the repository's docs as written, which can be out of date. The agent treats their claims about code as unchecked until it checks them against the code.
 
+## What a message finds
+
+An agent that isn't handed a page mostly doesn't go looking for one. So when you send a message, the plugin's hook searches every wiki for its words and hands the agent the pages and notes that fit, up to four lines, beside your message. A ticket key such as `VID-74441`, or a name out of code such as `fetch_order_total`, is enough on its own, in an index line, a page's text or a note not compiled yet. Ordinary words of five letters or more need two, in one index line or one note. Nothing is handed over when nothing fits, in a folder a pattern sets to no wiki, or in a background compile. A page or note is named once a session, and the text says earlier sessions wrote it and it can be out of date. It works in Claude Code, Codex and Antigravity, and needs `python3`. `wiki stats` counts how often it handed something over.
+
 ## Is it paying off?
 
 The weekly report (`wiki report`) counts how many sessions opened each wiki's pages, from the transcripts on this machine. It also lists searches that found nothing, which `wiki find` logs itself. Those words are the pages you're missing. Compiling a wiki counts as opening it too, so a busy wiki's count runs a little high.
