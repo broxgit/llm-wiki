@@ -4067,11 +4067,13 @@ case "$tn" in *"Answer auto, dark or light."*"theme: auto"*) ok "setup theme ref
 # wiki setup, in its forms. A mark goes in front of a line, after any indent. With the
 # codes stripped and the marks taken off, what a terminal shows is the piped words.
 nomarks() { strip | sed -E 's/(^|  )(✓|\+|!) /\1/'; }
+# kitw: the words of what a command printed, as the kit reads them (ui_words).
+kitw() { bash -c ". '$REPO/ui.sh'; ui_words"; }
 UTF="LANG=en_US.UTF-8"
 lplain="$(sty LLM_WIKI_STYLE=off "$W" setup --list 2>&1)"
 lstyled="$(sty LLM_WIKI_STYLE=on "$W" setup --list 2>&1)"
 case "$lstyled" in *"${ESC}[33m  <- new${ESC}[0m"*) ok "setup --list: the <- new markers are yellow" ;; *) bad "setup --list: the <- new markers are yellow" "$lstyled" ;; esac
-case "$lstyled" in *"${ESC}[2m  (default)${ESC}[0m"*) ok "setup --list: (default) is dim, an aside" ;; *) bad "setup --list: (default) is dim, an aside" "$lstyled" ;; esac
+case "$lstyled" in *"  (default)"*) case "$lstyled" in *"${ESC}[2m  (default)"*) bad "setup --list: (default) stays in its row, as a table's rows are" "$lstyled" ;; *) ok "setup --list: (default) stays in its row, as a table's rows are" ;; esac ;; *) bad "setup --list: (default) stays in its row, as a table's rows are" "$lstyled" ;; esac
 case "$lstyled" in *"Change one:    ${ESC}[36m"*"git.identity${ESC}[0m"*) ok "setup --list: the commands on the Change one line are cyan" ;; *) bad "setup --list: the commands on the Change one line are cyan" "$lstyled" ;; esac
 case "$lstyled" in *"Or a section:  ${ESC}[36m"*"microsoft-copilot${ESC}[0m"*) ok "setup --list: the Or a section line is cyan" ;; *) bad "setup --list: the Or a section line is cyan" "$lstyled" ;; esac
 case "$lplain" in *"Run: "*) case "$lstyled" in *"Run: ${ESC}[36m"*) ok "setup --list: a Run: command is cyan" ;; *) bad "setup --list: a Run: command is cyan" "$lstyled" ;; esac ;; *) ok "setup --list: no Run: to be cyan on this machine" ;; esac
@@ -4081,14 +4083,15 @@ case "$(sty -u LLM_WIKI_STYLE "$W" setup --list 2>&1)" in *"${ESC}"*) bad "setup
 # A section: the heading is bold, a line that says something was done has the tick.
 fplain="$(printf 'off\n' | sty LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE=off "$W" setup feedback 2>&1)"
 fstyled="$(printf 'off\n' | sty LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE=on $UTF "$W" setup feedback 2>&1)"
-case "$fstyled" in *"${ESC}[1m== Feedback on llm-wiki${ESC}[0m"*) ok "setup <section>: the heading is bold, with its ==" ;; *) bad "setup <section>: the heading is bold, with its ==" "$fstyled" ;; esac
+case "$fstyled" in *" SETUP ${ESC}[0m  ${ESC}[1mFeedback on llm-wiki${ESC}[0m"*) ok "setup <section>: a section is a SETUP stage with its title" ;; *) bad "setup <section>: a section is a SETUP stage with its title" "$fstyled" ;; esac
 case "$fstyled" in *"✓"*"feedback: off"*) bad "setup <section>: a no answer's off line has no tick" "$fstyled" ;; *"feedback: off"*) ok "setup <section>: a no answer's off line has no tick" ;; *) bad "setup <section>: a no answer's off line has no tick (no line)" "$fstyled" ;; esac
 fyes="$(printf 'notes\n' | sty LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE=on $UTF "$W" setup feedback 2>&1)"
 case "$fyes" in *"${ESC}[32m✓${ESC}[0m feedback: notes"*) ok "setup <section>: what was written has a green tick" ;; *) bad "setup <section>: what was written has a green tick" "$fyes" ;; esac
 printf 'off\n' | sty LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE=off "$W" setup feedback >/dev/null 2>&1
 case "$fstyled" in *"${ESC}[32m✓${ESC}[0m Done. "*) ok "setup <section>: the closing Done has the tick" ;; *) bad "setup <section>: the closing Done has the tick" "$fstyled" ;; esac
-case "$fstyled" in *"Feedback [off]: "*) ok "setup <section>: a prompt keeps its words, the default undimmed" ;; *) bad "setup <section>: a prompt keeps its words, the default undimmed" "$fstyled" ;; esac
-[ "$(printf '%s\n' "$fstyled" | nomarks)" = "$fplain" ] && ok "setup <section>: stripped, with the marks off, the words are the plain words" || bad "setup <section>: stripped, with the marks off, the words are the plain words" "$(diff <(printf '%s\n' "$fstyled" | nomarks) <(printf '%s\n' "$fplain"))"
+case "$fstyled" in *"${ESC}[2m│${ESC}[0m   ${ESC}[1mFeedback${ESC}[0m [off] ${ESC}[1m${ESC}[33m›${ESC}[0m "*) ok "setup <section>: a prompt is on the rail, its words kept, the default in brackets" ;; *) bad "setup <section>: a prompt is on the rail, its words kept, the default in brackets" "$fstyled" ;; esac
+case "$fplain" in *"    Feedback [off] › "* | *"    Feedback [off] > "*) ok "setup <section>: plain, the prompt has the same words" ;; *) bad "setup <section>: plain, the prompt has the same words" "$fplain" ;; esac
+[ "$(printf '%s\n' "$fstyled" | kitw)" = "$(printf '%s\n' "$fplain" | kitw)" ] && ok "setup <section>: stripped, the words are the plain words" || bad "setup <section>: stripped, the words are the plain words" "$(diff <(printf '%s\n' "$fstyled" | kitw) <(printf '%s\n' "$fplain" | kitw))"
 case "$fplain" in *"${ESC}"*) bad "setup <section>: off has no codes" ;; *) ok "setup <section>: off has no codes" ;; esac
 case "$(printf 'off\n' | sty -u LLM_WIKI_STYLE LLM_WIKI_TEST_TTY=1 "$W" setup feedback 2>&1)" in *"${ESC}"*) bad "setup <section>: piped has no codes" ;; *) ok "setup <section>: piped has no codes" ;; esac
 # A failure has the warning mark, and the command that fixes it is cyan.
@@ -4099,7 +4102,7 @@ gplain="$(printf '\ny\n' | sty WIKIS_DIR="$SG" LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYL
 gstyled="$(printf '\ny\n' | sty WIKIS_DIR="$SG" LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE=on $UTF "$W" setup git.identity 2>&1)"
 case "$gstyled" in *"  ${ESC}[1m${ESC}[33m!${ESC}[0m push failed:"*) ok "setup: a failure has the bold yellow warning mark" ;; *) bad "setup: a failure has the bold yellow warning mark" "$gstyled" ;; esac
 case "$gstyled" in *"Then run the test again: ${ESC}[36mwiki setup git.identity${ESC}[0m"* | *"Then run the test again: ${ESC}[36m"*"setup git.identity${ESC}[0m"*) ok "setup: the command that fixes it is cyan" ;; *) bad "setup: the command that fixes it is cyan" "$gstyled" ;; esac
-[ "$(printf '%s\n' "$gstyled" | nomarks)" = "$gplain" ] && ok "setup git.identity: stripped, with the marks off, the words are the plain words" || bad "setup git.identity: stripped, with the marks off, the words are the plain words" "$(diff <(printf '%s\n' "$gstyled" | nomarks) <(printf '%s\n' "$gplain"))"
+[ "$(printf '%s\n' "$gstyled" | kitw)" = "$(printf '%s\n' "$gplain" | kitw)" ] && ok "setup git.identity: stripped, the words are the plain words" || bad "setup git.identity: stripped, the words are the plain words" "$(diff <(printf '%s\n' "$gstyled" | kitw) <(printf '%s\n' "$gplain" | kitw))"
 # A setting, and the whole walkthrough and --new, each on a fresh machine and the same answers.
 walk() { # walk <style> <args...>: setup on a new HOME with the answers all Enter
   local st="$1"; shift
@@ -4110,8 +4113,8 @@ walk() { # walk <style> <args...>: setup on a new HOME with the answers all Ente
 }
 for form in "" "--new" "format"; do
   wplain="$(walk off $form)"; wstyled="$(walk on $form)"
-  [ -n "$wplain" ] && [ "$(printf '%s\n' "$wstyled" | nomarks)" = "$wplain" ] && ok "setup ${form:-(everything)}: stripped, with the marks off, the words are the plain words" || bad "setup ${form:-(everything)}: stripped, with the marks off, the words are the plain words" "$(diff <(printf '%s\n' "$wstyled" | nomarks) <(printf '%s\n' "$wplain") | head -n 20)"
-  case "$wstyled" in *"${ESC}[1m== "*) ok "setup ${form:-(everything)}: headings are bold" ;; *) [ "$form" = format ] && ok "setup format has no heading to style" || bad "setup ${form:-(everything)}: headings are bold" "$wstyled" ;; esac
+  [ -n "$wplain" ] && [ "$(printf '%s\n' "$wstyled" | kitw)" = "$(printf '%s\n' "$wplain" | kitw)" ] && ok "setup ${form:-(everything)}: stripped, the words are the plain words" || bad "setup ${form:-(everything)}: stripped, the words are the plain words" "$(diff <(printf '%s\n' "$wstyled" | kitw) <(printf '%s\n' "$wplain" | kitw) | head -n 20)"
+  case "$wstyled" in *" SETUP ${ESC}[0m  ${ESC}[1m"*) ok "setup ${form:-(everything)}: each section is a SETUP stage" ;; *) [ "$form" = format ] && ok "setup format has no heading to style" || bad "setup ${form:-(everything)}: headings are bold" "$wstyled" ;; esac
   case "$wplain" in *"${ESC}"*) bad "setup ${form:-(everything)}: off has no codes" ;; *) ok "setup ${form:-(everything)}: off has no codes" ;; esac
 done
 # wiki update, with a wiki that has a remote, an old handbook and a NEWS entry to print.
@@ -4269,6 +4272,8 @@ demo  <- x" ] && ok "plain, a table is its rows as they are" || bad "plain, a ta
 [ "$(kit 'ui_prompt "Feedback" off' LLM_WIKI_STYLE=off $utf)" = "Feedback [off] › " ] && ok "plain, a typed answer's prompt is the question, the default in brackets, and ›" || bad "plain, a typed answer's prompt" "$(kit 'ui_prompt "Feedback" off' LLM_WIKI_STYLE=off $utf)"
 [ "$(kit 'ui_prompt "Feedback" off' $on $utf)" = "${ESC}[1mFeedback${ESC}[0m [off] ${ESC}[1m${ESC}[33m›${ESC}[0m " ] && ok "at a terminal, the question is bold and the prompt yellow" || bad "at a terminal, the question is bold and the prompt yellow" "$(kit 'ui_prompt "Feedback" off' $on $utf | cat -v)"
 [ "$(kit 'ui_prompt "Name"' LLM_WIKI_STYLE=off $utf)" = "Name › " ] && ok "with no default, no brackets" || bad "with no default, no brackets"
+case "$(kit 'ui_stage A x; ui_prompt "Name" none' LLM_WIKI_STYLE=off $utf)" in *$'\n'"    Name [none] › ") ok "under a stage, a prompt sits on its rail" ;; *) bad "under a stage, a prompt sits on its rail" "$(kit 'ui_stage A x; ui_prompt "Name" none' LLM_WIKI_STYLE=off $utf)" ;; esac
+[ "$(printf 'a > b | c * d -\n' | bash -c ". '$REPO/ui.sh'; ui_words" | paste -sd ' ' -)" = "a b c d" ] && ok "ui_words drops the glyphs a locale that isn't UTF-8 gets" || bad "ui_words drops the glyphs a locale that isn't UTF-8 gets"
 case "$(kit 'ui_stage A x' $on $utf)" in *"${ESC}[2m${ESC}[0m"*) bad "a stage with nothing after its summary has no empty muted span" ;; *) ok "a stage with nothing after its summary has no empty muted span" ;; esac
 # A card: wrapped at spaces only, so a URL is never split, and tinted to the terminal's width.
 card="$(kit "ui_card '$long'" $on $utf COLUMNS=60)"

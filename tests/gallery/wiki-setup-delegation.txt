@@ -1,10 +1,8 @@
 Setup for <tmp>/wikis. Enter keeps the value in brackets.
-
-[1m== Delegation[0m
+[34m●[0m [1m[44m[97m SETUP [0m  [1mDelegation[0m
   created: <tmp>/wikis/delegation.md (mode ask)
-Sessions can hand big, self-contained work, like test runs and file sweeps, to sub-agents on cheaper models.
-off: never unless you ask. ask: suggest each one and wait for a yes. auto: do it and say so after.
-Which kinds of work go to which model is a table in <tmp>/wikis/delegation.md. Edit it any time.
-  mode (off, ask, auto) [ask]: 
-[32m✓[0m Done. After you pull template updates, wiki setup --new shows what's new.
-To see what it can do, ask your agent for the llm-wiki tour. It runs on a made-up project.
+[2m│[0m     Sessions can hand big, self-contained work, like test runs and file sweeps, to sub-agents on cheaper models.
+[2m│[0m     off: never unless you ask. ask: suggest each one and wait for a yes. auto: do it and say so after.
+[2m│[0m     Which kinds of work go to which model is a table in <tmp>/wikis/delegation.md. Edit it any time.
+[2m│[0m   [1m  mode (off, ask, auto)[0m [ask] [1m[33m›[0m [2m│[0m   [32m✓[0m Done. After you pull template updates, wiki setup --new shows what's new.
+[2m│[0m     To see what it can do, ask your agent for the llm-wiki tour. It runs on a made-up project.

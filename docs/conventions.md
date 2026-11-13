@@ -113,7 +113,7 @@ A blank line between groups. Marks in front, not words at the end. A column as w
 
 ## The kit: `ui.sh`
 
-Kit version 2. sha256 `0cc1611ee7c4f541244de4d5713c67e25c97196ff2756bc3a33ed6ed3822eb1a`.
+Kit version 3. sha256 `2aea7ad1afadc53edeff84a79881a5b9b879a031b8cfac515354192adc59f762`.
 
 `ui.sh` is in Bash 3.2 and has no dependency. llm-wiki keeps the original. Every other tool carries it byte for byte, beside its script, and sources it after setting three variables, which are all a tool changes:
 
