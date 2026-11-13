@@ -96,6 +96,25 @@ hook_item() {
   case "$n" in '' | *[!0-9]*) printf -- '-' ;; *) printf '%s' $((n - 1)) ;; esac
 }
 
+# prompt_item <session> <message>: the bytes the user-prompt hook hands over for a message,
+# or - when it hands over nothing or isn't in this checkout. The hook's own text, so a
+# longer sentence or a longer list shows up here.
+prompt_item() {
+  local n=""
+  if [ -f "$R/hooks/user-prompt.sh" ]; then
+    n="$(python3 -I -c 'import json, sys; print(json.dumps({"hook_event_name": "UserPromptSubmit", "session_id": sys.argv[1], "cwd": sys.argv[3], "prompt": sys.argv[2]}))' "$1" "$2" "$H/ws/plain-repo" \
+      | fx CLAUDE_PLUGIN_ROOT="$R" sh "$R/hooks/user-prompt.sh" 2>/dev/null \
+      | python3 -I -c '
+import json, sys
+try:
+    print(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"], end="")
+except Exception:
+    sys.exit(1)' 2>/dev/null \
+      | count 2>/dev/null)" || n=""
+  fi
+  case "$n" in '' | *[!0-9]*) printf -- '-' ;; *) printf '%s' "$n" ;; esac
+}
+
 # start_item <dir>: the bytes of `wiki.sh start` there, or - when it fails or isn't there.
 start_item() {
   local n=""
@@ -220,6 +239,15 @@ try:
 except Exception:
     pass' "$R/mcp/server.py" 2>/dev/null)"
   printf 'mcp: INSTRUCTIONS\t%s\n' "${pi:--}"
+  # What a message finds. Added to the fixture last, so no item above depends on it.
+  if [ -d "$H/wikis/payments" ] && [ -d "$H/wikis/lookup" ]; then
+    printf -- '- [Retry policy](wiki/concepts/retry.md): how a failed charge is retried.\n' >> "$H/wikis/payments/index.md"
+    printf '# Retry policy\n\nA charge is retried up to charge_retry_limit times.\n' > "$H/wikis/payments/wiki/concepts/retry.md"
+    printf -- '- [Quokka diet](wiki/concepts/quokka.md): which leaves a quokka eats.\n' >> "$H/wikis/lookup/index.md"
+    printf 'Quokkas prefer fresh eucalyptus leaves.\n' > "$H/wikis/lookup/raw/2026-01-02-leaves.md"
+  fi
+  printf 'hook: a message with a code name, one page\t%s\n' "$(prompt_item budget-1 'What is charge_retry_limit set to?')"
+  printf 'hook: a message with two ordinary words, a page and a note\t%s\n' "$(prompt_item budget-2 'Which leaves do quokkas eat?')"
 }
 
 # problems <measured file> <record file>: one line for each item whose numbers differ,
