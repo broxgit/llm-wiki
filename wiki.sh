@@ -514,7 +514,7 @@ copy_missing() {
     if [ ! -e "$root/$f" ]; then
       mkdir -p "$root/$(dirname "$f")"
       cp "$TEMPLATE/$f" "$root/$f"
-      case "$report:$f" in report:*.gitkeep | :*) ;; *) echo "added:    $f" ;; esac
+      case "$report:$f" in report:*.gitkeep | :*) ;; *) ui_detail "added:    $f" ;; esac
     fi
   done
 }
@@ -3407,9 +3407,9 @@ upgrade_one() {
   tv="$(version_of "$TEMPLATE/AGENTS.md")"
   wv="$(version_of "$root/AGENTS.md")"
   if [ "${wv:-0}" -gt "${tv:-0}" ]; then
-    echo "handbook: v$wv is newer than your template (v$tv), left alone. Update the template: git -C $(tilde "$REPO") pull"
+    ui_item warn "handbook: v$wv is newer than your template (v$tv), left alone. Update the template: $(typed "git -C $(tilde "$REPO") pull")"
   elif [ "${wv:-0}" -eq "${tv:-0}" ]; then
-    echo "handbook: already v${wv:-?}, nothing to replace"
+    ui_detail "handbook: already v${wv:-?}, nothing to replace"
   else
     # Outside git there is no history, so keep the old handbook beside the new one.
     in_git_repo "$root" || cp "$root/AGENTS.md" "$root/AGENTS.md.bak"
@@ -3418,29 +3418,29 @@ upgrade_one() {
     if [ -d "$TEMPLATE/rules" ]; then
       mkdir -p "$root/rules"
       for f in "$TEMPLATE"/rules/*.md; do
-        [ -e "$root/rules/${f##*/}" ] || echo "added:    rules/${f##*/}"
+        [ -e "$root/rules/${f##*/}" ] || ui_detail "added:    rules/${f##*/}"
         cp "$f" "$root/rules/"
       done
     fi
-    echo "handbook: v${wv:-?} -> v$tv"
+    ui_item ok "handbook: v${wv:-?} -> v$tv"
   fi
   # Older scaffolds pointed CLAUDE.md at the handbook in words. An import is reliable.
   if [ -f "$root/CLAUDE.md" ] && ! grep -q '^@AGENTS\.md' "$root/CLAUDE.md" \
     && [ "$(wc -l < "$root/CLAUDE.md" | tr -d ' ')" -le 1 ]; then
     cp "$TEMPLATE/CLAUDE.md" "$root/CLAUDE.md"
-    echo "CLAUDE.md: switched to an import of AGENTS.md"
+    ui_detail "CLAUDE.md: switched to an import of AGENTS.md"
   fi
   [ -f "$root/links.md" ] || had_links=0
   copy_missing "$root" report
   [ "$had_links" = 1 ] || link_shared "$root"
   if [ -f "$root/.gitignore" ] && ! grep -qxF '.compile-lock' "$root/.gitignore"; then
     printf '.compile-lock\n' >> "$root/.gitignore"
-    echo ".gitignore: added .compile-lock"
+    ui_detail ".gitignore: added .compile-lock"
   fi
   [ ! -f "$root/.gitignore" ] || ignore_obsidian "$root/.gitignore"
   r="$(wiki_repo "$root")"
   [ -z "$r" ] || install_hook "$r"
-  echo "done:     $(tilde "$root")"
+  ui_item ok "done:     $(tilde "$root")"
 }
 
 cmd_upgrade_all() {
@@ -3452,21 +3452,21 @@ cmd_upgrade_all() {
     d="${d%/}"
     is_wiki "$d" || continue
     found=1
-    echo "== ${d##*/}"
+    ui_stage UPGRADE "${d##*/}"
     upgrade_one "$d"
   done
-  [ "$found" = 1 ] || echo "(no wikis to upgrade)"
+  [ "$found" = 1 ] || ui_detail "(no wikis to upgrade)"
   [ ! -f "$WIKIS_DIR/.gitignore" ] || ignore_obsidian "$WIKIS_DIR/.gitignore"
   ensure_shared_conventions
-  echo "== journal"
+  ui_stage UPGRADE "journal"
   write_journal_config
   apply_journal_commit
-  echo "== delegation"
+  ui_stage UPGRADE "delegation"
   write_delegation_file
   apply_delegation_ignore
   # Team skills into whichever agents are on this machine.
   if [ -d "$HOME/.claude" ] || [ -d "$AGY_DIR" ] || [ -f "$CODEX_PLUGIN/.codex-plugin/plugin.json" ] || [ -d "$CURSOR_DIR/skills" ]; then
-    echo "== skills"
+    ui_stage UPGRADE "skills"
     [ ! -d "$HOME/.claude" ] || skills_link_into "$SKILLS_DIR" quiet
     [ ! -d "$AGY_DIR" ] || skills_link_into "$AGY_DIR/skills" quiet
     [ ! -f "$CODEX_PLUGIN/.codex-plugin/plugin.json" ] || skills_link_into "$CODEX_DIR/skills" quiet
@@ -3480,6 +3480,7 @@ cmd_upgrade_one() {
   is_wiki "$root" || die "$(tilde "$root") is not a wiki (needs AGENTS.md and index.md)"
   from="$(version_of "$root/AGENTS.md")"
   if [ "${from:-0}" -lt "$(version_of "$TEMPLATE/AGENTS.md")" ]; then behind=" ${root##*/}:${from:-0}"; fi
+  ui_stage UPGRADE "${root##*/}"
   upgrade_one "$root"
   upgrade_summary "${from:-0}" "$behind" "$root"
 }
@@ -3509,7 +3510,7 @@ changelog_since() {
   to="$(version_of "$TEMPLATE/AGENTS.md")"
   [ -f "$REPO/CHANGELOG.md" ] || return 0
   awk -v f="$1" -v t="${to:-0}" '
-    /^## v[0-9]+/ { v = substr($2, 2) + 0; show = (v > f && v <= t); if (show) print "\n" substr($0, 4); next }
+    /^## v[0-9]+/ { v = substr($2, 2) + 0; show = (v > f && v <= t); if (show) print substr($0, 4); next }
     /^## / { show = 0; next }
     show && /^- / { print "  " $0 }
   ' "$REPO/CHANGELOG.md"
@@ -3551,51 +3552,69 @@ EOF2
   if [ -n "$1" ]; then msg="wikis: handbook v$tv"; else msg="wikis: update collection files"; fi
   # shellcheck disable=SC2086
   if (cd "$WIKIS_DIR" && git add -- $paths && git commit -q -m "$msg" -- $paths) >/dev/null 2>&1; then
-    echo "${2}Committed the upgrade as \"$msg\"."
-    [ -z "$(git -C "$WIKIS_DIR" remote)" ] || echo "${2}Push it: git -C $(tilde "$WIKIS_DIR") push"
+    ui_item ok "Committed the upgrade as \"$msg\"."
+    [ -z "$(git -C "$WIKIS_DIR" remote)" ] || ui_item warn "Push it: $(typed "git -C $(tilde "$WIKIS_DIR") push")"
   else
-    echo "${2}The upgrade isn't committed: git refused. Commit it yourself:"
-    echo "    git -C $(tilde "$WIKIS_DIR") add${paths} && git -C $(tilde "$WIKIS_DIR") commit -m \"$msg\""
+    ui_item warn "The upgrade isn't committed: git refused. Commit it yourself:"
+    ui_detail "$(typed "git -C $(tilde "$WIKIS_DIR") add${paths} && git -C $(tilde "$WIKIS_DIR") commit -m \"$msg\"")"
   fi
 }
 
 # upgrade_summary <from> <upgraded names> [one wiki root]: what changed and what to do next.
+# With LLM_WIKI_UPGRADE_DATA set, as wiki update runs it, it commits and hands back one line
+# instead, "upgraded<TAB>from<TAB>names<TAB>wiki", for update to show in its own timeline.
 upgrade_summary() {
-  local from="$1" names="$2" one="${3:-}" tv n d groups=""
+  local from="$1" names="$2" one="${3:-}" plain="" d
+  # names arrives as name:version pairs; the commit takes the names.
+  for d in $names; do plain="$plain ${d%:*}"; done
+  if [ -n "${LLM_WIKI_UPGRADE_DATA:-}" ]; then
+    upgrade_commit "$plain" >/dev/null
+    printf 'upgraded\t%s\t%s\t%s\n' "$from" "$names" "$one"
+    return 0
+  fi
+  upgrade_changed "$from" "$names" "$one"
+  ui_stage NEXT "what to do now"
+  if [ -n "$names" ]; then
+    ui_detail "New sessions load the new handbook."
+    session_update_note
+  fi
+  upgrade_commit "$plain"
+  if [ "$(claude_state)" = old ]; then
+    ui_item warn "Your Claude Code wiki line is out of date: $(typed "$WIKI_CMD claude")"
+  fi
+  if [ -n "$(setup_pending)" ]; then
+    ui_item warn "New settings to look at: $(typed "$WIKI_CMD setup --new")"
+  fi
+  ui_detail "Settings any time: $(typed "$WIKI_CMD setup --list")"
+}
+
+# upgrade_changed <from> <upgraded names> [one wiki root]: the CHANGED stage, what the upgrade did,
+# with what's new in the handbook since the oldest version it came from.
+upgrade_changed() {
+  local from="$1" names="$2" one="${3:-}" tv n d l groups=""
   tv="$(version_of "$TEMPLATE/AGENTS.md")"
-  echo
-  echo "== What changed"
   # names arrives as name:version pairs. Group them by the version they came from.
   if [ -n "$names" ]; then
     groups="$(for d in $names; do echo "${d##*:} ${d%:*}"; done | sort -k1,1rn -k2,2 | awk '
-      $1 != last { if (line) print line; line = ($1 == 0 ? "  from an unversioned handbook:" : "  from v" $1 ":"); last = $1 }
+      $1 != last { if (line) print line; line = ($1 == 0 ? "from an unversioned handbook:" : "from v" $1 ":"); last = $1 }
       { line = line " " $2 } END { if (line) print line }')"
     names="$(for d in $names; do printf ' %s' "${d%:*}"; done)"
   fi
   if [ -z "$names" ] && [ -n "$one" ]; then
-    echo "Nothing. ${one##*/} was already on handbook v$tv."
+    ui_stage CHANGED "Nothing. ${one##*/} was already on handbook v$tv."
   elif [ -z "$names" ]; then
-    echo "Nothing. Every wiki was already on handbook v$tv."
+    ui_stage CHANGED "Nothing. Every wiki was already on handbook v$tv."
   else
     n="$(echo "$names" | wc -w | tr -d ' ')"
-    printf 'Upgraded %s wiki(s) to handbook v%s.\n%s\n' "$n" "$tv" "$groups"
-    if [ "$from" = 0 ]; then echo; echo "What's new (all versions on record):"; else echo; echo "What's new since v$from:"; fi
-    changelog_since "$from"
+    ui_stage --ok CHANGED "Upgraded $n wiki(s) to handbook v$tv."
+    while IFS= read -r l; do [ -z "$l" ] || ui_detail "$l"; done <<EOF2
+$groups
+EOF2
+    if [ "$from" = 0 ]; then ui_detail "What's new (all versions on record):"; else ui_detail "What's new since v$from:"; fi
+    while IFS= read -r l; do [ -z "$l" ] || ui_detail "$l"; done <<EOF2
+$(changelog_since "$from")
+EOF2
   fi
-  echo
-  echo "== Next"
-  if [ -n "$names" ]; then
-    echo "- New sessions load the new handbook."
-    session_update_note
-  fi
-  upgrade_commit "$names" "- "
-  if [ "$(claude_state)" = old ]; then
-    echo "- Your Claude Code wiki line is out of date: $WIKI_CMD claude"
-  fi
-  if [ -n "$(setup_pending)" ]; then
-    echo "- New settings to look at: $WIKI_CMD setup --new"
-  fi
-  echo "- Settings any time: $WIKI_CMD setup --list"
 }
 
 cmd_unlock() {
@@ -4897,9 +4916,22 @@ news_unseen() {
   fi
 }
 
-# news_print <n>: the newest n entries.
+# news_print <n>: the newest n entries, as written.
 news_print() {
   awk -v n="$1" '/^## / { c++; if (c > n) exit } c >= 1' "$NEWS_FILE"
+}
+
+# news_show: entries from news_print, each a NEWS stage with its title, and its lines, as they
+# are written, on the rail.
+news_show() {
+  local l
+  while IFS= read -r l; do
+    case "$l" in
+      "## "*) ui_stage NEWS "${l#\#\# }" ;;
+      "") ;;
+      *) ui_detail "$l" ;;
+    esac
+  done
 }
 
 news_mark_seen() {
@@ -4913,11 +4945,11 @@ cmd_news() {
   case "${1:-}" in
     --all)
       [ -f "$NEWS_FILE" ] || die "no NEWS.md in $(tilde "$REPO")"
-      news_print 999999
+      news_print 999999 | news_show
       ;;
     "")
       n="$(news_unseen)"
-      if [ "$n" -gt 0 ]; then news_print "$n"
+      if [ "$n" -gt 0 ]; then news_print "$n" | news_show
       else echo "Nothing new since you last looked. All of it: $WIKI_CMD news --all"; fi
       ;;
     -h | --help)
@@ -5199,35 +5231,16 @@ setup_chat() {
 
 # up_ok and up_warn: a line of update's report. At a terminal a tick or a warning mark
 # takes the place of the "- "; piped, the "- " stays.
-up_ok() { printf '%s%s\n' "${M_OK:-- }" "$*"; }
-up_warn() { printf '%s%s\n' "${M_WARN:-- }" "$*"; }
-# news_titles: NEWS.md entries as written, except that a title line is bold at a terminal.
-news_titles() {
-  if [ "$STYLE" = yes ]; then awk -v b="$S_BOLD" -v o="$S_OFF" '/^## / { print b $0 o; next } { print }'; else cat; fi
-}
-
-# bold_heads: a line that starts "== " is a heading: bold at a terminal, the words as they are.
-bold_heads() {
-  if [ "$STYLE" = yes ]; then sed "s/^== .*/${S_BOLD}&${S_OFF}/"; else cat; fi
-}
-
 # session_update_note: how to bring sessions that are already open up to date.
 session_update_note() {
-  if [ "${1:-}" = warn ]; then
-    up_warn "Sessions already open keep the handbook they started with. Start new ones, or paste this into each:"
-    printf '    %s\n' "$(typed "Run wiki start in this repository, reread this wiki's AGENTS.md and follow it for the rest of this session.")"
-    return 0
-  fi
-  cat <<EOF
-- Sessions already open keep the handbook they started with. Start new ones, or paste this into each:
-    Run wiki start in this repository, reread this wiki's AGENTS.md and follow it for the rest of this session.
-EOF
+  ui_item warn "Sessions already open keep the handbook they started with. Start new ones, or paste this into each:"
+  ui_detail "$(typed "Run wiki start in this repository, reread this wiki's AGENTS.md and follow it for the rest of this session.")"
 }
 
 # restart_note: apps load a plugin when they start, so an update reaches them only
 # after a restart. Cursor runs the Claude Code plugin's copy too.
 restart_note() {
-  up_warn "Quit and reopen the Claude app$([ "$(cursor_state)" = none ] || echo ' and Cursor'), and restart terminal sessions, so they load the new plugin."
+  ui_item warn "Quit and reopen the Claude app$([ "$(cursor_state)" = none ] || echo ' and Cursor'), and restart terminal sessions, so they load the new plugin."
 }
 
 cmd_update() {
@@ -5239,7 +5252,7 @@ cmd_update() {
     esac
   done
   [ "$wikis_only" = 0 ] || { update_wikis; return 0; }
-  say_head "== Updating llm-wiki"
+  ui_stage UPDATE "llm-wiki"
   new="$REPO/wiki.sh"
   if from_plugin; then
     command -v claude >/dev/null 2>&1 || die "no claude command, so the plugin can't be updated from here"
@@ -5251,9 +5264,9 @@ cmd_update() {
     restart_note
   elif git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     k="$(git -C "$REPO" rev-parse --abbrev-ref HEAD)"
-    case "$k" in main | master) ;; *) echo "- $(tilde "$REPO") is on the branch $k, so this pulls that branch, not the released code." ;; esac
+    case "$k" in main | master) ;; *) ui_item warn "$(tilde "$REPO") is on the branch $k, so this pulls that branch, not the released code." ;; esac
     git -C "$REPO" pull -q --no-rebase --no-edit || die "the pull in $(tilde "$REPO") failed. Fix it, then run $WIKI_CMD update again."
-    up_ok "pulled $(tilde "$REPO")"
+    ui_item ok "pulled $(tilde "$REPO")"
     # A machine that runs from a clone may still have the plugin installed, and its
     # cached copy goes stale. Other agents load its hook too, so keep it current.
     k="$(python3 -c '
@@ -5265,13 +5278,13 @@ except Exception:
     print("")' 2>/dev/null || true)"
     if [ -n "$k" ] && command -v claude >/dev/null 2>&1; then
       claude plugin marketplace update "${k#*@}" >/dev/null 2>&1 && claude plugin update "$k" >/dev/null 2>&1 \
-        && { up_ok "updated the installed plugin's copy ($k) too"; restart_note; } \
-        || up_warn "couldn't update the installed plugin's copy ($k): $(typed "claude plugin update $k")"
+        && { ui_item ok "updated the installed plugin's copy ($k) too"; restart_note; } \
+        || ui_item warn "couldn't update the installed plugin's copy ($k): $(typed "claude plugin update $k")"
     fi
   else
-    up_warn "$(tilde "$REPO") is neither the plugin nor a git clone, so the code wasn't updated."
+    ui_item warn "$(tilde "$REPO") is neither the plugin nor a git clone, so the code wasn't updated."
   fi
-  [ "$(agy_state)" = none ] || up_warn "Restart Antigravity, so it reloads the llm-wiki plugin."
+  [ "$(agy_state)" = none ] || ui_item warn "Restart Antigravity, so it reloads the llm-wiki plugin."
   # The new version does the rest. exec: this process becomes it, reading no further here.
   if [ -n "${LLM_WIKI_FIXED_DIR:-}" ]; then
     exec env LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" "$new" update --wikis-only
@@ -5285,47 +5298,46 @@ update_wikis() {
   # The helper that goes with this version of the code. Skipped where one is built in
   # the checkout, which is newer than any release.
   if [ -z "${LLM_WIKI_NO_GO:-}" ] && [ -f "$HELPER_LOCK" ] && ! helper_ok "$REPO/bin/llm-wiki"; then
-    echo
-    say_head "== Helper"
-    k="$(helper_fetch)" && up_ok "$k" || up_warn "$k. Nothing is lost: the ported commands run their built-in code, only slower."
+    ui_stage HELPER "the compiled helper for this version"
+    k="$(helper_fetch)" && ui_item ok "$k" || ui_item warn "$k. Nothing is lost: the ported commands run their built-in code, only slower."
   fi
   while IFS="$TAB" read -r n f r; do
     [ -d "$f" ] || continue
-    echo
-    say_head "== Collection $n: $(tilde "$f")"
+    ui_stage COLLECTION "$n: $(tilde "$f")"
     track=""
     if in_git_repo "$f" && [ -n "$(git -C "$f" remote 2>/dev/null)" ]; then
       track="$(track_remote "$f")"
-      [ "$track" = new ] || git -C "$f" pull -q --no-rebase --no-edit </dev/null || up_warn "the pull failed; upgrading what's here. Pull and push by hand afterwards."
+      [ "$track" = new ] || git -C "$f" pull -q --no-rebase --no-edit </dev/null || ui_item warn "the pull failed; upgrading what's here. Pull and push by hand afterwards."
     fi
-    WIKIS_DIR="$f" "$REPO/wiki.sh" upgrade --all </dev/null | sed -n '/^== What changed/,/^== Next/p' | sed '$d' | bold_heads
+    # The upgrade hands back what it did, which this shows as its own CHANGED stage.
+    k="$(LLM_WIKI_UPGRADE_DATA=1 WIKIS_DIR="$f" "$REPO/wiki.sh" upgrade --all </dev/null 2>/dev/null | sed -n 's/^upgraded'"$TAB"'//p' | tail -n 1)"
+    [ -z "$k" ] || upgrade_changed "${k%%"$TAB"*}" "$(printf '%s' "$k" | cut -f 2)"
     if in_git_repo "$f" && [ -n "$(git -C "$f" remote 2>/dev/null)" ]; then
       ahead="$(git -C "$f" rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)"
       if [ "$track" = new ]; then
-        git -C "$f" push -q -u origin HEAD </dev/null && up_ok "pushed to origin for the first time" || up_warn "the first push failed. Check the remote with: $(typed "$WIKI_CMD setup git")"
+        git -C "$f" push -q -u origin HEAD </dev/null && ui_item ok "pushed to origin for the first time" || ui_item warn "the first push failed. Check the remote with: $(typed "$WIKI_CMD setup git")"
       elif [ "${ahead:-0}" -gt 0 ]; then
-        git -C "$f" push -q </dev/null && up_ok "pushed $ahead commit(s)" || up_warn "the push failed. Run: $(typed "git -C $(tilde "$f") pull --no-rebase && git -C $(tilde "$f") push")"
+        git -C "$f" push -q </dev/null && ui_item ok "pushed $ahead commit(s)" || ui_item warn "the push failed. Run: $(typed "git -C $(tilde "$f") pull --no-rebase && git -C $(tilde "$f") push")"
       fi
     fi
   done <<EOF2
 $(if [ -n "${LLM_WIKI_FIXED_DIR:-}" ]; then printf 'here\t%s\t\n' "$WIKIS_DIR"; else collections; fi)
 EOF2
-  echo
   if [ -t 0 ] && [ -n "$(setup_pending)" ]; then
-    "$REPO/wiki.sh" setup --new
     echo
+    "$REPO/wiki.sh" setup --new
   fi
   k="$(news_unseen)"
   if [ "$k" -gt 0 ]; then
-    say_head "== What's new in llm-wiki"
-    news_print "$k" | news_titles
+    news_print "$k" | news_show
     news_mark_seen
-    echo
   fi
-  say_head "== Next"
-  [ -t 0 ] || [ -z "$(setup_pending)" ] || up_warn "New settings to look at: $(typed "$WIKI_CMD setup --new")"
-  [ -z "$(listed_cli_tools)" ] || up_warn "To let agents run the tools your wikis list without asking: $(typed "$WIKI_CMD setup tools")"
-  session_update_note warn
+  # news_show drew its stages in a pipe's subshell; the rail goes on to NEXT all the same.
+  _UI_RAIL=yes
+  ui_stage NEXT "what to do now"
+  [ -t 0 ] || [ -z "$(setup_pending)" ] || ui_item warn "New settings to look at: $(typed "$WIKI_CMD setup --new")"
+  [ -z "$(listed_cli_tools)" ] || ui_item warn "To let agents run the tools your wikis list without asking: $(typed "$WIKI_CMD setup tools")"
+  session_update_note
 }
 
 # ---- journal ----------------------------------------------------------------
@@ -8685,7 +8697,7 @@ setup_upgrade() {
     ui_detail "What's new since v$from:"
     changelog_since "$from" | sed 's/^/  /'
     ui_detail "New sessions load the new handbook. Running sessions keep the old one until restarted."
-    upgrade_commit "$behind" ""
+    upgrade_commit "$behind"
   fi
 }
 

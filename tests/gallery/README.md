@@ -10,7 +10,7 @@ What each command a person reads prints at a terminal, made by `scripts/gallery.
 
 - `wiki pages demo`: unstyled. Pieces: -. [wiki-pages.txt](wiki-pages.txt)
 
-- `wiki news --all`: unstyled. Pieces: -. [wiki-news.txt](wiki-news.txt)
+- `wiki news --all`: kit. Pieces: detail stage. [wiki-news.txt](wiki-news.txt)
 
 - `wiki setup --list`: kit. Pieces: table typed. [wiki-setup-list.txt](wiki-setup-list.txt)
 
@@ -40,13 +40,13 @@ What each command a person reads prints at a terminal, made by `scripts/gallery.
 
 - `wiki stale 30`: unstyled. Pieces: -. [wiki-stale.txt](wiki-stale.txt)
 
-- `wiki upgrade demo`: unstyled. Pieces: -. [wiki-upgrade.txt](wiki-upgrade.txt)
+- `wiki upgrade demo`: kit. Pieces: detail item stage typed. [wiki-upgrade.txt](wiki-upgrade.txt)
 
 - `wiki unlock demo`: unstyled. Pieces: -. [wiki-unlock.txt](wiki-unlock.txt)
 
 - `wiki claude --print`: unstyled. Pieces: -. [wiki-claude.txt](wiki-claude.txt)
 
-- `wiki update --wikis-only`: old look. Pieces: typed. [wiki-update.txt](wiki-update.txt)
+- `wiki update --wikis-only`: kit. Pieces: detail item stage typed. [wiki-update.txt](wiki-update.txt)
 
 - `wiki relay`: unstyled. Pieces: -. [wiki-relay.txt](wiki-relay.txt)
 

@@ -1,4 +1,3 @@
-## YYYY-MM-DD: An entry
-
-- Something you would notice.
-- Do: run `wiki status`.
+[34m●[0m [1m[44m[97m NEWS [0m  [1mYYYY-MM-DD: An entry[0m
+[2m│[0m     - Something you would notice.
+[2m│[0m     - Do: run `wiki status`.
