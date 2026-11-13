@@ -1,0 +1,34 @@
+# Size budget: bytes of text an agent is handed, one fixed piece per line. Made by tests/budget.sh.
+# Run: tests/budget.sh --update when a change moves one, and say in the pull request why it did.
+find: a word in an index line, a page and a note	217
+hook: a branch named for a ticket, no wiki	1465
+hook: a clone with a wiki	862
+hook: a clone with two notes waiting	1085
+hook: a folder a pattern sets to none	304
+hook: a folder holding more than 30 folders	1236
+hook: a folder holding nothing	1305
+hook: a ticket folder with no wikis	1590
+hook: a ticket folder with pages that mention it	1652
+hook: a ticket folder, two wikis, no pattern	1382
+hook: a ticket folder, two wikis, pattern recorded	1190
+list: the fixture wikis	68
+mcp: INSTRUCTIONS	1305
+skill: the description	197
+start: a branch named for a ticket, no wiki	1022
+start: a clone with a wiki	765
+start: a clone with two notes waiting	871
+start: a ticket folder with pages that mention it	1326
+start: a ticket folder, two wikis, no pattern	1447
+template/AGENTS.md	15555
+template/rules/compile.md	10785
+template/rules/conflicts.md	1581
+template/rules/delegation.md	4985
+template/rules/feedback.md	2202
+template/rules/journal.md	6505
+template/rules/lint.md	3170
+template/rules/open.md	2425
+template/rules/patterns.md	9611
+template/rules/peers.md	5386
+template/rules/sync.md	1995
+template/rules/workflows.md	3741
+workflows: one pattern recorded	286
