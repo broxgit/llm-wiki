@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# ui.sh: how the llm tools look at a terminal. Kit version 2, for docs/conventions.md version 4.
+# ui.sh: how the llm tools look at a terminal. Kit version 3, for docs/conventions.md version 4.
 # llm-wiki keeps the original. Every other tool carries this file byte for byte, and a test holds
 # the copies together, so change it in llm-wiki first and copy it in the same sitting. Bash 3.2.
 #
@@ -207,10 +207,12 @@ ui_keys() {
   printf '%s%s%s%s ' "$out" "$S_BOLD$S_WARN" "$_G_PROMPT" "$S_OFF"
 }
 # ui_prompt <question> [<default>]: a question answered by typing a line: the question, the
-# default in brackets, and the prompt, with no line end. The caller reads the line.
+# default in brackets, and the prompt, with no line end, on the rail under a stage. The caller
+# reads the line.
 ui_prompt() {
   _ui_t ui_prompt
-  printf '%s%s%s%s %s%s%s ' "$S_BOLD" "$1" "$S_OFF" "${2:+ [$2]}" "$S_BOLD$S_WARN" "$_G_PROMPT" "$S_OFF"
+  _ui_rail
+  printf '%s%s%s%s%s %s%s%s ' "$_UI_PRE" "$S_BOLD" "$1" "$S_OFF" "${2:+ [$2]}" "$S_BOLD$S_WARN" "$_G_PROMPT" "$S_OFF"
 }
 # ui_stage [--ok|--warn|--error] <LABEL> <summary> [<more>...]: a step of the command's work, as
 # a dot on a rail with a coloured label, then one line: the summary, and the rest muted, joined
@@ -472,10 +474,11 @@ say_next() { _ui_t v2; printf '%sNext:%s %s\n' "$S_BOLD$S_TYPED" "$S_OFF" "$*"; 
 # ---- for tests --------------------------------------------------------------------------------
 # ui_words: the words of what a command printed, one a line, so a terminal's output can be held
 # to its plain output. Codes go; so does every token made only of glyphs (│ ● ◆ · › and the
-# marks), and a "-", "+" or "!" standing alone, the plain marks.
+# marks), and a "-", "+", "!", ">", "|" or "*" standing alone: the plain marks, and the glyphs
+# where the locale isn't UTF-8.
 ui_words() {
   LC_ALL=C sed -e "s/$(printf '\033')\\[[0-9;]*[mK]//g" -e "s/$(printf '\r')//g" | LC_ALL=C tr -s ' \t' '\n\n' |
-    LC_ALL=C grep -v -x -e '[^[:print:]]*' -e '-' -e '+' -e '!' || true
+    LC_ALL=C grep -v -x -e '[^[:print:]]*' -e '-' -e '+' -e '!' -e '>' -e '|' -e '\*' || true
 }
 
 # _ui_demo: every piece, in the look of the terminal it runs in, then the settings in force, on

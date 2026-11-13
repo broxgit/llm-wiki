@@ -4608,17 +4608,19 @@ setup_feedback() {
   cur="$(feedback_mode)"
   setup_due feedback || return 0
   section "Feedback on llm-wiki"
-  echo "Agents can keep a note when llm-wiki itself gets in their way: a command that failed or misled, instructions that"
-  echo "conflicted, work a command should have done. At most one a session, never mid-task. Notes stay on this machine."
-  echo "  off    nothing is kept"
-  echo "  notes  keep notes for you to read: $WIKI_CMD feedback"
-  echo "  share  keep them, and let you file one as an issue on $(feedback_repo). You read each one first;"
-  echo "         names of your projects, paths and emails are scrubbed. Nothing is sent without your yes."
+  ui_detail "Agents can keep a note when llm-wiki itself gets in their way: a command that failed or misled, instructions that"
+  ui_detail "conflicted, work a command should have done. At most one a session, never mid-task. Notes stay on this machine."
+  ui_detail "  off    nothing is kept"
+  ui_detail "  notes  keep notes for you to read: $WIKI_CMD feedback"
+  ui_detail "  share  keep them, and let you file one as an issue on $(feedback_repo). You read each one first;"
+  ui_detail "         names of your projects, paths and emails are scrubbed. Nothing is sent without your yes."
   while :; do
     ask "Feedback" "$cur"
-    case "$ANSWER" in off | notes | share) break ;; *) echo "  Answer off, notes or share." ;; esac
+    case "$ANSWER" in off | notes | share) break ;; *) ui_item warn "Answer off, notes or share." ;; esac
   done
-  feedback_set "$ANSWER" && echo "  $([ "$ANSWER" = off ] || printf %s "$M_OK")feedback: $ANSWER"
+  if feedback_set "$ANSWER"; then
+    if [ "$ANSWER" = off ]; then ui_detail "feedback: off"; else ui_item ok "feedback: $ANSWER"; fi
+  fi
   setup_mark feedback
 }
 
@@ -4635,17 +4637,17 @@ setup_palette() {
   local cur
   setup_due palette || return 0
   section "Colours"
-  echo "default keeps green for ok and red for an error. colorblind uses blue and magenta instead, which stay apart"
-  echo "for most kinds of colour blindness. Marks and words are the same either way."
-  echo "LLM_PALETTE=default or colorblind overrides this, for every llm-* tool, in one shell."
+  ui_detail "default keeps green for ok and red for an error. colorblind uses blue and magenta instead, which stay apart"
+  ui_detail "for most kinds of colour blindness. Marks and words are the same either way."
+  ui_detail "LLM_PALETTE=default or colorblind overrides this, for every llm-* tool, in one shell."
   cur="$(palette_setting)"
   while :; do
     ask "Palette (default, colorblind)" "$cur"
-    case "$ANSWER" in default | colorblind) break ;; *) echo "  Answer default or colorblind." ;; esac
+    case "$ANSWER" in default | colorblind) break ;; *) ui_item warn "Answer default or colorblind." ;; esac
   done
   mkdir -p "$(dirname "$STYLE_PALETTE_FILE")"
   printf '# Colours: default or colorblind. Written by %s setup palette.\npalette=%s\n' "$WIKI_CMD" "$ANSWER" > "$STYLE_PALETTE_FILE"
-  echo "  ${M_OK}palette: $ANSWER"
+  ui_item ok "palette: $ANSWER"
   setup_mark palette
 }
 
@@ -4662,17 +4664,17 @@ setup_theme() {
   local cur
   setup_due theme || return 0
   section "Theme"
-  echo "Colours are picked to read on a dark terminal or a light one. auto takes the terminal's word for it where"
-  echo "it gives one (COLORFGBG), and dark otherwise. Say light if your terminal has a light background."
-  echo "LLM_THEME=auto, dark or light overrides this, for every llm-* tool, in one shell."
+  ui_detail "Colours are picked to read on a dark terminal or a light one. auto takes the terminal's word for it where"
+  ui_detail "it gives one (COLORFGBG), and dark otherwise. Say light if your terminal has a light background."
+  ui_detail "LLM_THEME=auto, dark or light overrides this, for every llm-* tool, in one shell."
   cur="$(theme_setting)"
   while :; do
     ask "Theme (auto, dark, light)" "$cur"
-    case "$ANSWER" in auto | dark | light) break ;; *) echo "  Answer auto, dark or light." ;; esac
+    case "$ANSWER" in auto | dark | light) break ;; *) ui_item warn "Answer auto, dark or light." ;; esac
   done
   mkdir -p "$(dirname "$STYLE_THEME_FILE")"
   printf '# The terminal'"'"'s background: auto, dark or light. Written by %s setup theme.\ntheme=%s\n' "$WIKI_CMD" "$ANSWER" > "$STYLE_THEME_FILE"
-  echo "  ${M_OK}theme: $ANSWER"
+  ui_item ok "theme: $ANSWER"
   setup_mark theme
 }
 
@@ -4789,12 +4791,12 @@ setup_obsidian() {
   [ -d "$(obsidian_dir)" ] || return 0
   if [ "$SETUP_MODE" = new ] && { setup_done obsidian || [ "$(obsidian_state)" = ours ]; }; then return 0; fi
   section "Obsidian"
-  echo "Obsidian is on this machine. It can browse the wikis as one vault over $(tilde "$WIKIS_DIR"): search, links, the graph."
-  echo "Starter settings keep that safe: links stay plain markdown, pasted files stay inside the wiki, and raw notes"
-  echo "stay out of search and the graph. Agents still maintain the pages. Settings: $(obsidian_state)."
+  ui_detail "Obsidian is on this machine. It can browse the wikis as one vault over $(tilde "$WIKIS_DIR"): search, links, the graph."
+  ui_detail "Starter settings keep that safe: links stay plain markdown, pasted files stay inside the wiki, and raw notes"
+  ui_detail "stay out of search and the graph. Agents still maintain the pages. Settings: $(obsidian_state)."
   if ask_yn "Write the starter settings?" n; then
     cmd_obsidian --no-open | sed 's/^/  /'
-    echo "  To open it: $(typed "$WIKI_CMD obsidian")"
+    ui_detail "  To open it: $(typed "$WIKI_CMD obsidian")"
   fi
   setup_mark obsidian
 }
@@ -4810,39 +4812,39 @@ setup_extensions() {
     if [ "$SETUP_MODE" = new ] && { setup_done "extension.$n" || ext_on "$n"; }; then continue; fi
     section "Extension: $n"
     d="$(ext_about "$f")"
-    echo "${d:-An optional command, $WIKI_CMD $n.}"
+    ui_detail "${d:-An optional command, $WIKI_CMD $n.}"
     d="$(ext_needs "$f")"
     if [ -n "$d" ]; then
       # Not marked as asked: it is offered again once the machine has what it needs.
-      echo "  ${M_WARN}It needs $d, which isn't on this machine, so it can't be turned on here. Do: install $d, then $(typed "$WIKI_CMD setup extensions")"
+      ui_item warn "It needs $d, which isn't on this machine, so it can't be turned on here. Do: install $d, then $(typed "$WIKI_CMD setup extensions")"
       continue
     fi
-    echo "It is optional, and off unless you turn it on. $WIKI_CMD extensions add $n does the same later."
+    ui_detail "It is optional, and off unless you turn it on. $WIKI_CMD extensions add $n does the same later."
     if ask_yn "Turn on $WIKI_CMD $n?" "$(ext_on "$n" && echo y || echo n)"; then
       ext_set "$n" on
-      echo "  ${M_OK}on. $WIKI_CMD $n --help has its commands."
+      ui_item ok "on. $WIKI_CMD $n --help has its commands."
       if ext_has_setup "$f"; then
         echo
         ext_setup "$n"
-        echo "To go through this again: $(typed "$WIKI_CMD extensions setup $n")"
+        ui_detail "To go through this again: $(typed "$WIKI_CMD extensions setup $n")"
       fi
     else
       ext_set "$n" off
-      echo "  off"
+      ui_detail "  off"
     fi
     setup_mark "extension.$n"
   done
   [ -n "$(ext_wanting tick)" ] || return 0
   if [ "$SETUP_MODE" = new ] && setup_done extensions.every; then return 0; fi
   section "Extensions: how often"
-  echo "An extension that works by itself is run from session start, in the background, at most once in"
-  echo "this long: $(ext_wanting tick | tr '\n' ' ')"
-  echo "Give a number and m, h, d or w, such as 4h or 2d. One extension can have its own, which wins:"
-  echo "$WIKI_CMD extensions every <name> <time>"
+  ui_detail "An extension that works by itself is run from session start, in the background, at most once in"
+  ui_detail "this long: $(ext_wanting tick | tr '\n' ' ')"
+  ui_detail "Give a number and m, h, d or w, such as 4h or 2d. One extension can have its own, which wins:"
+  ui_detail "$WIKI_CMD extensions every <name> <time>"
   ask "Time between runs" "$(ext_every)"
   if dur_minutes "$ANSWER" >/dev/null; then ext_every_set every "$((10#${ANSWER%[mhdw]}))${ANSWER#"${ANSWER%[mhdw]}"}"
-  else echo "  ${M_WARN}$ANSWER isn't a length of time, so it stays as it was"; fi
-  echo "  ${M_OK}tick: every $(ext_every)"
+  else ui_item warn "$ANSWER isn't a length of time, so it stays as it was"; fi
+  ui_item ok "tick: every $(ext_every)"
   setup_mark extensions.every
 }
 
@@ -4850,14 +4852,14 @@ setup_helper() {
   setup_due helper || return 0
   if [ ! -f "$HELPER_LOCK" ] || [ -z "$(helper_platform)" ]; then setup_mark helper; return 0; fi
   section "The helper"
-  echo "wiki report and wiki standup run several times faster through a small compiled helper, about 3 MB."
-  echo "$WIKI_CMD update downloads it from this project's GitHub releases, and keeps it only if it matches a"
-  echo "checksum that came with the code you already run. It can also be fetched at session start, in the"
-  echo "background, whenever it is missing or out of date, so a plugin update doesn't leave it behind."
+  ui_detail "wiki report and wiki standup run several times faster through a small compiled helper, about 3 MB."
+  ui_detail "$WIKI_CMD update downloads it from this project's GitHub releases, and keeps it only if it matches a"
+  ui_detail "checksum that came with the code you already run. It can also be fetched at session start, in the"
+  ui_detail "background, whenever it is missing or out of date, so a plugin update doesn't leave it behind."
   if ask_yn "Fetch it automatically at session start?" "$(helper_auto_on && echo y || echo n)"; then
-    helper_auto_set on && echo "  ${M_OK}helper auto: on"
+    helper_auto_set on && ui_item ok "helper auto: on"
   else
-    helper_auto_set off && echo "  helper auto: off"
+    helper_auto_set off && ui_detail "  helper auto: off"
   fi
   setup_mark helper
 }
@@ -5161,7 +5163,7 @@ chat_wait_closed() {
 setup_unreadable() {
   [ "$SETUP_MODE" != new ] || return 0
   section "$1"
-  echo "Can't read $(tilde "$2") from this shell, so there's no telling how this is set up. Nothing was changed."
+  ui_detail "Can't read $(tilde "$2") from this shell, so there's no telling how this is set up. Nothing was changed."
 }
 
 setup_chat() {
@@ -5174,14 +5176,14 @@ setup_chat() {
   fi
   section "Claude desktop Chat"
   case "$state" in
-    current) echo "${M_OK}The Chat tab can reach your wikis."; chat_note ;;
-    old) if chat_wait_closed && chat_write; then echo "${M_OK}Updated the llm-wiki server in the desktop app's config. Open the Claude app to use it."; fi ;;
+    current) ui_item ok "The Chat tab can reach your wikis."; chat_note ;;
+    old) if chat_wait_closed && chat_write; then ui_item ok "Updated the llm-wiki server in the desktop app's config. Open the Claude app to use it."; fi ;;
     missing)
-      echo "The desktop app's Chat tab has no file access, so it can't use a wiki. A small local server gives it tools to search and read your wikis and save notes. It runs on this machine; nothing goes anywhere except the pushes to your own wiki remote."
+      ui_detail "The desktop app's Chat tab has no file access, so it can't use a wiki. A small local server gives it tools to search and read your wikis and save notes. It runs on this machine; nothing goes anywhere except the pushes to your own wiki remote."
       if ask_yn "Add it to the desktop app's config? Everything else there stays, with a backup beside it." y; then
         chat_wait_closed || return 1
-        if chat_write; then echo "  ${M_OK}added. Open the Claude app."; chat_note; echo "  Then ask a new Chat something your wikis know."
-        else echo "  ${M_WARN}couldn't change the config. To add it by hand, with the app closed: $(typed "$WIKI_CMD mcp --print")"; fi
+        if chat_write; then ui_item ok "added. Open the Claude app."; chat_note; ui_detail "Then ask a new Chat something your wikis know."
+        else ui_item warn "couldn't change the config. To add it by hand, with the app closed: $(typed "$WIKI_CMD mcp --print")"; fi
       fi
       setup_mark chat
       ;;
@@ -7080,14 +7082,14 @@ ext_setup() {
   msg="$(ext_needs "$f")"
   [ -z "$msg" ] || die "$n needs $msg, which isn't on this machine. Do: install $msg"
   if ! ext_has_setup "$f"; then
-    echo "$n has nothing to set up."
+    ui_detail "$n has nothing to set up."
     return 0
   fi
   LLM_WIKI="$REPO/wiki.sh" LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" LLM_WIKI_EXTENSION="$EXT_API" "$f" --wiki-setup || true
   if msg="$(ext_ready "$n")"; then
-    echo "${M_OK}$n is set up."
+    ui_item ok "$n is set up."
   else
-    echo "${M_WARN}$n isn't set up yet: $msg"
+    ui_item warn "$n isn't set up yet: $msg"
   fi
 }
 
@@ -7423,10 +7425,10 @@ setup_completion() {
   completion_on "$sh" && return 0
   [ "$SETUP_MODE" = new ] && setup_done completion.$sh && return 0
   section "Tab completion"
-  echo "Tab completion fills in commands, wiki names and settings when you press Tab after wiki."
+  ui_detail "Tab completion fills in commands, wiki names and settings when you press Tab after wiki."
   if ask_yn "Turn it on? It adds one line to $(tilde "$prof")." y; then
     ensure_line "$prof" "$line"
-    echo "  ${M_OK}added. Open a new terminal to use it."
+    ui_item ok "added. Open a new terminal to use it."
   fi
   setup_mark "completion.$sh"
 }
@@ -8287,21 +8289,21 @@ setup_permissions() {
   if perm_unreadable; then
     [ "$SETUP_MODE" != new ] || return 0
     section "Claude Code permissions"
-    echo "Can't read ~/.claude/settings.json from this shell, so there's no telling which wiki commands Claude Code may run."
+    ui_detail "Can't read ~/.claude/settings.json from this shell, so there's no telling which wiki commands Claude Code may run."
     return 0
   fi
   n="$(perm_missing | wc -l | tr -d ' ')"
   if [ "$SETUP_MODE" = new ] && { [ "$n" -eq 0 ] || setup_done claude.permissions; }; then return 0; fi
   section "Claude Code permissions"
   if [ "$n" -eq 0 ]; then
-    echo "${M_OK}Claude Code may run the wiki commands that write without asking."
+    ui_item ok "Claude Code may run the wiki commands that write without asking."
     return 0
   fi
-  echo "Agents commit and push the wikis themselves with \`wiki sync\`. Claude Code stops to ask before a push, and"
-  echo "a session can't give itself permission. Allow rules let sessions run these without asking:"
+  ui_detail "Agents commit and push the wikis themselves with \`wiki sync\`. Claude Code stops to ask before a push, and"
+  ui_detail "a session can't give itself permission. Allow rules let sessions run these without asking:"
   echo "  $WIKI_CMD $(printf '%s' "$PERM_SUBCOMMANDS" | sed 's/ /, /g')"
   if ask_yn "Add $n allow rule(s) to ~/.claude/settings.json?" y; then
-    if perm_add; then echo "  ${M_OK}added (backup beside it). New sessions use them."; else echo "  ${M_WARN}couldn't change ~/.claude/settings.json."; fi
+    if perm_add; then ui_item ok "added (backup beside it). New sessions use them."; else ui_item warn "couldn't change ~/.claude/settings.json."; fi
   fi
   setup_mark claude.permissions
 }
@@ -8325,29 +8327,29 @@ setup_plugin() {
   if [ "$SETUP_MODE" = new ] && ! plugin_pending; then return 0; fi
   section "Claude Code plugin"
   if wiki_linked; then
-    echo "${M_OK}wiki is a command in every terminal."
+    ui_item ok "wiki is a command in every terminal."
   elif [ "$HOME/.local/bin/wiki" -ef "$(plugin_cmd)" ]; then
-    echo "${M_OK}wiki is linked in ~/.local/bin. Open a new terminal to type it as plain wiki."
+    ui_item ok "wiki is linked in ~/.local/bin. Open a new terminal to type it as plain wiki."
   else
-    echo "The wiki command isn't on your PATH yet, so for now you run it as $(tilde "$(plugin_cmd)")."
+    ui_detail "The wiki command isn't on your PATH yet, so for now you run it as $(tilde "$(plugin_cmd)")."
     if ask_yn "Make it plain wiki?" y; then cmd_link | sed 's/^/  /'; fi
   fi
   case "$(autoupdate_state "$mkt")" in
-    on) echo "${M_OK}Auto-update is on, so fixes arrive on their own." ;;
+    on) ui_item ok "Auto-update is on, so fixes arrive on their own." ;;
     off)
-      echo "Auto-update is off for the $mkt marketplace, so you'd get no fixes. Claude Code starts other marketplaces with it off."
+      ui_detail "Auto-update is off for the $mkt marketplace, so you'd get no fixes. Claude Code starts other marketplaces with it off."
       if ask_yn "Turn it on?" y; then
-        if autoupdate_on "$mkt"; then echo "  ${M_OK}turned on, in ~/.claude/settings.json (backup beside it)"; else echo "  ${M_WARN}couldn't change ~/.claude/settings.json. Use /plugin in a terminal session instead."; fi
+        if autoupdate_on "$mkt"; then ui_item ok "turned on, in ~/.claude/settings.json (backup beside it)"; else ui_item warn "couldn't change ~/.claude/settings.json. Use /plugin in a terminal session instead."; fi
       fi
       ;;
-    *) echo "${M_WARN}Couldn't tell whether auto-update is on. Check with /plugin in a terminal Claude Code session." ;;
+    *) ui_item warn "Couldn't tell whether auto-update is on. Check with /plugin in a terminal Claude Code session." ;;
   esac
   if old_claude_line; then
-    echo "$(tilde "$CLAUDE_FILE") still has the wiki line from before the plugin. The plugin does its job, and both would point sessions at the handbook twice."
+    ui_detail "$(tilde "$CLAUDE_FILE") still has the wiki line from before the plugin. The plugin does its job, and both would point sessions at the handbook twice."
     if ask_yn "Remove it?" y; then
       cp "$CLAUDE_FILE" "$CLAUDE_FILE.bak"
       remove_line "$CLAUDE_FILE" "$(grep -m 1 "knowledge wikis live in" "$CLAUDE_FILE")"
-      echo "  ${M_OK}removed (backup beside it)"
+      ui_item ok "removed (backup beside it)"
     fi
   fi
 }
@@ -8423,21 +8425,22 @@ setup_pending() {
   done
 }
 
-section() { printf '\n%s== %s%s\n' "$S_BOLD" "$1" "$S_OFF"; }
+# section <title>: one step of setup, as a stage of the kit: SETUP and the title.
+section() { ui_stage SETUP "$1"; }
 
 # ask_yn <question> <y|n>: succeed for yes.
 ask_yn() {
-  local r hint="[y/N]"
+  local r hint="y/N"
   [ -z "${SETUP_YES:-}" ] || return 0
-  [ "$2" = y ] && hint="[Y/n]"
+  [ "$2" = y ] && hint="Y/n"
   while :; do
-    printf '%s %s ' "$1" "$hint"
+    ui_prompt "$1" "$hint"
     IFS= read -r r || die "input ended"
     case "${r:-$2}" in
       y | Y | yes) return 0 ;;
       n | N | no) return 1 ;;
     esac
-    echo "  Answer y or n."
+    ui_item warn "Answer y or n."
   done
 }
 
@@ -8445,7 +8448,7 @@ ask_yn() {
 # The answer is left in ANSWER.
 ask() {
   local r
-  if [ -n "$2" ]; then printf '%s [%s]: ' "$1" "$2"; else printf '%s [none]: ' "$1"; fi
+  ui_prompt "$1" "${2:-none}"
   IFS= read -r r || die "input ended"
   case "$r" in
     '') ANSWER="$2" ;;
@@ -8460,19 +8463,19 @@ setup_collection() {
   section "Collection"
   if [ -d "$WIKIS_DIR" ]; then
     for d in "$WIKIS_DIR"/*/; do is_wiki "${d%/}" && n=$((n + 1)); done
-    echo "Wikis live in $(tilde "$WIKIS_DIR"): $n found."
+    ui_detail "Wikis live in $(tilde "$WIKIS_DIR"): $n found."
   else
-    echo "Wikis will live in $(tilde "$WIKIS_DIR"). For another folder, quit and rerun with WIKIS_DIR=<path> set."
+    ui_detail "Wikis will live in $(tilde "$WIKIS_DIR"). For another folder, quit and rerun with WIKIS_DIR=<path> set."
     if ask_yn "Create it now?" y; then
       init_collection | sed 's/^/  /'
     else
-      echo "Nothing else to set up without a collection."
+      ui_detail "Nothing else to set up without a collection."
       exit 0
     fi
   fi
   write_collection_marker | sed 's/^/  /'
   if ! is_wiki "$WIKIS_DIR/$SHARED"; then
-    echo "There is no shared wiki at $(tilde "$WIKIS_DIR/$SHARED"). It holds knowledge that applies to every project."
+    ui_detail "There is no shared wiki at $(tilde "$WIKIS_DIR/$SHARED"). It holds knowledge that applies to every project."
     if ask_yn "Create it?" y; then scaffold "$WIKIS_DIR/$SHARED" 0 | sed 's/^/  /'; fi
   fi
 }
@@ -8482,9 +8485,9 @@ setup_git() {
   if setup_due git; then
     section "Git"
     if in_git_repo "$WIKIS_DIR"; then
-      echo "${M_OK}The collection is a git repo. Agents commit and push their wiki changes to it."
+      ui_item ok "The collection is a git repo. Agents commit and push their wiki changes to it."
     else
-      echo "The collection isn't a git repo. Git gives it history, undo, and sync between machines."
+      ui_detail "The collection isn't a git repo. Git gives it history, undo, and sync between machines."
       if ask_yn "Make it one?" y; then
         git_init_collection | sed 's/^/  /'
       else
@@ -8494,13 +8497,13 @@ setup_git() {
     fi
     url="$(git -C "$WIKIS_DIR" remote get-url origin 2>/dev/null || true)"
     if [ -n "$url" ]; then
-      echo "Remote: $url"
+      ui_detail "Remote: $url"
     else
-      echo "No remote yet. With one, agents push and your other machines pull."
+      ui_detail "No remote yet. With one, agents push and your other machines pull."
       ask "Remote URL, such as git@github.com:you/wikis.git. Enter for none" ""
       if [ -n "$ANSWER" ]; then
         git -C "$WIKIS_DIR" remote add origin "$ANSWER"
-        echo "  ${M_OK}added remote origin"
+        ui_item ok "added remote origin"
       fi
     fi
     setup_mark git
@@ -8517,11 +8520,11 @@ setup_git() {
   # The gitleaks note is left out here: the question below covers it.
   install_hook "$WIKIS_DIR" | { grep -v 'gitleaks isn' || true; } | sed 's/^/  /'
   if ! command -v gitleaks >/dev/null 2>&1; then
-    echo "gitleaks isn't installed, so commits aren't checked for secrets."
+    ui_detail "gitleaks isn't installed, so commits aren't checked for secrets."
     if command -v brew >/dev/null 2>&1; then
       if ask_yn "Install it with Homebrew?" y; then brew install gitleaks </dev/null 2>&1 | tail -n 1 | sed 's/^/  /'; fi
     else
-      echo "  ${M_WARN}Install it from https://github.com/gitleaks/gitleaks, then commits are checked."
+      ui_item warn "Install it from https://github.com/gitleaks/gitleaks, then commits are checked."
     fi
   fi
 }
@@ -8535,20 +8538,20 @@ setup_identity() {
     while :; do
       ask "Name for commits in this repo" ""
       [ -n "$ANSWER" ] && break
-      echo "  Commits need a name."
+      ui_detail "Commits need a name."
     done
     git -C "$WIKIS_DIR" config user.name "$ANSWER"
   fi
   cur="$(git -C "$WIKIS_DIR" config user.email 2>/dev/null || true)"
-  echo "Commits are made as: ${cur:-nobody yet}"
+  ui_detail "Commits are made as: ${cur:-nobody yet}"
   while :; do
     ask "Email for commits in this repo only" "$cur"
     [ -n "$ANSWER" ] && break
-    echo "  Commits need an email."
+    ui_detail "Commits need an email."
   done
   if [ "$ANSWER" != "$cur" ] || [ -z "$(git -C "$WIKIS_DIR" config --local user.email || true)" ]; then
     git -C "$WIKIS_DIR" config user.email "$ANSWER"
-    echo "  ${M_OK}set user.email for this repo"
+    ui_item ok "set user.email for this repo"
   fi
   cmd="$(git -C "$WIKIS_DIR" config --local core.sshCommand 2>/dev/null || true)"
   key="$(printf '%s' "$cmd" | sed -n 's/.*-i \([^ ]*\).*/\1/p')"
@@ -8560,29 +8563,29 @@ setup_identity() {
       # the keychain, a port-443 host). So try the normal setup first.
       if [ -z "$key" ] && GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=10" \
         git -C "$WIKIS_DIR" ls-remote origin >/dev/null 2>&1; then
-        echo "${M_OK}Your normal SSH setup reaches $url, so this repo needs no key of its own."
+        ui_item ok "Your normal SSH setup reaches $url, so this repo needs no key of its own."
         setup_mark git.identity
         return 0
       fi
-      echo "If your usual SSH key belongs to another account, name the key for this repo."
-      echo "It is used alone, without ~/.ssh/config, so host aliases there don't apply here."
-      echo "If your normal SSH works for this host, answer - instead."
+      ui_detail "If your usual SSH key belongs to another account, name the key for this repo."
+      ui_detail "It is used alone, without ~/.ssh/config, so host aliases there don't apply here."
+      ui_detail "If your normal SSH works for this host, answer - instead."
       while :; do
         ask "SSH key path. Enter keeps it, - uses your normal SSH setup" "$(tilde "$key")"
         # shellcheck disable=SC2088
         case "$ANSWER" in "~/"*) ANSWER="$HOME/${ANSWER:2}" ;; esac
-        case "$ANSWER" in *" "*) echo "  Use a key path without spaces."; continue ;; esac
+        case "$ANSWER" in *" "*) ui_item warn "Use a key path without spaces."; continue ;; esac
         if [ -z "$ANSWER" ] || [ -f "$ANSWER" ]; then break; fi
-        echo "  No file at $ANSWER."
+        ui_item warn "No file at $ANSWER."
       done
       if [ -z "$ANSWER" ]; then
         if [ -n "$cmd" ]; then
           git -C "$WIKIS_DIR" config --local --unset core.sshCommand
-          echo "  ${M_OK}removed the repo's SSH key setting"
+          ui_item ok "removed the repo's SSH key setting"
         fi
       elif [ "$ANSWER" != "$key" ]; then
         git -C "$WIKIS_DIR" config --local core.sshCommand "ssh -i $ANSWER -o IdentitiesOnly=yes -F /dev/null"
-        echo "  ${M_OK}this repo now pushes with $(tilde "$ANSWER")"
+        ui_item ok "this repo now pushes with $(tilde "$ANSWER")"
       fi
       ;;
   esac
@@ -8599,12 +8602,12 @@ setup_push_check() {
   cmd="$(git -C "$WIKIS_DIR" config core.sshCommand 2>/dev/null || echo ssh)"
   if err="$(GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="$cmd -o BatchMode=yes -o ConnectTimeout=10" \
     git -C "$WIKIS_DIR" push --dry-run --quiet origin HEAD 2>&1)"; then
-    echo "  ${M_OK}ok: push access works"
+    ui_item ok "ok: push access works"
   else
-    echo "  ${M_WARN}push failed:"
+    ui_item warn "push failed:"
     printf '%s\n' "$err" | grep -v '^$' | head -n 4 | sed 's/^/    /'
     push_advice "$err" "$url" | sed 's/^/  /'
-    echo "  Then run the test again: $(typed "$WIKI_CMD setup git.identity")"
+    ui_detail "  Then run the test again: $(typed "$WIKI_CMD setup git.identity")"
   fi
 }
 
@@ -8648,15 +8651,15 @@ setup_claude() {
   # The plugin step covers Claude Code: the hook does this job.
   from_plugin && return 0
   case "$state" in
-    current) echo "${M_OK}$(tilde "$CLAUDE_FILE") has the current wiki line. Every session finds its wiki." ;;
+    current) ui_item ok "$(tilde "$CLAUDE_FILE") has the current wiki line. Every session finds its wiki." ;;
     old)
-      echo "$(tilde "$CLAUDE_FILE") has an older wiki line."
+      ui_detail "$(tilde "$CLAUDE_FILE") has an older wiki line."
       if ask_yn "Replace it with the current one?" y; then cmd_claude | sed -n '1s/^/  /p'; fi
       ;;
-    unreadable) echo "Can't read $(tilde "$CLAUDE_FILE") from this shell, so there's no telling whether it has the wiki line." ;;
+    unreadable) ui_detail "Can't read $(tilde "$CLAUDE_FILE") from this shell, so there's no telling whether it has the wiki line." ;;
     missing)
-      echo "One line in $(tilde "$CLAUDE_FILE") lets every Claude Code session find its wiki."
-      echo "Other agents: put the same line in their user-level instruction file."
+      ui_detail "One line in $(tilde "$CLAUDE_FILE") lets every Claude Code session find its wiki."
+      ui_detail "Other agents: put the same line in their user-level instruction file."
       if ask_yn "Add it?" y; then cmd_claude | sed -n '1s/^/  /p'; fi
       ;;
   esac
@@ -8669,19 +8672,19 @@ setup_upgrade() {
   [ "$SETUP_MODE" = new ] && [ -z "$behind" ] && return 0
   section "Handbooks"
   if [ -z "$behind" ]; then
-    echo "${M_OK}Every wiki is on handbook v$tv."
+    ui_item ok "Every wiki is on handbook v$tv."
     return 0
   fi
-  echo "Behind the template's v$tv:$behind"
+  ui_detail "Behind the template's v$tv:$behind"
   from="$(oldest_version "$(behind_versions)")"
   if ask_yn "Upgrade them now? Pages and notes are untouched." y; then
     for d in $behind; do
       printf '  %s: ' "$d"
       upgrade_one "$WIKIS_DIR/$d" | sed -n 's/^handbook: //p'
     done
-    echo "What's new since v$from:"
+    ui_detail "What's new since v$from:"
     changelog_since "$from" | sed 's/^/  /'
-    echo "New sessions load the new handbook. Running sessions keep the old one until restarted."
+    ui_detail "New sessions load the new handbook. Running sessions keep the old one until restarted."
     upgrade_commit "$behind" ""
   fi
 }
@@ -8692,14 +8695,14 @@ setup_delegation() {
   section "Delegation"
   write_delegation_file | sed 's/^/  /'
   apply_delegation_ignore | sed 's/^/  /'
-  echo "Sessions can hand big, self-contained work, like test runs and file sweeps, to sub-agents on cheaper models."
-  echo "off: never unless you ask. ask: suggest each one and wait for a yes. auto: do it and say so after."
-  echo "Which kinds of work go to which model is a table in $(tilde "$DELEG_FILE"). Edit it any time."
+  ui_detail "Sessions can hand big, self-contained work, like test runs and file sweeps, to sub-agents on cheaper models."
+  ui_detail "off: never unless you ask. ask: suggest each one and wait for a yes. auto: do it and say so after."
+  ui_detail "Which kinds of work go to which model is a table in $(tilde "$DELEG_FILE"). Edit it any time."
   cur="$(deleg_mode)"
   while :; do
     ask "  mode (off, ask, auto)" "$cur"
     case "$ANSWER" in off | ask | auto) break ;; esac
-    echo "  Answer off, ask, or auto."
+    ui_item warn "Answer off, ask, or auto."
   done
   if [ "$ANSWER" != "$cur" ] || ! grep -q '^mode:' "$DELEG_FILE"; then deleg_set_mode "$ANSWER" | sed 's/^/  /'; fi
   setup_mark delegation.mode
@@ -8742,7 +8745,7 @@ setup_skills() {
   n="$(skills_unlinked)"
   [ "$n" -gt 0 ] || return 0
   section "Team skills"
-  echo "The wikis hold $n skill(s) that Claude Code can't see yet. Linking puts them in $(tilde "$SKILLS_DIR")."
+  ui_detail "The wikis hold $n skill(s) that Claude Code can't see yet. Linking puts them in $(tilde "$SKILLS_DIR")."
   if ask_yn "Link them?" y; then skills_link quiet | sed 's/^/  /'; fi
 }
 
@@ -8754,12 +8757,12 @@ setup_journal() {
   [ -n "$due" ] || return 0
   section "Work journal"
   write_journal_config | sed 's/^/  /'
-  echo "Agents note work that leaves no commit, and $WIKI_CMD standup turns your day into a report."
+  ui_detail "Agents note work that leaves no commit, and $WIKI_CMD standup turns your day into a report."
   for k in $due; do
     [ "$(journal_field "$k" 3)" = basic ] || { adv="$adv $k"; continue; }
     setup_journal_key "$k"
     if [ "$k" = enabled ] && [ "$(journal_get enabled)" = no ]; then
-      echo "  The journal is off. Its other settings are skipped."
+      ui_detail "  The journal is off. Its other settings are skipped."
       return 0
     fi
   done
@@ -8774,10 +8777,30 @@ setup_journal() {
   for k in $adv; do setup_journal_key "$k"; done
 }
 
+# setup_list: every setting and its value, as a table of the kit with no header, then how to
+# change one. Its plain words are what agents read, so they stay as they were.
 setup_list() {
+  setup_list_rows | ui_table --no-head
+  echo
+  echo "Change one:    $(typed "$WIKI_CMD setup journal.<key>")   or   $(typed "$WIKI_CMD setup git.identity")"
+  setup_list_end
+}
+
+# setup_typed_tail <text>: what follows "Run: " or "own: " in typed's colour.
+setup_typed_tail() {
+  case "$1" in
+    *"Run: "*) printf '%sRun: %s' "${1%%Run: *}" "$(typed "${1#*Run: }")" ;;
+    *"own: "*) printf '%sown: %s' "${1%%own: *}" "$(typed "${1#*own: }")" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+# setup_list_rows: the rows of setup --list. A setting that setup --new would ask about ends in
+# "  <- new", which the table shows in the warn colour.
+setup_list_rows() {
   local k v pending new_note
   pending=" $(setup_pending | tr '\n' ' ')"
-  new_note="${S_WARN}  <- new${S_OFF}"
+  new_note="  <- new"
   echo "collection          $(tilde "$WIKIS_DIR")$([ -d "$WIKIS_DIR" ] || echo ' (missing)')"
   if in_git_repo "$WIKIS_DIR"; then
     echo "git                 remote $(git -C "$WIKIS_DIR" remote get-url origin 2>/dev/null || echo none)"
@@ -8822,7 +8845,7 @@ setup_list() {
   case "$pending" in *" extension."* | *" extensions.every "*) printf '%s' "$new_note" ;; esac
   printf '\n'
   printf '%-19s %s\n' "compile" "$(compile_auto_on && echo "in the background at session start" || echo "by sessions (background compile is off)")"
-  printf '%-19s %s' "helper" "$(cmd_helper | sed -n '1s/^helper: //p' | { if [ "$STYLE" = yes ]; then sed -E "s/(Run: |own: )(.*)\$/\1${S_TYPED}\2${S_OFF}/"; else cat; fi; }), fetched at session start: $(helper_auto_on && echo on || echo off)"
+  printf '%-19s %s' "helper" "$(setup_typed_tail "$(cmd_helper | sed -n '1s/^helper: //p')"), fetched at session start: $(helper_auto_on && echo on || echo off)"
   case "$pending" in *" helper "*) printf '%s' "$new_note" ;; esac
   printf '\n'
   case "$(chat_state)" in none) ;; unreadable) unknown_state chat "$CLAUDE_DESKTOP_CONFIG" ;; *) echo "chat                server $(chat_state)" ;; esac
@@ -8830,13 +8853,15 @@ setup_list() {
   for k in $JOURNAL_KEYS; do
     v="$(journal_get "$k")"
     printf '%-19s %s' "journal.$k" "${v:-(none)}"
-    if [ "$v" = "$(journal_default "$k")" ]; then printf '%s  (default)%s' "$S_DIM" "$S_OFF"; fi
+    if [ "$v" = "$(journal_default "$k")" ]; then printf '  (default)'; fi
     case "$pending" in *" journal.$k "*) printf '%s' "$new_note" ;; esac
     printf '\n'
   done
   case "$pending" in *" git "* | *" git.identity "*) echo "(git questions not yet answered on this machine)" ;; esac
-  echo
-  echo "Change one:    $(typed "$WIKI_CMD setup journal.<key>")   or   $(typed "$WIKI_CMD setup git.identity")"
+}
+
+# setup_list_end: the last lines of setup --list, after "Change one:".
+setup_list_end() {
   local tools=""
   [ "$(agy_state)" = none ] || tools="$tools | antigravity"
   [ "$(codex_state)" = none ] || tools="$tools | codex"
@@ -8901,16 +8926,16 @@ with open(path, "w") as out:
 setup_agy_grants() {
   local missing n
   if ! missing="$(agy_grants_missing)"; then
-    [ "$SETUP_MODE" = new ] || echo "${M_WARN}Antigravity's grant list isn't where llm-wiki expects it ($(tilde "$AGY_CONFIG"), userSettings.globalPermissionGrants), so nothing was changed. Approve wiki commands when Gemini asks, with Always allow."
+    [ "$SETUP_MODE" = new ] || ui_item warn "Antigravity's grant list isn't where llm-wiki expects it ($(tilde "$AGY_CONFIG"), userSettings.globalPermissionGrants), so nothing was changed. Approve wiki commands when Gemini asks, with Always allow."
     return 0
   fi
   n="$(printf '%s' "$missing" | grep -c . || true)"
-  [ "$n" -gt 0 ] || { [ "$SETUP_MODE" = new ] || echo "${M_OK}Gemini may read and write the wikis and run wiki.sh without asking."; return 0; }
+  [ "$n" -gt 0 ] || { [ "$SETUP_MODE" = new ] || ui_item ok "Gemini may read and write the wikis and run wiki.sh without asking."; return 0; }
   if [ "$SETUP_MODE" = new ] && setup_done antigravity.grants; then return 0; fi
-  echo "Gemini asks before each file it reads in the wikis and each wiki.sh command it runs, unless Antigravity has grants for them:"
+  ui_detail "Gemini asks before each file it reads in the wikis and each wiki.sh command it runs, unless Antigravity has grants for them:"
   printf '%s\n' "$missing" | sed 's/^/  /'
   if ask_yn "Add them to Antigravity's grants?" y; then
-    if agy_grants_add; then echo "  ${M_OK}added (backup beside $(tilde "$AGY_CONFIG")). Quit and reopen Antigravity, or it may save its old list over this."; else echo "  ${M_WARN}couldn't change $(tilde "$AGY_CONFIG")."; fi
+    if agy_grants_add; then ui_item ok "added (backup beside $(tilde "$AGY_CONFIG")). Quit and reopen Antigravity, or it may save its old list over this."; else ui_item warn "couldn't change $(tilde "$AGY_CONFIG")."; fi
   fi
   setup_mark antigravity.grants
 }
@@ -8933,13 +8958,13 @@ setup_tools() {
   section "Tools"
   all="$(listed_cli_tools)"
   if [ -z "$all" ]; then
-    echo "No wiki lists command-line tools yet. Add them under \"## Tools\" in a wiki's wiki/conventions.md, as \"- gh (cli): what it's for\"."
+    ui_detail "No wiki lists command-line tools yet. Add them under \"## Tools\" in a wiki's wiki/conventions.md, as \"- gh (cli): what it's for\"."
     return 0
   fi
   [ -d "$HOME/.claude" ] && command -v python3 >/dev/null 2>&1 && claude=1
   [ "$(agy_state)" != none ] && agy_grants_missing >/dev/null 2>&1 && agy=1
-  [ "$claude$agy" != 00 ] || { echo "Neither Claude Code nor Antigravity is set up here, so there's nothing to grant."; return 0; }
-  echo "Your wikis list these command-line tools. For each, agents can be allowed to run it without asking:"
+  [ "$claude$agy" != 00 ] || { ui_detail "Neither Claude Code nor Antigravity is set up here, so there's nothing to grant."; return 0; }
+  ui_detail "Your wikis list these command-line tools. For each, agents can be allowed to run it without asking:"
   while IFS="$TAB" read -r t wikis; do
     command -v "$t" >/dev/null 2>&1 || { echo "  $t ($wikis): not installed here, skipped"; continue; }
     ask_yn "  Allow $t (listed by $wikis)?" y </dev/tty && picked="$picked $t"
@@ -8948,10 +8973,10 @@ $all
 EOF2
   [ -n "$picked" ] || return 0
   if [ "$claude" = 1 ]; then
-    for t in $picked; do printf 'Bash(%s *)\n' "$t"; done | claude_allow && echo "  ${M_OK}Claude Code: allowed$picked (backup beside ~/.claude/settings.json)."
+    for t in $picked; do printf 'Bash(%s *)\n' "$t"; done | claude_allow && ui_item ok "Claude Code: allowed$picked (backup beside ~/.claude/settings.json)."
   fi
   if [ "$agy" = 1 ]; then
-    for t in $picked; do printf 'command(%s)\n' "$t"; done | agy_grant && echo "  ${M_OK}Antigravity: allowed$picked. Restart it, or it may save its old list over this."
+    for t in $picked; do printf 'command(%s)\n' "$t"; done | agy_grant && ui_item ok "Antigravity: allowed$picked. Restart it, or it may save its old list over this."
   fi
 }
 
@@ -8960,8 +8985,8 @@ setup_collections() {
   local name dir rules here_url
   section "Collections"
   "$REPO/wiki.sh" collections 2>/dev/null | sed 's/^/  /'
-  echo "A second collection keeps wikis apart, such as work and personal, each with its own git remote and shared wiki."
-  echo "Repositories go to the collection whose rules match their remote URL or their folder; the rest stay in $(tilde "$DEFAULT_WIKIS")."
+  ui_detail "A second collection keeps wikis apart, such as work and personal, each with its own git remote and shared wiki."
+  ui_detail "Repositories go to the collection whose rules match their remote URL or their folder; the rest stay in $(tilde "$DEFAULT_WIKIS")."
   ask_yn "Add a collection?" n || return 0
   ask "Its name, one word" "work"; name="$ANSWER"
   case "$name" in '' | default | *[!A-Za-z0-9_-]*) die "a collection name is one word of letters, digits, - and _, and not \"default\"" ;; esac
@@ -8970,21 +8995,21 @@ setup_collections() {
   # shellcheck disable=SC2088
   ask "Its folder" "~/wikis-$name"; dir="$ANSWER"
   here_url="$(git config --get remote.origin.url 2>/dev/null || true)"
-  echo "Rules, separated by commas. A rule starting with ~ or / matches a repository's folder, such as ~/dev/work/*."
-  echo "Any other rule matches its remote URL, such as *gitlab.com:acme/* or *github.com/acme/*.${here_url:+ The remote here is $here_url.}"
+  ui_detail "Rules, separated by commas. A rule starting with ~ or / matches a repository's folder, such as ~/dev/work/*."
+  ui_detail "Any other rule matches its remote URL, such as *gitlab.com:acme/* or *github.com/acme/*.${here_url:+ The remote here is $here_url.}"
   ask "Rules" ""; rules="$(printf '%s' "$ANSWER" | tr -d ' ')"
   [ -n "$rules" ] || die "a collection needs at least one rule, or nothing would ever go to it"
   mkdir -p "$(dirname "$COLLECTIONS_FILE")"
   [ -f "$COLLECTIONS_FILE" ] || printf '# Wiki collections besides %s: name, folder, rules. See: %s collections\n' "$(tilde "$DEFAULT_WIKIS")" "$WIKI_CMD" > "$COLLECTIONS_FILE"
   printf '%s %s %s\n' "$name" "$dir" "$rules" >> "$COLLECTIONS_FILE"
-  echo "  ${M_OK}added to $(tilde "$COLLECTIONS_FILE")."
+  ui_item ok "added to $(tilde "$COLLECTIONS_FILE")."
   # shellcheck disable=SC2088
   case "$dir" in "~/"*) dir="$HOME/${dir:2}" ;; esac
   if [ ! -f "$dir/WIKIS.md" ]; then
-    WIKIS_DIR="$dir" "$REPO/wiki.sh" init >/dev/null && echo "  ${M_OK}created the collection at $(tilde "$dir"), with its shared wiki."
+    WIKIS_DIR="$dir" "$REPO/wiki.sh" init >/dev/null && ui_item ok "created the collection at $(tilde "$dir"), with its shared wiki."
   fi
-  echo "Next: give it a git remote and a commit identity with: $(typed "$WIKI_CMD setup git --collection $name")"
-  echo "Moving existing wikis into it is up to you: move the folder, then commit in both collections."
+  ui_detail "Next: give it a git remote and a commit identity with: $(typed "$WIKI_CMD setup git --collection $name")"
+  ui_detail "Moving existing wikis into it is up to you: move the folder, then commit in both collections."
 }
 
 # Antigravity: offer the llm-wiki plugin when Antigravity is installed, keep it
@@ -9001,16 +9026,16 @@ setup_antigravity() {
   fi
   section "Antigravity"
   case "$state" in
-    current) echo "${M_OK}The llm-wiki plugin for Antigravity is up to date." ;;
+    current) ui_item ok "The llm-wiki plugin for Antigravity is up to date." ;;
     old)
-      agy_write && echo "${M_OK}Updated the llm-wiki plugin for Antigravity. New conversations use it, and Gemini now gets the wikis' reminders at the tool calls they apply to. Quit and reopen Antigravity once, so it reads the new hooks." ;;
+      agy_write && ui_item ok "Updated the llm-wiki plugin for Antigravity. New conversations use it, and Gemini now gets the wikis' reminders at the tool calls they apply to. Quit and reopen Antigravity once, so it reads the new hooks." ;;
     missing)
-      echo "Antigravity is installed. An llm-wiki plugin points its conversations at your wikis, loads the wiki's index and agreements at the start, and hands over the wikis' reminders at the tool calls they apply to, like the Claude Code plugin."
+      ui_detail "Antigravity is installed. An llm-wiki plugin points its conversations at your wikis, loads the wiki's index and agreements at the start, and hands over the wikis' reminders at the tool calls they apply to, like the Claude Code plugin."
       if ask_yn "Add it to $(tilde "$AGY_DIR")?" y; then
         if agy_write; then
-          echo "  ${M_OK}added. Quit and reopen Antigravity once, so it finds the new plugin."
+          ui_item ok "added. Quit and reopen Antigravity once, so it finds the new plugin."
         else
-          echo "  ${M_WARN}couldn't write $(tilde "$AGY_DIR")."
+          ui_item warn "couldn't write $(tilde "$AGY_DIR")."
         fi
       fi
       setup_mark antigravity
@@ -9018,11 +9043,11 @@ setup_antigravity() {
   esac
   line="$(grep -m 1 -F "knowledge wikis live in" "$gm" 2>/dev/null || true)"
   if [ -n "$line" ] && [ "$(agy_state)" = current ]; then
-    echo "$(tilde "$gm") still has the wiki line from before the plugin, so conversations would get it twice."
+    ui_detail "$(tilde "$gm") still has the wiki line from before the plugin, so conversations would get it twice."
     if ask_yn "Remove that line? The rest of the file stays." y; then
       cp "$gm" "$gm.bak-$(date +%Y%m%d-%H%M%S)"
       remove_line "$gm" "$line"
-      echo "  ${M_OK}removed (backup beside it)."
+      ui_item ok "removed (backup beside it)."
       [ -s "$gm" ] || rm -f "$gm"
     fi
   fi
@@ -9040,22 +9065,22 @@ setup_codex() {
   fi
   section "Codex"
   case "$state" in
-    current) echo "${M_OK}The llm-wiki plugin for Codex is up to date." ;;
+    current) ui_item ok "The llm-wiki plugin for Codex is up to date." ;;
     old)
-      if codex_write; then echo "${M_OK}Updated the llm-wiki plugin for Codex. New sessions use it."; fi ;;
+      if codex_write; then ui_item ok "Updated the llm-wiki plugin for Codex. New sessions use it."; fi ;;
     missing)
-      echo "Codex is installed. An llm-wiki plugin points its sessions at your wikis, and loads the wiki's index and agreements at the start and after compaction, like the Claude Code plugin."
+      ui_detail "Codex is installed. An llm-wiki plugin points its sessions at your wikis, and loads the wiki's index and agreements at the start and after compaction, like the Claude Code plugin."
       if [ -n "$(codex_line)" ]; then
-        echo "It replaces the wiki line in $(tilde "$CODEX_DIR/AGENTS.md") with one that knows about the plugin."
+        ui_detail "It replaces the wiki line in $(tilde "$CODEX_DIR/AGENTS.md") with one that knows about the plugin."
       else
-        echo "It also adds a line about your wikis to $(tilde "$CODEX_DIR/AGENTS.md")."
+        ui_detail "It also adds a line about your wikis to $(tilde "$CODEX_DIR/AGENTS.md")."
       fi
       if ask_yn "Add it?" y; then
         [ ! -f "$CODEX_DIR/AGENTS.md" ] || cp "$CODEX_DIR/AGENTS.md" "$CODEX_DIR/AGENTS.md.bak-$(date +%Y%m%d-%H%M%S)"
         if codex_write; then
-          echo "  ${M_WARN}added. Codex runs its hooks only once you trust them, and the desktop app doesn't ask. Run codex in a terminal once: it says 2 hooks need review. Type /hooks and trust both."
+          ui_item warn "added. Codex runs its hooks only once you trust them, and the desktop app doesn't ask. Run codex in a terminal once: it says 2 hooks need review. Type /hooks and trust both."
         else
-          echo "  ${M_WARN}couldn't install it."
+          ui_item warn "couldn't install it."
         fi
       fi
       setup_mark codex
@@ -9069,25 +9094,25 @@ setup_cursor() {
   local state
   state="$(cursor_state)"
   if [ "$state" = unreadable ]; then setup_unreadable "Cursor" "$(cursor_unreadable)"; return 0; fi
-  case "$state" in none) return 0 ;; claude) [ "$SETUP_MODE" = new ] || { section "Cursor"; echo "${M_OK}Cursor runs the Claude Code plugin's hook, so it needs nothing more. Keep the plugin current with $WIKI_CMD update."; }; return 0 ;; esac
+  case "$state" in none) return 0 ;; claude) [ "$SETUP_MODE" = new ] || { section "Cursor"; ui_item ok "Cursor runs the Claude Code plugin's hook, so it needs nothing more. Keep the plugin current with $WIKI_CMD update."; }; return 0 ;; esac
   if [ "$SETUP_MODE" = new ] && { [ "$state" = current ] || { [ "$state" = missing ] && setup_done cursor; }; }; then
     return 0
   fi
   section "Cursor"
   case "$state" in
-    current) echo "${M_OK}The llm-wiki hook for Cursor is up to date." ;;
-    old) if cursor_write; then echo "${M_OK}Updated the llm-wiki hook in $(tilde "$CURSOR_HOOKS"). New sessions use it."; fi ;;
+    current) ui_item ok "The llm-wiki hook for Cursor is up to date." ;;
+    old) if cursor_write; then ui_item ok "Updated the llm-wiki hook in $(tilde "$CURSOR_HOOKS"). New sessions use it."; fi ;;
     missing)
-      echo "Cursor is installed. A sessionStart hook in $(tilde "$CURSOR_HOOKS") points its sessions at your wikis, pulls, and loads the wiki's index and agreements at the start."
+      ui_detail "Cursor is installed. A sessionStart hook in $(tilde "$CURSOR_HOOKS") points its sessions at your wikis, pulls, and loads the wiki's index and agreements at the start."
       if ask_yn "Add it?" y; then
         [ ! -f "$CURSOR_HOOKS" ] || cp "$CURSOR_HOOKS" "$CURSOR_HOOKS.bak-$(date +%Y%m%d-%H%M%S)"
         if cursor_write; then
-          echo "  ${M_WARN}added. In Cursor, put this in Settings > Rules > User Rules, in place of any earlier wiki line:"
+          ui_item warn "added. In Cursor, put this in Settings > Rules > User Rules, in place of any earlier wiki line:"
           echo
           cursor_rule; echo
           echo
         else
-          echo "  ${M_WARN}couldn't write $(tilde "$CURSOR_HOOKS")."
+          ui_item warn "couldn't write $(tilde "$CURSOR_HOOKS")."
         fi
       fi
       setup_mark cursor
@@ -9153,7 +9178,7 @@ EOF
   [ -n "${SETUP_YES:-}" ] || [ -t 0 ] || [ -n "${LLM_WIKI_TEST_TTY:-}" ] || die "setup asks questions, so it needs a terminal. $WIKI_CMD setup --list prints the current values."
   if [ "$SETUP_MODE" = new ] && [ -d "$WIKIS_DIR" ] && [ "$(claude_state)" = current ] && ! plugin_pending; then
     n="$(setup_pending | wc -l | tr -d ' ')"
-    [ "$n" -gt 0 ] || [ -n "$(setup_upgrade_needed)" ] || { echo "${M_OK}Nothing new to set up."; return 0; }
+    [ "$n" -gt 0 ] || [ -n "$(setup_upgrade_needed)" ] || { ui_item ok "Nothing new to set up."; return 0; }
   fi
   echo "Setup for $(tilde "$WIKIS_DIR"). Enter keeps the value in brackets."
   case "$what" in
@@ -9214,13 +9239,13 @@ EOF
   case "$what" in
     *.*) return 0 ;;
   esac
-  echo
+  # The end of the rail: what was done, and what to try next, on it.
   if from_plugin; then
-    echo "${M_OK}Done. After a plugin update, $WIKI_CMD setup --new shows what's new."
+    ui_item ok "Done. After a plugin update, $WIKI_CMD setup --new shows what's new."
   else
-    echo "${M_OK}Done. After you pull template updates, $WIKI_CMD setup --new shows what's new."
+    ui_item ok "Done. After you pull template updates, $WIKI_CMD setup --new shows what's new."
   fi
-  echo "To see what it can do, ask your agent for the llm-wiki tour. It runs on a made-up project."
+  ui_detail "To see what it can do, ask your agent for the llm-wiki tour. It runs on a made-up project."
 }
 
 # Names of wikis behind the template handbook, space separated.

@@ -12,11 +12,11 @@ What each command a person reads prints at a terminal, made by `scripts/gallery.
 
 - `wiki news --all`: unstyled. Pieces: -. [wiki-news.txt](wiki-news.txt)
 
-- `wiki setup --list`: old look. Pieces: typed. [wiki-setup-list.txt](wiki-setup-list.txt)
+- `wiki setup --list`: kit. Pieces: table typed. [wiki-setup-list.txt](wiki-setup-list.txt)
 
-- `wiki setup feedback`: old look. Pieces: -. [wiki-setup-feedback.txt](wiki-setup-feedback.txt)
+- `wiki setup feedback`: kit. Pieces: detail item prompt stage. [wiki-setup-feedback.txt](wiki-setup-feedback.txt)
 
-- `wiki setup delegation`: old look. Pieces: -. [wiki-setup-delegation.txt](wiki-setup-delegation.txt)
+- `wiki setup delegation`: kit. Pieces: detail item prompt stage. [wiki-setup-delegation.txt](wiki-setup-delegation.txt)
 
 - `wiki delegation`: unstyled. Pieces: -. [wiki-delegation.txt](wiki-delegation.txt)
 
