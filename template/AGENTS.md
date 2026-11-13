@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Handbook version 34.
+Handbook version 35.
 
 This folder is a knowledge base maintained by an LLM agent. Any agent working here follows this file. It needs no vendor features. Plain markdown, plain files.
 
@@ -44,7 +44,7 @@ Run `wiki.sh start` in the repository you're working in, or `wiki.sh start <repo
 
 1. If Sync applies to this wiki and its repo has a remote, pull.
 2. Read `index.md`, then each shared wiki's `index.md`. Then read the `## For agents` and `## Tools` sections of each shared wiki's `wiki/conventions.md`, and of this wiki's own. Shared wikis are listed in `links.md`. Nothing else yet. Shared knowledge only helps if you know it's there, and the agreements in `For agents` apply to every session.
-3. Find the notes in `raw/` not compiled yet, with `wiki.sh pending <wiki>`. By hand: a note is compiled once an ingest entry in `log.md` names it in a `- source:` line, or a page lists it in `sources:`. If notes are waiting, compile them before you start on the user's request, and say so in one line. With more than ten waiting, do the user's request first and compile at the next pause, and say that instead. If another session holds the lock, go on without it.
+3. Find the notes in `raw/` not compiled yet, with `wiki.sh pending <wiki>`. By hand: a note is compiled once an ingest entry in `log.md` names it in a `- source:` line, or a page lists it in `sources:`. If notes are waiting, the user's request comes first. Compile them after you have answered, at the first pause, as one batch if there are five or more, and say so in one line. If another session holds the lock, go on without it. If a wiki command that writes fails (a lock, a capture, a sync), say so in one line and carry on with what the user asked: a failed write never costs them their answer.
 
 Do not bulk-read `wiki/`. The index exists so you don't have to.
 
@@ -66,7 +66,7 @@ Finished work is not a capture by itself where a commit records it. The code and
 
 Capture at stopping points, not as you go. A stopping point is where a piece of work is done: you are about to report it finished, or the user moves on. In a long working session that is rarely more than one or two notes an hour, each covering everything since the last. Skip small talk, guesses, passing opinions, and work still in flux. When unsure whether something is a decision or a correction, capture it. When unsure whether it is only a record of work done, don't.
 
-**Compile.** Ingest pending files on your own at three points: at session start, at a pause, and as soon as five notes are waiting in one wiki. The five-note rule holds in the middle of long work: finish the step you are on, compile, then carry on. All of this covers this wiki, any shared wiki, and any peer this session captured into. A pause is any point with no work in progress: a task just finished, or the user is reporting or chatting, not asking for work. A question the pending files bear on also counts. Compile before answering it. Don't stop work in progress to compile. If another session holds the lock, carry on. The files stay pending and a later pause picks them up.
+**Compile.** Ingest pending files on your own at two points: at a pause, the first one after session start included, and as soon as five notes are waiting in one wiki. The five-note rule holds in the middle of long work: finish the step you are on, compile, then carry on. All of this covers this wiki, any shared wiki, and any peer this session captured into. A pause is any point with no work in progress: a task just finished, or the user is reporting or chatting, not asking for work. A question the pending files bear on also counts: `wiki.sh find` searches notes not compiled yet, so answer it first and compile after. Don't stop work in progress to compile. If another session holds the lock, carry on. The files stay pending and a later pause picks them up.
 
 **Lint.** Due when the log shows 10 or more ingests since the last lint. Every compile ends by checking, so you don't have to remember.
 

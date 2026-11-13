@@ -41,6 +41,16 @@ collections() {
       done
 }
 
+# global_files_ok: whether a session start may write the agents' global files (rules,
+# hooks, skill links). Not when WIKIS_DIR came from the environment: that is a test or a
+# one-off command, and what it writes would outlive it. Setup commands don't ask.
+global_files_ok() { [ -z "${LLM_WIKI_FIXED_DIR:-}" ]; }
+
+# rule_dir: the collection a global rule file names, as the user would type it. A rule
+# is about the person, not the session, so it always names the default collection,
+# whichever one this run is in.
+rule_dir() { tilde "$(collections | head -n 1 | cut -f 2)"; }
+
 # collection_for <folder>: the collection folder whose rules match the repository
 # the folder is in, or the default.
 collection_for() {
@@ -99,7 +109,8 @@ if [ -n "$pick" ]; then
 elif [ -z "${WIKIS_DIR:-}" ]; then
   WIKIS_DIR="$(collection_for "$PWD")"
 else
-  # Set in the environment: it wins everywhere, routing included.
+  # Set in the environment: it wins everywhere, routing included. It is an override for
+  # this run, so session starts leave the agents' global files alone (global_files_ok).
   LLM_WIKI_FIXED_DIR=1
 fi
 # The command people type, for messages: what they can run again from anywhere. The
@@ -566,8 +577,21 @@ copy_missing() {
   done
 }
 
+# link_shared <root>: point a new wiki's links.md at this collection's own shared wiki.
+# The template names ~/wikis/global, which is another collection's. Call it only on a
+# links.md this run just copied: one the user has is never rewritten.
+# shellcheck disable=SC2088
+link_shared() {
+  local f="$1/links.md" old="~/wikis/$SHARED"
+  [ -f "$f" ] || return 0
+  OLD="$old" NEW="$(tilde "$WIKIS_DIR/$SHARED")" awk '
+    { i = index($0, ENVIRON["OLD"])
+      if (i > 0 && substr($0, 1, 2) == "- ") $0 = substr($0, 1, i - 1) ENVIRON["NEW"] substr($0, i + length(ENVIRON["OLD"]))
+      print }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
 scaffold() {
-  local root="$1" want_git="$2" tmp
+  local root="$1" want_git="$2"
   [ -d "$TEMPLATE" ] || die "template/ not found next to this script"
   case "$root/" in
     "$REPO"/*) die "refusing to create a wiki inside the template repo" ;;
@@ -580,12 +604,7 @@ scaffold() {
   copy_missing "$root"
   [ -f "$root/index.md" ] || printf '# Index\n' > "$root/index.md"
   [ -f "$root/log.md" ] || printf '# Log\n' > "$root/log.md"
-  # The template's links.md assumes ~/wikis. Rewrite it when WIKIS_DIR is elsewhere.
-  if [ "$WIKIS_DIR" != "$HOME/wikis" ] && [ -f "$root/links.md" ]; then
-    tmp="$root/links.md.tmp"
-    sed "s#~/wikis/$SHARED#$(tilde "$WIKIS_DIR/$SHARED")#" "$root/links.md" > "$tmp"
-    mv "$tmp" "$root/links.md"
-  fi
+  link_shared "$root"
   echo "created: $(tilde "$root")"
   if [ "$want_git" = 1 ]; then
     if in_git_repo "$root"; then
@@ -1273,6 +1292,12 @@ cmd_start() {
     fi
   fi
   echo "wiki: $(tilde "$wiki")${repo:+, for the repository $repo}"
+  # Straight after the wiki line, where an agent reads it: a fact to pass on, not a command.
+  tv="$(version_of "$TEMPLATE/AGENTS.md")"
+  v="$(version_of "$wiki/AGENTS.md")"
+  if [ -n "$tv" ] && [ "${v:-0}" -lt "$tv" ]; then
+    echo "handbook: this wiki's is v${v:-?} and the tool's is v$tv. Tell the user so in your first reply, and that \`$WIKI_CMD update\` brings every wiki up to date. Don't upgrade unless they ask."
+  fi
   [ -z "$note" ] || echo "$note"
   # The pull. A failure is a warning: offline, a sandbox, or another session pulling.
   if in_git_repo "$WIKIS_DIR" && [ -n "$(git -C "$WIKIS_DIR" remote 2>/dev/null)" ]; then
@@ -1289,11 +1314,6 @@ cmd_start() {
         *"Operation not permitted"*) echo "pull: that looks like an agent's sandbox blocking $(tilde "$WIKIS_DIR")/.git. Rerun $WIKI_CMD start outside the sandbox, or ask the user to allow it." ;;
       esac
     fi
-  fi
-  tv="$(version_of "$TEMPLATE/AGENTS.md")"
-  v="$(version_of "$wiki/AGENTS.md")"
-  if [ -n "$tv" ] && [ "${v:-0}" -lt "$tv" ]; then
-    echo "handbook: v${v:-?}, behind v$tv. Run \`$WIKI_CMD upgrade --all\`, commit and push, then read the new AGENTS.md."
   fi
   echo "Read $(tilde "$wiki")/AGENTS.md, the handbook, if you haven't this session. Below is what its session start says to read next."
   # A folder named for a ticket: the pages that mention it, in whichever wiki they are.
@@ -1357,7 +1377,7 @@ EOF2
     elif compile_auto_on && compile_background "$d"; then echo "$(tilde "$d"): $n note(s), being compiled in the background now. Don't compile them: that run holds the lock."
     elif [ -n "$(lock_holder "$d")" ]; then echo "$(tilde "$d"): $n note(s), and $(lock_who "$d") holds the compile lock. Leave them and carry on."
     else
-      echo "$(tilde "$d"): $n note(s). Compile them before the user's request, as the handbook's session start says, unless there are more than ten."
+      echo "$(tilde "$d"): $n note(s). Answer the user's request first, then compile them at the first pause, as one batch if there are five or more."
       # Said once, or every wiki with notes would repeat it.
       if [ -z "$hinted" ] && compile_auto_on && ! compile_agent_ready; then
         hinted=1
@@ -3452,7 +3472,7 @@ EOF2
 }
 
 upgrade_one() {
-  local root="$1" tv wv f r
+  local root="$1" tv wv f r had_links=1
   is_wiki "$root" || die "$(tilde "$root") is not a wiki (needs AGENTS.md and index.md)"
   tv="$(version_of "$TEMPLATE/AGENTS.md")"
   wv="$(version_of "$root/AGENTS.md")"
@@ -3480,7 +3500,9 @@ upgrade_one() {
     cp "$TEMPLATE/CLAUDE.md" "$root/CLAUDE.md"
     echo "CLAUDE.md: switched to an import of AGENTS.md"
   fi
+  [ -f "$root/links.md" ] || had_links=0
   copy_missing "$root" report
+  [ "$had_links" = 1 ] || link_shared "$root"
   if [ -f "$root/.gitignore" ] && ! grep -qxF '.compile-lock' "$root/.gitignore"; then
     printf '.compile-lock\n' >> "$root/.gitignore"
     echo ".gitignore: added .compile-lock"
@@ -3680,7 +3702,7 @@ claude_state() {
 # so from the plugin the line names the stable command instead.
 claude_line() {
   local dir w
-  dir="$(tilde "$WIKIS_DIR")"
+  dir="$(rule_dir)"
   if from_plugin; then w="$(tilde "$(plugin_cmd)")"; else w="$(tilde "$REPO")/wiki.sh"; fi
   printf '%s' "My knowledge wikis live in $dir, one folder per project, plus a shared one at $dir/$SHARED. Wherever their handbooks say \`wiki.sh\`, run \`$w\`. At session start, run \`$w start\` in the repository you are working in. It names the wiki that covers it, pulls, and prints what to read first. Read that wiki's AGENTS.md and follow it. If no wiki covers the repository, read $dir/$SHARED/AGENTS.md and follow that, and create the repository's wiki with \`$w new <repository-name>\` the first time you have something to file there. Outside any repository, use the shared wiki. If your tool can hand work to sub-agents on cheaper models, do it for large, self-contained work as $dir/delegation.md says, following $dir/$SHARED/rules/delegation.md."
 }
@@ -3754,7 +3776,7 @@ agy_cmd() { if from_plugin; then tilde "$(plugin_cmd)"; else printf '%s/wiki.sh'
 
 agy_rule() {
   local dir w
-  dir="$(tilde "$WIKIS_DIR")"
+  dir="$(rule_dir)"
   w="$(agy_cmd)"
   cat <<EOF2
 # llm-wiki
@@ -3904,7 +3926,7 @@ print(p[7:] if p.startswith("file://") else p)' 2>/dev/null || true)"
   # the model can run, not ./wiki.sh.
   WIKI_CMD="$(agy_cmd)"
   # Keep the plugin current, so an update reaches the next conversation.
-  [ ! -d "$AGY_DIR" ] || agy_write >/dev/null 2>&1 || true
+  { [ ! -d "$AGY_DIR" ] || ! global_files_ok || agy_write >/dev/null 2>&1; } || true
   out="$( (cmd_start "$dir") 2>&1 || true)"
   agy_reminders_write "$input" "$out"
   printf 'llm-wiki: this plugin ran `%s start` for this conversation. Its output follows. Read the AGENTS.md of the wiki it names and follow it. Do not run start again.\n\n%s\n' "$(agy_cmd)" "$out" \
@@ -3944,7 +3966,7 @@ codex_cmd() { if from_plugin; then plugin_cmd; else printf '%s/wiki.sh' "$REPO";
 codex_rule() {
   local dir w hook="${1:-}"
   [ -n "$hook" ] || hook="the llm-wiki plugin's hook"
-  dir="$(tilde "$WIKIS_DIR")"
+  dir="$(rule_dir)"
   w="$(tilde "${2:-$(codex_cmd)}")"
   printf '%s' "My knowledge wikis live in $dir, one folder per project, plus a shared one at $dir/$SHARED. Wherever their handbooks say \`wiki.sh\`, run \`$w\`. At the start of each session, $hook runs \`$w start\` for the repository and adds its output to the session: the wiki that covers it, a pull of the collection, the indexes, the agreements under For agents, and the notes waiting. When that output is there, don't run start again: read that wiki's AGENTS.md and follow it. When it's missing, run \`$w start\` in the repository yourself, then do the same. If no wiki covers the repository, create one with \`$w new <repository-name>\` the first time you have something to file there. If you can hand work to sub-agents on cheaper models, do it for large, self-contained work as $dir/delegation.md says, following $dir/$SHARED/rules/delegation.md."
 }
@@ -4088,7 +4110,7 @@ EOF2
   else
     [ -n "${pick:-}" ] || [ -n "${LLM_WIKI_FIXED_DIR:-}" ] || set_collection "$(collection_for "$dir")"
     # Keep the rule and skills current, so an update reaches the next session.
-    if [ -f "$CODEX_PLUGIN/.codex-plugin/plugin.json" ]; then
+    if global_files_ok && [ -f "$CODEX_PLUGIN/.codex-plugin/plugin.json" ]; then
       { [ -z "$(codex_line)" ] || codex_rule_write; codex_links; } >/dev/null 2>&1 || true
     fi
     out="$( (cmd_start "$dir") 2>&1 || true)"
@@ -4226,7 +4248,7 @@ print(p[0] if p else "")' 2>/dev/null || true)"
   [ -n "$dir" ] && [ -d "$dir" ] || dir="${CURSOR_PROJECT_DIR:-$HOME}"
   [ -n "${pick:-}" ] || [ -n "${LLM_WIKI_FIXED_DIR:-}" ] || set_collection "$(collection_for "$dir")"
   WIKI_CMD="$(tilde "$(cursor_cmd)")"
-  { [ "$(cursor_state)" = none ] || cursor_links; } >/dev/null 2>&1 || true
+  { ! global_files_ok || [ "$(cursor_state)" = none ] || cursor_links; } >/dev/null 2>&1 || true
   out="$( (cmd_start "$dir") 2>&1 || true)"
   printf 'llm-wiki: this hook ran `%s start` for this session. Its output follows. Read the AGENTS.md of the wiki it names and follow it. Do not run start again.\n\n%s\n' "$WIKI_CMD" "$out" \
     | python3 -c 'import json, sys; print(json.dumps({"additional_context": sys.stdin.read()}))'
