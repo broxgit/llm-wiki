@@ -1,0 +1,120 @@
+[1mUsage: wiki <command> [options][0m
+
+  setup                Walk through every setting, step by step. Safe to rerun.
+  setup --new          Only what's new since you last ran it, such as after a template update.
+  setup --list         Print current settings without asking.
+  init                 Create the wiki collection at <tmp>/wikis and its shared wiki, global.
+  new <name|path>      Create a wiki from the template. A bare name goes under <tmp>/wikis.
+  capture <wiki> <slug>  Save a note piped on stdin in raw/, named from the clock.
+                       --file NOTE reads it from a file. --copy FILE stores a
+                       document unchanged instead.
+  lock <wiki> [--release|--renew|--who] [--as <name>]
+                       Take, release or renew the compile lock. --who says who holds
+                       it. --as names the session that takes or renews it.
+  compile [<wiki>] [--background] | on | off
+                       Compile a wiki's waiting notes with a headless agent. on makes
+                       session start do it in the background. compile --help has more.
+  log <wiki> <type> [title] [--source raw/F] [--created P] [--updated P] ...
+                       Append a log.md entry and print its counts. log --help has the options.
+  sync <wiki> [-m MSG] Commit this wiki's changes, pull with a merge, and push.
+  index <wiki> [--check]  Bring index.md in step with the pages' frontmatter, in place.
+  lint <wiki>... | --all  The mechanical lint checks. Reports, changes nothing.
+  harvest [--dry-run]  Copy Claude Code's own memory notes into the wikis, where every
+                       repo and teammate can use them.
+  pending [<wiki>] [--show]
+                       Notes waiting to be compiled. --show prints a wiki's in one go.
+  seed [<repo>] [--wiki NAME] [--max N] [--dry-run]
+                       Start a wiki from a repository's own docs: README, agent
+                       instructions, skills, docs/, decision records.
+  cover <wiki> <repo>...  Record that one wiki covers several repositories.
+  workflows [add <pattern> inside|none|<wiki> | remove <pattern> | check [<folder>]]
+                       Where sessions outside a repository belong: which folders
+                       use the wikis of their clones, one wiki, or none.
+  collections          List the wiki collections and the repositories each one takes.
+  update [--wikis-only]
+                       Update llm-wiki itself, then pull, upgrade and push every collection,
+                       ask about new settings, and say how to bring open sessions up to date.
+  start [<repo>]       Session start in one call: find the wiki, pull, print the indexes,
+                       For agents and what waits. Defaults to the current folder.
+  permissions          Print the Claude Code allow rules for the wiki commands that
+                       write, and Antigravity's grants when it's installed. wiki setup
+                       permissions and wiki setup antigravity add them.
+  which [repo]         Print the wiki that covers a repository, by default the one you're in.
+  list [--names]       The wikis here, and the repositories each covers. --names prints
+                       the names alone, for a program.
+  status               List wikis: handbook version, notes waiting, lock state.
+  find <words>         Search every wiki's index, then page text, then the notes not
+                       compiled yet, for a word or phrase.
+  deps [--all] [--write]
+                       Which repository owns which package, and which use each other's,
+                       from go.mod, package.json and pyproject.toml. --write saves it
+                       to the shared wiki's data/dependencies.csv.
+  stale [days]         List pages not verified in that many days (default 90), or 50
+                       commits behind their repository's clone under code_dirs.
+  patterns             Recurring feedback across wikis, and which patterns are ready to propose.
+  open [--data [<wiki>]]  What is waiting on someone or on a date, in every wiki. --data gives
+                       every entry in a plain form for a program. open --help has more.
+  pages <wiki> [--data]  A wiki's pages and their titles. --data gives path, dates and title,
+                       tab separated, for a program.
+  skills [link]        Team skills in the wikis, and link them into ~/.claude/skills.
+  tips [--mute NAME]   Features your own wikis suggest you'd get something out of.
+  completion zsh|bash  Print tab completion for a shell. wiki setup turns it on.
+  feedback [show|send|dismiss <id>]
+                       Notes agents kept about llm-wiki itself, and filing one as an
+                       issue after you read it. Off until: setup feedback.
+  helper [fetch | auto on|off]
+                       Which compiled helper the ported commands use, and download the
+                       one released for this version. wiki update does that too, and
+                       so does session start, in the background, unless auto is off.
+  mcp [--print]        A local MCP server over the wikis, for sessions with no file
+                       access. An MCP client starts it. --print gives its config entry.
+  news [--all]         What's new in llm-wiki since you last looked.
+  obsidian [--no-open] Browse the wikis in Obsidian: write the vault's starter settings and open it.
+  extensions [path | add <name> | remove <name> | setup <name> | log <name> | tick | every ...]
+                       Commands of your own: wiki <name> runs an executable named
+                       wiki-<name> in the extensions folder. Lists them, or prints the folder.
+                       add turns on one that ships with llm-wiki, such as jira. remove turns it off.
+                       setup asks for what an extension needs before it can work, such as
+                       a sign-in. wiki status says when one that is on isn't ready.
+                       log shows how an extension's last runs for events ended. tick runs
+                       the tick event now, for cron on a machine with no sessions.
+                       every [<time>] says or sets how long passes between ticks: 90m, 4h,
+                       2d, 3w; 24h unless set. every <name> <time> is for one extension
+                       and wins over it; every <name> default takes that away.
+  tour [--clean] [--dir DIR]
+                       A hands-on tour for your agent, on a made-up project in a sandbox.
+                       Ask your agent to run it and follow what it prints.
+  report [--since R]   Weekly look: tokens per project, what the wikis gained, hit
+                       rate, and what needs you. An agent writes it up.
+  stats [range]        How often wikis answered the questions sessions checked them for (default 30d).
+  delegation [off|ask|auto]  Show handoff mode and results by kind of work, or set the mode.
+  delegation log <kind> <model> <effort> <ok|fixed|redone>  Record one handoff.
+  upgrade <name|path>  Bring a wiki's handbook and scaffold files up to the template's.
+  upgrade --all        Do that for every wiki in the collection.
+  unlock <name|path>   Free a stuck compile lock.
+  claude               Add the wiki line to ~/.claude/CLAUDE.md so every session finds its wiki.
+  claude --print       Print the line, for another agent's instruction file.
+  link [--yes]         With the plugin: make wiki a command in every terminal.
+
+  journal              Show the work journal's settings and today's entry count.
+  journal on | off     Turn the journal on or off. It is on by default.
+  journal set <key> <value>  Change a setting. See <tmp>/wikis/journal/config.
+  journal note [--day DATE] [--at HH:MM] <project> <text>
+                       Add one line to today's journal, or a past day's.
+  journal backfill [--since 14d] [--until DATE] [--done]
+                       Digest past Claude Code sessions and Gemini's Antigravity
+                       conversations into journal/backfill.md.
+                       An agent turns the digest into entries.
+  journal path | prune Print today's journal file. Delete days older than keep_days.
+  standup [options]    Gather what you did: commits, journal lines, wiki notes,
+                       work in progress, open checks. An agent turns it into a report.
+                       --since lastworkday|yesterday|today|week|lastweek|7d|DATE
+                       --until DATE  --day DATE  --format standup|summary|detailed
+                       --only GLOB  --exclude GLOB  --max N  --save
+
+  --git   With init: make the whole collection one git repo.
+          With new:  make that wiki its own repo, unless it is already inside one.
+
+Name a wiki after the repository it covers. For a project that spans several
+repositories, name it after the project and list the repositories with cover.
+Set WIKIS_DIR to keep wikis somewhere other than ~/wikis.

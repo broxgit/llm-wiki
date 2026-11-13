@@ -229,7 +229,7 @@ esac
 llm-wiki does the rest:
 
 - `wiki setup` runs the setup right after someone turns the extension on, and `wiki extensions setup <name>` runs it again.
-- While `--wiki-ready` fails, `wiki status` has a To do line with what the extension printed and the command that sets it up, `wiki extensions` shows it as not ready, and no event runs it.
+- While `--wiki-ready` fails, `wiki status` has a TO DO line with what the extension printed and the command that sets it up, `wiki extensions` shows it as not ready, and no event runs it.
 - An extension with no `wiki-setup:` comment is always taken as ready.
 
 Something else is checked for every extension, with or without that comment: the program its first line names. One written in Python on a machine with no `python3` says so when it is run, in `wiki status`, and when setup would offer it.

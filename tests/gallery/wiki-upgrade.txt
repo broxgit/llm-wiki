@@ -1,0 +1,9 @@
+[34m●[0m [1m[44m[97m UPGRADE [0m  [1mdemo[0m
+[2m│[0m     handbook: already v<handbook>, nothing to replace
+[2m│[0m   [32m✓[0m done:     <tmp>/wikis/demo
+[2m│[0m
+[35m●[0m [1m[45m[97m CHANGED [0m  [1mNothing. demo was already on handbook v<handbook>.[0m
+[2m│[0m
+[32m●[0m [1m[42m[30m NEXT [0m  [1mwhat to do now[0m
+[2m│[0m   [1m[33m![0m New settings to look at: [36mwiki setup --new[0m
+[2m│[0m     Settings any time: [36mwiki setup --list[0m

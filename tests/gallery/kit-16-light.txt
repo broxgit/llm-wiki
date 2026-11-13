@@ -1,0 +1,36 @@
+[1m[43m[30m ? [0m [1m[33mRun this branch's code on your Mac?[0m
+   !20 at c5f91b7 by a teammate · [2mgit hooks off[0m
+   [33m•[0m go build, vet, test and mod tidy
+   [33m•[0m pre-commit, on the 10 changed files
+
+   [1m[32m[y][0mes  [1m[31m[n][0mo  [1m[33m›[0m y
+
+[34m●[0m [1m[44m[97m CHECKS [0m  [1m[32m5 passed[0m[2m · 0 failed · 64s[0m
+[2m│[0m   [32m✓[0m go build[2m                          17s[0m
+[2m│[0m   [32m✓[0m go vet[2m                             6s[0m
+[2m│[0m   [1m[33m![0m go test, 1 skipped[2m                 8s[0m
+[2m│[0m   [1m[31m✗[0m pre-commit, 10 files[2m              31s[0m
+[2m│[0m
+[35m●[0m [1m[45m[97m PACKED [0m  [1mcamera-events !20[0m[2m · 3.5 MB[0m
+[2m│[0m     [36mfeature/clip-people[0m → master[2m · [0m@ c5f91b7
+[2m│[0m     13 Go modules[2m · [0myour earlier review[2m · [0mcheck logs
+[2m│[0m
+[32m●[0m [1m[42m[30m SENT [0m  [1mOneDrive[0m[2m · Documents/Cowork/relay/mrs/camera-events-20[0m
+[2m│[0m
+[33m◆[0m [1m[33mYOUR TURN[0m
+
+  [1m[46m[30m 1 [0m  [1mPaste into Copilot Cowork[0m  [32m📋 already on your clipboard[0m
+
+[47m[30m                                                                                [0m
+[47m[30m  Use remote-pair-run to review this merge request, following its section on    [0m
+[47m[30m  merge requests. With no attachment, read these notes from my OneDrive:        [0m
+[47m[30m  - Documents/Cowork/relay/mrs/camera-events-20.txt                             [0m
+[47m[30m  A link is never split:                                                        [0m
+[47m[30m  https://gitlab.com/example/group/platform/camera-detection-event-aggregator/-/merge_requests/20  [0m
+[47m[30m                                                                                [0m
+
+  [1m[100m[97m 2 [0m  [1mAsk Slackbot[0m  [2mthen paste its answer into Copilot Cowork[0m
+
+[1m[36mNext:[0m back in Copilot Cowork, reply [36mdone[0m
+
+palette default, theme light (light), 16 colours

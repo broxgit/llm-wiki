@@ -1,0 +1,5 @@
+[34m●[0m [1m[44m[97m EXTENSIONS [0m  [1mwhat this machine has[0m
+[2m│[0m     confluence     off. Watch Confluence pages and tell your wiki when one changes. It can also publish a wiki to a space, if you choose. Turn it on: [36mwiki extensions add confluence[0m
+[2m│[0m     jira           off. Check the Jira tickets your open items wait on, and close the ones that are done. Turn it on: [36mwiki extensions add jira[0m
+[2m│[0m     An extension is an executable named wiki-<name> in ~/.local/share/llm-wiki/extensions.
+[2m│[0m     wiki <name> runs it. docs/extensions.md says what it is given.

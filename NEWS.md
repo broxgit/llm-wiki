@@ -4,6 +4,12 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-12-09: one look for every llm tool
+
+- Every command prints as a timeline: stages down a line on the left, ✓ ! ✗ marks, and what to do next. The words agents read are the same.
+- Colours are 24-bit where your terminal says it can show them (`COLORTERM=truecolor`), and the terminal's own 16 elsewhere.
+- `wiki setup theme` (or `LLM_THEME=light`) suits a light background. `bash ui.sh`, in the llm-wiki folder, shows every piece.
+
 ## 2026-12-08: your message finds its pages
 
 - When you send a message, the agent is handed the pages and notes, in any wiki, that fit its words. It used to have to go looking, and mostly didn't.

@@ -1,0 +1,13 @@
+[100m[97m                                                                                [0m
+[100m[97m  My knowledge wikis live in ~/wikis, one folder per project, plus a shared     [0m
+[100m[97m  one at ~/wikis/global. Wherever their handbooks say `wiki.sh`, run            [0m
+[100m[97m  `~/llm-wiki/wiki.sh`. At session start, run `~/llm-wiki/wiki.sh start` in     [0m
+[100m[97m  the repository you are working in. It names the wiki that covers it, pulls,   [0m
+[100m[97m  and prints what to read first. Read that wiki's AGENTS.md and follow it. If   [0m
+[100m[97m  no wiki covers the repository, read ~/wikis/global/AGENTS.md and follow       [0m
+[100m[97m  that, and create the repository's wiki with `~/llm-wiki/wiki.sh new           [0m
+[100m[97m  <repository-name>` the first time you have something to file there. Outside   [0m
+[100m[97m  any repository, use the shared wiki. If your tool can hand work to            [0m
+[100m[97m  sub-agents on cheaper models, do it for large, self-contained work as         [0m
+[100m[97m  ~/wikis/delegation.md says, following ~/wikis/global/rules/delegation.md.     [0m
+[100m[97m                                                                                [0m

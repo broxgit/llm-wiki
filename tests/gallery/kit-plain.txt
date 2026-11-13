@@ -1,0 +1,32 @@
+? Run this branch's code on your Mac?
+   !20 at c5f91b7 by a teammate · git hooks off
+   - go build, vet, test and mod tidy
+   - pre-commit, on the 10 changed files
+
+   [y]es  [n]o  › y
+
+CHECKS  5 passed · 0 failed · 64s
+    - go build                          17s
+    - go vet                             6s
+    - go test, 1 skipped                 8s
+    - pre-commit, 10 files              31s
+
+PACKED  camera-events !20 · 3.5 MB
+      feature/clip-people → master · @ c5f91b7
+      13 Go modules · your earlier review · check logs
+
+SENT  OneDrive · Documents/Cowork/relay/mrs/camera-events-20
+
+YOUR TURN
+
+  1  Paste into Copilot Cowork  already on your clipboard
+
+Use remote-pair-run to review this merge request, following its section on merge requests. With no attachment, read these notes from my OneDrive:
+- Documents/Cowork/relay/mrs/camera-events-20.txt
+A link is never split: https://gitlab.com/example/group/platform/camera-detection-event-aggregator/-/merge_requests/20
+
+  2  Ask Slackbot  then paste its answer into Copilot Cowork
+
+Next: back in Copilot Cowork, reply done
+
+palette default, theme auto (dark), 16 colours

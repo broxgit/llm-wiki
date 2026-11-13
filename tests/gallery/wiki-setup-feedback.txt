@@ -1,0 +1,11 @@
+Setup for <tmp>/wikis. Enter keeps the value in brackets.
+[34m●[0m [1m[44m[97m SETUP [0m  [1mFeedback on llm-wiki[0m
+[2m│[0m     Agents can keep a note when llm-wiki itself gets in their way: a command that failed or misled, instructions that
+[2m│[0m     conflicted, work a command should have done. At most one a session, never mid-task. Notes stay on this machine.
+[2m│[0m       off    nothing is kept
+[2m│[0m       notes  keep notes for you to read: wiki feedback
+[2m│[0m       share  keep them, and let you file one as an issue on broxgit/llm-wiki. You read each one first;
+[2m│[0m              names of your projects, paths and emails are scrubbed. Nothing is sent without your yes.
+[2m│[0m   [1mFeedback[0m [off] [1m[33m›[0m [2m│[0m   [32m✓[0m feedback: notes
+[2m│[0m   [32m✓[0m Done. After you pull template updates, wiki setup --new shows what's new.
+[2m│[0m     To see what it can do, ask your agent for the llm-wiki tour. It runs on a made-up project.

@@ -1,0 +1,36 @@
+[1m[48;2;230;159;0m[38;2;20;20;30m ? [0m [1m[38;2;230;159;0mRun this branch's code on your Mac?[0m
+   !20 at c5f91b7 by a teammate · [38;2;140;145;160mgit hooks off[0m
+   [38;2;230;159;0m•[0m go build, vet, test and mod tidy
+   [38;2;230;159;0m•[0m pre-commit, on the 10 changed files
+
+   [1m[38;2;86;140;255m[y][0mes  [1m[38;2;225;120;200m[n][0mo  [1m[38;2;230;159;0m›[0m y
+
+[38;2;86;180;233m●[0m [1m[48;2;86;180;233m[38;2;20;20;30m CHECKS [0m  [1m[38;2;86;140;255m5 passed[0m[38;2;140;145;160m · 0 failed · 64s[0m
+[38;2;140;145;160m│[0m   [38;2;86;140;255m✓[0m go build[38;2;140;145;160m                          17s[0m
+[38;2;140;145;160m│[0m   [38;2;86;140;255m✓[0m go vet[38;2;140;145;160m                             6s[0m
+[38;2;140;145;160m│[0m   [1m[38;2;230;159;0m![0m go test, 1 skipped[38;2;140;145;160m                 8s[0m
+[38;2;140;145;160m│[0m   [1m[38;2;225;120;200m✗[0m pre-commit, 10 files[38;2;140;145;160m              31s[0m
+[38;2;140;145;160m│[0m
+[38;2;230;159;0m●[0m [1m[48;2;230;159;0m[38;2;20;20;30m PACKED [0m  [1mcamera-events !20[0m[38;2;140;145;160m · 3.5 MB[0m
+[38;2;140;145;160m│[0m     [38;2;120;220;230mfeature/clip-people[0m → master[38;2;140;145;160m · [0m@ c5f91b7
+[38;2;140;145;160m│[0m     13 Go modules[38;2;140;145;160m · [0myour earlier review[38;2;140;145;160m · [0mcheck logs
+[38;2;140;145;160m│[0m
+[38;2;0;158;115m●[0m [1m[48;2;0;158;115m[38;2;20;20;30m SENT [0m  [1mOneDrive[0m[38;2;140;145;160m · Documents/Cowork/relay/mrs/camera-events-20[0m
+[38;2;140;145;160m│[0m
+[38;2;230;159;0m◆[0m [1m[38;2;230;159;0mYOUR TURN[0m
+
+  [1m[48;2;120;220;230m[38;2;20;20;30m 1 [0m  [1mPaste into Copilot Cowork[0m  [38;2;86;140;255m📋 already on your clipboard[0m
+
+[48;2;32;34;46m[38;2;220;222;235m                                                                                [0m
+[48;2;32;34;46m[38;2;220;222;235m  Use remote-pair-run to review this merge request, following its section on    [0m
+[48;2;32;34;46m[38;2;220;222;235m  merge requests. With no attachment, read these notes from my OneDrive:        [0m
+[48;2;32;34;46m[38;2;220;222;235m  - Documents/Cowork/relay/mrs/camera-events-20.txt                             [0m
+[48;2;32;34;46m[38;2;220;222;235m  A link is never split:                                                        [0m
+[48;2;32;34;46m[38;2;220;222;235m  https://gitlab.com/example/group/platform/camera-detection-event-aggregator/-/merge_requests/20  [0m
+[48;2;32;34;46m[38;2;220;222;235m                                                                                [0m
+
+  [1m[48;2;140;145;160m[38;2;20;20;30m 2 [0m  [1mAsk Slackbot[0m  [38;2;140;145;160mthen paste its answer into Copilot Cowork[0m
+
+[1m[38;2;120;220;230mNext:[0m back in Copilot Cowork, reply [38;2;120;220;230mdone[0m
+
+palette colorblind, theme dark (dark), 24-bit colours

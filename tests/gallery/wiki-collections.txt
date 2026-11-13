@@ -1,0 +1,2 @@
+default    ~/wikis
+Only the default. wiki setup collections adds another, such as one for work.

@@ -85,6 +85,12 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### One look for every command (2026-11-13)
+
+- **Why:** decided on 2026-11-13: the timeline look picked for `relay mr` (a question, stages on a rail, items, a card to paste, YOUR TURN and its steps) is the house style of llm-wiki, llm-relay and any llm tool after them, so no command looks plainer than the others.
+- **What changed:** conventions version 4 names the pieces and the colour roles, and `ui.sh`, kit version 4, draws them: one file each tool carries byte for byte, held to the guide by its sha256. 24-bit colour where the terminal says so, a colour-blind palette and a light theme (`wiki setup palette`, `wiki setup theme`). Every command a person reads in both tools prints through the pieces; `tests/ui-lint.sh` fails on anything that doesn't, and `scripts/gallery.sh` keeps what each prints. llm-relay says "Copilot Cowork" wherever a person reads it. The work went on a long-lived `ui-house-style` branch in each repository, merged to `main` once, so nobody saw a half-moved look.
+- **Untested:** how the 24-bit colours and the light theme look in terminals other than the tests'; auto can't tell a light background in macOS's Terminal, which sets no `COLORFGBG`.
+
 ### Patterns: a session outside a repository asks once where it belongs (2026-11-11)
 
 - **Why:** the second step of "Learn where a person works, by asking" under Next. Step 1 said which wikis a session in a folder of clones used, and remembered nothing, so the same folder was placed, and would have been asked about, every time. The maintainer's answers on 2026-11-11: a good guess asks once; a pattern seen again is used, and the session says so at the start with a way to say it is wrong; with no pattern, ask whether to use llm-wiki there at all, then about the layout, then whether to remember it.

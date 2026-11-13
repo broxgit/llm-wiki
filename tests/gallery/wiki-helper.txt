@@ -1,0 +1,3 @@
+helper: off, because LLM_WIKI_NO_GO is set
+This checkout names release <release>, protocol <n>, for <platform>.
+Fetched automatically at session start: on
