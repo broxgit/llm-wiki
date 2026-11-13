@@ -39,6 +39,11 @@ unset XDG_CONFIG_HOME XDG_STATE_HOME XDG_DATA_HOME XDG_CACHE_HOME LC_ALL LC_CTYP
 PATH="/usr/bin:/bin"
 mkdir -p "$HOME"
 cd "$T" || exit 1
+# A copy of the checkout inside the fake home, so a path to it is ~/llm-wiki on every machine:
+# a card wraps at its width before any placeholder goes in, so its length has to be the same.
+mkdir -p "$HOME/llm-wiki"
+(cd "$REPO" && tar cf - --exclude ./.git --exclude ./.claude --exclude ./tests --exclude ./bin .) | (cd "$HOME/llm-wiki" && tar xf -)
+W="$HOME/llm-wiki/wiki.sh"
 printf '[user]\n\tname = Gallery\n\temail = gallery@example.test\n[init]\n\tdefaultBranch = main\n' >"$HOME/.gitconfig"
 printf '# News\n\n## 2026-01-02: An entry\n\n- Something you would notice.\n- Do: run `wiki status`.\n' >"$LLM_WIKI_NEWS_FILE"
 LLM_WIKI_STYLE=off "$W" new "$WIKIS_DIR/global" >/dev/null 2>&1
