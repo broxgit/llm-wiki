@@ -582,13 +582,13 @@ func (s *Server) wikiCapture(a args) (string, error) {
 	// sync also ends well with nothing pushed: no remote, or a folder that isn't in a
 	// repository the wikis own. Only its "synced: " line says the note left this machine.
 	if ok && (strings.HasPrefix(synced, "synced: ") || strings.Contains(synced, "\nsynced: ")) {
-		return out + "\nPushed. A later session with file access compiles it into pages.", nil
+		return out + "\nSaved, and copied off this machine. A later session with file access works it into the wiki's pages.", nil
 	}
 	why := "sync failed"
 	if synced != "" {
 		why = lastLine(synced)
 	}
-	return out + "\nSaved on this machine, but not pushed: " + why, nil
+	return out + "\nSaved on this machine only: " + why, nil
 }
 
 // capture saves the note as wiki.sh capture does, and answers as must would have:

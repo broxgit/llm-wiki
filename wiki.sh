@@ -291,7 +291,7 @@ need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 # Raise GO_PROTOCOL, with the constant in cmd/llm-wiki/main.go, whenever a ported
 # command's arguments or output change. scripts/helper.sh builds releases and writes
 # helper.lock.
-GO_PROTOCOL=16
+GO_PROTOCOL=17
 HELPER_LOCK="$REPO/helper.lock"
 HELPER_DIR="${LLM_WIKI_HELPER_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/llm-wiki/helper}"
 
@@ -513,6 +513,12 @@ valid_name() {
   case "$1" in
     '' | .* | -* | *[!A-Za-z0-9._-]*) return 1 ;;
   esac
+}
+
+# name_hint: the nearest name valid_name takes, for a refusal to offer. "Acme Holdings"
+# gives Acme-Holdings. Prints nothing when nothing usable is left.
+name_hint() {
+  printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9._-' '-' | sed -e 's/--*/-/g' -e 's/^[.-]*//' -e 's/-$//'
 }
 
 version_of() {
@@ -2329,7 +2335,7 @@ cmd_sync() {
 }
 
 sync_do() {
-  local wiki="" msg="" root repo path top err ahead
+  local wiki="" msg="" root repo path top err ahead here coll how cname
   while [ $# -gt 0 ]; do
     case "$1" in
       -m) need_value "$@"; msg="${2:-}"; shift 2 ;;
@@ -2345,7 +2351,26 @@ sync_do() {
   elif [ -n "$top" ] && [ -f "$WIKIS_DIR/WIKIS.md" ] && [ "$top" = "$(cd "$WIKIS_DIR" && pwd -P)" ]; then
     repo="$WIKIS_DIR"; path="${root##*/}"
   else
-    echo "$(tilde "$root") isn't in a repo the wikis own, so there's nothing to sync. Commits are up to you there."
+    if [ -z "$top" ]; then
+      # No git at all: a person who never set it up, and may not know the word. One line,
+      # because the MCP servers pass on the last one. The command is offered only where it
+      # reaches: a wiki really inside the collection, with the collection named when it
+      # isn't the default. Real paths, so a link in or out of the collection doesn't fool it.
+      here="$(cd "$root" && pwd -P)"; coll="$(cd "$WIKIS_DIR" 2>/dev/null && pwd -P || true)"
+      how=""
+      case "$here" in
+        "${coll:-/nowhere}"/*)
+          how=" To set that up, run in a terminal: $WIKI_CMD setup git"
+          # No exit in the awk: stopping early can break the pipe, and with pipefail that
+          # ends the script with nothing said.
+          cname="$(collections | awk -F '\t' -v d="${WIKIS_DIR%/}" '!got && $2 == d { print $1; got = 1 }' || true)"
+          case "$cname" in '' | default) ;; *) how="$how --collection $cname" ;; esac
+          ;;
+      esac
+      echo "$(tilde "$root") has no backup and isn't shared: it is kept on this machine only.$how"
+    else
+      echo "$(tilde "$root") is in a repository the wikis don't manage, so nothing is synced from here. Commits are up to you there."
+    fi
     return 0
   fi
   [ -n "$msg" ] || msg="${root##*/}: update"
@@ -10605,8 +10630,11 @@ case "$cmd" in
   init) cmd_init "$want_git" ;;
   new)
     need_target
-    valid_name "${target##*/}" \
-      || die "\"${target##*/}\" can't be a wiki name. Use the repository's name: letters, digits, dots, dashes, underscores."
+    if ! valid_name "${target##*/}"; then
+      hint="$(name_hint "${target##*/}")"
+      [ -z "$hint" ] || hint=" Try: $hint"
+      die "\"${target##*/}\" can't be a wiki name. A name is letters, digits, dots, dashes and underscores, with no spaces.$hint"
+    fi
     case "$target" in
       */*) ;;
       *)

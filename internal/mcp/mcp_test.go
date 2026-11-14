@@ -79,7 +79,7 @@ case "$FAKE" in
   linger) sleep 5 & echo "gone" ;;
   bytes) printf 'caf\351 \342\206\r\nnext\r' ; printf ' err\n' >&2 ;;
   no-remote) case "$1" in sync) echo "committed: m"; echo "no remote, so nothing to pull or push" ;; *) echo "ran $1" ;; esac ;;
-  unowned) case "$1" in sync) echo "~/wikis/demo isn't in a repo the wikis own, so there's nothing to sync. Commits are up to you there." ;; *) echo "ran $1" ;; esac ;;
+  unowned) case "$1" in sync) echo "~/wikis/demo is in a repository the wikis don't manage, so nothing is synced from here. Commits are up to you there." ;; *) echo "ran $1" ;; esac ;;
   first-push) case "$1" in sync) echo "committed: m"; echo "synced: pushed ~/wikis to origin for the first time" ;; *) echo "ran $1" ;; esac ;;
   noisy-push) case "$1" in sync) echo "synced: pulled and pushed ~/wikis"; echo "remote: a hook said this" >&2 ;; *) echo "ran $1" ;; esac ;;
   *) case "$1" in which) [ "$2" = jobs ] && [ "${WIKIS_DIR##*/}" = wikis-work ] ;; sync) echo "committed: m"; echo "synced: pulled and pushed ~/wikis" ;; *) echo "ran $1" ;; esac ;;
@@ -592,7 +592,7 @@ func TestWrappedTools(t *testing.T) {
 	os.Remove(root + "/calls.log")
 	note := "We chose Postgres.\nBecause \u2192 reasons.\n"
 	got, isErr = call(t, s, "wiki_capture", m{"wiki": "demo", "slug": "pg", "note": note})
-	if isErr || saved(got) != "ran capture\nPushed. A later session with file access compiles it into pages." {
+	if isErr || saved(got) != "ran capture\nSaved, and copied off this machine. A later session with file access works it into the wiki's pages." {
 		t.Errorf("wiki_capture = %q, error %v", got, isErr)
 	}
 	// The server saves the note itself, and wiki.sh only syncs.
@@ -634,7 +634,7 @@ func TestWrappedTools(t *testing.T) {
 	if got, isErr := call(t, s, "wiki_status", m{}); !isErr || got != "error: it went wrong" {
 		t.Errorf("a wiki.sh that fails: %q, error %v", got, isErr)
 	}
-	if got, isErr := call(t, s, "wiki_capture", m{"wiki": "demo", "slug": "x", "note": "n"}); isErr || saved(got) != "ran capture\nSaved on this machine, but not pushed: error: it went wrong" {
+	if got, isErr := call(t, s, "wiki_capture", m{"wiki": "demo", "slug": "x", "note": "n"}); isErr || saved(got) != "ran capture\nSaved on this machine only: error: it went wrong" {
 		t.Errorf("a capture whose sync fails: %q, error %v", got, isErr)
 	}
 	// A note that can't be written is the tool's error, in wiki.sh's words.
@@ -697,7 +697,7 @@ func TestCaptureNotPushed(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = root
-	if got, isErr := call(t, s, "wiki_capture", m{"wiki": "demo", "slug": "x", "note": "n"}); isErr || saved(got) != "ran capture\nSaved on this machine, but not pushed: error: no remote" {
+	if got, isErr := call(t, s, "wiki_capture", m{"wiki": "demo", "slug": "x", "note": "n"}); isErr || saved(got) != "ran capture\nSaved on this machine only: error: no remote" {
 		t.Errorf("wiki_capture = %q, error %v", got, isErr)
 	}
 }
@@ -705,10 +705,10 @@ func TestCaptureNotPushed(t *testing.T) {
 // sync ends well in four ways, and only two of them pushed. A capture is called pushed
 // only when sync says "synced: ", wherever in its output that line is.
 func TestCapturePushedOnlyWhenSyncPushed(t *testing.T) {
-	const pushed = "ran capture\nPushed. A later session with file access compiles it into pages."
+	const pushed = "ran capture\nSaved, and copied off this machine. A later session with file access works it into the wiki's pages."
 	for how, want := range map[string]string{
-		"no-remote":  "ran capture\nSaved on this machine, but not pushed: no remote, so nothing to pull or push",
-		"unowned":    "ran capture\nSaved on this machine, but not pushed: ~/wikis/demo isn't in a repo the wikis own, so there's nothing to sync. Commits are up to you there.",
+		"no-remote":  "ran capture\nSaved on this machine only: no remote, so nothing to pull or push",
+		"unowned":    "ran capture\nSaved on this machine only: ~/wikis/demo is in a repository the wikis don't manage, so nothing is synced from here. Commits are up to you there.",
 		"first-push": pushed,
 		"noisy-push": pushed,
 	} {
