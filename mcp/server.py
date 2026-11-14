@@ -224,7 +224,15 @@ def wiki_capture(args):
     # repository the wikis own. Only its "synced: " line says the note left this machine.
     if ok and (synced.startswith("synced: ") or "\nsynced: " in synced):
         return out + "\nSaved, and copied off this machine. A later session with file access works it into the wiki's pages."
-    return out + "\nSaved on this machine only: " + (synced.splitlines()[-1] if synced else "sync failed")
+    last = synced.splitlines()[-1] if synced else "sync failed"
+    reply = out + "\nSaved on this machine only: " + last
+    # A sync that failed says why in the lines before its last: which secret the scan
+    # found, which file is in conflict. Someone with no terminal can't go and look.
+    if not ok and synced:
+        before = synced[: len(synced) - len(last)].strip()[-1500:]
+        if before:
+            reply += "\nBefore that, sync said:\n" + before
+    return reply
 
 
 def wiki_feedback(args):

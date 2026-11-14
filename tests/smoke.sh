@@ -2592,6 +2592,15 @@ mcp_tools() {
   mv "$WIKIS_DIR/WIKIS.md" "$T/WIKIS.aside"
   expect "$who: nor in a folder the wikis don't own" "Saved on this machine only: " mcp_call wiki_capture "{\"wiki\":\"demo\",\"slug\":\"$slug-unowned\",\"note\":\"n\"}"
   mv "$T/WIKIS.aside" "$WIKIS_DIR/WIKIS.md"
+  # A sync that fails: what it printed before its last line is passed on, so someone
+  # with no terminal learns what stopped it.
+  HK="$(cd "$WIKIS_DIR" && git rev-parse --git-path hooks)"; case "$HK" in /*) ;; *) HK="$WIKIS_DIR/$HK" ;; esac
+  mkdir -p "$HK"; [ ! -f "$HK/pre-commit" ] || mv "$HK/pre-commit" "$T/pre-commit.aside"
+  printf '#!/bin/sh\necho "Finding: a key in raw/note.md, line 3"\nexit 1\n' > "$HK/pre-commit"; chmod +x "$HK/pre-commit"
+  out="$(mcp_call wiki_capture "{\"wiki\":\"demo\",\"slug\":\"$slug-refused\",\"note\":\"n\"}" 2>&1)"
+  case "$out" in *"Saved on this machine only: error: the commit was refused."*"Before that, sync said:"*"Finding: a key in raw/note.md, line 3"*) ok "$who: a capture whose sync fails passes on what stopped it" ;; *) bad "$who: a capture whose sync fails passes on what stopped it" "$out" ;; esac
+  rm -f "$HK/pre-commit"; [ ! -f "$T/pre-commit.aside" ] || mv "$T/pre-commit.aside" "$HK/pre-commit"
+  rm -f "$WIKIS_DIR"/demo/raw/*-"$slug"-refused.md; git -C "$WIKIS_DIR" reset -q 2>/dev/null || true
   rm -f "$WIKIS_DIR"/demo/raw/*-"$slug"-no-remote.md "$WIKIS_DIR"/demo/raw/*-"$slug"-unowned.md; "$W" sync demo >/dev/null 2>&1
   check "$who: and the remote is back in step after those" bash -c "[ \"\$(git -C '$WIKIS_DIR' rev-parse HEAD)\" = \"\$(git --git-dir='$T/remote.git' rev-parse HEAD)\" ]"
   expect "$who: wiki_feedback follows the setting" "feedback is off" mcp_call wiki_feedback '{"kind":"idea","summary":"s","details":"d"}'

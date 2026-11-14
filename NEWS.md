@@ -4,6 +4,10 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-12-17: the chat connector says why a save didn't sync
+
+- When a note saved through the connector fails to sync, the reply now says what stopped it: the file a secret scan flagged, or the page in conflict.
+
 ## 2026-12-15: plainer words for people who don't use git
 
 - In a collection with no git, `wiki sync` now says the wiki has no backup and isn't shared, and how to set that up.
