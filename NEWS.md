@@ -4,6 +4,12 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-12-14: the search at your message stays in your project
+
+- When you send a message, two ordinary words now find pages and notes only in the wiki of the project you are in, and in the shared wiki.
+- A ticket's key or a name out of code is still found in any wiki, with your own project's pages first.
+- Before, a session in one project was handed notes from others that happened to share two everyday words with the message.
+
 ## 2026-12-13: notes taken in a ticket folder know their ticket
 
 - A note you capture in a folder, or on a branch, named for a Jira ticket now ends with a `Ticket: <KEY>` line.

@@ -1161,21 +1161,37 @@ recall_words() {
     }'
 }
 
-# recall_text <file> [max]: what to hand a session for the words of the message in a file:
-# up to max lines (4), best first, nothing when nothing fits. One strong word is enough,
-# in an index line, a page's text or a note waiting to be compiled. Weak words need two,
+# recall_home <folder>: the wikis a session in a folder calls its own, as names with a
+# space on each side: the wiki that covers the repository it is in, or the ones session
+# start gives a folder outside one (place_all), and the shared wiki, always. The search
+# at a message counts ordinary words in these only.
+recall_home() {
+  local dir="$1" top w=""
+  if top="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)"; then
+    w="$(which_wiki "$(repo_name "$top")" || true)"
+  elif placeable "$dir"; then
+    place_all "$dir" >/dev/null 2>&1 || true
+    w="${PLACE_WIKIS:-}"
+  fi
+  printf ' %s %s ' "$w" "$SHARED"
+}
+
+# recall_text <file> [max] [home]: what to hand a session for the words of the message in
+# a file: up to max lines (4), best first, nothing when nothing fits. One strong word is
+# enough, in an index line, a page's text or a note waiting to be compiled. Weak words need two,
 # on one line, of the index or of a waiting note, and aren't searched for in page text, which is
-# noisy and slow. Never fails: any error means nothing.
+# noisy and slow. With home, the session's own wikis as recall_home gives them, weak words
+# count in those wikis only. Never fails: any error means nothing.
 recall_text() {
   local words strong weak
   words="$(recall_words "$1" 2>/dev/null || true)"
   [ -n "$words" ] || return 0
   strong="$(printf '%s\n' "$words" | LC_ALL=C awk -F'\t' '$1 == "S" { printf "%s ", $2 }')"
   weak="$(printf '%s\n' "$words" | LC_ALL=C awk -F'\t' '$1 == "W" { printf "%s ", $2 }')"
-  recall_core "${strong% }" "${weak% }" 1 "${2:-4}" 2>/dev/null || true
+  recall_core "${strong% }" "${weak% }" 1 "${2:-4}" "${3:-}" 2>/dev/null || true
 }
 
-# recall_core <strong words> <weak words> <notes 0|1> <max>: the search itself, over every
+# recall_core <strong words> <weak words> <notes 0|1> <max> [home]: the search itself, over every
 # wiki of the collection that has an index, in a few passes however many wikis there are:
 # one grep for page text, one awk over the index lines and the notes. The words are
 # lowercase, separated by spaces. A word matches whole: VID-7400 is not VID-74003. Rows
@@ -1185,8 +1201,12 @@ recall_text() {
 # for a ticket: "- <wiki> wiki: [Title](~/.../page.md): summary", and for a note
 # "- <wiki> wiki, a note not compiled yet: ~/.../raw/<name>.md: <its first line that
 # mentions a word>".
+# With home, the names of the session's own wikis with a space on each side, two ordinary
+# words count in those wikis only, and of equals one of theirs comes first. A session in
+# one project was handed notes about another that shared two everyday words with its
+# message. A ticket's key or a name out of code is exact, so it is still found anywhere.
 recall_core() {
-  local strong="$1" weak="$2" notes="$3" max="$4" d f w n tmp nwords=0
+  local strong="$1" weak="$2" notes="$3" max="$4" home_wikis="${5:-}" d f w n tmp nwords=0
   local kind a b c e line pend
   local tab="$TAB"
   local LC_ALL=C
@@ -1219,7 +1239,11 @@ recall_core() {
     # Whole words, whatever their case, in the pages of every wiki: one grep.
     grep -r -l -i -w -F --include='*.md' "$@" -- "${wdirs[@]}" 2>/dev/null > "$tmp/pages" || true
   fi
-  awk -F"$tab" -v strong="$strong" -v weak="$weak" -v home="$HOME" '
+  awk -F"$tab" -v strong="$strong" -v weak="$weak" -v home="$HOME" -v own="$home_wikis" '
+    # mine(w): whether ordinary words count in this wiki. near(w): 1 for a wiki the
+    # session calls its own, when it is known which those are, so that it ranks first of equals.
+    function mine(w) { return own == "" || index(own, " " w " ") > 0 }
+    function near(w) { return (own != "" && index(own, " " w " ") > 0) ? 1 : 0 }
     function hasword(s, w,   off, i, n, b, a) {
       off = 0; n = length(w)
       while ((i = index(substr(s, off + 1), w)) > 0) {
@@ -1242,16 +1266,17 @@ recall_core() {
         low = tolower(line)
         path = line; sub(/^[^(]*\(/, "", path); sub(/\).*/, "", path)
         sc = 0
-        if (nS && strongin(low)) sc = 4000
-        else if (nS && ((dir "/" path) in inpage)) sc = 3000
-        else if (nW >= 2) { t = line; sub(/\]\([^)]*\)/, "]", t); sc = nweak(t); sc = (sc >= 2) ? sc * 10 + 1 : 0 }
+        if (nS && strongin(low)) sc = 4000 + near(w)
+        else if (nS && ((dir "/" path) in inpage)) sc = 3000 + near(w)
+        else if (nW >= 2 && mine(w)) { t = line; sub(/\]\([^)]*\)/, "]", t); sc = nweak(t); sc = (sc >= 2) ? sc * 10 + 1 : 0 }
         if (!sc) continue
         out = line; sub(/^- /, "", out); sub(/\]\(/, "](" root "/", out); gsub(/\t/, " ", out)
         printf "%d\tI\t- %s wiki: %s\n", sc, w, out
       }
       close(f)
     }
-    function do_note(w, dir, name,   f, line, low, fm, n, best, bline, sfirst, shit, i, s, sc, shown, c) {
+    function do_note(w, dir, name,   f, line, low, fm, n, best, bline, sfirst, shit, i, s, sc, shown, c, wk) {
+      wk = (nW >= 2 && mine(w)); if (!nS && !wk) return
       f = dir "/raw/" name; fm = 0; n = 0; shit = 0; best = 0; bline = ""; sfirst = ""
       while ((getline line < f) > 0) {
         n++
@@ -1260,13 +1285,13 @@ recall_core() {
         if (nS && !shit) { low = tolower(line); if (strongin(low)) { shit = 1; sfirst = line } }
         # Ordinary words count on one line, as in an index line: a long note holds two of
         # almost any five words somewhere. The line a note was captured on says nothing.
-        if (nW >= 2 && line !~ /^Captured:/) {
+        if (wk && line !~ /^Captured:/) {
           c = nweak(line)
           if (c > best) { best = c; bline = line }
         }
       }
       close(f)
-      if (shit) { sc = 3000; shown = sfirst } else if (best >= 2) { sc = best * 10; shown = bline } else return
+      if (shit) { sc = 3000 + near(w); shown = sfirst } else if (best >= 2) { sc = best * 10; shown = bline } else return
       sub(/^[ \t]+/, "", shown); gsub(/\t/, " ", shown); shown = substr(shown, 1, 120)
       printf "%d\tN\t%s\t%s\t%s\t%s\n", sc, w, tilde(dir), name, shown
     }
@@ -4535,7 +4560,7 @@ prompt_recall() {
   printf '%s\n' "$sum" > "$last" 2>/dev/null || true
   # A ticket or a page of Atlassian's in the message comes first, and may be all there is.
   atl="$(atlassian_notice "$tf" "$state" "$dir" 2>/dev/null || true)"
-  hits="$(recall_text "$tf" 12 2>/dev/null || true)"
+  hits="$(recall_text "$tf" 12 "$(recall_home "$dir" 2>/dev/null || true)" 2>/dev/null || true)"
   [ -n "$hits" ] || { printf '%s' "$atl"; return 0; }
   fresh="$hits"
   if [ -s "$state" ]; then fresh="$(printf '%s\n' "$hits" | grep -vxFf "$state" || true)"; fi
@@ -10426,13 +10451,21 @@ case "$cmd" in
   # Nothing at all when there are none.
   # With --text <file> it searches for the words of a message instead, for the hooks that
   # run when the user sends one: at most --max lines (4), best first, and nothing at all
-  # when nothing fits. It never fails.
+  # when nothing fits. With --in <folder> after them it searches as a session in that
+  # folder would: ordinary words count in its own wikis only. It never fails.
   __recall)
     if [ "${1:-}" = --text ]; then
-      rmax=4
-      [ "${3:-}" != --max ] || rmax="${4:-4}"
+      rfile="${2:-}" rmax=4 rhome=""
+      [ $# -lt 2 ] || shift 2
+      while [ $# -ge 2 ]; do
+        case "$1" in
+          --max) rmax="$2" ;;
+          --in) [ ! -d "$2" ] || rhome="$(recall_home "$2" 2>/dev/null || true)" ;;
+        esac
+        shift 2
+      done
       case "$rmax" in '' | *[!0-9]*) rmax=4 ;; esac
-      recall_text "${2:-}" "$rmax" 2>/dev/null || true
+      recall_text "$rfile" "$rmax" "$rhome" 2>/dev/null || true
       exit 0
     fi
     tkey="$(ticket_find "${1:-$PWD}")"
