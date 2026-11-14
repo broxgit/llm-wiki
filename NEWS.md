@@ -4,6 +4,13 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-12-11: your agent can walk you through setup
+
+- Ask your agent to run `wiki setup --guide` (in Claude Code, `/llm-wiki:setup`): it goes through each setting with you, starting with the unanswered ones.
+- A session can set Jira and Confluence settings now: `wiki extensions settings jira`, `wiki extensions set jira site <address>`. Your token stays yours.
+- `wiki setup palette`, `theme` and `feedback` take a value, such as `wiki setup theme light`, and ask nothing.
+- Every reminder to set up now says the guide is there.
+
 ## 2026-12-10: tickets and Confluence links bring their extensions
 
 - Name a Jira ticket or paste a Jira or Confluence link and the agent offers that extension once, if it isn't set up. If it is, the agent uses it.

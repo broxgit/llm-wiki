@@ -69,6 +69,7 @@ read -r -d '' PARTS <<'TABLE' || true
 2 | Jira extension | Collection
 2 | Confluence extension | Collection
 2 | Extension events | Collection
+2 | Guided setup | Collection
 2 | Content as data | Collection
 2 | Size budget |
 3 | Tour |
@@ -4365,7 +4366,7 @@ EXT
 chmod +x "$XD/wiki-hello"
 out="$("$W" hello one "two words" --all -x 2>&1)"
 case "$out" in *"args: [one] [two words] [--all] [-x]"*) ok "wiki <name> runs the extension with its arguments as given" ;; *) bad "wiki <name> runs the extension with its arguments as given" "$out" ;; esac
-case "$out" in *"api=3 dir=$WIKIS_DIR"*) ok "and tells it the contract's version and the collection" ;; *) bad "and tells it the contract's version and the collection" "$out" ;; esac
+case "$out" in *"api=4 dir=$WIKIS_DIR"*) ok "and tells it the contract's version and the collection" ;; *) bad "and tells it the contract's version and the collection" "$out" ;; esac
 case "$out" in *"nested: $XD"*) ok "and how to run the wiki command" ;; *) bad "and how to run the wiki command" "$out" ;; esac
 "$W" hello fail >/dev/null 2>&1
 code=$?
@@ -4374,7 +4375,7 @@ expect "extensions lists it with its description" "Says hello, for the smoke tes
 expect "the first word completes to it" "hello" "$W" __complete 1 he
 expect "and to extensions" "extensions" "$W" __complete 1 ex
 expect "extensions completes to path" "path" "$W" __complete 2 extensions ""
-expect "the usage names the command" "extensions [path | add <name> | remove <name> | setup <name> | log <name> | tick | every ...]" "$W" --help
+expect "the usage names the command" "extensions [path | add <name> | remove <name> | setup <name> | settings <name> | set <name> <key> <value> | log <name> | tick | every ...]" "$W" --help
 # A command of llm-wiki's own always wins.
 printf '#!/bin/sh\necho HIJACK\n' > "$XD/wiki-news"
 printf '#!/bin/sh\necho HIJACK\n' > "$XD/wiki-relay"
@@ -5163,7 +5164,7 @@ lacks "and nothing for one that asks for none" "quiet          Asks for nothing.
 echo "a note" | ew capture edemo first >/dev/null
 ew sync edemo -m "a note" >/dev/null 2>&1
 out="$(cat "$REC/log" 2>/dev/null)"
-case "$out" in "--wiki-event sync edemo|api=3|in=1|changed=raw/"*"-first.md "*) ok "a sync that changed a wiki runs the extension, with the paths it changed" ;; *) bad "a sync that changed a wiki runs the extension, with the paths it changed" "$out" ;; esac
+case "$out" in "--wiki-event sync edemo|api=4|in=1|changed=raw/"*"-first.md "*) ok "a sync that changed a wiki runs the extension, with the paths it changed" ;; *) bad "a sync that changed a wiki runs the extension, with the paths it changed" "$out" ;; esac
 check "what it printed is in its log" grep -q "said on the way" "$XS/rec/sync-edemo.log"
 check "and the run is recorded as fine" grep -q "^ok" "$XS/rec/sync-edemo.status"
 check "an extension that asks for no events is never run" test ! -e "$REC/quiet"
@@ -5182,7 +5183,7 @@ case "$out" in *"-second.md"*"-third.md"* | *"-third.md"*"-second.md"*) ok "and 
 # tick, from session start, once per interval.
 : > "$REC/log"
 ew start >/dev/null 2>&1
-expect "session start runs the tick event" "--wiki-event tick|api=3" cat "$REC/log"
+expect "session start runs the tick event" "--wiki-event tick|api=4" cat "$REC/log"
 ew start >/dev/null 2>&1
 check "and not again within the interval" test "$(grep -c . "$REC/log")" = 1
 expect "extensions tick runs it now" "rec: ok" ew extensions tick
@@ -5290,6 +5291,340 @@ i=0; while [ -d "$XS/rec/sync-edemo.running" ] && [ "$i" -lt 100 ]; do sleep 0.1
 expect "completion offers log and tick" "tick" "$W" __complete 2 extensions ""
 check "the docs give the contract's second version" grep -q 'wiki-event' "$REPO/docs/extensions.md"
 rm -rf "$XD" "$XS"
+fi
+
+if section "Guided setup"; then
+# `setup --guide` is text for an agent to follow, and the settings a session may change come
+# from the commands an agent can run. Its own folder, so no setting of the other sections is read.
+GH="$T/guide"
+mkdir -p "$GH"
+cp "$HOME/.gitconfig" "$GH/.gitconfig"
+gw() { env HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_CMD=wiki "$W" "$@"; }
+gwtty() { env HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_CMD=wiki LLM_WIKI_TEST_TTY=1 "$W" "$@"; }
+GXD="$GH/.local/share/llm-wiki/extensions"
+GCFG="$GH/.config/llm-wiki"
+gw init >/dev/null 2>&1
+gw new gdemo >/dev/null 2>&1
+code_of() { "$@" >/dev/null 2>&1; echo $?; }
+TB="$(printf '\t')"
+
+# Every place that reminds about setup says the guide is there, before anything is answered.
+expect "status, with setup never run, says the guide exists" 'setup: never run on this machine. Run: wiki setup. Or ask an agent: "run wiki setup --guide and walk me through it"' gw status
+expect "the opening of setup says it" "Or ask your agent to walk you through it in its session: it runs wiki setup --guide. In Claude Code, /llm-wiki:setup does." bash -c "printf '' | env HOME='$GH' WIKIS_DIR='$GH/wikis' LLM_WIKI_CMD=wiki LLM_WIKI_TEST_TTY=1 '$W' setup palette"
+expect "init's next steps say it" "ask it to run wiki setup --guide" env HOME="$GH" WIKIS_DIR="$GH/other" LLM_WIKI_CMD=wiki "$W" init
+expect "the session hook, with no collection, says it" "setup --guide and walk them through it" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; export WIKIS_DIR='$T/none'; hook '$T' | context"
+
+# The guide lists every row of setup --list.
+rows="$(gw setup --list | awk 'NF == 0 { exit } $1 !~ /^[(]/ { print $1 }')"
+guide="$(gw setup --guide)"
+missing=""
+for r in $rows; do
+  printf '%s\n' "$guide" | grep -q "^- $r = " || missing="$missing $r"
+done
+[ -z "$missing" ] && [ -n "$rows" ] && ok "the guide has an entry for every row setup --list shows" || bad "the guide has an entry for every row setup --list shows" "missing:$missing
+$guide"
+case "$guide" in *"- journal.max_commits = "*) ok "and the journal's settings, one each" ;; *) bad "and the journal's settings, one each" "$guide" ;; esac
+case "$guide" in "llm-wiki setup guide, to follow with the user in this session"*) ok "it starts with the rules, in plain words" ;; *) bad "it starts with the rules, in plain words" "$guide" ;; esac
+case "$guide" in *"Never ask for, accept or write a token or password"*"don't store or repeat it"*"keychain themselves"*) ok "the rules say never to take a token, and what to do if one is pasted" ;; *) bad "the rules say never to take a token, and what to do if one is pasted" "$guide" ;; esac
+case "$guide" in *"wiki setup --list and tell the user what changed"*) ok "and to end with setup --list" ;; *) bad "and to end with setup --list" "$guide" ;; esac
+case "$guide" in *"- delegation.mode = ask [not answered yet]: "*"Change: wiki delegation <off|ask|auto>"*) ok "an unanswered setting is marked, with its value and the command that changes it" ;; *) bad "an unanswered setting is marked, with its value and the command that changes it" "$guide" ;; esac
+case "$guide" in *"- git = "*"Terminal only: wiki setup git"*) ok "one with no safe command from a session says terminal only, and which" ;; *) bad "one with no safe command from a session says terminal only, and which" "$guide" ;; esac
+lacks "the session's command name is used, never a path" "$REPO/wiki.sh" gw setup --guide
+case "$(gw setup --guide | grep -c '^- journal.format = standup')" in 1) ok "a journal setting shows its value" ;; *) bad "a journal setting shows its value" ;; esac
+expect "a journal setting says which values it takes" "Change: wiki journal set format <standup|summary|detailed>" gw setup --guide
+check "the whole guide is under 6,000 bytes here" test "$(gw setup --guide | wc -c | tr -d ' ')" -lt 6000
+
+# It is plain: style forced on, or a pipe, gives no colour code.
+esc="$(printf '\033')"
+case "$(env LLM_WIKI_STYLE=on COLORTERM=truecolor HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_CMD=wiki "$W" setup --guide)" in *"$esc"*) bad "the guide holds no colour code even with style forced on" ;; *) ok "the guide holds no colour code even with style forced on" ;; esac
+case "$(gw setup --guide | cat)" in *"$esc"*) bad "or in a pipe" ;; *) ok "or in a pipe" ;; esac
+
+# A section limits it.
+sec="$(gw setup --guide journal)"
+case "$sec" in *"- journal.format = "*) ok "a section gives its own entries" ;; *) bad "a section gives its own entries" "$sec" ;; esac
+case "$sec" in *"- palette = "* | *"- git = "*) bad "and no others" "$sec" ;; *) ok "and no others" ;; esac
+lacks "a single setting's section is that setting only" "journal.commit" gw setup --guide journal.format
+expect "and the rules are still there" "Never ask for, accept or write a token" gw setup --guide journal.format
+expect "a section the setup command takes works" "- palette = default" gw setup --guide palette
+expect "extensions covers each extension" "- jira: off" gw setup --guide extensions
+lacks "and not the other settings" "- palette = " gw setup --guide extensions
+expect "a step with no row says it is for a terminal" "Terminal only: wiki setup plugin" gw setup --guide plugin
+refuse "an unknown section is a usage error" gw setup --guide nosuch
+check "with exit 2" test "$(code_of gw setup --guide nosuch)" = 2
+expect "that names the sections" "Sections: " gw setup --guide nosuch
+check "two sections are a usage error too" test "$(code_of gw setup --guide palette theme)" = 2
+expect "completion offers --guide" "--guide" gw __complete 2 setup ""
+expect "and the sections after it" "confluence" gw __complete 3 setup --guide ""
+expect "and the journal keys" "journal.format" gw __complete 3 setup --guide ""
+expect "completion offers extensions settings" "settings" gw __complete 2 extensions ""
+expect "and set" "set" gw __complete 2 extensions ""
+check "the slash command runs the guide with its argument" grep -q 'setup --guide $ARGUMENTS' "$REPO/commands/setup.md"
+expect "the usage names the guide" "setup --guide [section]" gw --help
+
+# Setters, and each marks its step as answered so setup --new stops asking.
+gw setup --list | grep -q '^palette .*<- new' && ok "palette is new before it is answered" || bad "palette is new before it is answered" "$(gw setup --list)"
+out="$(gw setup palette colorblind 2>&1)"
+case "$out" in "- palette: colorblind"* | *"palette: colorblind"*) ok "setup palette <value> sets it with no question and no terminal" ;; *) bad "setup palette <value> sets it with no question and no terminal" "$out" ;; esac
+check "in the file the questions write" grep -qx 'palette=colorblind' "$GCFG/palette"
+lacks "and setup --new no longer lists it" "<- new" bash -c "env HOME='$GH' WIKIS_DIR='$GH/wikis' LLM_WIKI_CMD=wiki '$W' setup --list | grep '^palette'"
+expect "the guide marks it answered" "- palette = colorblind [answered]" gw setup --guide
+gw setup theme dark >/dev/null 2>&1
+check "theme too" grep -qx 'theme=dark' "$GCFG/theme"
+gw setup feedback notes >/dev/null 2>&1
+check "and feedback" grep -qx 'mode=notes' "$GCFG/feedback"
+check "a bad value is a usage error" test "$(code_of gw setup palette purple)" = 2
+check "for theme" test "$(code_of gw setup theme purple)" = 2
+check "and feedback" test "$(code_of gw setup feedback purple)" = 2
+check "and the file is as it was" grep -qx 'palette=colorblind' "$GCFG/palette"
+gw delegation auto >/dev/null 2>&1
+lacks "delegation <mode> counts as answering its step" "<- new" bash -c "env HOME='$GH' WIKIS_DIR='$GH/wikis' LLM_WIKI_CMD=wiki '$W' setup --list | grep '^delegation.mode'"
+gw setup --list | grep '^journal.format' | grep -q '<- new' && ok "a journal setting is new before it is answered" || bad "a journal setting is new before it is answered"
+gw journal set format summary >/dev/null 2>&1
+lacks "journal set counts as answering it" "<- new" bash -c "env HOME='$GH' WIKIS_DIR='$GH/wikis' LLM_WIKI_CMD=wiki '$W' setup --list | grep '^journal.format'"
+gw journal set depth 5 >/dev/null 2>&1
+check "so does another" grep -qx 'journal.depth' "$GCFG/setup"
+gw helper auto off >/dev/null 2>&1
+check "helper auto counts as answering the helper step" grep -qx 'helper' "$GCFG/setup"
+expect "status now counts only what is left, and names the guide" 'new setting(s). Run: wiki setup --new. Or ask an agent: "run wiki setup --guide and walk me through it"' gw status
+
+# Extensions: a version 3 one still works, and has only a terminal section.
+mkdir -p "$GXD"
+cat > "$GXD/wiki-old" <<'EXT'
+#!/bin/sh
+# wiki-extension: A version 3 extension, for the smoke test.
+# wiki-setup: yes
+case "${1:-}" in
+  --wiki-ready) exit 0 ;;
+  --wiki-setup) exit 0 ;;
+esac
+echo old ran
+EXT
+chmod +x "$GXD/wiki-old"
+expect "a version 3 extension still runs" "old ran" gw old
+expect "and its guide section says terminal only" "- old: on, ready. Terminal only: wiki extensions setup old" gw setup --guide old
+expect "the whole guide has it too" "- old: on, ready. Terminal only: wiki extensions setup old" gw setup --guide extensions
+refuse "extensions settings says it lists none" gw extensions settings old
+expect "and where to set it" "doesn't list its settings, so they are set in a terminal. Run: wiki extensions setup old" gw extensions settings old
+refuse "extensions set refuses it" gw extensions set old key value
+expect "with the terminal command" "has no settings a session can change. Run: wiki extensions setup old" gw extensions set old key value
+rm "$GXD/wiki-old"
+
+# Jira. The fake token command leaves a mark if anything runs it.
+MARK="$GH/token-ran"
+FAKE="FAKE-TOKEN-VALUE-4f9c1"
+expect "settings for an extension that is off says so and gives extensions add" "extensions add jira" gw extensions settings jira
+gw extensions add jira >/dev/null 2>&1
+expect "jira says, with nothing set, that it isn't set up, and names the guide" 'Or ask an agent: "run wiki setup --guide jira and walk me through it"' gw jira config
+expect "so does the status line for it" 'extension jira: on, but not ready: no Atlassian site yet. Run: wiki extensions setup jira. Or ask an agent: "run wiki setup --guide jira and walk me through it"' gw status
+expect "and the list of extensions" 'not ready: no Atlassian site yet. Run: wiki extensions setup jira. Or ask an agent: "run wiki setup --guide jira' gw extensions
+expect "extensions setup says it at its opening" "it runs wiki setup --guide jira" bash -c "printf '\n\n\n\n\n\n\n' | env HOME='$GH' WIKIS_DIR='$GH/wikis' LLM_WIKI_CMD=wiki LLM_WIKI_TEST_TTY=1 '$W' extensions setup jira"
+out="$(gw setup --guide jira)"
+case "$out" in *"- jira: on, not ready (no Atlassian site yet). Change one: wiki extensions set jira <key> <value> (a - clears it)"*) ok "the jira section says what is missing and how to change one setting" ;; *) bad "the jira section says what is missing and how to change one setting" "$out" ;; esac
+for k in site email token token_cmd projects auto_close done_statuses; do
+  case "$out" in *"    $k = "*) ;; *) bad "the jira section lists $k" "$out" ;; esac
+done
+ok "and every setting the interactive setup asks for"
+case "$out" in *"https://id.atlassian.com/manage-profile/security/api-tokens"*'security add-generic-password -a "$USER" -s atlassian -U -w "$(pbpaste)"'*"Terminal only."*) ok "the token step names the page, and the command, for the user's own terminal" ;; *) bad "the token step names the page, and the command, for the user's own terminal" "$out" ;; esac
+case "$out" in *"set this to keychain, and run wiki jira config, which contacts the site"*) ok "then the keychain preset and the test, which says it contacts the site" ;; *) bad "then the keychain preset and the test, which says it contacts the site" "$out" ;; esac
+check "the jira section is under 1,600 bytes" test "$(printf '%s' "$out" | wc -c | tr -d ' ')" -lt 1600
+printf 'site = https://acme.atlassian.net\ntoken_cmd = touch %s; echo %s\n' "$MARK" "$FAKE" > "$GCFG/atlassian"
+rm -f "$MARK"
+settings_out="$(env JIRA_API_TOKEN="$FAKE" HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_CMD=wiki "$W" extensions settings jira 2>&1)"
+guide_out="$(env JIRA_API_TOKEN="$FAKE" ATLASSIAN_API_TOKEN="$FAKE" HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_CMD=wiki "$W" setup --guide 2>&1)"
+raw_out="$(env JIRA_API_TOKEN="$FAKE" HOME="$GH" WIKIS_DIR="$GH/wikis" "$REPO/extensions/wiki-jira" --wiki-settings 2>&1)"
+[ ! -e "$MARK" ] && ok "settings, the guide and --wiki-settings never run token_cmd" || bad "settings, the guide and --wiki-settings never run token_cmd"
+case "$settings_out$guide_out$raw_out" in *"$FAKE"*) bad "and print no token value, even with JIRA_API_TOKEN set" "$settings_out" ;; *) ok "and print no token value, even with JIRA_API_TOKEN set" ;; esac
+case "$raw_out" in *"token${TB}set${TB}environment (JIRA_API_TOKEN)${TB}"*) ok "the token row says set, and where from" ;; *) bad "the token row says set, and where from" "$raw_out" ;; esac
+case "$raw_out" in *"token_cmd${TB}custom command${TB}shared file${TB}"*) ok "and a custom token_cmd is shown as one, never as its text" ;; *) bad "and a custom token_cmd is shown as one, never as its text" "$raw_out" ;; esac
+cat > "$T/nonet.py" <<'PY'
+import http.client, runpy, socket, ssl, sys, urllib.request
+def refuse(*a, **k):
+    raise RuntimeError("the network was used")
+socket.socket = refuse
+socket.create_connection = refuse
+socket.getaddrinfo = refuse
+sys.argv = [sys.argv[1]] + sys.argv[2:]
+runpy.run_path(sys.argv[0], run_name="__main__")
+PY
+env HOME="$GH" WIKIS_DIR="$GH/wikis" python3 "$T/nonet.py" "$REPO/extensions/wiki-jira" --wiki-settings >/dev/null 2>&1 && ok "--wiki-settings works with the network refused" || bad "--wiki-settings works with the network refused"
+if printf '%s\n' "$raw_out" | awk -F '\t' 'NF != 5 || ($5 != "set" && $5 != "terminal") { bad = 1 } END { exit bad }'; then ok "every row has five tab-separated fields, the last set or terminal"; else bad "every row has five tab-separated fields, the last set or terminal" "$raw_out"; fi
+JX="$REPO/extensions/wiki-jira"
+jset() { env HOME="$GH" WIKIS_DIR="$GH/wikis" "$JX" --wiki-set "$@"; }
+for k in token api_token password Token JIRA_API_TOKEN; do
+  check "--wiki-set refuses $k with exit 2" test "$(code_of jset "$k" abc)" = 2
+done
+expect "and says why in one line" "is a secret" jset token abc
+check "an unknown key is refused with exit 2" test "$(code_of jset nosuch abc)" = 2
+check "a site that isn't an address is" test "$(code_of jset site acme.atlassian.net)" = 2
+check "so is a site with a scheme that isn't http" test "$(code_of jset site ftp://acme)" = 2
+check "token_cmd with a command of its own is" test "$(code_of jset token_cmd 'echo hi')" = 2
+expect "and it says the user sets that in a terminal" "in a terminal" jset token_cmd 'echo hi'
+check "a yes/no key takes only yes or no" test "$(code_of jset auto_close maybe)" = 2
+check "a value that would start a comment is refused" test "$(code_of jset projects 'PAY # x')" = 2
+check "none of those changed the files" grep -qx 'site = https://acme.atlassian.net' "$GCFG/atlassian"
+if [ "$(uname -s)" = Darwin ]; then
+  rm -f "$GCFG/atlassian"
+  gw extensions set jira token_cmd keychain >/dev/null 2>&1
+  check "token_cmd keychain writes the macOS preset to the shared file" grep -qx 'token_cmd = security find-generic-password -s atlassian -w' "$GCFG/atlassian"
+  expect "and settings shows it as keychain" "keychain" gw extensions settings jira
+else
+  check "token_cmd keychain is refused where there is no macOS keychain, with exit 2" test "$(code_of jset token_cmd keychain)" = 2
+  expect "and the terminal command to use" "wiki extensions setup jira" env HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_CMD=wiki "$JX" --wiki-set token_cmd keychain
+fi
+rm -f "$GCFG/atlassian" "$MARK"
+out="$(gw extensions set jira site https://acme.atlassian.net/ 2>&1)"
+case "$out" in "site set in $GCFG/atlassian"*"jira isn't ready yet: no API token yet"*) ok "set says what it set and where, then whether it is ready" ;; *) bad "set says what it set and where, then whether it is ready" "$out" ;; esac
+check "into the shared file the interactive setup writes" grep -qx 'site = https://acme.atlassian.net' "$GCFG/atlassian"
+expect "settings shows the value and its source" "https://acme.atlassian.net  shared file" gw extensions settings jira
+gw extensions set jira email me@example.com >/dev/null 2>&1
+check "email goes in the shared file too" grep -qx 'email = me@example.com' "$GCFG/atlassian"
+gw extensions set jira projects "pay, ops" >/dev/null 2>&1
+check "projects go in jira's own file, as keys" grep -qx 'projects = PAY, OPS' "$GCFG/jira"
+gw extensions set jira auto_close yes >/dev/null 2>&1
+check "auto_close yes is written as the interactive setup writes it" grep -qx 'auto_close = yes' "$GCFG/jira"
+gw extensions set jira auto_close - >/dev/null 2>&1
+lacks "and - clears it" "auto_close" cat "$GCFG/jira"
+gw extensions set jira done_statuses "Released, Deployed" >/dev/null 2>&1
+check "done_statuses is kept as written" grep -qx 'done_statuses = Released, Deployed' "$GCFG/jira"
+expect "a setting from the environment says it wins" "but JIRA_PROJECTS is set, and it wins" env JIRA_PROJECTS=ZZ HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_CMD=wiki "$W" extensions set jira projects PAY
+expect "set refuses a bad key, with exit 2, through wiki too" "no setting called nosuch" gw extensions set jira nosuch x
+check "exit 2 reaches the caller" test "$(code_of gw extensions set jira nosuch x)" = 2
+check "set needs all three words" test "$(code_of gw extensions set jira site)" = 2
+check "a setter marks the extension's step answered, as extensions add does" grep -qx 'extension.jira' "$GCFG/setup"
+gw extensions remove jira >/dev/null 2>&1
+rm -f "$GCFG/jira"
+gw extensions remove confluence >/dev/null 2>&1
+check "remove marks it too, so a no is remembered" grep -qx 'extension.confluence' "$GCFG/setup"
+lacks "and the guide stops marking it as not answered" "- confluence: off [not answered yet]" gw setup --guide extensions
+
+# Confluence has more settings, and anything that publishes is for a terminal.
+gw extensions add confluence >/dev/null 2>&1
+expect "confluence says, with nothing set, that it isn't set up, and names the guide" 'Or ask an agent: "run wiki setup --guide confluence and walk me through it"' gw confluence config
+cout="$(gw setup --guide confluence)"
+for k in site email token token_cmd url watch.\<wiki\> done_states space auto parent; do
+  case "$cout" in *"    $k = "*) ;; *) bad "the confluence section lists $k" "$cout" ;; esac
+done
+ok "the confluence section lists what its setup asks"
+case "$cout" in *"    space = (not set): "*"Terminal only."*"    auto = (not set): "*"Terminal only."*) ok "publishing settings are marked terminal only" ;; *) bad "publishing settings are marked terminal only" "$cout" ;; esac
+CX="$REPO/extensions/wiki-confluence"
+cset() { env HOME="$GH" WIKIS_DIR="$GH/wikis" "$CX" --wiki-set "$@"; }
+for k in space parent auto space.gdemo parent.gdemo token api_token password; do
+  check "confluence --wiki-set refuses $k with exit 2" test "$(code_of cset "$k" ENG)" = 2
+done
+check "and an unknown key" test "$(code_of cset nosuch x)" = 2
+check "and a bad site" test "$(code_of cset site nothing)" = 2
+check "and a custom token_cmd" test "$(code_of cset token_cmd 'echo x')" = 2
+check "and a watch for a wiki that isn't here" test "$(code_of cset watch.nowiki 12345)" = 2
+check "and a watch that names nothing a page is" test "$(code_of cset watch.gdemo nonsense)" = 2
+out="$(gw extensions set confluence watch.gdemo "https://acme.atlassian.net/wiki/spaces/ENG/pages/12345/Title, space:ENG" 2>&1)"
+case "$out" in "watch.gdemo set in $GCFG/confluence"*) ok "a watch for a wiki that is here is set, without asking the site" ;; *) bad "a watch for a wiki that is here is set, without asking the site" "$out" ;; esac
+check "as page ids and space keys, as the interactive setup keeps them" grep -qx 'watch.gdemo = 12345, space:ENG' "$GCFG/confluence"
+expect "settings lists it" "watch.gdemo" gw extensions settings confluence
+gw extensions set confluence done_states "Verified, Done" >/dev/null 2>&1
+check "done_states is set" grep -qx 'done_states = Verified, Done' "$GCFG/confluence"
+raw_c="$(env CONFLUENCE_API_TOKEN="$FAKE" HOME="$GH" WIKIS_DIR="$GH/wikis" "$CX" --wiki-settings 2>&1)"
+case "$raw_c" in *"$FAKE"*) bad "confluence prints no token value either" ;; *) ok "confluence prints no token value either" ;; esac
+[ ! -e "$MARK" ] && ok "and runs no token_cmd" || bad "and runs no token_cmd"
+# Hardening: a value is one plain line, in UTF-8; a failed write leaves the file; no error repeats a value.
+MARK2="$GH/injected"
+rm -f "$MARK2"
+printf 'projects = PAY\ndone_statuses = Released\n' > "$GCFG/jira"
+printf 'done_states = Verified\n' > "$GCFG/confluence"
+for sep in '\x0b' '\x0c' '\x1c' '\x1d' '\x1e' '\xc2\x85' '\xe2\x80\xa8' '\xe2\x80\xa9' '\x07' '\x7f' '\x09'; do
+  val="$(printf "Released${sep}token_cmd = touch $MARK2")"
+  cp "$GCFG/jira" "$GH/jira.keep"
+  cp "$GCFG/confluence" "$GH/confluence.keep"
+  jcode="$(code_of jset done_statuses "$val")"
+  ccode="$(code_of cset done_states "$val")"
+  if [ "$jcode" = 2 ] && [ "$ccode" = 2 ] && cmp -s "$GH/jira.keep" "$GCFG/jira" && cmp -s "$GH/confluence.keep" "$GCFG/confluence"; then ok "a value holding $sep is refused with exit 2 by both extensions, and the files are untouched"; else bad "a value holding $sep is refused with exit 2 by both extensions, and the files are untouched" "jira $jcode, confluence $ccode"; fi
+done
+jset projects VID >/dev/null 2>&1
+check "so a later set can't turn a refused value into a line of its own" bash -c "! grep -q token_cmd '$GCFG/jira'"
+[ ! -e "$MARK2" ] && ok "and nothing ran" || bad "and nothing ran"
+cat > "$T/setconf.py" <<'PY'
+import importlib.machinery, importlib.util, sys
+path, cfg, value = sys.argv[1], sys.argv[2], sys.argv[3]
+loader = importlib.machinery.SourceFileLoader("ext", path)
+spec = importlib.util.spec_from_loader("ext", loader)
+m = importlib.util.module_from_spec(spec)
+loader.exec_module(m)
+try:
+    m.set_conf(cfg, "done_statuses", value)
+    print("wrote")
+except SystemExit as e:
+    print("refused", e.code)
+PY
+for ext in wiki-jira wiki-confluence; do
+  cp "$GCFG/jira" "$GH/jira.keep"
+  for v in 'a token_cmd = x' 'a\x0bb' 'a\nb' 'a\x1cb'; do
+    out="$(env HOME="$GH" python3 "$T/setconf.py" "$REPO/extensions/$ext" "$GCFG/jira" "$(python3 -c 'import sys; sys.stdout.write(eval("\"" + sys.argv[1] + "\""))' "$v")" 2>&1)"
+    case "$out" in *"refused 2"*) ok "set_conf of $ext itself refuses a value split on $v, as the interactive setup would reach it" ;; *) bad "set_conf of $ext itself refuses a value split on $v" "$out" ;; esac
+  done
+  cmp -s "$GH/jira.keep" "$GCFG/jira" && ok "and the file is as it was" || bad "and the file is as it was"
+done
+cp "$GCFG/jira" "$GH/jira.keep"
+for ext in jset cset; do
+  if [ "$ext" = jset ]; then key=done_statuses; else key=done_states; fi
+  out="$($ext "$key" "$(printf 'x\xff')" 2>&1)"
+  code=$?
+  case "$out" in *Traceback*) bad "invalid UTF-8 gives no traceback ($ext)" "$out" ;; *) ok "invalid UTF-8 gives no traceback ($ext)" ;; esac
+  [ "$code" = 2 ] && ok "and exit 2 ($ext)" || bad "and exit 2 ($ext)" "$out"
+done
+cmp -s "$GH/jira.keep" "$GCFG/jira" && ok "and the file is byte-identical" || bad "and the file is byte-identical"
+chmod 640 "$GCFG/jira"
+jset projects OPS >/dev/null 2>&1
+check "a set keeps the file's permissions" test "$(python3 -c 'import os, sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))' "$GCFG/jira")" = 0o640
+check "and leaves no temporary file behind" bash -c "! ls -A '$GCFG' | grep -q '^[.]settings-'"
+# Dotfiles kept elsewhere: the settings file is a link, and a set writes the file it names.
+mv "$GCFG/jira" "$GH/jira.linked"
+ln -s "$GH/jira.linked" "$GCFG/jira"
+jset projects LNK >/dev/null 2>&1
+check "a settings file that is a link stays a link" test -L "$GCFG/jira"
+check "and the file it names gets the value" grep -qx 'projects = LNK' "$GH/jira.linked"
+rm -f "$GCFG/jira"
+mv "$GH/jira.linked" "$GCFG/jira"
+if [ "$(id -u)" != 0 ]; then
+  cp "$GCFG/jira" "$GH/jira.keep"
+  chmod 555 "$GCFG"
+  out="$(jset projects PAY 2>&1)"
+  code=$?
+  chmod 755 "$GCFG"
+  [ "$code" != 0 ] && ok "a write that can't be made fails" || bad "a write that can't be made fails" "$out"
+  case "$out" in *"can't write"*"The old file is as it was"*) ok "saying so in a line" ;; *) bad "saying so in a line" "$out" ;; esac
+  case "$out" in *Traceback*) bad "with no traceback" "$out" ;; *) ok "with no traceback" ;; esac
+  cmp -s "$GH/jira.keep" "$GCFG/jira" && ok "and the old file is intact" || bad "and the old file is intact"
+fi
+# No error repeats what was typed, which may be a token in the wrong field.
+STR="FAKE-TOKEN-do-not-store-7731"
+seen=""
+for call in "jset email $STR" "jset site $STR" "jset auto_close $STR" "jset projects $STR" "jset token_cmd $STR" "cset email $STR" "cset site $STR" "cset url $STR" "cset watch.gdemo $STR" "cset token_cmd $STR"; do
+  out="$($call 2>&1)"
+  code=$?
+  case "$out" in *"$STR"*) seen="$seen [$call]" ;; esac
+  [ "$code" = 2 ] || seen="$seen [$call: exit $code]"
+done
+[ -z "$seen" ] && ok "no --wiki-set error repeats the value, and each exits 2" || bad "no --wiki-set error repeats the value, and each exits 2" "$seen"
+expect "an email error still names the key" "email isn't an email address" jset email "$STR"
+expect "and a site error" "site isn't an address" jset site "$STR"
+# The feedback question counts as answered only when the answer was written.
+grep -vx 'feedback' "$GCFG/setup" > "$GCFG/setup.tmp"; mv "$GCFG/setup.tmp" "$GCFG/setup"
+rm -f "$GCFG/feedback"
+mkdir "$GCFG/feedback"
+printf 'notes\n' | gwtty setup feedback >/dev/null 2>&1
+check "an interactive feedback answer that couldn't be written isn't marked answered" bash -c "! grep -qx feedback '$GCFG/setup'"
+rmdir "$GCFG/feedback"
+printf 'notes\n' | gwtty setup feedback >/dev/null 2>&1
+check "and one that was written is" grep -qx feedback "$GCFG/setup"
+# A token command that is only set has not been checked.
+printf 'site = https://acme.atlassian.net\ntoken_cmd = pass show atlassian\n' > "$GCFG/atlassian"
+gw extensions add jira >/dev/null 2>&1
+expect "settings doesn't show a token as set when only token_cmd is" "token          not checked (token_cmd is set)" gw extensions settings jira
+expect "and the guide says the same" "token = not checked (token_cmd is set) [shared file]" gw setup --guide jira
+expect "an environment token is still set" "token = set [environment (JIRA_API_TOKEN)]" env JIRA_API_TOKEN="$STR" HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_CMD=wiki "$W" setup --guide jira
+lacks "and its value is never printed" "$STR" env JIRA_API_TOKEN="$STR" HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_CMD=wiki "$W" setup --guide jira
+gw extensions remove jira >/dev/null 2>&1
+gw extensions remove confluence >/dev/null 2>&1
+rm -rf "$GXD" "$GCFG/confluence" "$GCFG/atlassian"
 fi
 
 if section "Content as data"; then
@@ -5752,7 +6087,7 @@ AP="$T/tickets/plain"
 ALL=""
 out="$(atl "$AP" at-1 'Please look at VID-74003 for me')"
 ALL="$ALL$out"
-case "$out" in "The user's message names a Jira ticket (VID-74003). llm-wiki has a Jira extension that isn't set up on this machine. Offer once, in one line, to walk them through it: they run \`wiki extensions add jira\`, then \`wiki extensions setup jira\`, in a terminal. If they say no, run \`wiki tips --mute ext-jira\` so it isn't offered again.") ok "a ticket key with the Jira extension off gets one offer line, naming the key" ;; *) bad "a ticket key with the Jira extension off gets one offer line, naming the key" "$out" ;; esac
+case "$out" in "The user's message names a Jira ticket (VID-74003). llm-wiki has a Jira extension that isn't set up on this machine. Offer once, in one line, to walk them through it: with their yes, run \`wiki extensions add jira\`, then \`wiki setup --guide jira\` and follow it. Or they run \`wiki extensions setup jira\` in a terminal. If they say no, run \`wiki tips --mute ext-jira\` so it isn't offered again.") ok "a ticket key with the Jira extension off gets one offer line, naming the key" ;; *) bad "a ticket key with the Jira extension off gets one offer line, naming the key" "$out" ;; esac
 check "the same session, asked again, gets nothing" test -z "$(atl "$AP" at-1 'And again VID-74003, and VID-5')"
 check "a second session within the week gets nothing" test -z "$(atl "$AP" at-2 'VID-74003 is blocked')"
 check "the offer is remembered with the tips, to the day" grep -q "^shown:ext-jira $(date -u +%Y-%m-%d)\$" "$ATIPS"
@@ -5773,7 +6108,7 @@ rm -f "$ATIPS"
 atlw extensions add jira >/dev/null 2>&1
 out="$(atl "$AP" at-7 'Please look at VID-74003 for me')"
 ALL="$ALL$out"
-case "$out" in "The user's message names a Jira ticket (VID-74003). llm-wiki has a Jira extension that isn't set up on this machine. Offer once, in one line, to walk them through it: they run \`wiki extensions setup jira\` in a terminal. If they say no, run \`wiki tips --mute ext-jira\` so it isn't offered again.") ok "with it on and not set up, the offer is to run setup, with no add" ;; *) bad "with it on and not set up, the offer is to run setup, with no add" "$out" ;; esac
+case "$out" in "The user's message names a Jira ticket (VID-74003). llm-wiki has a Jira extension that isn't set up on this machine. Offer once, in one line, to walk them through it: run \`wiki setup --guide jira\` and follow it. Or they run \`wiki extensions setup jira\` in a terminal. If they say no, run \`wiki tips --mute ext-jira\` so it isn't offered again.") ok "with it on and not set up, the offer is to run setup, with no add" ;; *) bad "with it on and not set up, the offer is to run setup, with no add" "$out" ;; esac
 rm -f "$ATIPS"
 # Set up: the shared sign-in, and a token command that would leave a mark if it were run.
 printf 'site = https://acme.atlassian.net\ntoken_cmd = touch %s/token-ran; echo FAKETOKEN-9f3a41c7\n' "$T" > "$AH/.config/llm-wiki/atlassian"
@@ -5848,7 +6183,7 @@ rm -f "$AH/.config/llm-wiki/jira"
 # Confluence.
 out="$(atl "$AP" at-17 'Read https://acme.atlassian.net/wiki/spaces/ENG/pages/123/Plan?token=pagetoken_77abc first')"
 ALL="$ALL$out"
-case "$out" in "The user's message links to a Confluence page. llm-wiki has a Confluence extension that isn't set up on this machine. Offer once, in one line, to walk them through it: they run \`wiki extensions add confluence\`, then \`wiki extensions setup confluence\`, in a terminal. If they say no, run \`wiki tips --mute ext-confluence\` so it isn't offered again.") ok "a Confluence link gets the Confluence offer and not the Jira one" ;; *) bad "a Confluence link gets the Confluence offer and not the Jira one" "$out" ;; esac
+case "$out" in "The user's message links to a Confluence page. llm-wiki has a Confluence extension that isn't set up on this machine. Offer once, in one line, to walk them through it: with their yes, run \`wiki extensions add confluence\`, then \`wiki setup --guide confluence\` and follow it. Or they run \`wiki extensions setup confluence\` in a terminal. If they say no, run \`wiki tips --mute ext-confluence\` so it isn't offered again.") ok "a Confluence link gets the Confluence offer and not the Jira one" ;; *) bad "a Confluence link gets the Confluence offer and not the Jira one" "$out" ;; esac
 check "the offer never repeats the link" test -z "$(printf '%s' "$ALL" | grep pagetoken_77abc)"
 check "a second Confluence offer in the week gets nothing" test -z "$(atl "$AP" at-18 'And https://acme.atlassian.net/wiki/spaces/ENG/pages/124/Notes')"
 atlw extensions add confluence >/dev/null 2>&1
@@ -6167,7 +6502,7 @@ if command -v go >/dev/null 2>&1 && [ -n "$HPLAT" ]; then
   expect "and wiki helper fetch still works" "helper $HSRC installed" "$HW" helper fetch
   expect "helper auto on turns it back on" "helper auto: on" "$HW" helper auto on
   refuse "helper auto needs on or off" "$HW" helper auto maybe
-  expect "setup --list marks the question as new" "fetched at session start: on  <- new" "$HW" setup --list
+  lacks "helper auto counts as answering the question, so setup --list doesn't mark it new" "<- new" bash -c "'$HW' setup --list | grep '^helper'"
   out="$(printf 'n\n' | in_tty "$HW" setup helper 2>&1)"
   case "$out" in *"Fetch it automatically at session start?"*"helper auto: off"*) ok "setup helper asks, and a no turns it off" ;; *) bad "setup helper asks, and a no turns it off" "$out" ;; esac
   lacks "and the question isn't new any more" "<- new" bash -c "'$HW' setup --list | grep '^helper'"

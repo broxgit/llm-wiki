@@ -254,7 +254,9 @@ except Exception:
   W new vid-seen >/dev/null 2>&1
   printf '# Index\n\n## Concepts\n- [Old work](wiki/concepts/old.md): the earlier tickets, such as VID-70001.\n' > "$H/wikis/vid-seen/index.md" 2>/dev/null || true
   printf 'hook: a ticket key, the Jira extension not set up\t%s\n' "$(prompt_item budget-3 'Please look at VID-74003 for me')"
+  printf 'setup: the whole guide\t%s\n' "$(cmd_item "$H" setup --guide)"
   W extensions add jira >/dev/null 2>&1
+  printf 'setup: the guide for Jira, on and not set up\t%s\n' "$(cmd_item "$H" setup --guide jira)"
   mkdir -p "$H/.config/llm-wiki"
   printf 'site = https://acme.atlassian.net\ntoken_cmd = echo x\n' > "$H/.config/llm-wiki/atlassian"
   printf 'hook: a ticket key, the Jira extension set up\t%s\n' "$(prompt_item budget-4 'Please look at VID-74003 for me')"

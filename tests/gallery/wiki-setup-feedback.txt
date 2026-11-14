@@ -1,4 +1,5 @@
 Setup for <tmp>/wikis. Enter keeps the value in brackets.
+  Or ask your agent to walk you through it in its session: it runs [36mwiki setup --guide[0m. In Claude Code, /llm-wiki:setup does.
 [34m●[0m [1m[44m[97m SETUP [0m  [1mFeedback on llm-wiki[0m
 [2m│[0m     Agents can keep a note when llm-wiki itself gets in their way: a command that failed or misled, instructions that
 [2m│[0m     conflicted, work a command should have done. At most one a session, never mid-task. Notes stay on this machine.

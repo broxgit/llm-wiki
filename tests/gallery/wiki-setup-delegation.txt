@@ -1,4 +1,5 @@
 Setup for <tmp>/wikis. Enter keeps the value in brackets.
+  Or ask your agent to walk you through it in its session: it runs [36mwiki setup --guide[0m. In Claude Code, /llm-wiki:setup does.
 [34m●[0m [1m[44m[97m SETUP [0m  [1mDelegation[0m
   created: <tmp>/wikis/delegation.md (mode ask)
 [2m│[0m     Sessions can hand big, self-contained work, like test runs and file sweeps, to sub-agents on cheaper models.

@@ -2,6 +2,7 @@
 # wiki-extension: Watch Confluence pages and tell your wiki when one changes. It can also publish a wiki to a space, if you choose.
 # wiki-events: sync tick
 # wiki-setup: yes
+# wiki-settings: yes
 """wiki confluence: an llm-wiki extension. Standard library only.
 
 It does two separate things, and neither until it is chosen in its settings.
@@ -31,8 +32,11 @@ import json
 import os
 import posixpath
 import re
+import stat
 import subprocess
 import sys
+import tempfile
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -44,6 +48,8 @@ CONFIG = os.path.join(CONFIG_DIR, "confluence")
 # The sign-in every Atlassian extension shares.
 SHARED = os.path.join(CONFIG_DIR, "atlassian")
 LABEL = "llm-wiki"
+KEYCHAIN_CMD = "security find-generic-password -s atlassian -w"
+GUIDE = f'Or ask an agent: "run {CMD} setup --guide confluence and walk me through it"'
 
 USAGE = f"""Usage: {CMD} confluence check [--save] [<wiki>]
        {CMD} confluence publish <wiki> [--dry-run]
@@ -116,15 +122,26 @@ def unreachable(msg):
 
 # ---- settings ----------------------------------------------------------------
 
+def conf_lines(path):
+    """The lines of a settings file, by the one rule everything that reads or writes it shares:
+    a line ends at a newline, and a trailing carriage return is dropped. Nothing else splits one.
+    Bytes that aren't UTF-8 are kept as they are."""
+    with open(path, encoding="utf-8", errors="surrogateescape", newline="") as f:
+        text = f.read()
+    lines = [l[:-1] if l.endswith("\r") else l for l in text.split("\n")]
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
 def read_conf(path):
     conf = {}
     try:
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.split("#", 1)[0].strip()
-                if "=" in line:
-                    k, v = line.split("=", 1)
-                    conf[k.strip()] = v.strip()
+        for line in conf_lines(path):
+            line = line.split("#", 1)[0].strip()
+            if "=" in line:
+                k, v = line.split("=", 1)
+                conf[k.strip()] = v.strip()
     except FileNotFoundError:
         pass
     return conf
@@ -265,20 +282,62 @@ def ask_yn(prompt, default=False):
     return default if line == "" else line.startswith("y")
 
 
+# What no setting's value may hold: a character that ends a line in any reader's eyes
+# (str.splitlines splits on more than a newline), or any other control character.
+SEPARATORS = "\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"
+
+
+def unfit(text):
+    """Why a key or value can't be written to a settings file, in words that don't repeat it, or nothing."""
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return "isn't valid UTF-8"
+    for c in text:
+        cat = unicodedata.category(c)
+        if c in SEPARATORS or cat[0] == "C" or cat in ("Zl", "Zp"):
+            return "can't hold a control character or a line separator"
+    return ""
+
+
 def set_conf(path, key, value):
     """Set one `name = value` line in a settings file, or take it out when value is empty.
-    Every other line stays as it is."""
+    Every other line stays as it is. The file is written beside itself and moved into place,
+    so a write that fails leaves the old one."""
+    why = unfit(key) or unfit(value) or ("is more than one line" if len(value.splitlines()) > 1 else "")
+    if why:
+        die_usage(f"the value of {key} {why}, so nothing was written")
     try:
-        with open(path, encoding="utf-8") as f:
-            lines = f.read().splitlines()
+        lines = conf_lines(path)
     except FileNotFoundError:
         lines = []
     kept = [l for l in lines if l.split("#", 1)[0].split("=", 1)[0].strip() != key or "=" not in l.split("#", 1)[0]]
     if value:
         kept.append(f"{key} = {value}")
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write("\n".join(kept) + ("\n" if kept else ""))
+    # A settings file that is a link, as with dotfiles kept elsewhere, stays one: the file it names is replaced.
+    path = os.path.realpath(path)
+    folder = os.path.dirname(path)
+    tmp = None
+    try:
+        os.makedirs(folder, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=folder, prefix=".settings-")
+        with os.fdopen(fd, "w", encoding="utf-8", errors="surrogateescape", newline="") as f:
+            f.write("\n".join(kept) + ("\n" if kept else ""))
+        try:
+            mode = stat.S_IMODE(os.stat(path).st_mode)
+        except FileNotFoundError:
+            mask = os.umask(0)
+            os.umask(mask)
+            mode = 0o666 & ~mask
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except OSError as e:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        die(f"can't write {path}: {e.strerror or e}. The old file is as it was")
 
 
 def has_token(conf):
@@ -339,7 +398,7 @@ def sign_in_missing(conf):
 def need_sign_in(conf):
     msg = sign_in_missing(conf)
     if msg:
-        die(f"Confluence isn't set up: {msg}. Run: {CMD} extensions setup confluence")
+        die(f"Confluence isn't set up: {msg}. Run: {CMD} extensions setup confluence. {GUIDE}")
 
 
 def watch_lists(conf):
@@ -1151,7 +1210,7 @@ def cmd_check(args):
     n = sum(len(v) for v in found.values()) + sum(len(v) for v in closes.values())
     print()
     if not lists and not closes:
-        print(f"No wiki watches a page yet. Run: {CMD} extensions setup confluence")
+        print(f"No wiki watches a page yet. Run: {CMD} extensions setup confluence. {GUIDE}")
     if n == 0:
         if lists:
             print("Nothing changed.")
@@ -1249,7 +1308,7 @@ def cmd_publish(args):
     space = conf.get(f"space.{wiki}") or conf.get("space")
     parent = conf.get(f"parent.{wiki}") or conf.get("parent") or ""
     if not space:
-        die(f"no space to publish {wiki} into. Run: {CMD} extensions setup confluence (or set space.{wiki} in {CONFIG})")
+        die(f"no space to publish {wiki} into. Run: {CMD} extensions setup confluence (or set space.{wiki} in {CONFIG}). {GUIDE}")
     wiki_cmd = os.environ.get("LLM_WIKI") or die("LLM_WIKI isn't set. Run this as: wiki confluence")
     pages = wiki_pages(wiki_cmd, root, wiki)
     titles = {rel: title for rel, title, _ in pages}
@@ -1267,7 +1326,7 @@ def cmd_publish(args):
     try:
         top = c.find(space, root_title)
     except Refused as e:
-        die(f"can't read the space {space}: {e.message}. Check space in {CONFIG}, or run: {CMD} extensions setup confluence")
+        die(f"can't read the space {space}: {e.message}. Check space in {CONFIG}, or run: {CMD} extensions setup confluence. {GUIDE}")
     if top is not None and not ours(top):
         die(f"the space {space} already has a page called \"{root_title}\" that llm-wiki didn't make. Rename it, or publish to another space.")
     existing = {}
@@ -1367,7 +1426,7 @@ def cmd_config(args):
         if k.startswith(("space.", "parent")) and k != "_from":
             print(f"{k:<9} {conf[k]}")
     if not conf["url"] or not where:
-        print(f"\nNot set up: {sign_in_missing(conf)}. Run: {CMD} extensions setup confluence")
+        print(f"\nNot set up: {sign_in_missing(conf)}. Run: {CMD} extensions setup confluence. {GUIDE}")
         return 1
     try:
         me = Confluence(conf).call("GET", "/rest/api/user/current")
@@ -1375,7 +1434,7 @@ def cmd_config(args):
         die(f"{conf['url']} has no Confluence API at /rest/api ({e.code}). Is url the address of Confluence itself? On Cloud it ends in /wiki.")
     print(f"\nSigned in as {me.get('displayName') or me.get('username') or '?'}.")
     if not watch_lists(conf) and not conf.get("space"):
-        print(f"Nothing is chosen yet: no pages to watch, and no space to publish into. Run: {CMD} extensions setup confluence")
+        print(f"Nothing is chosen yet: no pages to watch, and no space to publish into. Run: {CMD} extensions setup confluence. {GUIDE}")
     elif not conf.get("space"):
         print("Publishing is off: no space is set.")
     return 0
@@ -1430,7 +1489,179 @@ def on_event(args):
     return 0
 
 
+# ---- what a session can change: llm-wiki's contract, version 4 -------------------------
+
+# Where a value came from, in the words --wiki-settings uses.
+SOURCES = {"this file": "file", "the shared file": "shared file", "token_cmd": "file",
+           "token_cmd in the shared file": "shared file", "Jira's settings": "file",
+           "token_cmd in Jira's settings": "file"}
+
+
+def source_name(src):
+    if not src:
+        return "default"
+    if src in SOURCES:
+        return SOURCES[src]
+    return f"environment ({src})"
+
+
+def own_value(own, env_name, key):
+    """A setting of Confluence's own, from the environment (where there is a name for it) or its file."""
+    if env_name and os.environ.get(env_name):
+        return os.environ[env_name], source_name(env_name)
+    if own.get(key):
+        return own[key], "file"
+    return "", "default"
+
+
+PUBLISH = "Publishing writes to Confluence, so the user sets it in a terminal: " + f"{CMD} extensions setup confluence"
+
+
+def setting_rows():
+    """One row for each setting a session may look at: key, value, where from, meaning, and
+    whether a session can change it. Reads files and the environment only: it never runs
+    token_cmd and never touches the network, and a token's value is never in it."""
+    own = read_conf(CONFIG)
+    shared = read_conf(SHARED)
+    jira = read_conf(os.path.join(CONFIG_DIR, "jira"))
+    conf = settings()
+    src = conf["_from"]
+    mac = sys.platform == "darwin"
+    if os.environ.get("ATLASSIAN_SITE"):
+        site, site_from = os.environ["ATLASSIAN_SITE"], "environment (ATLASSIAN_SITE)"
+    elif shared.get("site"):
+        site, site_from = shared["site"], "shared file"
+    else:
+        site, site_from = jira.get("url", ""), ("file" if jira.get("url") else "default")
+    rows = [
+        ("site", site.rstrip("/"), site_from, "The Atlassian site, such as https://your-company.atlassian.net. On Cloud, Confluence is at its /wiki", "set"),
+        ("email", conf.get("email", ""), source_name(src["email"]), "Your Atlassian account's email. Empty on Data Center", "set"),
+    ]
+    tok_env = next((n for n in TOKEN_ENV if os.environ.get(n)), "")
+    tok_from = source_name(tok_env) if tok_env else (source_name(src["token_cmd"]) if conf.get("token_cmd") else "")
+    rows.append(("token", "set" if tok_env else ("not checked (token_cmd is set)" if conf.get("token_cmd") else "not set"), tok_from,
+                 "The user makes one at https://id.atlassian.com/manage-profile/security/api-tokens "
+                 "(Data Center: a personal access token) and runs in their own terminal: "
+                 "security add-generic-password -a \"$USER\" -s atlassian -U -w \"$(pbpaste)\"", "terminal"))
+    cmd = conf.get("token_cmd", "")
+    shown = "keychain" if cmd == KEYCHAIN_CMD else ("custom command" if cmd else "")
+    if mac:
+        what = f"Then set this to keychain, and run {CMD} confluence config, which contacts the site, to test sign-in"
+    else:
+        what = f"A command that prints the token, such as pass show atlassian. The user sets it in a terminal: {CMD} extensions setup confluence"
+    rows.append(("token_cmd", shown, source_name(src["token_cmd"]) if cmd else "default", what, "set" if mac else "terminal"))
+    url, url_from = own_value(own, "CONFLUENCE_URL", "url")
+    rows.append(("url", url, url_from, "Confluence's own address, only where the site isn't on Atlassian Cloud", "set"))
+    watching = sorted(k for k in own if k.startswith("watch.") and own[k].strip())
+    watch_what = "Pages that wiki hears about when they change: page addresses or ids, or space:KEY for a whole space. Watching only reads"
+    for k in watching:
+        rows.append((k, own[k], "file", watch_what, "set"))
+    if not watching:
+        rows.append(("watch.<wiki>", "", "default", watch_what, "set"))
+    value, where = own_value(own, "", "done_states")
+    rows.append(("done_states", value, where, "Page statuses that mean finished, which close an open item that links the page. Verified if unset", "set"))
+    for key, env_name in (("space", "CONFLUENCE_SPACE"), ("auto", "CONFLUENCE_AUTO")):
+        value, where = own_value(own, env_name, key)
+        rows.append((key, value, where, PUBLISH, "terminal"))
+    for k in sorted(own):
+        if k.startswith(("space.", "parent")) and own[k]:
+            rows.append((k, own[k], "file", PUBLISH, "terminal"))
+    if not own.get("parent"):
+        rows.append(("parent", "", "default", PUBLISH, "terminal"))
+    return rows
+
+
+def wiki_settings():
+    for row in setting_rows():
+        print("\t".join(" ".join(str(f).split()) for f in row))
+    return 0
+
+
+def secret_key(key):
+    k = key.lower()
+    if k == "token_cmd":
+        return False
+    return any(w in k for w in ("token", "password", "passwd", "secret", "api_key", "apikey"))
+
+
+def wiki_set(args):
+    """--wiki-set <key> <value>: check the key and the shape of the value, then write it where
+    the interactive setup would. A - clears it. Exit 2, and one line why, for what it refuses.
+    Publishing is never set from here: it sends a wiki to a space."""
+    if len(args) != 2:
+        die_usage("usage: --wiki-set <key> <value>")
+    for what, text in (("key", args[0]), ("value", args[1])):
+        if unfit(text):
+            die_usage(f"the {what} {unfit(text)}, so nothing was written")
+    key, value = args[0].strip(), args[1].strip()
+    if secret_key(key):
+        die_usage(f"{key} is a secret, and a session never sets one. The user puts the token in their keychain themselves, and then {CMD} extensions set confluence token_cmd keychain")
+    if key in ("space", "parent", "auto") or key.startswith(("space.", "parent.")):
+        die_usage(f"{key} is for publishing, which writes to Confluence. The user sets it in a terminal: {CMD} extensions setup confluence")
+    fixed = ("site", "email", "token_cmd", "url", "done_states")
+    if key not in fixed and not (key.startswith("watch.") and len(key) > 6):
+        die_usage(f"no setting a session can change is called {key}. Settings: site, email, token_cmd, url, watch.<wiki>, done_states")
+    if not value:
+        die_usage(f"give {key} a value, or - to clear it")
+    if "#" in value:
+        die_usage(f"{key} can't hold a #, which starts a comment in the settings file")
+    clear = value == "-"
+    path = CONFIG
+    if key == "site":
+        path = SHARED
+        if not clear and (not value.startswith(("http://", "https://")) or len(value.split()) != 1 or value.count("://") != 1):
+            die_usage("site isn't an address: it starts with https:// or http://, with no spaces")
+        out = "" if clear else value.rstrip("/")
+    elif key == "url":
+        if not clear and (not value.startswith(("http://", "https://")) or len(value.split()) != 1 or value.count("://") != 1):
+            die_usage("url isn't an address: it starts with https:// or http://, with no spaces")
+        out = "" if clear else value.rstrip("/")
+    elif key == "email":
+        path = SHARED
+        if not clear and (len(value.split()) != 1 or "@" not in value):
+            die_usage(f"{key} isn't an email address: it needs an @ and no spaces")
+        out = "" if clear else value
+    elif key == "token_cmd":
+        path = SHARED
+        if clear:
+            out = ""
+        elif value != "keychain":
+            die_usage(f"token_cmd takes only the preset keychain from a session. The user sets a command of their own in a terminal: {CMD} extensions setup confluence")
+        elif sys.platform != "darwin":
+            die_usage(f"the keychain preset is macOS's. On this machine the user sets token_cmd in a terminal: {CMD} extensions setup confluence")
+        else:
+            out = KEYCHAIN_CMD
+    elif key == "done_states":
+        out = "" if clear else value
+    else:
+        wiki = key[len("watch."):]
+        if not is_wiki(wiki):
+            die_usage(f"{wiki} isn't one of your wikis, so it can't hear about pages. {CMD} list shows them")
+        out = ""
+        if not clear:
+            kept = []
+            for t in [x.strip() for x in value.split(",") if x.strip()]:
+                kind, ref = target(t)
+                if kind is None:
+                    die_usage(f"each entry of {key} is a page's address, an id, or space:KEY")
+                kept.append(f"space:{ref}" if kind == "space" else ref)
+            out = ", ".join(kept)
+    set_conf(path, key, out)
+    line = f"{key} {'cleared' if not out else 'set'} in {path}"
+    wins = {"site": ("ATLASSIAN_SITE",), "email": ("CONFLUENCE_EMAIL", "ATLASSIAN_EMAIL"), "url": ("CONFLUENCE_URL",)}
+    for name in wins.get(key, ()):
+        if os.environ.get(name):
+            line += f", but {name} is set, and it wins"
+            break
+    print(line)
+    return 0
+
+
 def main(argv):
+    if argv and argv[0] == "--wiki-settings":
+        return wiki_settings()
+    if argv and argv[0] == "--wiki-set":
+        return wiki_set(argv[1:])
     if argv and argv[0] == "--wiki-event":
         return on_event(argv[1:])
     if argv and argv[0] == "--wiki-ready":
