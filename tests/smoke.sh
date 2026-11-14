@@ -232,6 +232,27 @@ check "new resolves .. in a path" bash -c "cd '$T/sub' && '$W' new ../rel && tes
 expect "cover lists repositories" "covers:  api" "$W" cover demo api web
 expect "which finds a covered repository" "demo" "$W" which web
 refuse "which fails for an unknown repository" "$W" which nothing
+# uncover: the way back from cover, and the only way a covered repository gets its own wiki.
+"$W" cover demo splitme stray >/dev/null
+out="$("$W" new splitme 2>&1)" && bad "new still refuses a covered repository" "$out" || case "$out" in *"wiki uncover splitme --new"*|*"uncover splitme --new"*) ok "new refuses a covered repository and names uncover --new" ;; *) bad "new refuses a covered repository and names uncover --new" "$out" ;; esac
+expect "uncover takes a repository off the wiki that listed it" "uncovered: stray, from the wiki demo" "$W" uncover stray
+check "its line is gone from repos.md" bash -c "! grep -qxF -- '- stray' '$WIKIS_DIR/demo/repos.md'"
+check "the other lines stay" grep -qxF -- '- web' "$WIKIS_DIR/demo/repos.md"
+check "and the heading" grep -qxF '# Repositories' "$WIKIS_DIR/demo/repos.md"
+refuse "which no longer finds it" "$W" which stray
+expect "uncover again says it wasn't covered" "not covered: stray" "$W" uncover stray
+pages_before="$(find "$WIKIS_DIR/demo/wiki" "$WIKIS_DIR/demo/index.md" | LC_ALL=C sort)"
+out="$("$W" uncover splitme --new 2>&1)"
+case "$out" in *"uncovered: splitme, from the wiki demo"*"created:"*"Its pages are still in demo"*"ask"*) ok "uncover --new gives the repository its own wiki and leaves the pages to the user" ;; *) bad "uncover --new gives the repository its own wiki and leaves the pages to the user" "$out" ;; esac
+check "the new wiki is there" test -f "$WIKIS_DIR/splitme/AGENTS.md"
+expect "which finds it by its own name" "splitme" "$W" which splitme
+check "no page of the old wiki was moved" test "$pages_before" = "$(find "$WIKIS_DIR/demo/wiki" "$WIKIS_DIR/demo/index.md" | LC_ALL=C sort)"
+"$W" uncover >/dev/null 2>&1; check "uncover with no repository is a usage error" test $? = 2
+"$W" uncover --bogus web >/dev/null 2>&1; check "so is an option it doesn't know" test $? = 2
+before="$(cat "$WIKIS_DIR/demo/repos.md")"
+refuse "a name that can't be a repository's is refused" "$W" uncover web "a b"
+check "and nothing was written for the names before it" test "$before" = "$(cat "$WIKIS_DIR/demo/repos.md")"
+rm -rf "$WIKIS_DIR/splitme"
 printf -- '- [Deploy flow](wiki/howto/deploy.md): blue-green behind the canary gate\n' >> "$WIKIS_DIR/demo/index.md"
 expect "find searches indexes" "Deploy flow" "$W" find canary
 expect "find takes several words as one phrase" "Deploy flow" "$W" find blue-green behind

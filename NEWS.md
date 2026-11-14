@@ -4,6 +4,11 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-12-12: a covered repository can leave, or get its own wiki
+
+- `wiki uncover <repo>` takes a repository off the wiki that covers it. Before, that meant editing `repos.md` by hand.
+- `wiki uncover <repo> --new` also gives it a wiki of its own, which `wiki new` refuses while it is covered. Its pages stay put until you say to move them.
+
 ## 2026-12-11: your agent can walk you through setup
 
 - Ask your agent to run `wiki setup --guide` (in Claude Code, `/llm-wiki:setup`): it goes through each setting with you, starting with the unanswered ones.
