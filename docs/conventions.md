@@ -12,7 +12,7 @@ Colour and marks are on only when standard output is a terminal, `NO_COLOR` is u
 
 `LLM_WIKI_STYLE=on` or `off` overrides all of it, for a pager (`less -R`) and for tests. `on` wins over `NO_COLOR`: it is a request made for this one tool, and `NO_COLOR` is a standing preference for every tool. Each tool names its own variable: `LLM_RELAY_STYLE` in llm-relay.
 
-Agents' shells can be pseudo-terminals, where "is a terminal" is true. So a command whose output an agent or a program reads calls `style_off` and stays plain whatever the terminal says, even with the variable set to `on`. In llm-wiki those are `start`, `capture`, `sync`, `find`, `which`, `pending`, `patterns`, `lint`, `index`, `log`, `lock`, `compile`, `mcp`, `journal`, `standup`, `tour`, `report`, `stats`, every command that begins `__`, and everything a hook or an extension event runs.
+Agents' shells can be pseudo-terminals, where "is a terminal" is true. So a command whose output an agent or a program reads calls `style_off` and stays plain whatever the terminal says, even with the variable set to `on`. In llm-wiki those are `start`, `capture`, `sync`, `find`, `which`, `pending`, `patterns`, `lint`, `index`, `log`, `lock`, `compile`, `mcp`, `journal`, `standup`, `tour`, `report`, `stats`, `setup --guide`, `open --data`, `pages --data`, every command that begins `__`, and everything a hook or an extension event runs.
 
 A tool whose every command may be run by an assistant, as llm-relay's can, has a second way to apply the same rule: it calls `style_off` whenever standard input isn't a terminal, whatever the variable says.
 
