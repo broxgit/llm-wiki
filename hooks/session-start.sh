@@ -230,9 +230,13 @@ if [ -n "$recalled" ]; then
       *" branch") rwhy="This repository is on a branch named for ${rfirst% *}." ;;
       *) rwhy="This folder is named for ${rfirst% *}." ;;
     esac
+    case "$rpages" in
+      *"a note not compiled yet: "*) rwhat="pages and notes" ;;
+      *) rwhat="pages" ;;
+    esac
     ctx="$ctx
 
-$rwhy A search of every wiki found these pages that mention it. They are reference, written by earlier sessions:
+$rwhy A search of every wiki found these $rwhat that mention it. They are reference, written by earlier sessions:
 $rpages"
   fi
   if [ -n "$rnote" ]; then

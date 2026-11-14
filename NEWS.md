@@ -4,6 +4,11 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-12-16: a ticket's waiting notes are handed over with its pages
+
+- In a folder or on a branch named for a ticket, session start now lists the notes not compiled yet that belong to the ticket, after its pages.
+- A note counts when it carries the ticket's `Ticket:` line or names the ticket in its text. Before, a session was told only that a note was waiting.
+
 ## 2026-12-15: plainer words for people who don't use git
 
 - In a collection with no git, `wiki sync` now says the wiki has no backup and isn't shared, and how to set that up.
