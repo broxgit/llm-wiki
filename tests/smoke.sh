@@ -6020,6 +6020,20 @@ lacks "a folder not named for a ticket gets no such lines" "A search of every wi
 out="$(env -C "$RC" "$W" start 2>&1)"
 case "$out" in *"===== Pages that mention RECALL-42, from a search of every wiki"*"- tfrecall wiki: [RECALL-42 plan]"*) ok "wiki start prints them too, for agents with no hook" ;; *) bad "wiki start prints them too, for agents with no hook" "$out" ;; esac
 lacks "and prints no such heading when there are none" "===== Pages that mention" env -C "$T/tickets/RECALL-4" "$W" start
+# A note not compiled yet that belongs to the ticket is handed over with the pages: by its
+# Ticket line, shown by what it says, or by naming the ticket in its text.
+printf 'Ask finance whether the cap covers credit notes\n\nDana owns the answer.\n\nTicket: RECALL-42\n' | "$W" capture tfrecall rc-open-item >/dev/null 2>&1
+printf 'Gateway retries\n\nFor RECALL-42 the gateway retries twice.\n' | "$W" capture tfrecall rc-in-text >/dev/null 2>&1
+printf 'Another ticket\n\nTicket: RECALL-420\n' | "$W" capture tfrecall rc-other >/dev/null 2>&1
+out="$("$W" __recall "$RC" 2>&1)"
+case "$out" in *"- tfrecall wiki, a note not compiled yet: "*"-rc-open-item.md: Ask finance whether the cap covers credit notes"*) ok "a waiting note with the ticket's Ticket line is found, shown by its first line" ;; *) bad "a waiting note with the ticket's Ticket line is found, shown by its first line" "$out" ;; esac
+case "$out" in *"-rc-in-text.md: For RECALL-42 the gateway retries twice."*) ok "and one that names the ticket in its text, by that line" ;; *) bad "and one that names the ticket in its text, by that line" "$out" ;; esac
+case "$out" in *"rc-other"*) bad "a note for a longer number is another ticket's" "$out" ;; *) ok "a note for a longer number is another ticket's" ;; esac
+case "$out" in *"[RECALL-42 plan]"*"a note not compiled yet"*) ok "the pages come before the notes" ;; *) bad "the pages come before the notes" "$out" ;; esac
+expect "wiki start says pages and notes" "===== Pages and notes that mention RECALL-42, from a search of every wiki" env -C "$RC" "$W" start
+out="$(hook "$RC" '{"source":"startup"}')"
+case "$out" in *"A search of every wiki found these pages and notes that mention it."*"-rc-open-item.md: Ask finance"*) ok "and the session hook hands the notes over too" ;; *) bad "and the session hook hands the notes over too" "$out" ;; esac
+rm -f "$WIKIS_DIR"/tfrecall/raw/*-rc-open-item.md "$WIKIS_DIR"/tfrecall/raw/*-rc-in-text.md "$WIKIS_DIR"/tfrecall/raw/*-rc-other.md
 # Most people work in one repository, on a branch named for the ticket. The branch says
 # what the folder's name doesn't.
 BR="$T/tickets/plain/svc"

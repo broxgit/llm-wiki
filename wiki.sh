@@ -1105,13 +1105,15 @@ ticket_real() {
 }
 
 # recall_key <key> [max]: the pages, in every wiki of the collection, that mention a
-# ticket's key: one line a page, those whose index line names it first, five at most,
-# nothing when there are none. Session start hands these over, because placing a
+# ticket's key, and the notes not compiled yet that do, by a Ticket line or in their text:
+# one line each, pages whose index line names it first, five at most, nothing when there
+# are none. A note waiting to be compiled is the newest word on a ticket, and a session
+# told only "1 note waiting" didn't read it. Session start hands these over, because placing a
 # session by its clones can't find a page filed under another repository's wiki, and
 # a session that isn't handed the page doesn't go looking. VID-7400 is not VID-74003.
 recall_key() {
   [ -n "${1:-}" ] || return 0
-  recall_core "$1" "" 0 "${2:-5}"
+  recall_core "$1" "" 1 "${2:-5}"
 }
 
 # The ordinary words that say nothing about what a message is for. Only words of five
@@ -1275,13 +1277,14 @@ recall_core() {
       }
       close(f)
     }
-    function do_note(w, dir, name,   f, line, low, fm, n, best, bline, sfirst, shit, i, s, sc, shown, c, wk) {
+    function do_note(w, dir, name,   f, line, low, fm, n, best, bline, sfirst, shit, i, s, sc, shown, c, wk, top) {
       wk = (nW >= 2 && mine(w)); if (!nS && !wk) return
-      f = dir "/raw/" name; fm = 0; n = 0; shit = 0; best = 0; bline = ""; sfirst = ""
+      f = dir "/raw/" name; fm = 0; n = 0; shit = 0; best = 0; bline = ""; sfirst = ""; top = ""
       while ((getline line < f) > 0) {
         n++
         if (n == 1 && line == "---") { fm = 1; continue }
         if (fm) { if (line == "---") fm = 0; continue }
+        if (top == "" && line ~ /[A-Za-z0-9]/ && line !~ /^Captured:/) top = line
         if (nS && !shit) { low = tolower(line); if (strongin(low)) { shit = 1; sfirst = line } }
         # Ordinary words count on one line, as in an index line: a long note holds two of
         # almost any five words somewhere. The line a note was captured on says nothing.
@@ -1291,7 +1294,9 @@ recall_core() {
         }
       }
       close(f)
-      if (shit) { sc = 3000 + near(w); shown = sfirst } else if (best >= 2) { sc = best * 10; shown = bline } else return
+      # Found by its Ticket line alone, a note is shown by its first line: the Ticket line
+      # says nothing the heading has not said.
+      if (shit) { sc = 3000 + near(w); shown = (sfirst ~ /^Ticket:/ && top != "") ? top : sfirst } else if (best >= 2) { sc = best * 10; shown = bline } else return
       sub(/^[ \t]+/, "", shown); gsub(/\t/, " ", shown); shown = substr(shown, 1, 120)
       printf "%d\tN\t%s\t%s\t%s\t%s\n", sc, w, tilde(dir), name, shown
     }
@@ -1528,7 +1533,10 @@ cmd_start() {
     thits="$(recall_key "$tkey")"
     if [ -n "$thits" ]; then
       echo
-      echo "===== Pages that mention $tkey, from a search of every wiki"
+      case "$thits" in
+        *"a note not compiled yet: "*) echo "===== Pages and notes that mention $tkey, from a search of every wiki" ;;
+        *) echo "===== Pages that mention $tkey, from a search of every wiki" ;;
+      esac
       echo "$thits"
     fi
   fi
