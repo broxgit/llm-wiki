@@ -8,6 +8,11 @@ Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title i
 
 - When a note saved through the connector fails to sync, the reply now says what stopped it: the file a secret scan flagged, or the page in conflict.
 
+## 2026-12-16: a ticket's waiting notes are handed over with its pages
+
+- In a folder or on a branch named for a ticket, session start now lists the notes not compiled yet that belong to the ticket, after its pages.
+- A note counts when it carries the ticket's `Ticket:` line or names the ticket in its text. Before, a session was told only that a note was waiting.
+
 ## 2026-12-15: plainer words for people who don't use git
 
 - In a collection with no git, `wiki sync` now says the wiki has no backup and isn't shared, and how to set that up.
