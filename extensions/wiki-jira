@@ -2,6 +2,7 @@
 # wiki-extension: Check the Jira tickets your open items wait on, and close the ones that are done.
 # wiki-events: tick
 # wiki-setup: yes
+# wiki-settings: yes
 """wiki jira: an llm-wiki extension. Standard library only.
 
 It reads each wiki's open items through `wiki open --data`, finds the open entries
@@ -24,8 +25,11 @@ import datetime
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
+import tempfile
+import unicodedata
 import urllib.error
 import urllib.request
 
@@ -34,6 +38,8 @@ CONFIG_DIR = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduse
 CONFIG = os.path.join(CONFIG_DIR, "jira")
 # The sign-in every Atlassian extension shares.
 SHARED = os.path.join(CONFIG_DIR, "atlassian")
+KEYCHAIN_CMD = "security find-generic-password -s atlassian -w"
+GUIDE = f'Or ask an agent: "run {CMD} setup --guide jira and walk me through it"'
 KEY = re.compile(r"(?<![A-Za-z0-9-])([A-Z][A-Z0-9]{1,9}-[0-9]+)(?![A-Za-z0-9-])")
 
 USAGE = f"""Usage: {CMD} jira [check] [--close] [<wiki>]
@@ -94,15 +100,26 @@ def unreachable(msg):
     die(msg)
 
 
+def conf_lines(path):
+    """The lines of a settings file, by the one rule everything that reads or writes it shares:
+    a line ends at a newline, and a trailing carriage return is dropped. Nothing else splits one.
+    Bytes that aren't UTF-8 are kept as they are."""
+    with open(path, encoding="utf-8", errors="surrogateescape", newline="") as f:
+        text = f.read()
+    lines = [l[:-1] if l.endswith("\r") else l for l in text.split("\n")]
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
 def read_conf(path):
     conf = {}
     try:
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.split("#", 1)[0].strip()
-                if "=" in line:
-                    k, v = line.split("=", 1)
-                    conf[k.strip()] = v.strip()
+        for line in conf_lines(path):
+            line = line.split("#", 1)[0].strip()
+            if "=" in line:
+                k, v = line.split("=", 1)
+                conf[k.strip()] = v.strip()
     except FileNotFoundError:
         pass
     return conf
@@ -230,20 +247,62 @@ def ask_yn(prompt, default=False):
     return default if line == "" else line.startswith("y")
 
 
+# What no setting's value may hold: a character that ends a line in any reader's eyes
+# (str.splitlines splits on more than a newline), or any other control character.
+SEPARATORS = "\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"
+
+
+def unfit(text):
+    """Why a key or value can't be written to a settings file, in words that don't repeat it, or nothing."""
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return "isn't valid UTF-8"
+    for c in text:
+        cat = unicodedata.category(c)
+        if c in SEPARATORS or cat[0] == "C" or cat in ("Zl", "Zp"):
+            return "can't hold a control character or a line separator"
+    return ""
+
+
 def set_conf(path, key, value):
     """Set one `name = value` line in a settings file, or take it out when value is empty.
-    Every other line stays as it is."""
+    Every other line stays as it is. The file is written beside itself and moved into place,
+    so a write that fails leaves the old one."""
+    why = unfit(key) or unfit(value) or ("is more than one line" if len(value.splitlines()) > 1 else "")
+    if why:
+        die_usage(f"the value of {key} {why}, so nothing was written")
     try:
-        with open(path, encoding="utf-8") as f:
-            lines = f.read().splitlines()
+        lines = conf_lines(path)
     except FileNotFoundError:
         lines = []
     kept = [l for l in lines if l.split("#", 1)[0].split("=", 1)[0].strip() != key or "=" not in l.split("#", 1)[0]]
     if value:
         kept.append(f"{key} = {value}")
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write("\n".join(kept) + ("\n" if kept else ""))
+    # A settings file that is a link, as with dotfiles kept elsewhere, stays one: the file it names is replaced.
+    path = os.path.realpath(path)
+    folder = os.path.dirname(path)
+    tmp = None
+    try:
+        os.makedirs(folder, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=folder, prefix=".settings-")
+        with os.fdopen(fd, "w", encoding="utf-8", errors="surrogateescape", newline="") as f:
+            f.write("\n".join(kept) + ("\n" if kept else ""))
+        try:
+            mode = stat.S_IMODE(os.stat(path).st_mode)
+        except FileNotFoundError:
+            mask = os.umask(0)
+            os.umask(mask)
+            mode = 0o666 & ~mask
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except OSError as e:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        die(f"can't write {path}: {e.strerror or e}. The old file is as it was")
 
 
 def has_token(conf):
@@ -301,7 +360,7 @@ def sign_in_missing(conf):
 def need_sign_in(conf):
     msg = sign_in_missing(conf)
     if msg:
-        die(f"Jira isn't set up: {msg}. Run: {CMD} extensions setup jira")
+        die(f"Jira isn't set up: {msg}. Run: {CMD} extensions setup jira. {GUIDE}")
 
 
 def bold(text):
@@ -619,7 +678,7 @@ def cmd_check(args):
     if not shown and not any(notes.values()):
         if seen and jira.get("/rest/api/2/myself", soft=True) is None:
             die(f"{jira.url} doesn't answer as Jira: none of {len(seen)} ticket(s) could be looked up, and it has no Jira "
-                f"API at /rest/api/2. The site is the address of Jira itself. Run: {CMD} extensions setup jira")
+                f"API at /rest/api/2. The site is the address of Jira itself. Run: {CMD} extensions setup jira. {GUIDE}")
         print(f"None of the keys the open items name is a ticket Jira knows: {', '.join(sorted(seen)[:8])}.")
         return 0
 
@@ -719,7 +778,7 @@ def cmd_config(args):
     print(f"auto      {'check --close runs by itself once a day' if auto_on(conf) else 'off'}")
     print(f"done      {', '.join(conf['done_statuses']) or 'what Jira counts as done'}")
     if not conf["url"] or not where:
-        print(f"\nNot set up: {sign_in_missing(conf)}. Run: {CMD} extensions setup jira")
+        print(f"\nNot set up: {sign_in_missing(conf)}. Run: {CMD} extensions setup jira. {GUIDE}")
         return 1
     me = Jira(conf).get("/rest/api/2/myself")
     if me is None:
@@ -744,7 +803,157 @@ def on_event(args):
     return cmd_check(["--close"])
 
 
+# ---- what a session can change: llm-wiki's contract, version 4 -------------------------
+
+# Where a value came from, in the words --wiki-settings uses.
+SOURCES = {"this file": "file", "the shared file": "shared file", "token_cmd": "file",
+           "token_cmd in the shared file": "shared file"}
+
+
+def source_name(src):
+    if not src:
+        return "default"
+    if src in SOURCES:
+        return SOURCES[src]
+    return f"environment ({src})"
+
+
+def own_value(own, env_name, key):
+    """A setting of Jira's own, from the environment or its file, and where it came from."""
+    if os.environ.get(env_name):
+        return os.environ[env_name], source_name(env_name)
+    if own.get(key):
+        return own[key], "file"
+    return "", "default"
+
+
+def on_mac():
+    """Whether the keychain preset fits this machine. LLM_WIKI_TEST_OS lets the tests see both answers."""
+    return (os.environ.get("LLM_WIKI_TEST_OS") or sys.platform) == "darwin"
+
+
+def setting_rows():
+    """One row for each setting a session may look at: key, value, where from, meaning, and
+    whether a session can change it. Reads files and the environment only: it never runs
+    token_cmd and never touches the network, and a token's value is never in it."""
+    own = read_conf(CONFIG)
+    conf = settings()
+    src = conf["_from"]
+    mac = on_mac()
+    rows = [
+        ("site", conf["url"], source_name(src["url"]), "Jira's address, https://your-company.atlassian.net or your server's", "set"),
+        ("email", conf.get("email", ""), source_name(src["email"]), "Atlassian account email; empty on Data Center", "set"),
+    ]
+    tok_env = next((n for n in TOKEN_ENV if os.environ.get(n)), "")
+    tok_from = source_name(tok_env) if tok_env else (source_name(src["token_cmd"]) if conf.get("token_cmd") else "")
+    rows.append(("token", "set" if tok_env else ("not checked (token_cmd is set)" if conf.get("token_cmd") else "not set"), tok_from,
+                 "The user makes one at https://id.atlassian.com/manage-profile/security/api-tokens "
+                 "(Data Center: a personal access token) and "
+                 + ("runs in their own terminal: security add-generic-password -a \"$USER\" -s atlassian -U -w \"$(pbpaste)\""
+                    if mac else "keeps it in their own password manager, such as pass"), "terminal"))
+    cmd = conf.get("token_cmd", "")
+    shown = "keychain" if cmd == KEYCHAIN_CMD else ("custom command" if cmd else "")
+    if mac:
+        what = f"Then set this to keychain, and run {CMD} jira config, which contacts the site, to test sign-in"
+    else:
+        what = f"A command that prints the token, such as pass show atlassian. The user sets it in a terminal: {CMD} extensions setup jira"
+    rows.append(("token_cmd", shown, source_name(src["token_cmd"]) if cmd else "default", what, "set" if mac else "terminal"))
+    for key, env_name, what in (
+            ("projects", "JIRA_PROJECTS", "Ticket project keys, such as PROJ, OPS; empty: any"),
+            ("auto_close", "JIRA_AUTO_CLOSE", "yes: finished tickets close their open items, checked in the background"),
+            ("done_statuses", "JIRA_DONE_STATUSES", "Statuses that mean finished, such as Released; empty: what Jira counts as done")):
+        value, where = own_value(own, env_name, key)
+        rows.append((key, value, where, what, "set"))
+    return rows
+
+
+def wiki_settings():
+    for row in setting_rows():
+        print("\t".join(" ".join(str(f).split()) for f in row))
+    return 0
+
+
+def secret_key(key):
+    k = key.lower()
+    if k == "token_cmd":
+        return False
+    return any(w in k for w in ("token", "password", "passwd", "secret", "api_key", "apikey"))
+
+
+WIN_ENV = {"projects": "JIRA_PROJECTS", "auto_close": "JIRA_AUTO_CLOSE", "done_statuses": "JIRA_DONE_STATUSES"}
+
+
+def wiki_set(args):
+    """--wiki-set <key> <value>: check the key and the shape of the value, then write it where
+    the interactive setup would. A - clears it. Exit 2, and one line why, for what it refuses."""
+    if len(args) != 2:
+        die_usage("usage: --wiki-set <key> <value>")
+    for what, text in (("key", args[0]), ("value", args[1])):
+        if unfit(text):
+            die_usage(f"the {what} {unfit(text)}, so nothing was written")
+    key, value = args[0].strip(), args[1].strip()
+    names = [r[0] for r in setting_rows()]
+    if secret_key(key):
+        die_usage(f"{key} is a secret, and a session never sets one. The user puts the token in their keychain themselves, and then {CMD} extensions set jira token_cmd keychain")
+    if key not in names:
+        die_usage(f"no setting called {key}. Settings: {', '.join(n for n in names if n != 'token')}")
+    if not value:
+        die_usage(f"give {key} a value, or - to clear it")
+    if "#" in value:
+        die_usage(f"{key} can't hold a #, which starts a comment in the settings file")
+    clear = value == "-"
+    path = CONFIG
+    if key == "site":
+        path = SHARED
+        if not clear and (not value.startswith(("http://", "https://")) or len(value.split()) != 1 or value.count("://") != 1):
+            die_usage("site isn't an address: it starts with https:// or http://, with no spaces")
+        out = "" if clear else value.rstrip("/")
+    elif key == "email":
+        path = SHARED
+        if not clear and (len(value.split()) != 1 or "@" not in value):
+            die_usage(f"{key} isn't an email address: it needs an @ and no spaces")
+        out = "" if clear else value
+    elif key == "token_cmd":
+        path = SHARED
+        if clear:
+            out = ""
+        elif value != "keychain":
+            die_usage(f"token_cmd takes only the preset keychain from a session. The user sets a command of their own in a terminal: {CMD} extensions setup jira")
+        elif not on_mac():
+            die_usage(f"the keychain preset is macOS's. On this machine the user sets token_cmd in a terminal: {CMD} extensions setup jira")
+        else:
+            out = KEYCHAIN_CMD
+    elif key == "projects":
+        parts = [x.strip() for x in value.split(",") if x.strip()]
+        if not clear and (not parts or not all(re.fullmatch(r"[A-Za-z][A-Za-z0-9]{1,9}", x) for x in parts)):
+            die_usage("projects takes project keys separated by commas, such as PROJ, OPS")
+        out = "" if clear else ", ".join(x.upper() for x in parts)
+    elif key == "auto_close":
+        if not clear and value.lower() not in ("yes", "no"):
+            die_usage("auto_close takes yes or no")
+        out = "yes" if value.lower() == "yes" else ""
+    else:
+        out = "" if clear else value
+    file_key = key
+    set_conf(path, file_key, out)
+    line = f"{key} {'cleared' if not out else 'set'} in {path}"
+    env = WIN_ENV.get(key)
+    if env and os.environ.get(env):
+        line += f", but {env} is set, and it wins"
+    elif key in ("site", "email"):
+        for name in (("JIRA_URL", "ATLASSIAN_SITE") if key == "site" else ("JIRA_EMAIL", "ATLASSIAN_EMAIL")):
+            if os.environ.get(name):
+                line += f", but {name} is set, and it wins"
+                break
+    print(line)
+    return 0
+
+
 def main(argv):
+    if argv and argv[0] == "--wiki-settings":
+        return wiki_settings()
+    if argv and argv[0] == "--wiki-set":
+        return wiki_set(argv[1:])
     if argv and argv[0] == "--wiki-event":
         return on_event(argv[1:])
     if argv and argv[0] == "--wiki-ready":

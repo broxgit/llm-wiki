@@ -142,6 +142,8 @@ Usage: $WIKI_CMD <command> [options]
   setup                Walk through every setting, step by step. Safe to rerun.
   setup --new          Only what's new since you last ran it, such as after a template update.
   setup --list         Print current settings without asking.
+  setup --guide [section]
+                       Text for your agent to walk you through setup in your session.
   init                 Create the wiki collection at $(tilde "$WIKIS_DIR") and its shared wiki, $SHARED.
   new <name|path>      Create a wiki from the template. A bare name goes under $(tilde "$WIKIS_DIR").
   capture <wiki> <slug>  Save a note piped on stdin in raw/, named from the clock.
@@ -209,12 +211,14 @@ Usage: $WIKI_CMD <command> [options]
                        access. An MCP client starts it. --print gives its config entry.
   news [--all]         What's new in llm-wiki since you last looked.
   obsidian [--no-open] Browse the wikis in Obsidian: write the vault's starter settings and open it.
-  extensions [path | add <name> | remove <name> | setup <name> | log <name> | tick | every ...]
+  extensions [path | add <name> | remove <name> | setup <name> | settings <name> | set <name> <key> <value> | log <name> | tick | every ...]
                        Commands of your own: $WIKI_CMD <name> runs an executable named
                        wiki-<name> in the extensions folder. Lists them, or prints the folder.
                        add turns on one that ships with llm-wiki, such as jira. remove turns it off.
                        setup asks for what an extension needs before it can work, such as
                        a sign-in. wiki status says when one that is on isn't ready.
+                       settings shows what a session can change, and set changes one, as
+                       an agent can: $WIKI_CMD setup --guide says how.
                        log shows how an extension's last runs for events ended. tick runs
                        the tick event now, for cron on a machine with no sessions.
                        every [<time>] says or sets how long passes between ticks: 90m, 4h,
@@ -416,7 +420,7 @@ cmd_helper() {
     fetch) helper_fetch || exit 1; return 0 ;;
     auto)
       case "${2:-}" in
-        on | off) helper_auto_set "$2" || die "can't write $(tilde "$HELPER_FILE")" ;;
+        on | off) helper_auto_set "$2" || die "can't write $(tilde "$HELPER_FILE")"; setup_mark helper ;;
         *) die "helper auto takes: on, off" ;;
       esac
       if [ "$2" = on ]; then ui_item ok "helper auto: on. Session start fetches the helper in the background when it is missing or out of date."
@@ -3107,6 +3111,7 @@ cmd_init() {
 Next:
   1. Give Claude Code access to $(tilde "$WIKIS_DIR"), or approve the prompt the first time it reaches for it.
   2. Walk through the rest:             $WIKI_CMD setup
+     Or have an agent do it with you:   ask it to run $WIKI_CMD setup --guide
 EOF
     return 0
   fi
@@ -3115,6 +3120,7 @@ EOF
 Next:
   1. Give your agent access to $(tilde "$WIKIS_DIR") and $(tilde "$REPO").
   2. Walk through the rest:             $WIKI_CMD setup
+     Or have an agent do it with you:   ask it to run $WIKI_CMD setup --guide
      Or just let sessions find wikis:   $WIKI_CMD claude
 EOF
 }
@@ -3143,9 +3149,21 @@ todo_add() { STATUS_TODO="$STATUS_TODO- $1
 # status_todo_text <line>: one line of the to-do list, with what the reader can type in typed's
 # colour: what follows "Run: ", or the quoted request after "Ask an agent: ". Not a word changes.
 status_todo_text() {
-  local l="$1" pre rest
+  local l="$1" pre rest cmd req
   case "$l" in
-    *"Run: "*) printf '%sRun: %s' "${l%%Run: *}" "$(typed "${l#*Run: }")" ;;
+    *"Run: "*)
+      pre="${l%%Run: *}"
+      rest="${l#*Run: }"
+      case "$rest" in
+        # "Run: <command>. Or ask an agent: "<request>"": the command and the request in typed's colour.
+        *'. Or ask an agent: "'*'"'*)
+          cmd="${rest%%. Or ask an agent: \"*}"
+          req="${rest#*. Or ask an agent: \"}"
+          printf '%sRun: %s. Or ask an agent: %s%s' "$pre" "$(typed "$cmd")" "$(typed "\"${req%%\"*}\"")" "${req#*\"}"
+          ;;
+        *) printf '%sRun: %s' "$pre" "$(typed "$rest")" ;;
+      esac
+      ;;
     *'Ask an agent: "'*'"'*)
       pre="${l%%Ask an agent: \"*}"
       rest="${l#*Ask an agent: \"}"
@@ -3360,9 +3378,9 @@ EOF2
   [ "$n" -eq 0 ] || todo_add "tips: $n feature(s) your wikis suggest trying. Run: $WIKI_CMD tips"
   n="$(setup_pending | wc -l | tr -d ' ')"
   if [ ! -f "$SETUP_STATE" ]; then
-    todo_add "setup: never run on this machine. Run: $WIKI_CMD setup"
+    todo_add "setup: never run on this machine. Run: $WIKI_CMD setup. Or ask an agent: \"run $WIKI_CMD setup --guide and walk me through it\""
   elif [ "$n" -gt 0 ]; then
-    todo_add "setup: $n new setting(s). Run: $WIKI_CMD setup --new"
+    todo_add "setup: $n new setting(s). Run: $WIKI_CMD setup --new. Or ask an agent: \"run $WIKI_CMD setup --guide and walk me through it\""
   fi
   if [ -n "$STATUS_TODO" ]; then
     echo
@@ -3764,7 +3782,7 @@ upgrade_summary() {
     ui_item warn "Your Claude Code wiki line is out of date: $(typed "$WIKI_CMD claude")"
   fi
   if [ -n "$(setup_pending)" ]; then
-    ui_item warn "New settings to look at: $(typed "$WIKI_CMD setup --new")"
+    ui_item warn "New settings to look at: $(typed "$WIKI_CMD setup --new"). Or ask an agent: $(typed "\"run $WIKI_CMD setup --guide and walk me through it\"")"
   fi
   ui_detail "Settings any time: $(typed "$WIKI_CMD setup --list")"
 }
@@ -4176,9 +4194,9 @@ atl_offer_ok() {
 atl_offer_line() {
   local c="$WIKI_CMD" how
   if [ "$3" = off ]; then
-    how="they run \`$c extensions add $1\`, then \`$c extensions setup $1\`, in a terminal"
+    how="with their yes, run \`$c extensions add $1\`, then \`$c setup --guide $1\` and follow it. Or they run \`$c extensions setup $1\` in a terminal"
   else
-    how="they run \`$c extensions setup $1\` in a terminal"
+    how="run \`$c setup --guide $1\` and follow it. Or they run \`$c extensions setup $1\` in a terminal"
   fi
   printf '%s' "llm-wiki has a $2 extension that isn't set up on this machine. Offer once, in one line, to walk them through it: $how. If they say no, run \`$c tips --mute ext-$1\` so it isn't offered again."
 }
@@ -5240,8 +5258,8 @@ setup_feedback() {
   done
   if feedback_set "$ANSWER"; then
     if [ "$ANSWER" = off ]; then ui_detail "feedback: off"; else ui_item ok "feedback: $ANSWER"; fi
+    setup_mark feedback
   fi
-  setup_mark feedback
 }
 
 # ---- palette ----------------------------------------------------------------
@@ -5251,6 +5269,11 @@ palette_setting() {
   local m
   m="$(sed -n 's/^palette=//p' "$STYLE_PALETTE_FILE" 2>/dev/null | head -n 1)"
   case "$m" in colorblind) printf colorblind ;; *) printf default ;; esac
+}
+
+palette_set() {
+  mkdir -p "$(dirname "$STYLE_PALETTE_FILE")" || return 1
+  printf '# Colours: default or colorblind. Written by %s setup palette.\npalette=%s\n' "$WIKI_CMD" "$1" > "$STYLE_PALETTE_FILE"
 }
 
 setup_palette() {
@@ -5265,8 +5288,7 @@ setup_palette() {
     ask "Palette (default, colorblind)" "$cur"
     case "$ANSWER" in default | colorblind) break ;; *) ui_item warn "Answer default or colorblind." ;; esac
   done
-  mkdir -p "$(dirname "$STYLE_PALETTE_FILE")"
-  printf '# Colours: default or colorblind. Written by %s setup palette.\npalette=%s\n' "$WIKI_CMD" "$ANSWER" > "$STYLE_PALETTE_FILE"
+  palette_set "$ANSWER"
   ui_item ok "palette: $ANSWER"
   setup_mark palette
 }
@@ -5278,6 +5300,11 @@ theme_setting() {
   local m
   m="$(sed -n 's/^theme=//p' "$STYLE_THEME_FILE" 2>/dev/null | tail -n 1)"
   case "$m" in dark | light) printf '%s' "$m" ;; *) printf auto ;; esac
+}
+
+theme_set() {
+  mkdir -p "$(dirname "$STYLE_THEME_FILE")" || return 1
+  printf '# The terminal'"'"'s background: auto, dark or light. Written by %s setup theme.\ntheme=%s\n' "$WIKI_CMD" "$1" > "$STYLE_THEME_FILE"
 }
 
 setup_theme() {
@@ -5292,8 +5319,7 @@ setup_theme() {
     ask "Theme (auto, dark, light)" "$cur"
     case "$ANSWER" in auto | dark | light) break ;; *) ui_item warn "Answer auto, dark or light." ;; esac
   done
-  mkdir -p "$(dirname "$STYLE_THEME_FILE")"
-  printf '# The terminal'"'"'s background: auto, dark or light. Written by %s setup theme.\ntheme=%s\n' "$WIKI_CMD" "$ANSWER" > "$STYLE_THEME_FILE"
+  theme_set "$ANSWER"
   ui_item ok "theme: $ANSWER"
   setup_mark theme
 }
@@ -5936,7 +5962,7 @@ EOF2
   # news_show drew its stages in a pipe's subshell; the rail goes on to NEXT all the same.
   _UI_RAIL=yes
   ui_stage NEXT "what to do now"
-  [ -t 0 ] || [ -z "$(setup_pending)" ] || ui_item warn "New settings to look at: $(typed "$WIKI_CMD setup --new")"
+  [ -t 0 ] || [ -z "$(setup_pending)" ] || ui_item warn "New settings to look at: $(typed "$WIKI_CMD setup --new"). Or ask an agent: $(typed "\"run $WIKI_CMD setup --guide and walk me through it\"")"
   [ -z "$(listed_cli_tools)" ] || ui_item warn "To let agents run the tools your wikis list without asking: $(typed "$WIKI_CMD setup tools")"
   session_update_note
 }
@@ -6471,9 +6497,9 @@ cmd_journal() {
   [ $# -gt 0 ] && shift
   case "$sub" in
     show) journal_show ;;
-    on) write_journal_config >/dev/null; journal_set enabled yes; apply_journal_commit ;;
-    off) write_journal_config >/dev/null; journal_set enabled no ;;
-    set) [ $# -ge 1 ] || die_usage "usage: $WIKI_CMD journal set <key> <value>"; journal_set "$1" "${2:-}" ;;
+    on) write_journal_config >/dev/null; journal_set enabled yes; apply_journal_commit; setup_mark journal.enabled ;;
+    off) write_journal_config >/dev/null; journal_set enabled no; setup_mark journal.enabled ;;
+    set) [ $# -ge 1 ] || die_usage "usage: $WIKI_CMD journal set <key> <value>"; journal_set "$1" "${2:-}"; setup_mark "journal.$1" ;;
     note) cmd_journal_note "$@" ;;
     backfill) journal_backfill "$@" ;;
     path) journal_file_for "$(journal_today)"; printf '\n' ;;
@@ -7383,8 +7409,20 @@ EOF
 #   wiki-<name> --wiki-setup   ask the person for what it needs, at a terminal.
 # So an extension that is on and not set up is never silent: setup walks the person
 # through it, `wiki status` lists it with its fix, and no event runs it until it is ready.
+# Version 4 lets a session change a setting. An extension that can says so with a
+# `wiki-settings:` comment near its top, and then answers two calls:
+#   wiki-<name> --wiki-settings        one line a setting, tab separated: key, current value
+#                                      (empty if unset), where it came from (file, shared file,
+#                                      environment or default), what it means in a line, and
+#                                      set or terminal. A secret is never printed: only set or
+#                                      not set. It reads files and the environment, nothing else.
+#   wiki-<name> --wiki-set <key> <value>   check the key and the value's shape, write it, and say
+#                                      so in one line. Exit 2 and a one-line reason for what it
+#                                      refuses: an unknown key, a bad value, anything secret.
+# `wiki setup --guide` and `wiki extensions settings|set` call them. One that doesn't say it
+# answers them (a version 3 one) is set up in a terminal only.
 EXT_DIR="${LLM_WIKI_EXTENSIONS_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/llm-wiki/extensions}"
-EXT_API=3
+EXT_API=4
 EXT_READY_SECONDS="${LLM_WIKI_READY_SECONDS:-5}"
 EXT_STATE="${XDG_STATE_HOME:-$HOME/.local/state}/llm-wiki/extensions"
 # How often the tick comes is a setting on each machine, `extensions every`: a length
@@ -7638,6 +7676,12 @@ ext_needs() {
 # ext_has_setup <file>: it says, in a `wiki-setup:` comment, that it answers the two calls.
 ext_has_setup() { head -n 10 "$1" 2>/dev/null | LC_ALL=C tr -d '\000' | LC_ALL=C grep -q '^[#/ ]*wiki-setup:'; }
 
+# ext_has_settings <file>: it says, in a `wiki-settings:` comment, that it answers the version 4 calls.
+ext_has_settings() { head -n 10 "$1" 2>/dev/null | LC_ALL=C tr -d '\000' | LC_ALL=C grep -q '^[#/ ]*wiki-settings:'; }
+
+# ext_fix <name>: the fix for an extension that isn't set up: a command, or a request for an agent.
+ext_fix() { printf 'Run: %s extensions setup %s. Or ask an agent: "run %s setup --guide %s and walk me through it"' "$WIKI_CMD" "$1" "$WIKI_CMD" "$1"; }
+
 # ext_ready <name>: whether the extension can work on this machine. Fails, printing why
 # and what to do, when the program it is written in is missing or when it says itself
 # that it isn't set up. The answer is kept beside its logs, for `wiki status`.
@@ -7657,7 +7701,7 @@ ext_ready() {
     pid=$!
     t=0
     while kill -0 "$pid" 2>/dev/null; do
-      if [ "$t" -ge $((EXT_READY_SECONDS * 10)) ]; then kill "$pid" 2>/dev/null || true; msg="it didn't say whether it is set up. Run: $WIKI_CMD extensions setup $n"; break; fi
+      if [ "$t" -ge $((EXT_READY_SECONDS * 10)) ]; then kill "$pid" 2>/dev/null || true; msg="it didn't say whether it is set up. $(ext_fix "$n")"; break; fi
       sleep 0.1
       t=$((t + 1))
     done
@@ -7665,7 +7709,7 @@ ext_ready() {
       msg="$(head -n 1 "$out" 2>/dev/null | LC_ALL=C tr -d '\000\t' | cut -c 1-200)"
       # Not ${msg:-...}: bash 3.2 can't parse an apostrophe inside one, in double quotes.
       [ -n "$msg" ] || msg="it isn't set up"
-      msg="$msg. Run: $WIKI_CMD extensions setup $n"
+      msg="$msg. $(ext_fix "$n")"
     fi
     rm -f "${dir:?}/ready.out"
   fi
@@ -7700,11 +7744,61 @@ ext_setup() {
     ui_detail "$n has nothing to set up."
     return 0
   fi
+  ui_detail "These are questions for a terminal. Or ask your agent to walk you through it: it runs $(typed "$WIKI_CMD setup --guide $n")."
   LLM_WIKI="$REPO/wiki.sh" LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" LLM_WIKI_EXTENSION="$EXT_API" "$f" --wiki-setup || true
   if msg="$(ext_ready "$n")"; then
     ui_item ok "$n is set up."
   else
     ui_item warn "$n isn't set up yet: $msg"
+  fi
+}
+
+# ext_call <name> <args>...: the extension itself, with what the contract hands it, and no input.
+ext_call() {
+  local n="$1" f
+  shift
+  f="$(ext_file "$n")"
+  LLM_WIKI="$REPO/wiki.sh" LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" LLM_WIKI_EXTENSION="$EXT_API" "$f" "$@" </dev/null
+}
+
+# ext_can_settings <name>: succeed when the extension is on, can run, and answers --wiki-settings.
+ext_can_settings() {
+  local f
+  f="$(ext_file "$1")" && [ -x "$f" ] && [ -z "$(ext_needs "$f")" ] && ext_has_settings "$f"
+}
+
+# ext_settings_lines <name>: its settings, as it prints them. Fails, printing nothing, when it can't.
+ext_settings_lines() {
+  ext_can_settings "$1" || return 1
+  ext_call "$1" --wiki-settings 2>/dev/null
+}
+
+# ext_settings_table <name>: a table of its settings, for a person or an agent.
+ext_settings_table() {
+  awk -F '\t' '
+    NF >= 5 { n++; k[n] = $1; v[n] = ($2 == "" ? "(not set)" : $2); s[n] = ($3 == "" ? "default" : $3); h[n] = $5; m[n] = $4
+      if (length($1) > a) a = length($1); if (length(v[n]) > b) b = length(v[n]); if (length(s[n]) > c) c = length(s[n]) }
+    END {
+      printf "%-*s  %-*s  %-*s  %-8s  %s\n", a, "SETTING", b, "VALUE", c, "FROM", "CHANGE", "MEANING"
+      for (i = 1; i <= n; i++) printf "%-*s  %-*s  %-*s  %-8s  %s\n", a, k[i], b, v[i], c, s[i], h[i], m[i]
+    }'
+}
+
+# ext_set_value <name> <key> <value>: change one of its settings, then say whether it is ready.
+ext_set_value() {
+  local n="$1" k="$2" v="$3" f msg rc=0
+  ext_must_be_on "$n"
+  f="$(ext_file "$n")"
+  [ -x "$f" ] || die "the extension $n isn't executable. Run: chmod +x $f"
+  msg="$(ext_needs "$f")"
+  [ -z "$msg" ] || die "$n needs $msg, which isn't on this machine. Do: install $msg"
+  ext_has_settings "$f" || die "$n has no settings a session can change. Run: $WIKI_CMD extensions setup $n"
+  ext_call "$n" --wiki-set "$k" "$v" || rc=$?
+  [ "$rc" -eq 0 ] || exit "$rc"
+  if msg="$(ext_ready "$n")"; then
+    ui_item ok "$n is ready."
+  else
+    ui_item warn "$n isn't ready yet: $msg"
   fi
 }
 
@@ -7741,7 +7835,7 @@ ext_notes() {
       *) printf 'no event is called %s, so it is never run for it. The events are sync and tick.\n' "$w" ;;
     esac
   done
-  line="$(LC_ALL=C grep -an '^[#/ ]*wiki-\(events\|setup\|extension\):' "$1" 2>/dev/null | awk -F: '$1 > 10 { print $1; exit }')"
+  line="$(LC_ALL=C grep -an '^[#/ ]*wiki-\(events\|setup\|settings\|extension\):' "$1" 2>/dev/null | awk -F: '$1 > 10 { print $1; exit }')"
   [ -z "$line" ] || printf 'its wiki- comment on line %s is past the first ten lines, so it is not read. Move it up.\n' "$line"
 }
 
@@ -7762,9 +7856,11 @@ cmd_extensions() {
         ui_item ok "on: $2. $WIKI_CMD $2 --help has its commands."
         d="$(ext_ready "$2")" || ui_item warn "$2 isn't set up yet: $d"
       elif ! ext_on "$2"; then
+        setup_mark "extension.$2"
         ui_item ok "$2 is already off."
       else
         ext_set "$2" off
+        setup_mark "extension.$2"
         ui_item ok "off: $2. Its settings are kept, for when you turn it on again."
       fi
       return 0
@@ -7772,6 +7868,18 @@ cmd_extensions() {
     setup)
       [ $# -eq 2 ] || die_usage "usage: $WIKI_CMD extensions setup <name>"
       ext_setup "$2"
+      return 0
+      ;;
+    settings)
+      [ $# -eq 2 ] || die_usage "usage: $WIKI_CMD extensions settings <name>"
+      ext_must_be_on "$2"
+      d="$(ext_settings_lines "$2")" || die "$2 doesn't list its settings, so they are set in a terminal. Run: $WIKI_CMD extensions setup $2"
+      printf '%s\n' "$d" | ext_settings_table
+      return 0
+      ;;
+    set)
+      [ $# -eq 4 ] || die_usage "usage: $WIKI_CMD extensions set <name> <key> <value>. A value of - clears the setting."
+      ext_set_value "$2" "$3" "$4"
       return 0
       ;;
     log)
@@ -7801,7 +7909,7 @@ cmd_extensions() {
         case "$d" in
           *": failed"* | *": stopped"*) bad=1; printf '%s. %s extensions log %s shows why.\n' "$d" "$WIKI_CMD" "$n" ;;
           *": later") printf '%s: it could not run now. %s extensions log %s says why.\n' "$d" "$WIKI_CMD" "$n" ;;
-          *": not set up") printf '%s. Run: %s extensions setup %s\n' "$d" "$WIKI_CMD" "$n" ;;
+          *": not set up") printf '%s. %s\n' "$d" "$(ext_fix "$n")" ;;
           *) printf '%s\n' "$d" ;;
         esac
       done
@@ -7847,7 +7955,7 @@ cmd_extensions() {
       esac
       return 0
       ;;
-    *) die_usage "extensions takes path, add <name>, remove <name>, setup <name>, log <name>, tick, every, or nothing" ;;
+    *) die_usage "extensions takes path, add <name>, remove <name>, setup <name>, settings <name>, set <name> <key> <value>, log <name>, tick, every, or nothing" ;;
   esac
   ui_stage EXTENSIONS "what this machine has"
   for f in "$EXT_DIR"/wiki-*; do
@@ -7936,8 +8044,8 @@ cmd_complete() {
     open) [ "$i" -eq 2 ] && echo --data; [ "$i" -eq 3 ] && wiki_names ;;
     pages) [ "$i" -eq 2 ] && wiki_names; echo --data ;;
     extensions)
-      [ "$i" -eq 2 ] && printf 'path\nadd\nremove\nsetup\nlog\ntick\nevery\n'
-      if [ "$i" -eq 3 ] && { [ "${2:-}" = log ] || [ "${2:-}" = every ] || [ "${2:-}" = setup ]; }; then extension_names; return 0; fi
+      [ "$i" -eq 2 ] && printf 'path\nadd\nremove\nsetup\nsettings\nset\nlog\ntick\nevery\n'
+      if [ "$i" -eq 3 ] && { [ "${2:-}" = log ] || [ "${2:-}" = every ] || [ "${2:-}" = setup ] || [ "${2:-}" = settings ] || [ "${2:-}" = set ]; }; then extension_names; return 0; fi
       if [ "$i" -eq 4 ] && [ "${2:-}" = every ]; then echo default; return 0; fi
       if [ "$i" -eq 3 ]; then for k in "$EXT_SHIPPED"/wiki-*; do [ ! -f "$k" ] || printf '%s\n' "${k##*/wiki-}"; done; fi
       ;;
@@ -7965,7 +8073,19 @@ cmd_complete() {
     init) echo --git ;;
     completion) printf 'zsh\nbash\n' ;;
     setup)
-      printf -- '--new\n--list\ncollection\ngit\ngit.identity\nclaude\nplugin\npermissions\ncollections\ntools\nantigravity\ncodex\ncursor\nfeedback\nhelper\nchat\nupgrade\nskills\ncompletion\ndelegation\njournal\nmicrosoft-copilot\n'
+      if [ "${2:-}" = --guide ]; then
+        [ "$i" -eq 3 ] || return 0
+        printf '%s\n' $GUIDE_SECTIONS
+        guide_ext_names | sort -u
+        for k in $JOURNAL_KEYS; do printf 'journal.%s\n' "$k"; done
+        return 0
+      fi
+      case "${2:-}" in
+        palette) [ "$i" -eq 3 ] && printf 'default\ncolorblind\n'; return 0 ;;
+        theme) [ "$i" -eq 3 ] && printf 'auto\ndark\nlight\n'; return 0 ;;
+        feedback) [ "$i" -eq 3 ] && printf 'off\nnotes\nshare\n'; return 0 ;;
+      esac
+      printf -- '--new\n--list\n--guide\ncollection\ngit\ngit.identity\nclaude\nplugin\npermissions\ncollections\ntools\nantigravity\ncodex\ncursor\nfeedback\npalette\ntheme\nhelper\nchat\nupgrade\nskills\ncompletion\ndelegation\njournal\nmicrosoft-copilot\n'
       for k in $JOURNAL_KEYS; do printf 'journal.%s\n' "$k"; done
       ;;
     journal)
@@ -8686,7 +8806,7 @@ deleg_log() {
 cmd_delegation() {
   local open
   case "${1:-show}" in
-    off | ask | auto) deleg_set_mode "$1"; return 0 ;;
+    off | ask | auto) deleg_set_mode "$1"; setup_mark delegation.mode; return 0 ;;
     log) shift; deleg_log "$@"; return 0 ;;
     show) ;;
     *) die "delegation commands: show, off, ask, auto, log" ;;
@@ -9749,8 +9869,197 @@ setup_copilot_cowork() {
   die "wiki setup copilot-cowork is now relay setup, from https://github.com/broxgit/llm-relay. Install it as its README says, and run: $(typed_err "relay setup")"
 }
 
+# setup_set_value <palette|theme|feedback> <value>: set it with no questions, and count its step as answered.
+setup_set_value() {
+  local name="$1" val="$2"
+  case "$name:$val" in
+    palette:default | palette:colorblind) palette_set "$val" || die "can't write $(tilde "$STYLE_PALETTE_FILE")" ;;
+    theme:auto | theme:dark | theme:light) theme_set "$val" || die "can't write $(tilde "$STYLE_THEME_FILE")" ;;
+    feedback:off | feedback:notes | feedback:share) feedback_set "$val" || die "can't write $(tilde "$FEEDBACK_FILE")" ;;
+    palette:*) die_usage "palette takes default or colorblind" ;;
+    theme:*) die_usage "theme takes auto, dark or light" ;;
+    *) die_usage "feedback takes off, notes or share" ;;
+  esac
+  setup_mark "$name"
+  ui_item ok "$name: $val"
+}
+
+# ---- the guide ---------------------------------------------------------------
+# `setup --guide [section]`: text for an agent to follow in the session the user is in, in
+# place of the questions a terminal gets. Every row of `setup --list` is an entry with its
+# value, whether setup --new would ask about it, what it does, and how to change it with a
+# command that asks nothing, or that only a terminal can do. It never prints, asks for or
+# writes a token or a password, and changes nothing itself.
+GUIDE_SECTIONS="collection collections tools git git.identity claude plugin permissions antigravity codex cursor upgrade skills completion journal delegation feedback palette theme helper obsidian extensions chat"
+
+# guide_known <section>: succeed for a name `setup --guide` takes.
+guide_known() {
+  case " $GUIDE_SECTIONS " in *" $1 "*) return 0 ;; esac
+  case "$1" in journal.*) [ -n "$(journal_field "${1#journal.}" 2)" ] && return 0 ;; esac
+  ext_name_ok "$1" && { ext_shipped "$1" >/dev/null || ext_file "$1" >/dev/null; }
+}
+
+# guide_in <section> <row>: whether a row of setup --list belongs to the section ("" is all).
+guide_in() {
+  case "$1" in
+    "") return 0 ;;
+    journal) case "$2" in journal.*) return 0 ;; esac; return 1 ;;
+    delegation) [ "$2" = delegation.mode ] ;;
+    git) [ "$2" = git ] || [ "$2" = git.identity ] ;;
+    *) [ "$2" = "$1" ] ;;
+  esac
+}
+
+# guide_unanswered <row>: whether setup --new would ask about it ($GUIDE_PENDING lists them).
+guide_unanswered() {
+  case "$GUIDE_PENDING" in *" $1 "*) return 0 ;; esac
+  case "$1" in
+    permissions) case "$GUIDE_PENDING" in *" claude.permissions "*) return 0 ;; esac ;;
+    antigravity) case "$GUIDE_PENDING" in *" antigravity."*) return 0 ;; esac ;;
+    completion) case "$GUIDE_PENDING" in *" completion."*) return 0 ;; esac ;;
+    extensions) case "$GUIDE_PENDING" in *" extension."* | *" extensions.every "*) return 0 ;; esac ;;
+  esac
+  return 1
+}
+
+# guide_entry <row> <value>: what the row does, and how to change it, after "- row = value [mark]: ".
+guide_entry() {
+  local c="$WIKI_CMD" id="$1" type
+  case "$id" in
+    collection) echo "Where the wikis live. Terminal only: $c setup collection" ;;
+    git) echo "Whether the collection is a git repo with a remote, so it syncs. Terminal only: $c setup git" ;;
+    git.identity) echo "The name and email on commits in the collection. Terminal only: $c setup git.identity" ;;
+    claude) echo "The wiki line in ~/.claude/CLAUDE.md. Terminal only: $c setup claude" ;;
+    permissions) echo "Claude Code allow rules, so wiki commands that write don't prompt. Terminal only: $c setup permissions" ;;
+    antigravity | codex | cursor) echo "How $id loads the wikis. Terminal only: $c setup $id" ;;
+    completion) echo "Tab completion in the shell. It edits the shell profile. Terminal only: $c setup completion" ;;
+    delegation.mode) echo "Whether sessions hand big work to cheaper sub-agents: off, ask or auto. Change: $c delegation <off|ask|auto>" ;;
+    palette) echo "Terminal colours. Change: $c setup palette <default|colorblind>" ;;
+    theme) echo "The terminal's background, for colours. Change: $c setup theme <auto|dark|light>" ;;
+    feedback) echo "Whether agents keep notes about llm-wiki itself: off, notes or share. Change: $c setup feedback <off|notes|share>" ;;
+    obsidian) echo "Starter settings so Obsidian can open the wikis as a vault. Change: $c obsidian --no-open" ;;
+    extensions) echo "Optional commands, such as Jira and Confluence. Change: $c extensions add|remove <name>, $c extensions every <time>" ;;
+    compile) echo "Whether session start compiles waiting notes in the background. Change: $c compile <on|off>" ;;
+    helper) echo "A compiled helper that speeds up report and standup. Change: $c helper auto <on|off>" ;;
+    chat) echo "The server for the Claude app's Chat tab. Terminal only, with the app closed: $c setup chat" ;;
+    journal.*)
+      type="$(journal_field "${id#journal.}" 2)"
+      case "$type" in
+        yesno) type="yes|no" ;;
+        */*) type="${type//\//|}" ;;
+        since) type="range" ;;
+      esac
+      printf '%s Change: %s journal set %s <%s>\n' "$(journal_field "${id#journal.}" 5)" "$c" "${id#journal.}" "$type"
+      ;;
+    *) echo "Terminal only: $c setup $id" ;;
+  esac
+}
+
+# guide_ext <name> [mark]: the section for one extension.
+guide_ext() {
+  local n="$1" c="$WIKI_CMD" msg lines
+  if ! ext_file "$n" >/dev/null; then
+    echo "- $n: off${2:+ [$2]}. Turn on: $c extensions add $n. Keep it off, and stop asking: $c extensions remove $n"
+    return 0
+  fi
+  msg="$(ext_ready "$n")" && msg="" || msg="not ready (${msg%%. Run: *})"
+  if lines="$(ext_settings_lines "$n")" && [ -n "$lines" ]; then
+    echo "- $n: on, ${msg:-ready}. Change one: $c extensions set $n <key> <value> (a - clears it)"
+    printf '%s\n' "$lines" | awk -F '\t' 'NF >= 5 {
+      printf "    %s = %s%s: %s%s\n", $1, ($2 == "" ? "(not set)" : $2), ($3 == "" || $2 == "" ? "" : " [" $3 "]"), $4, ($5 == "set" ? "" : " Terminal only.") }'
+  else
+    echo "- $n: on, ${msg:-ready}. Terminal only: $c extensions setup $n"
+  fi
+}
+
+# setup_guide [section]
+setup_guide() {
+  local sec="${1:-}" c="$WIKI_CMD" line id val mark n any=0
+  [ $# -le 1 ] || die_usage "usage: $c setup --guide [section]"
+  [ -z "$sec" ] || guide_known "$sec" || die_usage "no setup section called $sec. Sections: $GUIDE_SECTIONS, journal.<key>, or an extension such as jira"
+  style_off
+  GUIDE_PENDING=" $(setup_pending | tr '\n' ' ')"
+  cat <<EOF
+llm-wiki setup guide, to follow with the user in this session, one topic at a time.
+- Start with topics marked [not answered yet] ($c setup --new would ask them), then ask what else to change.
+- Per topic: say what it does and its value in a line, ask, then run its Change command.
+- Never ask for, accept or write a token or password. If the user pastes one, don't store or repeat it: they put it in their keychain themselves.
+- Change only what the user chose. Where it says Terminal only, the user runs the command: give it to them.
+- Finish with $c setup --list and tell the user what changed.
+
+EOF
+  while IFS= read -r line; do
+    case "$line" in "" | "("* | " "*) continue ;; esac
+    id="${line%% *}"
+    val="${line#"$id"}"
+    val="${val#"${val%%[! ]*}"}"
+    val="${val%  <- new}"
+    val="${val//  (default)/ (default)}"
+    guide_in "$sec" "$id" || continue
+    case "$id" in collection | claude | compile) mark="" ;; *) if guide_unanswered "$id"; then mark=" [not answered yet]"; else mark=" [answered]"; fi ;; esac
+    any=1
+    printf -- '- %s = %s%s: %s\n' "$id" "${val:-(none)}" "$mark" "$(guide_entry "$id")"
+    if [ "$id" = extensions ] && { [ -z "$sec" ] || [ "$sec" = extensions ]; }; then guide_all_ext; fi
+  done <<EOF2
+$(setup_list_rows)
+EOF2
+  if [ -n "$sec" ] && ! guide_in "$sec" extensions; then
+    # A section that is no row of the list: one extension, or a step with no row.
+    if ext_name_ok "$sec" && { ext_shipped "$sec" >/dev/null || ext_file "$sec" >/dev/null; }; then
+      guide_ext_one "$sec"
+      any=1
+    fi
+  fi
+  if [ "$any" = 0 ]; then
+    case "$sec" in
+      plugin | skills | upgrade | tools | collections) echo "- $sec: Terminal only: $c setup $sec" ;;
+      *) echo "- $sec: not on this machine, so there is nothing to set. $c setup --list shows what is." ;;
+    esac
+  fi
+  [ -n "$sec" ] || echo "- Also terminal only: $c setup plugin | skills | upgrade | tools | collections"
+  return 0
+}
+
+# guide_ext_names: the extensions that ship, and any other that is on, one a line.
+guide_ext_names() {
+  local f n
+  for f in "$EXT_SHIPPED"/wiki-*; do
+    [ -f "$f" ] || continue
+    n="${f##*/wiki-}"
+    ext_name_ok "$n" && ! is_builtin "$n" && printf '%s\n' "$n"
+  done
+  extension_names
+}
+
+guide_ext_one() {
+  local n="$1" mark=""
+  case "$GUIDE_PENDING" in *" extension.$n "*) mark="not answered yet" ;; *) ext_file "$n" >/dev/null || mark="answered" ;; esac
+  guide_ext "$n" "$mark"
+}
+
+guide_all_ext() {
+  local n
+  for n in $(guide_ext_names | sort -u); do guide_ext_one "$n"; done
+}
+
 cmd_setup() {
   local what="" a n
+  if [ "${1:-}" = --guide ]; then
+    shift
+    setup_guide "$@"
+    return 0
+  fi
+  # palette, theme and feedback take a value, for a session that can't answer questions.
+  case "${1:-}" in
+    palette | theme | feedback)
+      if [ $# -eq 2 ]; then
+        case "$2" in
+          -*) ;;
+          *) setup_set_value "$1" "$2"; return 0 ;;
+        esac
+      fi
+      ;;
+  esac
   if [ "${1:-}" = microsoft-copilot ]; then
     shift
     command -v python3 >/dev/null 2>&1 || die "setup microsoft-copilot needs python3"
@@ -9764,11 +10073,18 @@ cmd_setup() {
       --yes) SETUP_YES=1 ;;
       -h | --help)
         cat <<EOF
-Usage: $WIKI_CMD setup [--new | --list | <section> | <setting>]
+Usage: $WIKI_CMD setup [--new | --list | --guide [section] | <section> | <setting>]
 
   setup            Walk through every setting. Enter keeps what you have.
   setup --new      Only what's missing, out of date, or added since you last ran it.
   setup --list     Print current values without asking anything.
+  setup --guide [section]
+                   Print what an agent needs to walk you through setup in its session: each
+                   setting, whether it is answered, and the command that changes it. In Claude
+                   Code, /llm-wiki:setup does the same. No question is asked, and no token is
+                   ever asked for or written by the agent.
+  setup palette <default|colorblind>, setup theme <auto|dark|light>, setup feedback <off|notes|share>
+                   Set one without questions.
   setup <section>  Just one section: collection, collections, tools, git, claude, permissions, antigravity, codex, cursor, upgrade, delegation, feedback, palette, theme, chat, obsidian, extensions, journal.
   setup chat --yes Add the Chat tab's server without asking, for an agent the user told to. The app must be closed.
   setup microsoft-copilot --repo OWNER/REPO
@@ -9793,12 +10109,13 @@ EOF
   done
   [ -z "${SETUP_YES:-}" ] || [ "$what" = chat ] || die "--yes works only with: $WIKI_CMD setup chat"
   # LLM_WIKI_TEST_TTY: the smoke tests answer setup's questions through a pipe.
-  [ -n "${SETUP_YES:-}" ] || [ -t 0 ] || [ -n "${LLM_WIKI_TEST_TTY:-}" ] || die "setup asks questions, so it needs a terminal. $WIKI_CMD setup --list prints the current values."
+  [ -n "${SETUP_YES:-}" ] || [ -t 0 ] || [ -n "${LLM_WIKI_TEST_TTY:-}" ] || die "setup asks questions, so it needs a terminal. $WIKI_CMD setup --list prints the current values. Run: $WIKI_CMD setup --guide, and follow it with the user in this session."
   if [ "$SETUP_MODE" = new ] && [ -d "$WIKIS_DIR" ] && [ "$(claude_state)" = current ] && ! plugin_pending; then
     n="$(setup_pending | wc -l | tr -d ' ')"
     [ "$n" -gt 0 ] || [ -n "$(setup_upgrade_needed)" ] || { ui_item ok "Nothing new to set up."; return 0; }
   fi
   echo "Setup for $(tilde "$WIKIS_DIR"). Enter keeps the value in brackets."
+  ui_detail "Or ask your agent to walk you through it in its session: it runs $(typed "$WIKI_CMD setup --guide"). In Claude Code, /llm-wiki:setup does."
   case "$what" in
     collection) setup_collection ;;
     git) SETUP_MODE=all; setup_git ;;

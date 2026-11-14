@@ -3,6 +3,6 @@
 [35m●[0m [1m[45m[97m CHANGED [0m  [1mNothing. Every wiki was already on handbook v<handbook>.[0m
 [2m│[0m
 [32m●[0m [1m[42m[30m NEXT [0m  [1mwhat to do now[0m
-[2m│[0m   [1m[33m![0m New settings to look at: [36mwiki setup --new[0m
+[2m│[0m   [1m[33m![0m New settings to look at: [36mwiki setup --new[0m. Or ask an agent: [36m"run wiki setup --guide and walk me through it"[0m
 [2m│[0m   [1m[33m![0m Sessions already open keep the handbook they started with. Start new ones, or paste this into each:
 [2m│[0m     [36mRun wiki start in this repository, reread this wiki's AGENTS.md and follow it for the rest of this session.[0m

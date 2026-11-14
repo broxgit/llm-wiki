@@ -108,7 +108,7 @@ if [ -n "$CMD" ] && [ "$TYPE" != wiki ]; then
 fi
 
 if [ ! -d "$WIKIS_DIR" ]; then
-  emit "llm-wiki plugin: there is no wiki collection at $WIKIS_DIR yet, so this session has no wiki. If the user asks about wikis, tell them to run this in a terminal: $TYPE setup${LINK:+
+  emit "llm-wiki plugin: there is no wiki collection at $WIKIS_DIR yet, so this session has no wiki. If the user asks about wikis, tell them to run this in a terminal: $TYPE setup. Or, if they'd rather, run $TYPE setup --guide and walk them through it${LINK:+
 $LINK}"
 fi
 
