@@ -1039,13 +1039,19 @@ TICKET_NOT_KEYS=" release rel version ver v sprint hotfix feature feat fix bugfi
 # above a clone. Failing those, the branch a repository is on, such as
 # feature/VID-74441-end-block: most people work in one repository on a branch named
 # for the ticket. Nothing when none of them names one. A branch such as release-2026
-# has the shape of a key and isn't one, so the commonest of those words are left out.
+# has the shape of a key and isn't one, so the commonest of those words are left out,
+# in a folder's name as in a branch's.
 ticket_find() {
   local d cand b re='^([A-Za-z][A-Za-z0-9]*-[0-9]+)(-.*)?$' bre='(^|[/_-])([A-Za-z][A-Za-z0-9]*-[0-9]+)([^0-9]|$)' w
   local notkeys="$TICKET_NOT_KEYS"
   d="$(cd "$1" 2>/dev/null && pwd)" || return 0
   for cand in "${d##*/}" "$(basename "$(dirname "$d")")"; do
-    if [[ $cand =~ $re ]]; then printf '%s folder' "${BASH_REMATCH[1]}"; return 0; fi
+    if [[ $cand =~ $re ]]; then
+      # python-3 and sprint-12 have the shape of a key too: the same words are left out.
+      w="$(printf '%s' "${BASH_REMATCH[1]%-*}" | tr '[:upper:]' '[:lower:]')"
+      case "$notkeys" in *" $w "*) continue ;; esac
+      printf '%s folder' "${BASH_REMATCH[1]}"; return 0
+    fi
   done
   b="$(git -C "$d" symbolic-ref --short -q HEAD 2>/dev/null || true)"
   while [ -n "$b" ] && [[ $b =~ $bre ]]; do
@@ -1060,6 +1066,43 @@ ticket_find() {
 }
 # ticket_key <folder>: the key alone.
 ticket_key() { local t; t="$(ticket_find "$1")"; printf '%s' "${t% *}"; }
+
+# ticket_stand_line <key> <folder|branch>: the line that tells a session which ticket it
+# is on and how to see where it stands, or nothing unless the Jira extension is on and
+# says it is set up. atl_state asks the extension whether it is ready, which looks for a
+# token and never runs the command that fetches one, and nothing here reaches the network.
+ticket_stand_line() {
+  local why="the folder's" key
+  key="$(ticket_real "${1:-}")"
+  [ -n "$key" ] || return 0
+  [ "$(atl_state jira)" = ready ] || return 0
+  [ "${2:-}" != branch ] || why="the branch's"
+  printf 'This session is on %s (from %s name). `%s jira show %s` prints where it stands.' "$key" "$why" "$WIKI_CMD" "$key"
+}
+
+# ticket_real <key, as the folder or branch has it>: the key in capitals, when it is safe
+# to write down as a ticket, and nothing when it isn't. ticket_find takes anything shaped
+# like a key, which is fine for a search that finds nothing, and wrong for a line a note
+# keeps: the branch house-style/sync-main-3 would give MAIN-3. A key in capitals is taken
+# as written, unless its letters are a standard's, such as UTF-8. One in lower case counts
+# only when its project is known: the Jira settings name it, or a wiki already holds one
+# of its keys.
+ticket_real() {
+  local raw="${1:-}" up p projects
+  [ -n "$raw" ] || return 0
+  up="$(printf '%s' "$raw" | tr '[:lower:]' '[:upper:]')"
+  p="${up%-*}"
+  case " $ATL_NOT_KEYS " in *" $p "*) return 0 ;; esac
+  if [ "$raw" != "$up" ]; then
+    projects="${JIRA_PROJECTS:-$(atl_conf_get "${XDG_CONFIG_HOME:-$HOME/.config}/llm-wiki/jira" projects)}"
+    projects="$(printf '%s' "$projects" | tr 'a-z,' 'A-Z ')"
+    case " $projects " in
+      *" $p "*) ;;
+      *) atl_prefix_known "$p" || return 0 ;;
+    esac
+  fi
+  printf '%s' "$up"
+}
 
 # recall_key <key> [max]: the pages, in every wiki of the collection, that mention a
 # ticket's key: one line a page, those whose index line names it first, five at most,
@@ -1383,7 +1426,7 @@ cmd_list() {
 }
 
 cmd_start() {
-  local arg="${1:-$PWD}" repo="" top w="" wiki="" note="" out sshc tv v line sname spath d n hinted="" extras="" more="" tkey thits
+  local arg="${1:-$PWD}" repo="" top w="" wiki="" note="" out sshc tv v line sname spath d n hinted="" extras="" more="" tkey tfind tline thits
   if [ -d "$arg" ]; then
     if top="$(git -C "$arg" rev-parse --show-toplevel 2>/dev/null)"; then repo="$(repo_name "$top")"; fi
   else
@@ -1449,7 +1492,14 @@ cmd_start() {
   # A folder named for a ticket: the pages that mention it, in whichever wiki they are.
   # After the pull, so a page another machine wrote is found.
   if [ -d "$arg" ]; then
-    tkey="$(ticket_key "$arg")"
+    tfind="$(ticket_find "$arg")"
+    tkey="${tfind% *}"
+    # With the Jira extension set up, the ticket and how to see where it stands.
+    tline="$(ticket_stand_line "$tkey" "${tfind#* }")"
+    if [ -n "$tline" ]; then
+      echo
+      echo "$tline"
+    fi
     thits="$(recall_key "$tkey")"
     if [ -n "$thits" ]; then
       echo
@@ -1586,6 +1636,55 @@ iso_epoch() {
 # --file reads the note from a file instead of stdin. Some agents approve a command
 # once and for all only when it has no pipe or heredoc (Antigravity, 2026-10-29).
 cmd_capture() {
+  local tk a prev="" tmp="" has_file=0 has_copy=0 rc=0 argv=()
+  # A note taken in a folder, or on a branch, named for a ticket says which ticket, so
+  # what the wikis keep can be tied to it later. Both implementations below are fed the
+  # note with that line on its end, and neither knows about it. A copy of a file, and
+  # a terminal on stdin, are left alone.
+  tk="$(ticket_real "$(ticket_key "$PWD" 2>/dev/null || true)")"
+  for a in "$@"; do
+    case "$a" in --copy) has_copy=1 ;; --file) has_file=1 ;; esac
+  done
+  if [ -z "$tk" ] || [ "$has_copy" = 1 ] || { [ "$has_file" = 0 ] && [ -t 0 ]; }; then
+    capture_run "$@"
+    return
+  fi
+  if [ "$has_file" = 1 ]; then
+    # The note is in a file: pass a copy with the line, and leave the file as it is.
+    for a in "$@"; do
+      if [ "$prev" = --file ] && [ -f "$a" ] && tmp="$(mktemp)" && capture_ticketed "$a" "$tk" > "$tmp"; then a="$tmp"; fi
+      argv[${#argv[@]}]="$a"
+      prev="$a"
+    done
+    ( capture_run "${argv[@]}" ) || rc=$?
+  else
+    # Stdin is read here and handed on.
+    tmp="$(mktemp)"
+    if cat > "$tmp.in" && capture_ticketed "$tmp.in" "$tk" > "$tmp"; then
+      ( capture_run "$@" ) < "$tmp" || rc=$?
+    else
+      rc=1
+    fi
+    rm -f "$tmp.in"
+  fi
+  [ -z "$tmp" ] || rm -f "$tmp"
+  return "$rc"
+}
+
+# capture_ticketed <note file> <KEY>: the note with a "Ticket: KEY" line on its end, after
+# a blank line. As it is when it is empty, since an empty note is refused, and when it
+# already has a Ticket: line.
+capture_ticketed() {
+  cat "$1" || return 1
+  [ -s "$1" ] || return 0
+  ! grep -q '^Ticket:' "$1" || return 0
+  [ -z "$(tail -c 1 "$1")" ] || printf '\n'
+  [ -z "$(tail -n 1 "$1")" ] || printf '\n'
+  printf 'Ticket: %s\n' "$2"
+}
+
+# capture_run: capture, by the compiled helper when it is built and in Bash when not.
+capture_run() {
   local bin out tty="" nl=$'\n'
   # The compiled helper saves the note too. Its first line says which answer follows,
   # the line to print or what to refuse with. It fails only before it reads stdin, and
@@ -6950,14 +7049,39 @@ wiki's open.md, or of one wiki's, the closed ones too, one a line, tab separated
   wiki  state  kind  who  due  status  from  heading
 state is open, overdue, done or bad. kind is waiting or due. from is the notes the
 entry came from, joined by "; ". A field with nothing in it is empty.
+A ninth field, tickets, follows the heading: the ticket keys, upper case and separated by
+spaces, that the entry's notes carry in a "Ticket: <KEY>" line, as capture writes one for a
+note taken in a folder or on a branch named for a ticket. A note that is gone adds none.
+A program that reads the first eight fields needn't know about it.
 EOF
 }
 
 # open_data <wiki root>: every entry of its open.md, one a line, for a program.
 open_data() {
   [ -f "$1/open.md" ] || return 0
-  LC_ALL=C awk -v today="$(date -u +%Y-%m-%d)" -v wiki="${1##*/}" '
+  LC_ALL=C awk -v today="$(date -u +%Y-%m-%d)" -v wiki="${1##*/}" -v root="$1" '
     function clean(s) { gsub(/\t/, " ", s); return s }
+    # tickets_of <from>: the keys on the "Ticket:" lines of the raw notes it names.
+    function tickets_of(f,   n, parts, i, w, path, line, rest, out, k) {
+      out = ""
+      n = split(f, parts, /[ ;]+/)
+      for (i = 1; i <= n; i++) {
+        w = parts[i]
+        if (w !~ /^raw\/[^\/]+$/ || w ~ /\.\./) continue
+        path = root "/" w
+        while ((getline line < path) > 0) {
+          if (line !~ /^Ticket:/) continue
+          rest = substr(line, 8)
+          while (match(rest, /[A-Za-z][A-Za-z0-9]*-[0-9]+/)) {
+            k = toupper(substr(rest, RSTART, RLENGTH))
+            rest = substr(rest, RSTART + RLENGTH)
+            if (index(" " out " ", " " k " ") == 0) out = out (out == "" ? "" : " ") k
+          }
+        }
+        close(path)
+      }
+      return out
+    }
     function flush(   state) {
       if (name == "") return
       state = "open"
@@ -6966,7 +7090,7 @@ open_data() {
       else if (status ~ /^done [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) state = "done"
       else if (status != "open") state = "bad"
       else if (kind == "due" && due < today) state = "overdue"
-      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", wiki, state, kind, clean(who), due, clean(status), clean(from), clean(name)
+      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", wiki, state, kind, clean(who), due, clean(status), clean(from), clean(name), tickets_of(from)
       name = ""; kind = ""; who = ""; due = ""; status = ""; from = ""
     }
     /^## / { flush(); name = substr($0, 4); next }
@@ -10313,7 +10437,14 @@ case "$cmd" in
     fi
     tkey="$(ticket_find "${1:-$PWD}")"
     thits="$(recall_key "${tkey% *}")"
-    [ -z "$thits" ] || printf '%s\n%s\n' "$tkey" "$thits"
+    # A line that begins "note: " is a sentence for the session, the ticket and how to see
+    # where it stands, and comes when the Jira extension is set up. The pages follow.
+    tline="$(ticket_stand_line "${tkey% *}" "${tkey#* }")"
+    if [ -n "$thits" ] || [ -n "$tline" ]; then
+      printf '%s\n' "$tkey"
+      [ -z "$tline" ] || printf 'note: %s\n' "$tline"
+      [ -z "$thits" ] || printf '%s\n' "$thits"
+    fi
     exit 0
     ;;
   __place)

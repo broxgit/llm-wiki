@@ -11,6 +11,7 @@ hook: a message with a code name, one page	286
 hook: a message with two ordinary words, a page and a note	399
 hook: a ticket folder with no wikis	1590
 hook: a ticket folder with pages that mention it	1652
+hook: a ticket folder, the Jira extension set up	1754
 hook: a ticket folder, two wikis, no pattern	1382
 hook: a ticket folder, two wikis, pattern recorded	1190
 hook: a ticket key, the Jira extension not set up	431
@@ -24,6 +25,7 @@ start: a branch named for a ticket, no wiki	1022
 start: a clone with a wiki	765
 start: a clone with two notes waiting	871
 start: a ticket folder with pages that mention it	1326
+start: a ticket folder, the Jira extension set up	1425
 start: a ticket folder, two wikis, no pattern	1447
 template/AGENTS.md	15566
 template/rules/compile.md	10785

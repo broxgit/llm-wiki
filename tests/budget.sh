@@ -260,6 +260,10 @@ except Exception:
   mkdir -p "$H/.config/llm-wiki"
   printf 'site = https://acme.atlassian.net\ntoken_cmd = echo x\n' > "$H/.config/llm-wiki/atlassian"
   printf 'hook: a ticket key, the Jira extension set up\t%s\n' "$(prompt_item budget-4 'Please look at VID-74003 for me')"
+  # A session in a ticket folder with the Jira extension set up is told which ticket, and
+  # how to see where it stands. The same folder, measured above with it off, is unchanged.
+  printf 'hook: a ticket folder, the Jira extension set up\t%s\n' "$(hook_item "$H/tickets/PAY-7")"
+  printf 'start: a ticket folder, the Jira extension set up\t%s\n' "$(start_item "$H/tickets/PAY-7")"
 }
 
 # problems <measured file> <record file>: one line for each item whose numbers differ,

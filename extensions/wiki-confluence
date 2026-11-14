@@ -1239,7 +1239,9 @@ def cmd_check(args):
                 note.append(f"Confluence-page: {page['id']} | version {page['version']} | status {page['status']}")
             for h, st in closes.get(wiki, []):
                 note += ["", f"The page this item waits on is {st}.", f"Done: {h}"]
-            r = subprocess.run([wiki_cmd, "capture", wiki, "confluence"], input="\n".join(note) + "\n", text=True, capture_output=True)
+            # From the wikis' folder, so a ticket folder's name isn't written into a note about pages.
+            r = subprocess.run([wiki_cmd, "capture", wiki, "confluence"], input="\n".join(note) + "\n", text=True, capture_output=True,
+                               cwd=os.environ.get("WIKIS_DIR") or None)
             if r.returncode != 0:
                 die(f"couldn't save the note in {wiki}: {r.stderr.strip()}")
             r = subprocess.run([wiki_cmd, "sync", wiki, "-m", f"Confluence: {len(pages) + len(closes.get(wiki, []))} change(s)"], capture_output=True, text=True)
