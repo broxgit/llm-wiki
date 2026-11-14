@@ -6277,6 +6277,48 @@ check "the Antigravity hook injects a system message" python3 -c 'import json, s
 eq "and before the next step of the same message it says nothing" '{}' "$(agyp ag-1 'What does MSG-77 need?')"
 eq "a message that finds nothing gets an empty reply" '{}' "$(agyp ag-2 'ok')"
 eq "bad JSON gets an empty reply" '{}' "$(printf 'not json' | "$W" __agy-prompt)"
+# Ordinary words count only in the wikis a session calls its own: the wiki of its
+# repository, or of the clones its folder holds, and the shared wiki. A session in one
+# project was handed notes about another that shared two everyday words with its message.
+# A ticket's key or a name out of code is exact, and is still found in any wiki.
+"$W" new tfown >/dev/null 2>&1
+printf -- '- [MSG-77 here too](wiki/concepts/y.md): What MSG-77 meant for this project.\n' >> "$WIKIS_DIR/tfown/index.md"
+SC="$T/scope"
+mkdir -p "$SC/tfmsg" "$SC/tfown" "$SC/elsewhere" "$SC/tick/tfmsg"
+for d in "$SC/tfmsg" "$SC/tfown" "$SC/elsewhere" "$SC/tick/tfmsg"; do git -C "$d" init -q; done
+msgin() { printf '%s' "$2" > "$T/msg.txt"; "$W" __recall --text "$T/msg.txt" --in "$1"; }
+out="$(msgin "$SC/tfmsg" 'Why do the invoice retries stall?')"
+case "$out" in *"- tfmsg wiki: [Invoice retries]("*) ok "in a repository, two ordinary words find a page of its own wiki" ;; *) bad "in a repository, two ordinary words find a page of its own wiki" "$out" ;; esac
+out="$(msgin "$SC/tfmsg" 'The warehouse parcels went missing')"
+case "$out" in *"/tfmsg/raw/2026-01-05-sync.md: "*) ok "and a note waiting in it" ;; *) bad "and a note waiting in it" "$out" ;; esac
+check "in a repository another wiki covers, they find no page of that one" test -z "$(msgin "$SC/tfown" 'Why do the invoice retries stall?')"
+check "and no note waiting in it" test -z "$(msgin "$SC/tfown" 'The warehouse parcels went missing')"
+check "nor in a repository no wiki covers" test -z "$(msgin "$SC/elsewhere" 'Why do the invoice retries stall?')"
+out="$(msgin "$SC/tick" 'Why do the invoice retries stall?')"
+case "$out" in *"- tfmsg wiki: [Invoice retries]("*) ok "a folder of clones has the wikis of its clones for its own" ;; *) bad "a folder of clones has the wikis of its clones for its own" "$out" ;; esac
+out="$(msgin "$SC/elsewhere" 'Where is reconcile_ledger_totals called?')"
+case "$out" in *"- tfmsg wiki: [Billing run]("*) ok "a name out of code is still found in another project's wiki" ;; *) bad "a name out of code is still found in another project's wiki" "$out" ;; esac
+out="$(msgin "$SC/elsewhere" 'What was MSG-99 about?')"
+case "$out" in *"/tfmsg/raw/2026-01-06-key.md: "*) ok "and a ticket's key, in a note waiting there" ;; *) bad "and a ticket's key, in a note waiting there" "$out" ;; esac
+out="$(msgin "$SC/tfown" 'What does MSG-77 need?')"
+case "$out" in "- tfown wiki: [MSG-77 here too]("*$'\n'"- tfmsg wiki: [MSG-77 plan]("*) ok "a key found in two wikis lists the session's own first, then the other" ;; *) bad "a key found in two wikis lists the session's own first, then the other" "$out" ;; esac
+out="$(msg 'What does MSG-77 need?')"
+case "$out" in "- tfmsg wiki: [MSG-77 plan]("*$'\n'"- tfown wiki: [MSG-77 here too]("*) ok "with no folder named, the search is of every wiki, in their order" ;; *) bad "with no folder named, the search is of every wiki, in their order" "$out" ;; esac
+case "$(msg 'Why do the invoice retries stall?')" in *"[Invoice retries]"*) ok "and ordinary words count in all of them" ;; *) bad "and ordinary words count in all of them" ;; esac
+cp "$WIKIS_DIR/global/index.md" "$T/shared-index.bak"
+printf -- '- [Invoice rules](wiki/concepts/x.md): How every project retries an invoice.\n' >> "$WIKIS_DIR/global/index.md"
+out="$(msgin "$SC/tfown" 'Why do the invoice retries stall?')"
+case "$out" in "- global wiki: [Invoice rules]("*) ok "the shared wiki is every session's own" ;; *) bad "the shared wiki is every session's own" "$out" ;; esac
+case "$out" in *tfmsg*) bad "and brings no other wiki with it" "$out" ;; *) ok "and brings no other wiki with it" ;; esac
+cp "$T/shared-index.bak" "$WIKIS_DIR/global/index.md"
+check "the prompt hook searches as its folder says: nothing from another project for ordinary words" test -z "$(uphook "$SC/tfown" sc-1 'Why do the invoice retries stall?')"
+out="$(uphook "$SC/tfmsg" sc-2 'Why do the invoice retries stall?' | upctx)"
+case "$out" in *"- tfmsg wiki: [Invoice retries]("*) ok "and the page, in the project's own repository" ;; *) bad "and the page, in the project's own repository" "$out" ;; esac
+out="$(uphook "$SC/tfown" sc-3 'Where is reconcile_ledger_totals called?' | upctx)"
+case "$out" in *"- tfmsg wiki: [Billing run]("*) ok "and a name out of code from any wiki" ;; *) bad "and a name out of code from any wiki" "$out" ;; esac
+out="$(printf '{"session_id":"cx-sc","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"Why do the invoice retries stall?"}' "$SC/tfown" | "$W" __codex-prompt)"
+check "Codex's hook is held to the same" test -z "$out"
+rm -rf "$WIKIS_DIR/tfown" "$SC"
 # A ticket or an Atlassian page in the message. The Jira and Confluence extensions are offered
 # once when they aren't set up, and named when they are. This machine is its own HOME, and
 # every setting of theirs is out of the environment, so only what a check writes counts.

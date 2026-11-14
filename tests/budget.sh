@@ -102,7 +102,7 @@ hook_item() {
 prompt_item() {
   local n=""
   if [ -f "$R/hooks/user-prompt.sh" ]; then
-    n="$(python3 -I -c 'import json, sys; print(json.dumps({"hook_event_name": "UserPromptSubmit", "session_id": sys.argv[1], "cwd": sys.argv[3], "prompt": sys.argv[2]}))' "$1" "$2" "$H/ws/plain-repo" \
+    n="$(python3 -I -c 'import json, sys; print(json.dumps({"hook_event_name": "UserPromptSubmit", "session_id": sys.argv[1], "cwd": sys.argv[3], "prompt": sys.argv[2]}))' "$1" "$2" "${3:-$H/ws/plain-repo}" \
       | fx CLAUDE_PLUGIN_ROOT="$R" sh "$R/hooks/user-prompt.sh" 2>/dev/null \
       | python3 -I -c '
 import json, sys
@@ -245,9 +245,12 @@ except Exception:
     printf '# Retry policy\n\nA charge is retried up to charge_retry_limit times.\n' > "$H/wikis/payments/wiki/concepts/retry.md"
     printf -- '- [Quokka diet](wiki/concepts/quokka.md): which leaves a quokka eats.\n' >> "$H/wikis/lookup/index.md"
     printf 'Quokkas prefer fresh eucalyptus leaves.\n' > "$H/wikis/lookup/raw/2026-01-02-leaves.md"
+    # Ordinary words count in a session's own wikis, so this message is sent from the
+    # repository the wiki covers.
+    git init -q "$H/ws/lookup" 2>/dev/null || true
   fi
   printf 'hook: a message with a code name, one page\t%s\n' "$(prompt_item budget-1 'What is charge_retry_limit set to?')"
-  printf 'hook: a message with two ordinary words, a page and a note\t%s\n' "$(prompt_item budget-2 'Which leaves do quokkas eat?')"
+  printf 'hook: a message with two ordinary words, a page and a note\t%s\n' "$(prompt_item budget-2 'Which leaves do quokkas eat?' "$H/ws/lookup")"
   # A ticket key of a project a wiki already holds keys of, in a page no word of the message
   # finds: the Jira extension is offered, then, set up, named. A wiki of its own, made after
   # every item above, so none of them changes.
