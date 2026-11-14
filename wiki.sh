@@ -2361,7 +2361,9 @@ sync_do() {
       case "$here" in
         "${coll:-/nowhere}"/*)
           how=" To set that up, run in a terminal: $WIKI_CMD setup git"
-          cname="$(collections | awk -F '\t' -v d="${WIKIS_DIR%/}" '$2 == d { print $1; exit }')"
+          # No exit in the awk: stopping early can break the pipe, and with pipefail that
+          # ends the script with nothing said.
+          cname="$(collections | awk -F '\t' -v d="${WIKIS_DIR%/}" '!got && $2 == d { print $1; got = 1 }' || true)"
           case "$cname" in '' | default) ;; *) how="$how --collection $cname" ;; esac
           ;;
       esac
