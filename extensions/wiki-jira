@@ -827,6 +827,11 @@ def own_value(own, env_name, key):
     return "", "default"
 
 
+def on_mac():
+    """Whether the keychain preset fits this machine. LLM_WIKI_TEST_OS lets the tests see both answers."""
+    return (os.environ.get("LLM_WIKI_TEST_OS") or sys.platform) == "darwin"
+
+
 def setting_rows():
     """One row for each setting a session may look at: key, value, where from, meaning, and
     whether a session can change it. Reads files and the environment only: it never runs
@@ -834,7 +839,7 @@ def setting_rows():
     own = read_conf(CONFIG)
     conf = settings()
     src = conf["_from"]
-    mac = sys.platform == "darwin"
+    mac = on_mac()
     rows = [
         ("site", conf["url"], source_name(src["url"]), "Jira's address, https://your-company.atlassian.net or your server's", "set"),
         ("email", conf.get("email", ""), source_name(src["email"]), "Atlassian account email; empty on Data Center", "set"),
@@ -843,8 +848,9 @@ def setting_rows():
     tok_from = source_name(tok_env) if tok_env else (source_name(src["token_cmd"]) if conf.get("token_cmd") else "")
     rows.append(("token", "set" if tok_env else ("not checked (token_cmd is set)" if conf.get("token_cmd") else "not set"), tok_from,
                  "The user makes one at https://id.atlassian.com/manage-profile/security/api-tokens "
-                 "(Data Center: a personal access token) and runs in their own terminal: "
-                 "security add-generic-password -a \"$USER\" -s atlassian -U -w \"$(pbpaste)\"", "terminal"))
+                 "(Data Center: a personal access token) and "
+                 + ("runs in their own terminal: security add-generic-password -a \"$USER\" -s atlassian -U -w \"$(pbpaste)\""
+                    if mac else "keeps it in their own password manager, such as pass"), "terminal"))
     cmd = conf.get("token_cmd", "")
     shown = "keychain" if cmd == KEYCHAIN_CMD else ("custom command" if cmd else "")
     if mac:
@@ -913,7 +919,7 @@ def wiki_set(args):
             out = ""
         elif value != "keychain":
             die_usage(f"token_cmd takes only the preset keychain from a session. The user sets a command of their own in a terminal: {CMD} extensions setup jira")
-        elif sys.platform != "darwin":
+        elif not on_mac():
             die_usage(f"the keychain preset is macOS's. On this machine the user sets token_cmd in a terminal: {CMD} extensions setup jira")
         else:
             out = KEYCHAIN_CMD

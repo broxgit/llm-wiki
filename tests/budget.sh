@@ -60,7 +60,7 @@ mkdir -p "$H"
 # keeps the helper's answers the same.
 fx() {
   env -i HOME="$H" PATH="$PATH" LC_ALL=C TZ=UTC WIKIS_DIR="$H/wikis" \
-    LLM_WIKI_STYLE=off LLM_WIKI_NO_GO=1 GIT_CONFIG_NOSYSTEM=1 "$@"
+    LLM_WIKI_STYLE=off LLM_WIKI_NO_GO=1 GIT_CONFIG_NOSYSTEM=1 LLM_WIKI_TEST_OS=darwin "$@"
 }
 W() { fx bash "$R/wiki.sh" "$@"; }
 

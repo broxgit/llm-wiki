@@ -5299,8 +5299,11 @@ if section "Guided setup"; then
 GH="$T/guide"
 mkdir -p "$GH"
 cp "$HOME/.gitconfig" "$GH/.gitconfig"
-gw() { env HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_CMD=wiki "$W" "$@"; }
-gwtty() { env HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_CMD=wiki LLM_WIKI_TEST_TTY=1 "$W" "$@"; }
+# LLM_WIKI_TEST_OS: the keychain preset is macOS's, so what the guide says depends on the machine.
+# These run as a Mac wherever the suite runs, and glinux as anything else.
+gw() { env HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_CMD=wiki LLM_WIKI_TEST_OS=darwin "$W" "$@"; }
+glinux() { env HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_CMD=wiki LLM_WIKI_TEST_OS=linux "$W" "$@"; }
+gwtty() { env HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_CMD=wiki LLM_WIKI_TEST_TTY=1 LLM_WIKI_TEST_OS=darwin "$W" "$@"; }
 GXD="$GH/.local/share/llm-wiki/extensions"
 GCFG="$GH/.config/llm-wiki"
 gw init >/dev/null 2>&1
@@ -5449,7 +5452,7 @@ PY
 env HOME="$GH" WIKIS_DIR="$GH/wikis" python3 "$T/nonet.py" "$REPO/extensions/wiki-jira" --wiki-settings >/dev/null 2>&1 && ok "--wiki-settings works with the network refused" || bad "--wiki-settings works with the network refused"
 if printf '%s\n' "$raw_out" | awk -F '\t' 'NF != 5 || ($5 != "set" && $5 != "terminal") { bad = 1 } END { exit bad }'; then ok "every row has five tab-separated fields, the last set or terminal"; else bad "every row has five tab-separated fields, the last set or terminal" "$raw_out"; fi
 JX="$REPO/extensions/wiki-jira"
-jset() { env HOME="$GH" WIKIS_DIR="$GH/wikis" "$JX" --wiki-set "$@"; }
+jset() { env HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_TEST_OS=darwin "$JX" --wiki-set "$@"; }
 for k in token api_token password Token JIRA_API_TOKEN; do
   check "--wiki-set refuses $k with exit 2" test "$(code_of jset "$k" abc)" = 2
 done
@@ -5462,15 +5465,19 @@ expect "and it says the user sets that in a terminal" "in a terminal" jset token
 check "a yes/no key takes only yes or no" test "$(code_of jset auto_close maybe)" = 2
 check "a value that would start a comment is refused" test "$(code_of jset projects 'PAY # x')" = 2
 check "none of those changed the files" grep -qx 'site = https://acme.atlassian.net' "$GCFG/atlassian"
-if [ "$(uname -s)" = Darwin ]; then
-  rm -f "$GCFG/atlassian"
-  gw extensions set jira token_cmd keychain >/dev/null 2>&1
-  check "token_cmd keychain writes the macOS preset to the shared file" grep -qx 'token_cmd = security find-generic-password -s atlassian -w' "$GCFG/atlassian"
-  expect "and settings shows it as keychain" "keychain" gw extensions settings jira
-else
-  check "token_cmd keychain is refused where there is no macOS keychain, with exit 2" test "$(code_of jset token_cmd keychain)" = 2
-  expect "and the terminal command to use" "wiki extensions setup jira" env HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_CMD=wiki "$JX" --wiki-set token_cmd keychain
-fi
+# Both machines, wherever the suite runs: off a Mac the preset is refused before anything is written.
+rm -f "$GCFG/atlassian"
+jlinux() { env HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_CMD=wiki LLM_WIKI_TEST_OS=linux "$JX" --wiki-set "$@"; }
+check "token_cmd keychain is refused where there is no macOS keychain, with exit 2" test "$(code_of jlinux token_cmd keychain)" = 2
+expect "and the terminal command to use" "wiki extensions setup jira" jlinux token_cmd keychain
+check "and nothing is written" test ! -e "$GCFG/atlassian"
+check "confluence refuses it the same way" test "$(code_of env HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_TEST_OS=linux "$REPO/extensions/wiki-confluence" --wiki-set token_cmd keychain)" = 2
+out="$(glinux setup --guide jira)"
+case "$out" in *"security add-generic-password"*|*pbpaste*|*"set this to keychain"*) bad "off a Mac the guide names no macOS command and no keychain preset" "$out" ;; *) ok "off a Mac the guide names no macOS command and no keychain preset" ;; esac
+case "$out" in *"https://id.atlassian.com/manage-profile/security/api-tokens"*"password manager"*"A command that prints the token"*"wiki extensions setup jira"*) ok "it names the token page, a password manager, and the terminal setup for the command" ;; *) bad "it names the token page, a password manager, and the terminal setup for the command" "$out" ;; esac
+gw extensions set jira token_cmd keychain >/dev/null 2>&1
+check "token_cmd keychain writes the macOS preset to the shared file" grep -qx 'token_cmd = security find-generic-password -s atlassian -w' "$GCFG/atlassian"
+expect "and settings shows it as keychain" "keychain" gw extensions settings jira
 rm -f "$GCFG/atlassian" "$MARK"
 out="$(gw extensions set jira site https://acme.atlassian.net/ 2>&1)"
 case "$out" in "site set in $GCFG/atlassian"*"jira isn't ready yet: no API token yet"*) ok "set says what it set and where, then whether it is ready" ;; *) bad "set says what it set and where, then whether it is ready" "$out" ;; esac
@@ -5507,7 +5514,7 @@ done
 ok "the confluence section lists what its setup asks"
 case "$cout" in *"    space = (not set): "*"Terminal only."*"    auto = (not set): "*"Terminal only."*) ok "publishing settings are marked terminal only" ;; *) bad "publishing settings are marked terminal only" "$cout" ;; esac
 CX="$REPO/extensions/wiki-confluence"
-cset() { env HOME="$GH" WIKIS_DIR="$GH/wikis" "$CX" --wiki-set "$@"; }
+cset() { env HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_TEST_OS=darwin "$CX" --wiki-set "$@"; }
 for k in space parent auto space.gdemo parent.gdemo token api_token password; do
   check "confluence --wiki-set refuses $k with exit 2" test "$(code_of cset "$k" ENG)" = 2
 done
