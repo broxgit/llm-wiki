@@ -226,6 +226,28 @@ check "the shared wiki starts with a conventions page" grep -q '^## For agents' 
 check "the shared index lists it" grep -q 'wiki/conventions.md' "$WIKIS_DIR/global/index.md"
 expect "new creates a wiki" "created:" "$W" new demo
 refuse "new refuses a name with a space" "$W" new "My Repo"
+expect "and offers the nearest name it would take" "can't be a wiki name. A name is letters, digits, dots, dashes and underscores, with no spaces. Try: My-Repo" "$W" new "My Repo"
+out="$("$W" new '!!!' 2>&1)"; case "$out" in *"with no spaces."*"Try:"*) bad "with nothing offered when no letter is left" "$out" ;; *"with no spaces."*) ok "with nothing offered when no letter is left" ;; *) bad "with nothing offered when no letter is left" "$out" ;; esac
+# Someone with no git: sync says what that means for them, in their words, and how to change it.
+mkdir -p "$T/nogit" "$T/loose"
+out="$(WIKIS_DIR="$T/nogit" "$W" new plainw 2>&1 && WIKIS_DIR="$T/nogit" "$W" sync plainw 2>&1)"
+case "$out" in *"plainw has no backup and isn't shared: it is kept on this machine only. To set that up, run in a terminal: "*"setup git") ok "sync in a collection with no git says there is no backup, and how to get one" ;; *) bad "sync in a collection with no git says there is no backup, and how to get one" "$out" ;; esac
+case "$out" in *repo*|*"nothing to sync"*|*ommit*) bad "without a word about repositories or commits" "$out" ;; *) ok "without a word about repositories or commits" ;; esac
+out="$("$W" new "$T/loose/solo" 2>&1 && "$W" sync "$T/loose/solo" 2>&1)"
+case "$out" in *"solo has no backup and isn't shared: it is kept on this machine only.") ok "a wiki outside the collection with no git is told the same, with no command that wouldn't reach it" ;; *) bad "a wiki outside the collection with no git is told the same, with no command that wouldn't reach it" "$out" ;; esac
+ln -s "$T/loose/solo" "$T/nogit/linked"
+out="$(WIKIS_DIR="$T/nogit" "$W" sync linked 2>&1)"
+case "$out" in *"setup git"*) bad "a wiki linked into the collection from outside isn't told to set up git there" "$out" ;; *"has no backup and isn't shared"*) ok "a wiki linked into the collection from outside isn't told to set up git there" ;; *) bad "a wiki linked into the collection from outside isn't told to set up git there" "$out" ;; esac
+rm -f "$T/nogit/linked"
+ln -s "$T/nogit" "$T/nogit-link"
+expect "a collection reached through a link still gets the command" "kept on this machine only. To set that up, run in a terminal: " env WIKIS_DIR="$T/nogit-link/" "$W" sync "$T/nogit/plainw"
+rm -f "$T/nogit-link"
+mkdir -p "$(dirname "$HOME/.config/llm-wiki/collections")"; printf 'side\t%s\n' "$T/nogit" >> "$HOME/.config/llm-wiki/collections"
+expect "and a collection that isn't the default is named in it" "setup git --collection side" env WIKIS_DIR="$T/nogit" "$W" sync plainw
+sed -i.bak '/^side	/d' "$HOME/.config/llm-wiki/collections"; rm -f "$HOME/.config/llm-wiki/collections.bak"; [ -s "$HOME/.config/llm-wiki/collections" ] || rm -f "$HOME/.config/llm-wiki/collections"
+git init -q "$T/loose"
+expect "inside someone else's repository, sync says commits are theirs" "is in a repository the wikis don't manage, so nothing is synced from here. Commits are up to you there." "$W" sync "$T/loose/solo"
+rm -rf "$T/nogit" "$T/loose"
 refuse "new refuses a wiki inside the template repo" "$W" new "$REPO/template/inside"
 mkdir -p "$T/sub"
 check "new resolves .. in a path" bash -c "cd '$T/sub' && '$W' new ../rel && test -f '$T/rel/AGENTS.md'"
@@ -2531,6 +2553,7 @@ mcp_tools() {
   check "$who: a notification gets no reply, bad JSON a parse error, and the server carries on" python3 -c "import json,sys; l=[json.loads(x) for x in sys.argv[1].splitlines()]; assert len(l)==5 and l[1]['error']['code']==-32700 and l[2]['id']==2 and l[3]['error']['code']==-32601" "$out"
   check "$who: it lists its tools, each with a schema" python3 -c "import json,sys; t=json.loads(sys.argv[1].splitlines()[4])['result']['tools']; assert [x['name'] for x in t]==['wiki_list','wiki_start','wiki_search','wiki_read','wiki_status','wiki_capture','wiki_feedback'] and all(x['inputSchema']['type']=='object' for x in t)" "$out"
   check "$who: it tells chat agents the wikis come before memory and past chats" python3 -c "import json,sys; l=sys.argv[1].splitlines(); r=json.loads(l[0])['result']['instructions']; t={x['name']:x['description'] for x in json.loads(l[4])['result']['tools']}; assert 'before memory' in r and 'before memory' in t['wiki_start'] and 'before memory' in t['wiki_search']" "$out"
+  check "$who: and to tell the user what it did in everyday words" python3 -c "import json,sys; r=json.loads(sys.argv[1].splitlines()[0])['result']['instructions']; assert 'in everyday words' in r and 'raw, compile, push and repo' in r" "$out"
   expect "$who: wiki_list lists the wikis and what they cover" "covers: api web" mcp_call wiki_list
   expect "$who: wiki_start finds the project's wiki" "/demo, for the repository web" mcp_call wiki_start '{"repository":"web"}'
   expect "$who: with no project, the shared wiki" "Not in a repository" mcp_call wiki_start
@@ -2548,7 +2571,7 @@ mcp_tools() {
   expect "$who: a wiki name can't be a path" "ERROR: that isn't a wiki name" mcp_call wiki_read '{"wiki":"../demo"}'
   expect "$who: wiki_capture refuses a bad slug" "ERROR: the slug" mcp_call wiki_capture '{"wiki":"demo","slug":"../x","note":"n"}'
   expect "$who: and an empty note" "ERROR: the note is empty" mcp_call wiki_capture '{"wiki":"demo","slug":"x","note":" "}'
-  expect "$who: wiki_capture saves and pushes" "Pushed." mcp_call wiki_capture "{\"wiki\":\"demo\",\"slug\":\"$slug\",\"note\":\"We chose Postgres, in a chat.\"}"
+  expect "$who: wiki_capture saves and pushes, and says so without the word" "Saved, and copied off this machine. A later session with file access works it into the wiki's pages." mcp_call wiki_capture "{\"wiki\":\"demo\",\"slug\":\"$slug\",\"note\":\"We chose Postgres, in a chat.\"}"
   # Chat can't append to stats.csv, so the server logs its lookups.
   printf 'one\n' > "$WIKIS_DIR/demo/wiki/mcp-one.md"; printf 'two\n' > "$WIKIS_DIR/demo/wiki/mcp-two.md"
   SC="$WIKIS_DIR/stats.csv"; cp "$SC" "$T/stats.bak" 2>/dev/null || true; rm -f "$SC"
@@ -2564,10 +2587,10 @@ mcp_tools() {
   # sync also ends well with nothing pushed, and a capture then isn't called pushed:
   # with no remote, and in a folder that isn't in a repository the wikis own.
   git -C "$WIKIS_DIR" remote remove origin
-  expect "$who: with no remote, a capture is saved and not called pushed" "but not pushed: no remote, so nothing to pull or push" mcp_call wiki_capture "{\"wiki\":\"demo\",\"slug\":\"$slug-no-remote\",\"note\":\"n\"}"
+  expect "$who: with no remote, a capture is saved and not called pushed" "Saved on this machine only: no remote, so nothing to pull or push" mcp_call wiki_capture "{\"wiki\":\"demo\",\"slug\":\"$slug-no-remote\",\"note\":\"n\"}"
   git -C "$WIKIS_DIR" remote add origin "$T/remote.git"
   mv "$WIKIS_DIR/WIKIS.md" "$T/WIKIS.aside"
-  expect "$who: nor in a folder the wikis don't own" "Saved on this machine, but not pushed: " mcp_call wiki_capture "{\"wiki\":\"demo\",\"slug\":\"$slug-unowned\",\"note\":\"n\"}"
+  expect "$who: nor in a folder the wikis don't own" "Saved on this machine only: " mcp_call wiki_capture "{\"wiki\":\"demo\",\"slug\":\"$slug-unowned\",\"note\":\"n\"}"
   mv "$T/WIKIS.aside" "$WIKIS_DIR/WIKIS.md"
   rm -f "$WIKIS_DIR"/demo/raw/*-"$slug"-no-remote.md "$WIKIS_DIR"/demo/raw/*-"$slug"-unowned.md; "$W" sync demo >/dev/null 2>&1
   check "$who: and the remote is back in step after those" bash -c "[ \"\$(git -C '$WIKIS_DIR' rev-parse HEAD)\" = \"\$(git --git-dir='$T/remote.git' rev-parse HEAD)\" ]"

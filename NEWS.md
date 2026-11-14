@@ -9,6 +9,12 @@ Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title i
 - In a folder or on a branch named for a ticket, session start now lists the notes not compiled yet that belong to the ticket, after its pages.
 - A note counts when it carries the ticket's `Ticket:` line or names the ticket in its text. Before, a session was told only that a note was waiting.
 
+## 2026-12-15: plainer words for people who don't use git
+
+- In a collection with no git, `wiki sync` now says the wiki has no backup and isn't shared, and how to set that up.
+- A wiki name with a space is still refused, but the refusal offers the nearest name that works: "Acme Holdings" gets `Acme-Holdings`.
+- Through the chat connector, a saved note is reported in everyday words, without "pushed", "raw" or file paths.
+
 ## 2026-12-14: the search at your message stays in your project
 
 - When you send a message, two ordinary words now find pages and notes only in the wiki of the project you are in, and in the shared wiki.
