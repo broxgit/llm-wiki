@@ -21,6 +21,15 @@ For example, `Done: Confirm the Gemini reminder hook` closes the entry shown bel
 
 Work the user puts off goes in the owning repository's `ROADMAP.md`, or its equivalent, when it has one. Use these lines when there is none.
 
+## Ticket lines
+
+`wiki.sh capture` ends a note with `Ticket: <KEY>` when the session's folder, or its branch, is named for a ticket. Leave the line there. It ties the note's `Waiting:` and `Due:` lines to that ticket, and where the Jira extension is set to close items, their entries close when the ticket is done.
+
+- An item that isn't about that ticket goes in a note of its own that ends with `Ticket: none`. Capture adds nothing to a note that has a `Ticket:` line, so the entry closes only with a `Done:`.
+- A note about another ticket ends with that ticket's line, such as `Ticket: PROJ-123`.
+
+Compile does nothing with the line: it stays in the note, and the entry's `from:` line is what leads to it.
+
 ## The ledger
 
 Each wiki keeps `open.md` at its root. Updating it is compile work, done under the lock. For each line you ingest:

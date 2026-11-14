@@ -14,7 +14,7 @@ wiki extensions add jira
 
 `wiki extensions` lists them, on or off. `wiki extensions remove jira` turns one off. `wiki setup --new` asks about a new one once.
 
-Turning one on is not the same as setting it up, and it says so. When you answer yes in `wiki setup`, the extension asks at once for what it needs. `wiki extensions setup jira` asks again at any time. Until an extension that is on has what it needs, `wiki status` lists it with that command, `wiki extensions` shows it as not ready, and no event runs it.
+Turning one on is not the same as setting it up, and it says so. When you answer yes in `wiki setup`, the extension asks at once for what it needs. `wiki extensions setup jira` asks again at any time. Your agent can walk you through it instead: ask it to run `wiki setup --guide jira` (in Claude Code, `/llm-wiki:setup jira`). It sets what isn't secret with `wiki extensions set jira <key> <value>`, and `wiki extensions settings jira` lists what is set. A token is never the agent's to see or store: it tells you the command to run yourself. Until an extension that is on has what it needs, `wiki status` lists it with that command, `wiki extensions` shows it as not ready, and no event runs it.
 
 ### Signing in to Atlassian
 
@@ -42,6 +42,8 @@ Each value is looked for in this order, and the first one found is used: the ext
   Release PROJ-123
       PROJ-123     Done, resolved 2026-11-08
 ```
+
+An item is also tied to a ticket through its notes. A note captured in a folder, or on a branch, named for a ticket ends with a `Ticket: PROJ-123` line, which `wiki capture` adds. `wiki jira check` counts that ticket as it counts one in the heading, and says `(from a Ticket: line in its notes)`. The name counts as a ticket when it is in capitals as written, or when `projects` or a wiki already knows its project, so a branch such as `fix/sync-main-3` adds nothing. A note that isn't about the folder's ticket can end with `Ticket: none`, and capture leaves it as it is.
 
 `wiki jira check --close` then saves a note and syncs the wiki, and the next compile applies it. It notes only a change that alters what someone should do:
 
@@ -155,7 +157,7 @@ Its arguments, exactly as typed after the name, and three environment variables:
 |---|---|
 | `LLM_WIKI` | The wiki command, as a path the extension can run: `"$LLM_WIKI" capture …`. |
 | `WIKIS_DIR` | The collection this call is for. Commands the extension runs through `$LLM_WIKI` use the same one. |
-| `LLM_WIKI_EXTENSION` | The version of this contract, `3` today. Version 2 added events and version 3 setup, both below. |
+| `LLM_WIKI_EXTENSION` | The version of this contract, `4` today. Version 2 added events, version 3 setup and version 4 settings a session can change, all below. |
 
 The extension's exit code is the command's. Its output goes straight to the terminal.
 
@@ -163,10 +165,10 @@ To read a wiki, ask the wiki command, and don't parse its files. Both of these p
 
 | Command | A line is | Fields |
 |---|---|---|
-| `"$LLM_WIKI" open --data [<wiki>]` | An entry in a wiki's list of open items, the closed ones too | `wiki`, `state` (`open`, `overdue`, `done`, `bad`), `kind` (`waiting`, `due`), `who`, `due`, `status`, `from` (the notes it came from, joined by `; `), `heading` |
+| `"$LLM_WIKI" open --data [<wiki>]` | An entry in a wiki's list of open items, the closed ones too | `wiki`, `state` (`open`, `overdue`, `done`, `bad`), `kind` (`waiting`, `due`), `who`, `due`, `status`, `from` (the notes it came from, joined by `; `), `heading`, `tickets` (the keys on the `Ticket:` lines of those notes, in capitals, joined by spaces) |
 | `"$LLM_WIKI" pages <wiki> --data` | A page under `wiki/` | `path` from the wiki's folder, `updated`, `verified`, `title` |
 
-A field with nothing in it is empty, and the last field is the one that may hold anything but a tab. A page's text is the file at its path, to read as it is. The Jira and Confluence extensions read a wiki this way.
+A field with nothing in it is empty, and `heading` and `title` are the ones that may hold anything but a tab. `tickets` came after the first eight fields, in 2026-11: a field added later goes on the end, so read the ones you know and ignore the rest. A page's text is the file at its path, to read as it is. The Jira and Confluence extensions read a wiki this way.
 
 To save knowledge, run `"$LLM_WIKI" capture <wiki> <slug>` with the note on stdin, then `"$LLM_WIKI" sync <wiki>`. Don't write into `raw/` or `wiki/` yourself: capture names the note and sync takes its turn with other sessions.
 
@@ -232,7 +234,20 @@ llm-wiki does the rest:
 - While `--wiki-ready` fails, `wiki status` has a TO DO line with what the extension printed and the command that sets it up, `wiki extensions` shows it as not ready, and no event runs it.
 - An extension with no `wiki-setup:` comment is always taken as ready.
 
-Something else is checked for every extension, with or without that comment: the program its first line names. One written in Python on a machine with no `python3` says so when it is run, in `wiki status`, and when setup would offer it.
+## Settings a session can change
+
+`--wiki-setup` asks its questions at a terminal, which an agent can't answer. An extension whose settings an agent may read and change says so with a `wiki-settings: yes` comment in its first ten lines, and answers two more calls:
+
+| Call | What to do |
+|---|---|
+| `wiki-<name> --wiki-settings` | Print one line for each setting, tab separated: its key, its value now (empty when unset), where that came from (`file`, `shared file`, `environment` or `default`), what it means in a line, and `set` if a session may change it or `terminal` if only a person may. Read files and the environment, and nothing else |
+| `wiki-<name> --wiki-set <key> <value>` | Check the key and the shape of the value, save it, and say so in one line. A value of `-` clears the setting. Exit 2 with a one-line reason for what you refuse: an unknown key, a bad value, anything secret |
+
+Two rules keep a secret out of a session. Never print one: say `set` or `not set` in the value's place, and put how the person stores it, in their own terminal, in the line of meaning. And never run a command to answer `--wiki-settings`, a command that prints a token least of all.
+
+llm-wiki does the rest: `wiki setup --guide <name>` prints the settings for an agent to walk the user through, `wiki extensions settings <name>` lists them, and `wiki extensions set <name> <key> <value>` changes one. An extension with no `wiki-settings:` comment is set up at a terminal only. The Jira and Confluence extensions answer both calls.
+
+Something else is checked for every extension, with or without those comments: the program its first line names. One written in Python on a machine with no `python3` says so when it is run, in `wiki status`, and when setup would offer it.
 
 ## Rules
 
