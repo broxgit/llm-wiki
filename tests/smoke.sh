@@ -984,6 +984,8 @@ printf 'Not here.\n' | tcap "$T" tk-none >/dev/null
 lacks "a folder with no ticket in its name adds nothing" "Ticket:" cat "$(tnote tk-none)"
 printf 'It says.\n\nTicket: OTHER-9\n' | tcap "$TC/VID-74003" tk-has >/dev/null
 check "a note that has a Ticket: line is left as it is" test "$(grep -c '^Ticket:' "$(tnote tk-has)")" = 1 -a "$(grep '^Ticket:' "$(tnote tk-has)")" = "Ticket: OTHER-9"
+printf 'Not about it.\n\nTicket: none\n' | tcap "$TC/VID-74003" tk-optout >/dev/null
+check "and so is one that says Ticket: none, as rules/open.md has an agent write it" test "$(grep '^Ticket:' "$(tnote tk-optout)")" = "Ticket: none"
 printf 'copy me\n' > "$TC/copy.txt"
 tcap "$TC/VID-74003" --copy "$TC/copy.txt" >/dev/null
 check "a copy of a file is untouched" cmp "$TC/copy.txt" "$(ls "$WIKIS_DIR"/demo/raw/*-copy.txt | tail -n 1)"
@@ -5830,6 +5832,8 @@ case "$out" in *"Release PROJ-1 to production${TB}VID-74003 PAY-7"*) ok "open --
 case "$out" in *"Look at the trial${TB}VID-74003"*) ok "an entry with one note gets that note's ticket" ;; *) bad "an entry with one note gets that note's ticket" "$out" ;; esac
 check "and one whose note is gone, or names none, gets none, with no error" test "$(printf '%s\n' "$out" | awk -F'\t' '/Shipped the thing/ { print NF ":" $9 }')" = "9:"
 check "the first eight fields are what they were" test "$(printf '%s\n' "$out" | head -n 1 | cut -f 1-8)" = "alpha${TB}open${TB}waiting${TB}Katherine Nieman${TB}${TB}open${TB}2026-11-09 raw/a.md; 2026-11-10 raw/b.md${TB}Release PROJ-1 to production"
+printf 'Captured: 2026-11-09\n\nNot about the ticket.\n\nTicket: none\n' > "$DW/alpha/raw/a.md"
+check "a note that says Ticket: none ties its entry to no ticket" test "$(dw open --data alpha | awk -F'\t' '/Look at the trial/ { print NF ":" $9 }')" = "9:"
 printf '# Open\n\n## Sneaky\n- kind: waiting\n- who: user\n- status: open\n- from: 2026-11-09 raw/../../outside.md\n- from: 2026-11-09 raw/sub/x.md\n' > "$DW/beta/open.md"
 printf 'Ticket: SNEAK-1\n' > "$DW/outside.md"
 check "a note named with .. or a folder is not read" test "$(dw open --data beta | cut -f 9)" = ""

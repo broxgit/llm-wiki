@@ -270,6 +270,7 @@ Settings live in `~/wikis/journal/config`. Walk through them with `wiki setup jo
 
 - `wiki setup --list` prints every setting and marks the ones still at their default.
 - `wiki setup --new` asks only about what's new since you last ran it.
+- `wiki setup --guide` is for your agent: ask it to walk you through setup (in Claude Code, `/llm-wiki:setup`) and it goes through each setting with you, the unanswered ones first. `wiki setup --guide journal` does one section. A token stays yours to store.
 - `wiki setup plugin`, `wiki setup git`, `wiki setup journal` or `wiki setup delegation` reruns one section.
 - `wiki setup format` edits one journal setting.
 
@@ -381,6 +382,8 @@ Up to three wikis are read in full, and any more are named for the agent to open
 
 In a folder that is no repository and holds none, the session uses the shared wiki, says so, and the agent asks whether you want llm-wiki used for that work.
 
+Where the folder, or the branch, is named for a Jira ticket, a note saved there ends with a `Ticket: INFRA-17937` line. With the [Jira extension](extensions.md) set up, the session is told at the start which ticket it is on, and `wiki jira check` can close an open item through that line when the ticket is done.
+
 ### It asks once, and remembers
 
 The first time a session starts in a folder like that, the agent asks: do folders like this one always work this way? Say yes and it records a pattern, after showing it to you. The next session in a folder of that kind uses the pattern, tells you which one it recognised, and asks nothing. If it is wrong, say so and the agent changes it.
@@ -431,6 +434,7 @@ Run `wiki` with no arguments for the full list. The ones you're likely to use:
 | `wiki upgrade --all` | Bring every wiki's handbook up to the template's. |
 | `wiki new <name>` | Create a wiki. Usually the agent does this. |
 | `wiki cover <wiki> <repo>...` | One wiki for several repositories. |
+| `wiki uncover <repo>... [--new]` | Take a repository off the wiki that covers it. `--new` also gives it a wiki of its own. Its pages stay where they are until you say to move them. |
 | `wiki workflows [add\|remove\|check]` | Where sessions outside a repository belong. |
 | `wiki unlock <name>` | Free a stuck compile lock. |
 | `wiki capture <wiki> <slug>` | Save a note piped in, named from the clock. Mostly for agents. |

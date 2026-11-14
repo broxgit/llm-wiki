@@ -4,6 +4,14 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v37 (2026-11-14)
+
+An open item saved in a ticket folder is tied to the ticket, and the agent knows how to say when it isn't.
+
+- `wiki capture` ends a note taken in a folder, or on a branch, named for a Jira ticket with a `Ticket: <KEY>` line, and `wiki jira check` can close that note's open items when the ticket is done. `rules/open.md` now tells the agent so, and to leave the line.
+- An item that isn't about the folder's ticket goes in a note of its own ending `Ticket: none`, so it doesn't close with the ticket. A note about another ticket ends with that ticket's line.
+- Do: run `wiki upgrade --all`.
+
 ## v36 (2026-11-14)
 
 A repository that a wiki covers can get a wiki of its own.
