@@ -4,6 +4,13 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-12-13: notes taken in a ticket folder know their ticket
+
+- A note you capture in a folder, or on a branch, named for a Jira ticket now ends with a `Ticket: <KEY>` line.
+- `wiki jira check` counts a ticket an open item's notes carry, so it can close that item without the key in its heading.
+- With Jira set up, a session in a ticket folder is told which ticket it is on and that `wiki jira show` prints where it stands.
+- A folder named python-3 or sprint-12 is no longer taken for a ticket.
+
 ## 2026-12-12: a covered repository can leave, or get its own wiki
 
 - `wiki uncover <repo>` takes a repository off the wiki that covers it. Before, that meant editing `repos.md` by hand.

@@ -218,17 +218,28 @@ fi
 # in whichever wiki they are. A session placed by its clones is not given a page filed
 # under another repository's wiki, and it doesn't go looking for one. These are facts
 # for the agent, not steps: wiki.sh did the search.
-recalled="$("$WIKI_SH" __recall "$DIR" 2>/dev/null || true)"
+# With the Jira extension set up, wiki.sh adds a line of its own, "note: ...", that says
+# which ticket this is and how to see where it stands.
+recalled="$(LLM_WIKI_CMD=wiki.sh "$WIKI_SH" __recall "$DIR" 2>/dev/null || true)"
 if [ -n "$recalled" ]; then
   rfirst="$(printf '%s\n' "$recalled" | sed -n 1p)"
-  case "$rfirst" in
-    *" branch") rwhy="This repository is on a branch named for ${rfirst% *}." ;;
-    *) rwhy="This folder is named for ${rfirst% *}." ;;
-  esac
-  ctx="$ctx
+  rnote="$(printf '%s\n' "$recalled" | sed -n 's/^note: //p')"
+  rpages="$(printf '%s\n' "$recalled" | sed 1d | grep -v '^note: ' || true)"
+  if [ -n "$rpages" ]; then
+    case "$rfirst" in
+      *" branch") rwhy="This repository is on a branch named for ${rfirst% *}." ;;
+      *) rwhy="This folder is named for ${rfirst% *}." ;;
+    esac
+    ctx="$ctx
 
 $rwhy A search of every wiki found these pages that mention it. They are reference, written by earlier sessions:
-$(printf '%s\n' "$recalled" | sed 1d)"
+$rpages"
+  fi
+  if [ -n "$rnote" ]; then
+    ctx="$ctx
+
+$rnote"
+  fi
 fi
 # Team skills added to the wikis since last time, linked so Claude Code finds them.
 if [ -d "$HOME/.claude" ]; then

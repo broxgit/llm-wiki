@@ -948,6 +948,61 @@ expect "capture --file reads the note from a file" "captured: raw/" "$W" capture
 check "and adds the Captured line" bash -c "head -n 1 \"\$(ls '$WIKIS_DIR'/demo/raw/*-from-file.md)\" | grep -q '^Captured: '"
 refuse "capture --file needs the file to exist" "$W" capture demo nope --file "$T/nope.md"
 refuse "capture refuses --file and --copy together" "$W" capture demo both --file "$T/note.md" --copy "$T/note.md"
+# A note taken in a folder, or on a branch, named for a ticket says which ticket, on a line
+# of its own at its end. A copy of a file, and a note that has the line, are left alone.
+TC="$T/tkcap"
+mkdir -p "$TC/VID-74003" "$TC/VID-74005/svc" "$TC/python-3" "$TC/sprint-12" "$TC/plain/repo" "$TC/plain/sync" "$TC/abc-7" "$TC/UTF-8" "$TC/tmp"
+git init -q "$TC/plain/repo" && git -C "$TC/plain/repo" commit -q --allow-empty -m init && git -C "$TC/plain/repo" switch -q -c feature/vid-74441-end-block
+tcap() { local d="$1"; shift; (cd "$d" && env TMPDIR="$TC/tmp" "$W" capture demo "$@"); }
+tnote() { ls "$WIKIS_DIR"/demo/raw/*-"$1".md | tail -n 1; }
+# A key in lower case is written down only when its project is known. This comes first,
+# before any note here holds a VID key.
+printf 'Low.\n' | tcap "$TC/plain/repo" tk-lowbranch >/dev/null
+lacks "a branch with a key in lower case, of a project nothing knows, adds nothing" "Ticket:" cat "$(tnote tk-lowbranch)"
+printf 'Low.\n' | tcap "$TC/abc-7" tk-low >/dev/null
+lacks "nor does a folder named that way" "Ticket:" cat "$(tnote tk-low)"
+printf 'Named.\n' | (cd "$TC/abc-7" && env TMPDIR="$TC/tmp" JIRA_PROJECTS=abc "$W" capture demo tk-named >/dev/null)
+check "it counts when the Jira settings name its project, and is written in capitals" grep -qxF "Ticket: ABC-7" "$(tnote tk-named)"
+git init -q "$TC/plain/sync" && git -C "$TC/plain/sync" commit -q --allow-empty -m init && git -C "$TC/plain/sync" switch -q -c house-style/sync-main-3
+printf 'Sync.\n' | tcap "$TC/plain/sync" tk-sync >/dev/null
+lacks "a branch such as sync-main-3 is no ticket" "Ticket:" cat "$(tnote tk-sync)"
+printf 'A standard.\n' | tcap "$TC/UTF-8" tk-utf >/dev/null
+lacks "nor is a folder named UTF-8, in capitals or not" "Ticket:" cat "$(tnote tk-utf)"
+printf 'We chose X.\n' | tcap "$TC/VID-74003" tk-stdin >/dev/null
+check "a note taken in a folder named for a ticket ends with its key, after a blank line" test "$(tail -n 3 "$(tnote tk-stdin)")" = "$(printf 'We chose X.\n\nTicket: VID-74003')"
+printf 'Parent.\n' | tcap "$TC/VID-74005/svc" tk-parent >/dev/null
+check "and so does one taken in a clone inside it" grep -qxF "Ticket: VID-74005" "$(tnote tk-parent)"
+printf 'Branch.\n' | tcap "$TC/plain/repo" tk-branch >/dev/null
+check "and one on a branch named for it in lower case, now that a wiki holds a key of that project" grep -qxF "Ticket: VID-74441" "$(tnote tk-branch)"
+printf 'no newline at the end' | tcap "$TC/VID-74003" tk-nonl >/dev/null
+check "a note with no final line break still gets the line on a line of its own" test "$(tail -n 3 "$(tnote tk-nonl)")" = "$(printf 'no newline at the end\n\nTicket: VID-74003')"
+printf 'Plain python.\n' | tcap "$TC/python-3" tk-py >/dev/null
+printf 'A sprint.\n' | tcap "$TC/sprint-12" tk-sprint >/dev/null
+lacks "a folder named python-3 isn't a ticket" "Ticket:" cat "$(tnote tk-py)"
+lacks "nor is sprint-12" "Ticket:" cat "$(tnote tk-sprint)"
+printf 'Not here.\n' | tcap "$T" tk-none >/dev/null
+lacks "a folder with no ticket in its name adds nothing" "Ticket:" cat "$(tnote tk-none)"
+printf 'It says.\n\nTicket: OTHER-9\n' | tcap "$TC/VID-74003" tk-has >/dev/null
+check "a note that has a Ticket: line is left as it is" test "$(grep -c '^Ticket:' "$(tnote tk-has)")" = 1 -a "$(grep '^Ticket:' "$(tnote tk-has)")" = "Ticket: OTHER-9"
+printf 'copy me\n' > "$TC/copy.txt"
+tcap "$TC/VID-74003" --copy "$TC/copy.txt" >/dev/null
+check "a copy of a file is untouched" cmp "$TC/copy.txt" "$(ls "$WIKIS_DIR"/demo/raw/*-copy.txt | tail -n 1)"
+printf 'From a file.\n' > "$TC/note.md"
+cp "$TC/note.md" "$TC/note.orig"
+tcap "$TC/VID-74003" tk-file --file "$TC/note.md" >/dev/null
+check "--file gets the line too" test "$(tail -n 3 "$(tnote tk-file)")" = "$(printf 'From a file.\n\nTicket: VID-74003')"
+check "and the file it read is as it was" cmp "$TC/note.md" "$TC/note.orig"
+out="$(tcap "$TC/VID-74003" tk-empty </dev/null 2>&1)" && bad "an empty note is refused in a ticket folder (it succeeded)" "$out" || case "$out" in *"capture got an empty note"*) ok "an empty note is still refused in a ticket folder" ;; *) bad "an empty note is still refused in a ticket folder" "$out" ;; esac
+check "and nothing was saved for it" test -z "$(ls "$WIKIS_DIR"/demo/raw/*-tk-empty.md 2>/dev/null)"
+: > "$TC/empty.md"
+out="$(tcap "$TC/VID-74003" tk-empty2 --file "$TC/empty.md" 2>&1)" && bad "an empty file is refused in a ticket folder (it succeeded)" "$out" || case "$out" in *"capture got an empty note"*) ok "and so is an empty file" ;; *) bad "and so is an empty file" "$out" ;; esac
+tcap "$TC/VID-74003" tk-nofile --file "$TC/gone.md" >/dev/null 2>&1 && bad "--file with no file there fails in a ticket folder" || ok "--file with no file there fails in a ticket folder"
+check "no temporary file is left behind, on any of those paths" test -z "$(ls -A "$TC/tmp")"
+printf 'Via the Bash.\n' | (cd "$TC/VID-74003" && env LLM_WIKI_NO_GO=1 "$W" capture demo tk-nogo >/dev/null)
+check "with the helper off, the line is added just the same" grep -qxF "Ticket: VID-74003" "$(tnote tk-nogo)"
+rm -rf "$TC"
+# What these made is gone, so later searches and counts don't find it.
+rm -f "$WIKIS_DIR"/demo/raw/*-tk-*.md "$WIKIS_DIR"/demo/raw/*-copy.txt
 # An agent's sandbox can block writes to the wikis. Each command must say so and
 # fail, never report a capture, lock or log entry that wasn't written.
 chmod 555 "$WIKIS_DIR/demo/raw"
@@ -3738,6 +3793,26 @@ and a third" ] && ok "a page's line ends reach a client as line feeds" || bad "a
   csame "and by a path from here, with dots" helper "$FD/alpha/wiki" "$T/cap/note.md" ../../alpha by-dots
   csame "a slug with letters that aren't ASCII, in a UTF-8 locale" helper "$T" "$T/cap/note.md" alpha "$(printf 'Caf\303\251 \303\211cole')"
   csame "and with a byte that isn't UTF-8" helper "$T" "$T/cap/note.md" alpha "$(printf 'caf\351 au lait')"
+  # In a folder named for a ticket the note is fed on with the ticket's line on its end,
+  # and the helper and the Bash still say and save the same.
+  mkdir -p "$T/cap/VID-74003" "$T/cap/python-3"
+  printf 'Captured: 2020-01-02\n\nit came dated\n\nTicket: PAY-1\n' > "$T/cap/has-ticket.md"
+  csame "in a ticket folder, a note on stdin" helper "$T/cap/VID-74003" "$T/cap/note.md" alpha tk-note
+  out="$(crun "$T/bin/capture-spy" "$T/cap/VID-74003" "$T/cap/note.md" alpha tk-note)"
+  want="$(printf 'Captured: %s\n\na note in a file\n\nTicket: VID-74003\n' "$(date -u +%Y-%m-%d)" | cksum)"
+  case "$out" in *"STAMP-tk-note.md "*"$want"*) ok "and the helper saves it with the Ticket: line on its end" ;; *) bad "and the helper saves it with the Ticket: line on its end" "$out (wanted $want)" ;; esac
+  csame "in a ticket folder, a note in a file" helper "$T/cap/VID-74003" /dev/null alpha tk-file --file ../note.md
+  out="$(crun "$T/bin/capture-spy" "$T/cap/VID-74003" /dev/null alpha tk-file --file ../note.md)"
+  want="$(printf 'Captured: %s\n\na note in a file\n\nTicket: VID-74003\n' "$(date -u +%Y-%m-%d)" | cksum)"
+  case "$out" in *"STAMP-tk-file.md "*"$want"*) ok "and the helper saves that with the line too" ;; *) bad "and the helper saves that with the line too" "$out (wanted $want)" ;; esac
+  csame "in a ticket folder, a note that has a Ticket: line already" helper "$T/cap/VID-74003" "$T/cap/has-ticket.md" alpha tk-has
+  csame "in a ticket folder, a copy of a file" helper "$T/cap/VID-74003" /dev/null alpha --copy ../Two.Dots.TXT
+  csame "in a ticket folder, an empty note" helper "$T/cap/VID-74003" /dev/null alpha tk-empty
+  csame "in a ticket folder, an empty file" helper "$T/cap/VID-74003" /dev/null alpha tk-empty --file ../empty.md
+  csame "in a folder named python-3, which is no ticket" helper "$T/cap/python-3" "$T/cap/note.md" alpha tk-py
+  out="$(crun "$T/bin/capture-spy" "$T/cap/python-3" "$T/cap/note.md" alpha tk-py)"
+  want="$(printf 'Captured: %s\n\na note in a file\n' "$(date -u +%Y-%m-%d)" | cksum)"
+  case "$out" in *"STAMP-tk-py.md "*"$want"*) ok "and it saves the note as it is" ;; *) bad "and it saves the note as it is" "$out (wanted $want)" ;; esac
   csame "capture refuses, the same from both: no wiki" helper "$T" "$T/cap/note.md"
   csame "a folder that isn't a wiki" helper "$T" "$T/cap/note.md" nowiki slug
   csame "no slug" helper "$T" "$T/cap/note.md" alpha
@@ -4714,6 +4789,59 @@ lacks "and an item about a block isn't itself reported as blocked" "holding up \
 check "an item whose tickets are done still closes" grep -qxF "Done: Cut over at PROJ-6" "$note"
 check "the note says where each ticket stood" grep -q "PROJ-3 \"Dropped\": Closed as Won't Do, without the work done." "$note"
 expect "a second --close notes nothing again" "already noted, waiting for a compile" jst check --close
+# A ticket an item has only through its notes: a capture taken in a folder named for a ticket
+# ends with a Ticket: line, and the item that cites the note is tied to that ticket.
+JN="$T/jnotes"
+WIKIS_DIR="$JN" "$W" new ndemo >/dev/null 2>&1
+mkdir -p "$JN/ndemo/raw" "$T/jnfolder/VID-9"
+printf 'Captured: 2026-11-10\n\nBilling change is live.\n\nTicket: proj-1\n' > "$JN/ndemo/raw/n1.md"
+printf 'Captured: 2026-11-10\n\nVendor reply pending.\n\nTicket: PROJ-2\n' > "$JN/ndemo/raw/n2.md"
+printf 'Captured: 2026-11-10\n\nNo ticket here.\n' > "$JN/ndemo/raw/n3.md"
+cat > "$JN/ndemo/open.md" <<'OPEN'
+# Open
+
+## Roll out the billing change
+- kind: waiting
+- who: Katherine
+- status: open
+- from: 2026-11-10 raw/n1.md
+
+## Wait for the vendor's answer
+- kind: waiting
+- who: Katherine
+- status: open
+- from: 2026-11-10 raw/n2.md
+
+## Chase the old thread
+- kind: waiting
+- who: user
+- status: open
+- from: 2026-11-10 raw/n3.md
+- from: 2026-11-10 raw/gone.md
+OPEN
+jnn() { WIKIS_DIR="$JN" JIRA_URL="http://127.0.0.1:$(cat "$J/port")" JIRA_EMAIL=me@example.com JIRA_API_TOKEN=smoke-token "$W" jira "$@"; }
+out="$(jnn check 2>&1)"
+case "$out" in *"Roll out the billing change"*"PROJ-1       Done, resolved 2026-11-08  (from a Ticket: line in its notes)"*) ok "jira says where the ticket a note carries stands, and that it came from the notes" ;; *) bad "jira says where the ticket a note carries stands, and that it came from the notes" "$out" ;; esac
+case "$out" in *"Wait for the vendor's answer"*"PROJ-2       In Progress  (from a Ticket: line in its notes)"*) ok "and one that is still open" ;; *) bad "and one that is still open" "$out" ;; esac
+case "$out" in *"Chase the old thread"*) bad "an item whose notes carry no ticket, or are gone, is left out" "$out" ;; *) ok "an item whose notes carry no ticket, or are gone, is left out" ;; esac
+case "$out" in *"1 open item(s) have every ticket done"*) ok "only the item whose ticket is done is counted as done" ;; *) bad "only the item whose ticket is done is counted as done" "$out" ;; esac
+expect "projects limits those tickets too, and says which it left out" "No open item names a ticket in OPS. 2 other key(s) are left out by projects" env JIRA_PROJECTS=OPS WIKIS_DIR="$JN" JIRA_URL="http://127.0.0.1:$(cat "$J/port")" JIRA_API_TOKEN=smoke-token "$W" jira
+(cd "$T/jnfolder/VID-9" && jnn check --close >/dev/null 2>&1)
+note="$(ls "$JN/ndemo/raw"/*-jira-done.md 2>/dev/null | head -n 1)"
+check "check --close, run in a folder named for another ticket, writes the Done: line that closes the item, by its heading" grep -qxF "Done: Roll out the billing change" "$note"
+lacks "and none for the item whose ticket is still open" "Done: Wait for" cat "$note"
+check "the note names why, since the heading doesn't" grep -qF "\"Roll out the billing change\" carries PROJ-1 in a Ticket: line of its notes." "$note"
+lacks "and carries no Ticket: line of the folder it was run in" "VID-9" cat "$note"
+# An older wiki open --data, with eight fields, still works: only the headings count then.
+mkdir -p "$T/jnshim"
+printf '#!/bin/sh\nif [ "$1" = open ]; then "%s" "$@" | cut -f 1-8; else exec "%s" "$@"; fi\n' "$W" "$W" > "$T/jnshim/wiki-old"
+chmod +x "$T/jnshim/wiki-old"
+out="$(env LLM_WIKI="$T/jnshim/wiki-old" LLM_WIKI_CMD=wiki WIKIS_DIR="$JN" JIRA_URL="http://127.0.0.1:$(cat "$J/port")" JIRA_API_TOKEN=smoke-token python3 "$REPO/extensions/wiki-jira" check 2>&1)"
+case "$out" in "No open item names a ticket."*) ok "with an older open --data, an item with no key in its heading is left out, with no error" ;; *) bad "with an older open --data, an item with no key in its heading is left out, with no error" "$out" ;; esac
+printf '# Open\n\n## Release PROJ-1 to production\n- kind: waiting\n- who: Katherine\n- status: open\n- from: 2026-11-10 raw/n3.md\n' > "$JN/ndemo/open.md"
+out="$(env LLM_WIKI="$T/jnshim/wiki-old" LLM_WIKI_CMD=wiki WIKIS_DIR="$JN" JIRA_URL="http://127.0.0.1:$(cat "$J/port")" JIRA_API_TOKEN=smoke-token python3 "$REPO/extensions/wiki-jira" check 2>&1)"
+case "$out" in *"Release PROJ-1 to production"*"PROJ-1       Done, resolved 2026-11-08"*"1 open item(s) have every ticket done"*) ok "and a key in the heading still counts, as before" ;; *) bad "and a key in the heading still counts, as before" "$out" ;; esac
+rm -rf "$JN" "$T/jnfolder" "$T/jnshim"
 # Its guided setup: the shared sign-in, a test of it, then Jira's own settings.
 JH="$T/jhome"
 mkdir -p "$JH"
@@ -5688,11 +5816,25 @@ cat > "$DW/alpha/open.md" <<'OPEN'
 OPEN
 printf '# Open\n\n## Beta thing\n- kind: due\n- due: 2099-01-01\n- status: open\n- from: 2026-11-09 raw/a.md\n' > "$DW/beta/open.md"
 out="$(dw open --data)"
-want="alpha${TB}open${TB}waiting${TB}Katherine Nieman${TB}${TB}open${TB}2026-11-09 raw/a.md; 2026-11-10 raw/b.md${TB}Release PROJ-1 to production
-alpha${TB}overdue${TB}due${TB}${TB}2020-01-01${TB}open${TB}2026-11-09 raw/a.md${TB}Look at the trial
-alpha${TB}done${TB}waiting${TB}user${TB}${TB}done 2026-11-10${TB}2026-11-10 raw/2026-11-10-000000-jira-done.md${TB}Shipped the thing
-beta${TB}open${TB}due${TB}${TB}2099-01-01${TB}open${TB}2026-11-09 raw/a.md${TB}Beta thing"
-[ "$out" = "$want" ] && ok "open --data gives every entry of every wiki, one a line, tab separated" || bad "open --data gives every entry of every wiki, one a line, tab separated" "$out"
+want="alpha${TB}open${TB}waiting${TB}Katherine Nieman${TB}${TB}open${TB}2026-11-09 raw/a.md; 2026-11-10 raw/b.md${TB}Release PROJ-1 to production${TB}
+alpha${TB}overdue${TB}due${TB}${TB}2020-01-01${TB}open${TB}2026-11-09 raw/a.md${TB}Look at the trial${TB}
+alpha${TB}done${TB}waiting${TB}user${TB}${TB}done 2026-11-10${TB}2026-11-10 raw/2026-11-10-000000-jira-done.md${TB}Shipped the thing${TB}
+beta${TB}open${TB}due${TB}${TB}2099-01-01${TB}open${TB}2026-11-09 raw/a.md${TB}Beta thing${TB}"
+[ "$out" = "$want" ] && ok "open --data gives every entry of every wiki, one a line, tab separated, the ninth field empty with no tickets" || bad "open --data gives every entry of every wiki, one a line, tab separated, the ninth field empty with no tickets" "$out"
+# The ninth field: the tickets the notes an entry came from carry in a Ticket: line.
+mkdir -p "$DW/alpha/raw"
+printf 'Captured: 2026-11-09\n\nTalked about the release.\n\nTicket: vid-74003\n' > "$DW/alpha/raw/a.md"
+printf 'Captured: 2026-11-10\n\nMore.\n\nTicket: VID-74003, PAY-7\nTicket: PAY-7\n' > "$DW/alpha/raw/b.md"
+out="$(dw open --data alpha)"
+case "$out" in *"Release PROJ-1 to production${TB}VID-74003 PAY-7"*) ok "open --data names the tickets of the notes an entry cites, upper-cased, each once, in the order found" ;; *) bad "open --data names the tickets of the notes an entry cites" "$out" ;; esac
+case "$out" in *"Look at the trial${TB}VID-74003"*) ok "an entry with one note gets that note's ticket" ;; *) bad "an entry with one note gets that note's ticket" "$out" ;; esac
+check "and one whose note is gone, or names none, gets none, with no error" test "$(printf '%s\n' "$out" | awk -F'\t' '/Shipped the thing/ { print NF ":" $9 }')" = "9:"
+check "the first eight fields are what they were" test "$(printf '%s\n' "$out" | head -n 1 | cut -f 1-8)" = "alpha${TB}open${TB}waiting${TB}Katherine Nieman${TB}${TB}open${TB}2026-11-09 raw/a.md; 2026-11-10 raw/b.md${TB}Release PROJ-1 to production"
+printf '# Open\n\n## Sneaky\n- kind: waiting\n- who: user\n- status: open\n- from: 2026-11-09 raw/../../outside.md\n- from: 2026-11-09 raw/sub/x.md\n' > "$DW/beta/open.md"
+printf 'Ticket: SNEAK-1\n' > "$DW/outside.md"
+check "a note named with .. or a folder is not read" test "$(dw open --data beta | cut -f 9)" = ""
+rm -f "$DW/outside.md" "$DW/alpha/raw/a.md" "$DW/alpha/raw/b.md"
+printf '# Open\n\n## Beta thing\n- kind: due\n- due: 2099-01-01\n- status: open\n- from: 2026-11-09 raw/a.md\n' > "$DW/beta/open.md"
 check "open --data <wiki> gives one wiki's" test "$(dw open --data beta | wc -l | tr -d ' ')" = 1
 refuse "and fails for a wiki that isn't there" dw open --data nosuch
 refuse "open still takes nothing else" dw open alpha
@@ -5902,6 +6044,49 @@ check "the folder's ticket comes before the branch's" test -z "$("$W" __recall "
 lacks "a folder that uses no wiki is handed no pages" "A search of every wiki" hook "$RC" '{"source":"startup"}'
 lacks "nor by wiki start" "===== Pages that mention" env -C "$RC" "$W" start
 "$W" workflows remove "$RC" >/dev/null 2>&1
+# With the Jira extension on and set up, a session in a ticket folder, or on a ticket's
+# branch, is told which ticket it is on and how to see where it stands. Set up means a site
+# and a token command: the command is never run to find out, so this one leaves a mark.
+mkdir -p "$T/tickets/python-3/sprint-12"
+git -C "$BR" switch -q -c feature/RECALL-42-again
+STAND='This session is on RECALL-42 (from the folder'
+lacks "with the Jira extension off, wiki start says nothing of where the ticket stands" "jira show" env -C "$RC" "$W" start
+lacks "and neither does the hook" "jira show" hook "$RC" '{"source":"startup"}'
+"$W" extensions add jira >/dev/null 2>&1
+lacks "on but not set up, wiki start still says nothing" "jira show" env -C "$RC" "$W" start
+lacks "and neither does the hook" "jira show" hook "$RC" '{"source":"startup"}'
+printf 'site = https://smoke.invalid\ntoken_cmd = touch %s/token-ran\n' "$T" > "$HOME/.config/llm-wiki/atlassian"
+rm -f "$T/token-ran"
+expect "set up, wiki start names the ticket and the command that shows it, for the folder" "$STAND's name). \`wiki jira show RECALL-42\` prints where it stands." env -C "$RC" LLM_WIKI_CMD=wiki "$W" start
+expect "and for a branch" "This session is on RECALL-42 (from the branch's name). \`wiki jira show RECALL-42\` prints where it stands." env -C "$BR" LLM_WIKI_CMD=wiki "$W" start
+out="$(env -C "$RC" "$W" start 2>&1)"
+case "$out" in *"prints where it stands."*"===== Pages that mention RECALL-42, from a search of every wiki"*) ok "the line comes before the pages that mention it" ;; *) bad "the line comes before the pages that mention it" "$out" ;; esac
+out="$(env -C "$T/tickets/RECALL-4" "$W" start 2>&1)"
+case "$out" in *"This session is on RECALL-4 (from the folder's name)."*) ok "and it comes when no page mentions the ticket" ;; *) bad "and it comes when no page mentions the ticket" "$out" ;; esac
+lacks "a folder named for no ticket gets none" "This session is on" env -C "$T/tickets/plain" "$W" start
+lacks "nor does python-3" "This session is on" env -C "$T/tickets/python-3" "$W" start
+printf -- '- [Moving to python-3](wiki/concepts/other.md): the python-3 move.\n' >> "$WIKIS_DIR/tfrecall/index.md"
+check "a folder named python-3 or sprint-12 is no ticket, though a page mentions the words" test -z "$("$W" __recall "$T/tickets/python-3" 2>&1)$("$W" __recall "$T/tickets/python-3/sprint-12" 2>&1)"
+sed -i.bak '/python-3 move/d' "$WIKIS_DIR/tfrecall/index.md" && rm -f "$WIKIS_DIR/tfrecall/index.md.bak"
+out="$("$W" __recall "$RC" 2>&1)"
+case "$out" in "RECALL-42 folder"$'\n'"note: This session is on RECALL-42"*"jira show RECALL-42"*$'\n'"- tfrecall wiki: "*) ok "__recall gives the key, then the line, then the pages: one process for the hook" ;; *) bad "__recall gives the key, then the line, then the pages: one process for the hook" "$out" ;; esac
+out="$(hook "$RC" '{"source":"startup"}')"
+case "$out" in *"A search of every wiki found these pages that mention it."*"- tfrecall wiki: [RECALL-42 plan]"*"This session is on RECALL-42 (from the folder's name). \`wiki.sh jira show RECALL-42\` prints where it stands."*) ok "the session hook hands over the line after the pages" ;; *) bad "the session hook hands over the line after the pages" "$out" ;; esac
+case "$out" in *"note: "*) bad "and not the word that marks it" "$out" ;; *) ok "and not the word that marks it" ;; esac
+out="$(hook "$T/tickets/RECALL-4" '{"source":"startup"}')"
+case "$out" in *"This session is on RECALL-4 (from the folder's name)."*) ok "the hook hands it over when no page mentions the ticket" ;; *) bad "the hook hands it over when no page mentions the ticket" "$out" ;; esac
+case "$out" in *"A search of every wiki"*) bad "and says nothing of a search that found nothing" "$out" ;; *) ok "and says nothing of a search that found nothing" ;; esac
+lacks "the hook says nothing in a folder named for no ticket" "This session is on" hook "$T/tickets/plain" '{"source":"startup"}'
+expect "on a branch the hook says so" "This session is on RECALL-42 (from the branch's name)." hook "$BR" '{"source":"startup"}'
+out="$(printf '{"cwd":"%s","hook_event_name":"SessionStart","source":"startup"}' "$RC" | "$W" __codex-start)"
+case "$out" in *"This session is on RECALL-42 (from the folder"*"jira show RECALL-42"*) ok "Codex's hook goes through start and has it too" ;; *) bad "Codex's hook goes through start and has it too" "$out" ;; esac
+out="$(printf '{"workspacePaths":["%s"],"conversationId":"c1"}' "$RC" | "$W" __agy-start)"
+case "$out" in *"This session is on RECALL-42 (from the folder"*"jira show RECALL-42"*) ok "and so does Antigravity's" ;; *) bad "and so does Antigravity's" "$out" ;; esac
+check "none of them ran the command that fetches the token" test ! -e "$T/token-ran"
+rm -f "$HOME/.config/llm-wiki/atlassian"
+lacks "once it isn't set up, start says nothing again" "jira show" env -C "$RC" "$W" start
+"$W" extensions remove jira >/dev/null 2>&1
+git -C "$BR" checkout -q --detach
 # What a message finds. When the user sends one, the words they typed are searched for in
 # every wiki: a ticket key or a name out of code on its own, ordinary words two at a time.
 # __recall --text reads the message from a file.

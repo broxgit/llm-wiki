@@ -47,7 +47,8 @@ USAGE = f"""Usage: {CMD} jira [check] [--close] [<wiki>]
        {CMD} jira config
 
   check    For every open item that names a ticket, such as PROJ-123, say where the
-           ticket stands. The default. It reads Jira and changes nothing.
+           ticket stands. An item names one in its heading, or in a Ticket: line of
+           a note it came from. The default. It reads Jira and changes nothing.
            --close saves a note for what changes what you should do, and syncs the
            wiki: an item whose tickets are all done is closed; a ticket closed without
            the work, or blocked, opens an item saying so; a ticket reopened after its
@@ -395,7 +396,8 @@ def setup():
     print()
     print(bold("== Step 2 of 2: what it does"))
     own = read_conf(CONFIG)
-    print("A ticket is a key in an open item's heading, such as PROJ-123. Naming your projects keeps a")
+    print("A ticket is a key in an open item's heading, such as PROJ-123, or in a Ticket: line of a note the")
+    print("item came from, which a capture adds when it is taken in a folder named for a ticket. Naming your projects keeps a")
     print("word that only looks like a key, such as UTF-8, from being looked up.")
     projects = ask("Projects whose keys count as tickets, such as PROJ, OPS. Empty for any", own.get("projects", ""))
     set_conf(CONFIG, "projects", projects)
@@ -527,7 +529,8 @@ def keys_in(text, projects):
 
 def ledger(wiki_cmd, only):
     """[(wiki, [entry])] for every wiki's open items, from `wiki open --data`. An entry
-    is its heading, status, who, and the notes it came from."""
+    is its heading, status, who, the notes it came from, and the tickets those notes carry
+    in a Ticket: line (a ninth field, which an older wiki open --data doesn't have)."""
     r = subprocess.run([wiki_cmd, "open", "--data"] + ([only] if only else []), capture_output=True, text=True)
     if r.returncode != 0:
         if only:
@@ -540,7 +543,8 @@ def ledger(wiki_cmd, only):
             continue
         wiki, _state, _kind, who, _due, status, came, heading = f[:8]
         books.setdefault(wiki, []).append({"heading": heading.strip(), "status": status, "who": who,
-                                           "from": [x for x in came.split("; ") if x]})
+                                           "from": [x for x in came.split("; ") if x],
+                                           "noted": f[8].split() if len(f) > 8 else []})
     return sorted(books.items())
 
 
@@ -605,7 +609,14 @@ def cmd_check(args):
     books = ledger(wiki_cmd, rest[0] if rest else None)
 
     def keys(e):
-        return keys_in(e["heading"], conf["projects"])
+        # A ticket in the heading, or one that a note the item came from carries.
+        out = keys_in(e["heading"], conf["projects"])
+        return out + [k for k in keys_in(" ".join(e["noted"]), conf["projects"]) if k not in out]
+
+    def via_notes(e):
+        """The tickets an item has only through its notes, not in its heading."""
+        named = keys_in(e["heading"], [])
+        return [k for k in keys(e) if k not in named]
 
     # What to look at: open entries that name a ticket, and entries this extension
     # closed lately, in case their ticket was reopened.
@@ -615,11 +626,12 @@ def cmd_check(args):
                and (e["status"] == "open" or (recently_done(e["status"]) and ours(e) and not e["heading"].startswith(OWN)))]
     if not watched:
         if conf["projects"]:
-            others = sorted({k for _, es in books for e in es if e["status"] == "open" for k in keys_in(e["heading"], [])})
+            others = sorted({k for _, es in books for e in es if e["status"] == "open"
+                             for k in keys_in(e["heading"] + " " + " ".join(e["noted"]), [])})
             print(f"No open item names a ticket in {', '.join(conf['projects'])}."
                   + (f" {len(others)} other key(s) are left out by projects in {CONFIG}: {', '.join(others[:5])}." if others else ""))
         else:
-            print("No open item names a ticket. A ticket is a key such as PROJ-123 in the item's heading.")
+            print("No open item names a ticket. A ticket is a key such as PROJ-123 in the item's heading, or in a Ticket: line of a note it came from.")
         return 0
     jira = Jira(conf)
     seen = {}
@@ -635,6 +647,7 @@ def cmd_check(args):
 
     notes = {}      # wiki -> [(kind, line, [tickets])]
     counts = {}
+    tied = {}       # (wiki, heading) -> the tickets that item has only through its notes
     last = None
     shown = False
     for wiki, e in watched:
@@ -642,6 +655,7 @@ def cmd_check(args):
         if not found:
             continue
         h = e["heading"]
+        tied[(wiki, h)] = via_notes(e)
         open_headings = {x["heading"] for w, es in books if w == wiki for x in es if x["status"] == "open"}
         add = notes.setdefault(wiki, []).append
         if e["status"] != "open":
@@ -662,7 +676,7 @@ def cmd_check(args):
         shown = True
         print(f"  {h}")
         for t in found:
-            print(f"      {t['key']:<12} {describe(t)}")
+            print(f"      {t['key']:<12} {describe(t)}" + ("  (from a Ticket: line in its notes)" if t["key"] in tied[(wiki, h)] else ""))
         if all(t["state"] == "done" for t in found):
             add(("done", f"Done: {h}", found))
             continue
@@ -728,9 +742,17 @@ def cmd_check(args):
                 if t["key"] not in said:
                     said.append(t["key"])
                     note.append(f"- {t['key']} \"{t['summary']}\": {describe(t)}. {jira.url}/browse/{t['key']}")
+        # An item tied to a ticket only through its notes says why, as the heading doesn't.
+        # The Done: and Waiting: lines below still go by the heading.
+        for kind, line, _ in fresh:
+            h = line.split(" | ", 1)[1] if line.startswith("Waiting: ") else line.split(": ", 1)[-1]
+            if kind in ("done", "reopened") and tied.get((wiki, h)):
+                note.append(f"- \"{h}\" carries {', '.join(tied[(wiki, h)])} in a Ticket: line of its notes.")
         note.append("")
         note += [line for _, line, _ in fresh]
-        r = subprocess.run([wiki_cmd, "capture", wiki, "jira-done"], input="\n".join(note) + "\n", text=True)
+        # From the wikis' folder: a note taken in a folder named for a ticket gets a Ticket: line,
+        # and this one is about every ticket it names, not the one its folder is for.
+        r = subprocess.run([wiki_cmd, "capture", wiki, "jira-done"], input="\n".join(note) + "\n", text=True, cwd=wikis_dir)
         if r.returncode != 0:
             die(f"couldn't save the note in {wiki}")
         r = subprocess.run([wiki_cmd, "sync", wiki, "-m", f"Jira: {len(fresh)} change(s) for open items"])
