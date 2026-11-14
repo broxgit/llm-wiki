@@ -29,6 +29,9 @@
                        Start a wiki from a repository's own docs: README, agent
                        instructions, skills, docs/, decision records.
   cover <wiki> <repo>...  Record that one wiki covers several repositories.
+  uncover <repo>... [--new]
+                       Stop a wiki covering a repository. --new gives it a wiki
+                       of its own.
   workflows [add <pattern> inside|none|<wiki> | remove <pattern> | check [<folder>]]
                        Where sessions outside a repository belong: which folders
                        use the wikis of their clones, one wiki, or none.

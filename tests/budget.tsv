@@ -25,7 +25,7 @@ start: a clone with a wiki	765
 start: a clone with two notes waiting	871
 start: a ticket folder with pages that mention it	1326
 start: a ticket folder, two wikis, no pattern	1447
-template/AGENTS.md	15555
+template/AGENTS.md	15566
 template/rules/compile.md	10785
 template/rules/conflicts.md	1581
 template/rules/delegation.md	4985
@@ -34,7 +34,7 @@ template/rules/journal.md	6505
 template/rules/lint.md	3170
 template/rules/open.md	2425
 template/rules/patterns.md	9611
-template/rules/peers.md	5386
+template/rules/peers.md	5989
 template/rules/sync.md	1995
 template/rules/workflows.md	3741
 workflows: one pattern recorded	317

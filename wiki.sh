@@ -168,6 +168,9 @@ Usage: $WIKI_CMD <command> [options]
                        Start a wiki from a repository's own docs: README, agent
                        instructions, skills, docs/, decision records.
   cover <wiki> <repo>...  Record that one wiki covers several repositories.
+  uncover <repo>... [--new]
+                       Stop a wiki covering a repository. --new gives it a wiki
+                       of its own.
   workflows [add <pattern> inside|none|<wiki> | remove <pattern> | check [<folder>]]
                        Where sessions outside a repository belong: which folders
                        use the wikis of their clones, one wiki, or none.
@@ -2956,6 +2959,46 @@ cmd_cover() {
     else
       printf -- '- %s\n' "$repo" >> "$root/repos.md"
       echo "covers:  $repo"
+    fi
+  done
+}
+
+# uncover <repo>... [--new]: stop a wiki covering a repository, the opposite of cover.
+# --new also gives the repository a wiki of its own, which new refuses while it is covered.
+cmd_uncover() {
+  local make=0 repo d w from tmp n=0
+  # Everything is checked before anything is written.
+  for repo in "$@"; do
+    case "$repo" in
+      --new) make=1 ;;
+      -*) die_usage "unknown option: $repo" ;;
+      *)
+        valid_name "$repo" || die "\"$repo\" can't be a repository's name. Use letters, digits, dots, dashes, underscores."
+        n=$((n + 1))
+        ;;
+    esac
+  done
+  [ "$n" -gt 0 ] || die_usage "usage: $WIKI_CMD uncover <repo>... [--new]"
+  for repo in "$@"; do
+    [ "$repo" != --new ] || continue
+    from=""
+    for d in "$WIKIS_DIR"/*/; do
+      d="${d%/}"
+      is_wiki "$d" || continue
+      [ -f "$d/repos.md" ] && grep -qxF -- "- $repo" "$d/repos.md" || continue
+      w="${d##*/}"
+      # Written in place, so the file keeps its permissions, and a link stays a link.
+      tmp="$(grep -vxF -- "- $repo" "$d/repos.md" || true)"
+      if [ -n "$tmp" ]; then printf '%s\n' "$tmp" > "$d/repos.md"; else : > "$d/repos.md"; fi
+      echo "uncovered: $repo, from the wiki $w"
+      from="${from:+$from, }$w"
+    done
+    [ -n "$from" ] || echo "not covered: $repo"
+    if [ "$make" = 1 ]; then
+      scaffold "$WIKIS_DIR/$repo" 0
+      [ -z "$from" ] || echo "Its pages are still in $from. Moving them is the user's call: ask, then move each as the handbook's rules/peers.md says."
+    elif [ -n "$from" ] && ! is_wiki "$WIKIS_DIR/$repo"; then
+      echo "No wiki covers $repo now. For one of its own: $WIKI_CMD new $repo"
     fi
   done
 }
@@ -10354,6 +10397,10 @@ if [ "$cmd" = cover ]; then
   cmd_cover "$@"
   exit 0
 fi
+if [ "$cmd" = uncover ]; then
+  cmd_uncover "$@"
+  exit 0
+fi
 # Not a command of wiki.sh's own: an extension's, if there is one by that name.
 if ext="$(ext_file "$cmd")"; then run_extension "$ext" "$@"; fi
 if ext_shipped "$cmd" >/dev/null; then die "$cmd is an extension, and it is off. Turn it on: $WIKI_CMD extensions add $cmd"; fi
@@ -10401,7 +10448,7 @@ case "$cmd" in
       *)
         owner="$(which_wiki "$target")"
         if [ -n "$owner" ] && [ "$owner" != "$target" ]; then
-          die "$target is already covered by the wiki $owner. Use that one."
+          die "$target is already covered by the wiki $owner. Use that one. To give $target a wiki of its own: $WIKI_CMD uncover $target --new"
         fi
         ;;
     esac

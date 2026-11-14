@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Handbook version 35.
+Handbook version 36.
 
 This folder is a knowledge base maintained by an LLM agent. Any agent working here follows this file. It needs no vendor features. Plain markdown, plain files.
 
@@ -13,7 +13,7 @@ This file holds what every session needs. The rest is in `rules/`. Read a rules 
 | compile: ingest, or any change to `wiki/`, `index.md`, or `log.md` | `rules/compile.md` |
 | file a source that disagrees with a page, or a claim you doubt | `rules/conflicts.md` |
 | lint | `rules/lint.md` |
-| look something up in a peer wiki, write to another wiki, create one, or move knowledge between wikis | `rules/peers.md` |
+| look something up in a peer wiki, write to another wiki, create one, split one, or move knowledge between wikis | `rules/peers.md` |
 | commit by hand, or handle a merge conflict or a refused commit | `rules/sync.md` |
 | write a journal entry, or report what the user did | `rules/journal.md` |
 | record feedback, update `patterns.md`, propose a fix, or check code against conventions | `rules/patterns.md` |

@@ -4,6 +4,13 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v36 (2026-11-14)
+
+A repository that a wiki covers can get a wiki of its own.
+
+- There was a rule for when repositories belong in one wiki and none for when to split one out. Now the agent proposes a split when a covered repository's work mostly stands alone: its pages are only about it and little else links to them. It never splits unasked.
+- `wiki uncover <repository> --new` takes the repository off the old wiki's list and creates its wiki. The agent then moves the pages with your agreement. `wiki uncover <repository>` alone undoes a `wiki cover` made by mistake.
+
 ## v35 (2026-11-14)
 
 The user's request comes before a compile, and a failed write never costs them their answer.

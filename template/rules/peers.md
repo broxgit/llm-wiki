@@ -1,6 +1,6 @@
 # Peers
 
-Read this before you look something up in a peer wiki, write to another wiki, create one, or move knowledge between wikis.
+Read this before you look something up in a peer wiki, write to another wiki, create one, split one, or move knowledge between wikis.
 
 ## Other wikis
 
@@ -55,6 +55,15 @@ When the user sets one up, add a line per repository to its `repos.md`:
 Inside such a wiki, file shared knowledge once, by topic. Give a repository its own page only for what is specific to it, such as its build steps.
 
 Don't create wikis for third-party libraries. Their knowledge goes in a shared wiki. Don't create an empty wiki just to look something up.
+
+## Give a covered repository its own wiki
+
+Split a repository out of a wiki that covers several when its work mostly stands alone: it has built up pages that are only about it and that little else here links to, or the user says so. Propose it, naming the pages you would move. Never split unasked. Once the user agrees:
+
+1. Run `wiki.sh uncover <repository> --new`. It takes the repository off this wiki's `repos.md` and creates its wiki.
+2. Move its pages as Move knowledge says, below.
+
+For a repository that was listed here by mistake, `wiki.sh uncover <repository>` alone takes it off.
 
 ## Compile other wikis
 
