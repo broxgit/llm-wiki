@@ -588,7 +588,15 @@ func (s *Server) wikiCapture(a args) (string, error) {
 	if synced != "" {
 		why = lastLine(synced)
 	}
-	return out + "\nSaved on this machine only: " + why, nil
+	reply := out + "\nSaved on this machine only: " + why
+	// A sync that failed says why in the lines before its last: which secret the scan
+	// found, which file is in conflict. Someone with no terminal can't go and look.
+	if !ok {
+		if before := earlier(synced, why); before != "" {
+			reply += "\nBefore that, sync said:\n" + before
+		}
+	}
+	return reply, nil
 }
 
 // capture saves the note as wiki.sh capture does, and answers as must would have:

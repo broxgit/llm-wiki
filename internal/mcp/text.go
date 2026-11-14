@@ -79,6 +79,16 @@ func strip(s string) string {
 	return strings.TrimFunc(s, space)
 }
 
+// earlier is what s holds before its last line, trimmed as Python's strip does, and
+// its last 1500 characters when it is longer: s[:len(s)-len(last)].strip()[-1500:].
+func earlier(s, last string) string {
+	r := []rune(strip(strings.TrimSuffix(s, last)))
+	if len(r) > 1500 {
+		r = r[len(r)-1500:]
+	}
+	return string(r)
+}
+
 // lastLine is s.splitlines()[-1] for text that doesn't end in a line end: what follows
 // the last of the characters Python ends a line at.
 func lastLine(s string) string {

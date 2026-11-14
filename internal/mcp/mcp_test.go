@@ -78,6 +78,8 @@ case "$FAKE" in
   slow) sleep 5 ;;
   linger) sleep 5 & echo "gone" ;;
   bytes) printf 'caf\351 \342\206\r\nnext\r' ; printf ' err\n' >&2 ;;
+  refused) case "$1" in sync) echo "Finding: api_key = REDACTED"; echo "File: raw/x.md"; echo "error: the commit was refused." >&2; exit 1 ;; *) echo "ran $1" ;; esac ;;
+  long-fail) case "$1" in sync) i=0; while [ $i -lt 400 ]; do printf 'line %03d\n' $i; i=$((i+1)); done; echo "error: no" >&2; exit 1 ;; *) echo "ran $1" ;; esac ;;
   no-remote) case "$1" in sync) echo "committed: m"; echo "no remote, so nothing to pull or push" ;; *) echo "ran $1" ;; esac ;;
   unowned) case "$1" in sync) echo "~/wikis/demo is in a repository the wikis don't manage, so nothing is synced from here. Commits are up to you there." ;; *) echo "ran $1" ;; esac ;;
   first-push) case "$1" in sync) echo "committed: m"; echo "synced: pushed ~/wikis to origin for the first time" ;; *) echo "ran $1" ;; esac ;;
@@ -697,8 +699,25 @@ func TestCaptureNotPushed(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = root
-	if got, isErr := call(t, s, "wiki_capture", m{"wiki": "demo", "slug": "x", "note": "n"}); isErr || saved(got) != "ran capture\nSaved on this machine only: error: no remote" {
+	if got, isErr := call(t, s, "wiki_capture", m{"wiki": "demo", "slug": "x", "note": "n"}); isErr || saved(got) != "ran capture\nSaved on this machine only: error: no remote\nBefore that, sync said:\nfirst line" {
 		t.Errorf("wiki_capture = %q, error %v", got, isErr)
+	}
+}
+
+// A sync that fails says why before its last line, and a capture passes that on: at
+// most its last 1500 characters.
+func TestCaptureSaysWhySyncFailed(t *testing.T) {
+	s, _ := fixture(t)
+	fake(s, "refused")
+	want := "ran capture\nSaved on this machine only: error: the commit was refused.\nBefore that, sync said:\nFinding: api_key = REDACTED\nFile: raw/x.md"
+	if got, isErr := call(t, s, "wiki_capture", m{"wiki": "demo", "slug": "x", "note": "n"}); isErr || saved(got) != want {
+		t.Errorf("a refused commit: %q, error %v", got, isErr)
+	}
+	fake(s, "long-fail")
+	got, isErr := call(t, s, "wiki_capture", m{"wiki": "demo", "slug": "x", "note": "n"})
+	_, before, found := strings.Cut(saved(got), "\nBefore that, sync said:\n")
+	if isErr || !found || len([]rune(before)) != 1500 || !strings.HasSuffix(before, "line 399") {
+		t.Errorf("a long failure: %d characters, ends %q, error %v", len([]rune(before)), before[max(0, len(before)-20):], isErr)
 	}
 }
 
