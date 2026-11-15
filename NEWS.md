@@ -4,6 +4,11 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-12-22: a pattern for the folders inside says what it leaves out
+
+- `wiki workflows add '<folder>/*' <wiki>` now says it covers the folders inside, not the folder itself, and gives the command for that folder too.
+- An agent walking you through setup is told which pattern goes with which answer, to keep technical words out, and to end with how you can help.
+
 ## 2026-12-21: setup from start to finish, for anyone
 
 - `wiki setup` now opens by saying what llm-wiki is and why, and ends with tips and ways to help improve it.

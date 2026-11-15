@@ -1399,6 +1399,10 @@ cmd_workflows() {
         END { if (!done) print line }' "$f" > "$tmp" && mv "$tmp" "$f"
       setup_mark workflows
       ui_item ok "$([ -n "$had" ] && echo changed || echo added): ${line#- }"
+      case "$glob:$what" in
+        *"/*:inside") ;;
+        *"/*:"*) ui_detail "That is for the folders inside ${glob%/\*}, not ${glob%/\*} itself. For that folder too: $(typed "$WIKI_CMD workflows add '${glob%/\*}' $what")" ;;
+      esac
       ! git -C "$WIKIS_DIR" remote get-url origin >/dev/null 2>&1 || ui_detail "Send it to your other machines: $(typed "$WIKI_CMD sync $SHARED -m \"$SHARED: where sessions belong\"")"
       ;;
     remove)
@@ -10267,7 +10271,7 @@ guide_entry() {
       if [ -d "$WIKIS_DIR" ]; then echo "Where the wikis live. Terminal only: $c setup collection"
       else echo "The wikis get a folder of their own, $(tilde "$WIKIS_DIR"), apart from the folders the user works in. It doesn't exist yet, and nothing else can be set without it. With the user's yes, create it: $c init. Then run $c setup --guide again: the other topics appear once it exists"; fi
       ;;
-    workflows) echo "Where conversations that start outside a project's own folder belong. Ask where the user usually starts: one project's folder (nothing to record), a folder for each task or ticket that holds copies of projects, or one folder for everything. Then ask whether they also work another way. Change: $c workflows add '<folder>/*' inside, $c workflows add '<folder>' <wiki>|none, or $c workflows skip" ;;
+    workflows) echo "Where conversations that start outside a project's own folder belong. Ask where the user usually starts: one project's folder (nothing to record), a folder for each task or ticket that holds copies of projects, or one folder for everything. Then ask whether they also work another way. Change, by answer: task folders, $c workflows add '<folder>/*' inside. One folder, $c workflows add '<folder>' <wiki>|none, no /* at the end. A project's folder, $c workflows skip. Then try it: $c workflows check <folder>" ;;
     git) echo "Whether the collection is a git repo with a remote, so it syncs. Terminal only: $c setup git" ;;
     git.identity) echo "The name and email on commits in the collection. Terminal only: $c setup git.identity" ;;
     claude) echo "The wiki line in ~/.claude/CLAUDE.md. Terminal only: $c setup claude" ;;
@@ -10324,10 +10328,11 @@ setup_guide() {
   local first="" last="- Finish with $c setup --list and tell the user what changed."
   if [ -z "$sec" ]; then
     first="- If the user is new to llm-wiki, first say what it is in two or three plain sentences: notes on this computer, a wiki for each project, that give their assistant a memory that lasts.
-- Use everyday words. Say folder, not repository, unless the user does.
+- Use everyday words unless the user uses others: folder, not repository; a history or a backup, not git or sync. Never say a setting's internal name.
 - Don't hand the user a list of Terminal only commands. Give one only when they asked for that topic, or it is marked [not answered yet].
 "
-    last="- Finish with $c setup --list and tell the user what changed. Then give two or three tips (say \"remember this\" to save something, ask what was decided, $c status, the llm-wiki tour), and say how they can help improve it: feedback notes ($c setup feedback notes) and issues at https://github.com/$(feedback_repo)/issues."
+    last="- Finish with $c setup --list and tell the user what changed: only what they chose, not every row. Then give two or three tips (say \"remember this\" to save something, ask what was decided, $c status, the llm-wiki tour).
+- Your last line, always: how they can help improve llm-wiki, with feedback notes ($c setup feedback notes) and issues at https://github.com/$(feedback_repo)/issues."
   fi
   cat <<EOF
 llm-wiki setup guide, to follow with the user in this session, one topic at a time.
