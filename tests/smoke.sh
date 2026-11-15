@@ -4877,14 +4877,31 @@ out="$(jnn check 2>&1)"
 case "$out" in *"Roll out the billing change"*"PROJ-1       Done, resolved 2026-11-08  (from a Ticket: line in its notes)"*) ok "jira says where the ticket a note carries stands, and that it came from the notes" ;; *) bad "jira says where the ticket a note carries stands, and that it came from the notes" "$out" ;; esac
 case "$out" in *"Wait for the vendor's answer"*"PROJ-2       In Progress  (from a Ticket: line in its notes)"*) ok "and one that is still open" ;; *) bad "and one that is still open" "$out" ;; esac
 case "$out" in *"Chase the old thread"*) bad "an item whose notes carry no ticket, or are gone, is left out" "$out" ;; *) ok "an item whose notes carry no ticket, or are gone, is left out" ;; esac
-case "$out" in *"1 open item(s) have every ticket done"*) ok "only the item whose ticket is done is counted as done" ;; *) bad "only the item whose ticket is done is counted as done" "$out" ;; esac
+case "$out" in *"have every ticket done"*) bad "an item tied to a done ticket only by its notes isn't counted as done" "$out" ;; *"1 other change(s) to note: 1 to ask you about."*) ok "an item tied to a done ticket only by its notes isn't counted as done" ;; *) bad "an item tied to a done ticket only by its notes isn't counted as done" "$out" ;; esac
 expect "projects limits those tickets too, and says which it left out" "No open item names a ticket in OPS. 2 other key(s) are left out by projects" env JIRA_PROJECTS=OPS WIKIS_DIR="$JN" JIRA_URL="http://127.0.0.1:$(cat "$J/port")" JIRA_API_TOKEN=smoke-token "$W" jira
 (cd "$T/jnfolder/VID-9" && jnn check --close >/dev/null 2>&1)
 note="$(ls "$JN/ndemo/raw"/*-jira-done.md 2>/dev/null | head -n 1)"
-check "check --close, run in a folder named for another ticket, writes the Done: line that closes the item, by its heading" grep -qxF "Done: Roll out the billing change" "$note"
-lacks "and none for the item whose ticket is still open" "Done: Wait for" cat "$note"
-check "the note names why, since the heading doesn't" grep -qF "\"Roll out the billing change\" carries PROJ-1 in a Ticket: line of its notes." "$note"
+JQ='Jira: PROJ-1 is done: is "Roll out the billing change" finished too?'
+check "check --close, run in a folder named for another ticket, opens an item that asks about it" grep -qxF "Waiting: user | $JQ" "$note"
+lacks "and doesn't close the item itself" "Done: Roll out" cat "$note"
+lacks "and none for the item whose ticket is still open" "Wait for" cat "$note"
+check "the note names why it stays open" grep -qF "\"Roll out the billing change\" is tied to PROJ-1 only by a Ticket: line of its notes, so it stays open until you say." "$note"
 lacks "and carries no Ticket: line of the folder it was run in" "VID-9" cat "$note"
+# After a compile the question is an open item. It isn't asked twice, an answer of no isn't
+# asked again, and it closes itself when the item it asks about closes.
+jopen() { # jopen <status of the item> <status of the question>
+  rm -f "$JN/ndemo/raw"/*-jira-done*.md
+  printf '# Open\n\n## Roll out the billing change\n- kind: waiting\n- who: Katherine\n- status: %s\n- from: 2026-11-10 raw/n1.md\n\n## %s\n- kind: waiting\n- who: user\n- status: %s\n- from: 2026-11-11 raw/2026-11-11-jira-done.md\n' "$1" "$JQ" "$2" > "$JN/ndemo/open.md"
+}
+cp "$JN/ndemo/open.md" "$T/jn-open.bak"
+jopen open open; jnn check --close >/dev/null 2>&1
+[ -z "$(ls "$JN/ndemo/raw"/*-jira-done*.md 2>/dev/null)" ] && ok "with the question open, a second check doesn't ask again" || bad "with the question open, a second check doesn't ask again" "$(cat "$JN/ndemo/raw"/*-jira-done*.md)"
+jopen open "done 2026-11-12"; jnn check --close >/dev/null 2>&1
+[ -z "$(ls "$JN/ndemo/raw"/*-jira-done*.md 2>/dev/null)" ] && ok "answered no, the question is closed and isn't asked again" || bad "answered no, the question is closed and isn't asked again" "$(cat "$JN/ndemo/raw"/*-jira-done*.md)"
+jopen "done 2026-11-12" open; jnn check --close >/dev/null 2>&1
+note="$(ls "$JN/ndemo/raw"/*-jira-done*.md 2>/dev/null | head -n 1)"
+check "answered yes, the item is closed and the question closes itself" grep -qxF "Done: $JQ" "${note:-/dev/null}"
+rm -f "$JN/ndemo/raw"/*-jira-done*.md; mv "$T/jn-open.bak" "$JN/ndemo/open.md"
 # An older wiki open --data, with eight fields, still works: only the headings count then.
 mkdir -p "$T/jnshim"
 printf '#!/bin/sh\nif [ "$1" = open ]; then "%s" "$@" | cut -f 1-8; else exec "%s" "$@"; fi\n' "$W" "$W" > "$T/jnshim/wiki-old"

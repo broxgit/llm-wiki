@@ -4,6 +4,14 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v38 (2026-11-15)
+
+A finished ticket no longer closes an open item that only sat in its folder.
+
+- `wiki jira check --close` closes an item whose heading names the ticket, as before. An item tied to the ticket only by a note's `Ticket:` line stays open, and a `Jira:` item asks, once, whether it is finished too.
+- `rules/open.md` tells the agent to ask the user: on a yes it closes the item with a `Done:` line, on a no it closes only the question.
+- Do: run `wiki upgrade --all`.
+
 ## v37 (2026-11-14)
 
 An open item saved in a ticket folder is tied to the ticket, and the agent knows how to say when it isn't.

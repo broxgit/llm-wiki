@@ -11,6 +11,12 @@ Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title i
 - An agent walking you through setup does the same, and can create the wikis' folder itself, so no terminal is needed to begin.
 - Do: run `wiki setup --new` to be asked how you work. It is one question.
 
+## 2026-12-20: a finished ticket asks before closing what only sat in its folder
+
+- `wiki jira check --close` no longer closes an item tied to a ticket only by a note's `Ticket:` line. It asks you whether that one is finished too.
+- An item whose heading names the ticket still closes by itself when the ticket is done.
+- Do: run `wiki update`, then `wiki upgrade --all`, for handbook version 38.
+
 ## 2026-12-19: a chat with no wikis says where setup happens
 
 - On a machine with no wikis, the chat connector now says setup takes a terminal and names the agent-led guide, not just "Run: wiki setup".

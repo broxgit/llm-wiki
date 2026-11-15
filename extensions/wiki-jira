@@ -52,7 +52,9 @@ USAGE = f"""Usage: {CMD} jira [check] [--close] [<wiki>]
            --close saves a note for what changes what you should do, and syncs the
            wiki: an item whose tickets are all done is closed; a ticket closed without
            the work, or blocked, opens an item saying so; a ticket reopened after its
-           item closed opens the item again. The next compile applies it.
+           item closed opens the item again. An item tied to its tickets only by a
+           Ticket: line isn't closed: an item asks you, once, whether it is finished
+           too. The next compile applies it.
   show     One line for each ticket: its status and summary.
   config   What is set, and whether Jira accepts the sign-in.
 
@@ -666,8 +668,10 @@ def cmd_check(args):
         if h.startswith(OWN):
             # An item an earlier run opened: it closes when what it says stops being so.
             t = found[0]
+            asked = re.search(r' done: is "(.*)" finished too\?$', h)
             if (" is blocked, holding up " in h and t["state"] != "blocked") or \
-               (" was closed as " in h and t["state"] != "abandoned"):
+               (" was closed as " in h and t["state"] != "abandoned") or \
+               (asked and (asked.group(1) not in open_headings or any(x["state"] != "done" for x in found))):
                 add(("cleared", f"Done: {h}", [t]))
             continue
         if wiki != last:
@@ -678,7 +682,16 @@ def cmd_check(args):
         for t in found:
             print(f"      {t['key']:<12} {describe(t)}" + ("  (from a Ticket: line in its notes)" if t["key"] in tied[(wiki, h)] else ""))
         if all(t["state"] == "done" for t in found):
-            add(("done", f"Done: {h}", found))
+            if len(tied[(wiki, h)]) == len(found):
+                # Tied to its tickets only by where its notes were taken, so it may be about
+                # something else: the person is asked, and the item stays open until they say.
+                names = " and ".join(t["key"] for t in found)
+                item = f"{OWN}{names} {'is' if len(found) == 1 else 'are'} done: is \"{h}\" finished too?"
+                # Asked once: an answer of no closes the question and leaves the item open.
+                if item not in {x["heading"] for w_, es in books if w_ == wiki for x in es}:
+                    add(("ask", f"Waiting: user | {item}", found))
+            else:
+                add(("done", f"Done: {h}", found))
             continue
         for t in found:
             if t["state"] == "abandoned":
@@ -708,8 +721,8 @@ def cmd_check(args):
             todo[wiki] = fresh
             for kind, _, _ in fresh:
                 counts[kind] = counts.get(kind, 0) + 1
-    words = {"abandoned": "closed without the work", "blocked": "blocked", "cleared": "no longer so", "reopened": "reopened"}
-    others = [f"{counts[k]} {words[k]}" for k in ("abandoned", "blocked", "cleared", "reopened") if counts.get(k)]
+    words = {"ask": "to ask you about", "abandoned": "closed without the work", "blocked": "blocked", "cleared": "no longer so", "reopened": "reopened"}
+    others = [f"{counts[k]} {words[k]}" for k in ("ask", "abandoned", "blocked", "cleared", "reopened") if counts.get(k)]
     if shown:
         print()
     if not close:
@@ -748,6 +761,9 @@ def cmd_check(args):
             h = line.split(" | ", 1)[1] if line.startswith("Waiting: ") else line.split(": ", 1)[-1]
             if kind in ("done", "reopened") and tied.get((wiki, h)):
                 note.append(f"- \"{h}\" carries {', '.join(tied[(wiki, h)])} in a Ticket: line of its notes.")
+            m = re.search(r' done: is "(.*)" finished too\?$', h) if kind == "ask" else None
+            if m:
+                note.append(f"- \"{m.group(1)}\" is tied to {', '.join(tied[(wiki, m.group(1))])} only by a Ticket: line of its notes, so it stays open until you say.")
         note.append("")
         note += [line for _, line, _ in fresh]
         # From the wikis' folder: a note taken in a folder named for a ticket gets a Ticket: line,
@@ -763,7 +779,7 @@ def cmd_check(args):
             print(f"{wiki}: noted {n_done} item(s) as done. The next compile closes them.")
         else:
             kinds = ([f"{n_done} done"] if n_done else []) + [f"{sum(1 for k, _, _ in fresh if k == kind)} {words[kind]}"
-                                                               for kind in ("abandoned", "blocked", "cleared", "reopened")
+                                                               for kind in ("ask", "abandoned", "blocked", "cleared", "reopened")
                                                                if any(k == kind for k, _, _ in fresh)]
             print(f"{wiki}: noted {len(fresh)} change(s): {', '.join(kinds)}. The next compile applies them.")
     return 0
