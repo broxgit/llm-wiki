@@ -85,6 +85,40 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### Session start asks for plain words about a folder with no git (2026-11-15)
+
+- **Why:** the last piece of the plainer wording. The session-start lines that begin "This folder isn't a git repository" are written for the agent, and agents passed the phrase on to people who don't use git.
+- **What changed:** the four lines keep their reason, because a developer whose folder shares a name with a wiki needs it, and each instruction to tell the user now says "in plain words".
+- **Still untested:** whether agents then leave "git repository" out of what they say. The lines for a recorded pattern are unchanged.
+
+### The chat connector says why a save didn't sync (2026-11-14)
+
+- **Why:** found while testing the plainer wording. When a sync failed, the connector passed on only its last line, "sync failed", so a person in a chat had nothing to act on.
+- **What changed:** on a failed sync, both connector copies add "Before that, sync said:" and what sync printed before its last line, the last 1,500 characters at most. Go and Python print the same bytes. The helper protocol is 18.
+- **Known, and untested:** the added lines can carry a custom hook's output, local paths or a remote's address, since they are sync's own words. Not seen in the desktop app's Chat tab.
+
+### A ticket's waiting notes are handed over with its pages (2026-11-14)
+
+- **Why:** real Codex and Antigravity sessions in ticket folders were told only that a note was waiting. The search for a ticket's key looked at pages, not at notes that hadn't been compiled.
+- **What changed:** in a folder or on a branch named for a ticket, `wiki start` and the session hook list the notes not compiled yet that carry the ticket's `Ticket:` line or name it in their text, after its pages, each with its first line. The heading says "pages and notes" when a note is among them.
+- **Still untested:** whether a session should ask before closing an item tied to a ticket only through its notes. The line that names the ticket still needs the Jira extension ready.
+
+### Plainer words for people who don't use git (2026-11-14)
+
+- **Why:** simulated outside testers with no git, an accountant and an appraiser, were told a wiki "isn't in a repo the wikis own", that a note was "pushed", and to "use the repository's name" for "Acme Holdings".
+- **What changed:** `wiki sync` on a wiki with no git says it has no backup and isn't shared, and names `wiki setup git` only where that command reaches the wiki, with `--collection` for a collection that isn't the default. `wiki new` offers the nearest name it would take. Both connector copies report a note as "Saved, and copied off this machine" or "Saved on this machine only", and their instructions ask for everyday words. The helper protocol is 17. Codex and Gemini reviewed it; Gemini found four faults in the first sync message, all fixed with tests.
+- **Tested, and not:** 16 persona sessions through the connector and 26 real Codex and Antigravity sessions (23 passed, 3 partly, none failed). Left alone: the session-start lines that begin "This folder isn't a git repository", names with spaces, and first-run steps that assume a terminal.
+
+### The conventions name three more commands that stay plain (2026-11-14)
+
+- **What changed:** `docs/conventions.md` only. The same line went into llm-relay's copy, so the two guides match.
+
+### The search at a message stays in the session's project (2026-11-14)
+
+- **Why:** the prompt hook searched every wiki for a message's words, and two ordinary words on one line were enough. A session in one project was handed notes from three others.
+- **What changed:** two ordinary words count only in the wikis the session calls its own: the wiki that covers its repository, the wikis of the clones its folder holds, and the shared wiki. A ticket's key or a name out of code is still found in any wiki, the session's own first. `__recall --text <file> --in <folder>` searches as a session in that folder would.
+- **Tested:** held in 8 of 8 real Codex and Antigravity sessions.
+
 ### Notes taken in a ticket folder know their ticket (2026-11-14)
 
 - **Why:** the third step of "Learn where a person works, by asking" under Next. Most of one team starts sessions in a folder named for a Jira ticket, or on a branch named for one. Nothing tied what they captured there to the ticket, so `wiki jira check` could act only on an open item whose heading named the key.
