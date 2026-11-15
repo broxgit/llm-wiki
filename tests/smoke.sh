@@ -5922,7 +5922,7 @@ for r in tfalpha tfbeta tfgamma; do git init -q "$TF/$r"; done
 out="$(cd "$TF" && "$W" start 2>&1)"
 [ "$(printf '%s\n' "$out" | head -n 1)" = "wiki: $WIKIS_DIR/tfalpha" ] && ok "started in a folder of clones, the first clone's wiki is the session's" || bad "started in a folder of clones, the first clone's wiki is the session's" "$out"
 case "$out" in *"This folder isn't a git repository. It holds clones of tfalpha and tfbeta, so their wikis are this session's"*) ok "and start says why, naming the clones" ;; *) bad "and start says why, naming the clones" "$out" ;; esac
-case "$out" in *"Tell the user, in one line, which wikis you are using and why, and that they can say so if that is wrong."*) ok "and has the agent tell the user, and how to say it is wrong" ;; *) bad "and has the agent tell the user, and how to say it is wrong" "$out" ;; esac
+case "$out" in *"Tell the user, in one line and in plain words, which wikis you are using and why, and that they can say so if that is wrong."*) ok "and has the agent tell the user, and how to say it is wrong" ;; *) bad "and has the agent tell the user, and how to say it is wrong" "$out" ;; esac
 case "$out" in *"===== $WIKIS_DIR/tfalpha/index.md"*"===== $WIKIS_DIR/tfbeta/index.md (also in this folder)"*) ok "the other clone's index is printed too" ;; *) bad "the other clone's index is printed too" "$out" ;; esac
 case "$out" in *"tfgamma has no wiki yet"*"new tfgamma"*) ok "a clone with no wiki is named, with how to make one" ;; *) bad "a clone with no wiki is named, with how to make one" "$out" ;; esac
 case "$out" in *"$WIKIS_DIR/tfbeta: nothing waiting"*) ok "and what waits to be compiled covers every wiki in use" ;; *) bad "and what waits to be compiled covers every wiki in use" "$out" ;; esac
@@ -5931,7 +5931,7 @@ case "$out" in "wiki: $WIKIS_DIR/tfalpha, for the repository tfalpha"*) ok "star
 case "$out" in *"isn't a git repository"*) bad "with nothing said about folders" "$out" ;; *) ok "with nothing said about folders" ;; esac
 mkdir -p "$T/tickets/EMPTY/notes"
 out="$(cd "$T/tickets/EMPTY" && "$W" start 2>&1)"
-case "$out" in "wiki: $WIKIS_DIR/global"*"This folder isn't a git repository, and holds none, so the shared wiki is this session's. Tell the user so in one line, and ask whether they want llm-wiki used for this work, and if so which wiki it belongs to."*) ok "a folder with no repository in it gets the shared wiki, says so, and has the agent ask" ;; *) bad "a folder with no repository in it gets the shared wiki, says so, and has the agent ask" "$out" ;; esac
+case "$out" in "wiki: $WIKIS_DIR/global"*"This folder isn't a git repository, and holds none, so the shared wiki is this session's. Tell the user so in one line, in plain words, and ask whether they want llm-wiki used for this work, and if so which wiki it belongs to."*) ok "a folder with no repository in it gets the shared wiki, says so, and has the agent ask" ;; *) bad "a folder with no repository in it gets the shared wiki, says so, and has the agent ask" "$out" ;; esac
 mkdir -p "$T/tickets/NOWIKI"
 git init -q "$T/tickets/NOWIKI/tfgamma"
 out="$(cd "$T/tickets/NOWIKI" && "$W" start 2>&1)"
@@ -6005,7 +6005,7 @@ case "$out" in *"It holds a clone of tfalpha, so its wiki is this session's: tfa
 case "$out" in *"r01, r02, r03 and 26 more have no wikis yet"*) ok "and a long list of clones with no wiki is cut to three and a count" ;; *) bad "and a long list of clones with no wiki is cut to three and a count" "$out" ;; esac
 git init -q "$BIG/r30"
 out="$("$W" workflows check "$BIG" 2>&1)"
-case "$out" in "This folder isn't a git repository. It holds more than 30 folders, so it is taken for where repositories are kept"*"the shared wiki is this session's. Tell the user so in one line."*) ok "a folder of more than 30 is where repositories are kept, and gets the shared wiki" ;; *) bad "a folder of more than 30 is where repositories are kept, and gets the shared wiki" "$out" ;; esac
+case "$out" in "This folder isn't a git repository. It holds more than 30 folders, so it is taken for where repositories are kept"*"the shared wiki is this session's. Tell the user so in one line, in plain words."*) ok "a folder of more than 30 is where repositories are kept, and gets the shared wiki" ;; *) bad "a folder of more than 30 is where repositories are kept, and gets the shared wiki" "$out" ;; esac
 case "$out" in *"tfalpha"* | *"Ask once"* | *"have no wikis yet"*) bad "nothing is read into its clones, and nothing is asked" "$out" ;; *) ok "nothing is read into its clones, and nothing is asked" ;; esac
 case "$out" in *"workflows add '"*"/tickets/allrepos' <wiki>"*"workflows add '"*"/tickets/allrepos' none"*) ok "and it says how to name a wiki for it, or none" ;; *) bad "and it says how to name a wiki for it, or none" "$out" ;; esac
 out="$(env -C "$BIG" "$W" start 2>&1)"

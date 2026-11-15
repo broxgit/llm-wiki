@@ -85,6 +85,12 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### Session start asks for plain words about a folder with no git (2026-11-15)
+
+- **Why:** the last piece of the plainer wording. The session-start lines that begin "This folder isn't a git repository" are written for the agent, and agents passed the phrase on to people who don't use git.
+- **What changed:** the four lines keep their reason, because a developer whose folder shares a name with a wiki needs it, and each instruction to tell the user now says "in plain words".
+- **Still untested:** whether agents then leave "git repository" out of what they say. The lines for a recorded pattern are unchanged.
+
 ### The chat connector says why a save didn't sync (2026-11-14)
 
 - **Why:** found while testing the plainer wording. When a sync failed, the connector passed on only its last line, "sync failed", so a person in a chat had nothing to act on.

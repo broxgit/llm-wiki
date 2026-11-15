@@ -870,12 +870,12 @@ place_note() {
   set -- $PLACE_LACK
   if [ $# -gt 1 ]; then many="clones of $lack, which have no wikis yet"; else many="a clone of $lack, which has no wiki yet"; fi
   if [ -n "$PLACE_WIKIS" ]; then
-    printf "This folder isn't a git repository. %s Tell the user, in one line, which wikis you are using and why, and that they can say so if that is wrong." "$(place_holds)"
+    printf "This folder isn't a git repository. %s Tell the user, in one line and in plain words, which wikis you are using and why, and that they can say so if that is wrong." "$(place_holds)"
     place_lack
   elif [ -n "$lack" ]; then
-    printf "This folder isn't a git repository. It holds %s, so the shared wiki is this session's. Tell the user so in one line. Create a repository's wiki with \`%s new <name>\` when there is something to file there." "$many" "$WIKI_CMD"
+    printf "This folder isn't a git repository. It holds %s, so the shared wiki is this session's. Tell the user so in one line, in plain words. Create a repository's wiki with \`%s new <name>\` when there is something to file there." "$many" "$WIKI_CMD"
   else
-    printf "This folder isn't a git repository, and holds none, so the shared wiki is this session's. Tell the user so in one line, and ask whether they want llm-wiki used for this work, and if so which wiki it belongs to."
+    printf "This folder isn't a git repository, and holds none, so the shared wiki is this session's. Tell the user so in one line, in plain words, and ask whether they want llm-wiki used for this work, and if so which wiki it belongs to."
   fi
   printf '\n'
 }
@@ -1016,7 +1016,7 @@ place_all() {
   # nothing is asked: the shared wiki, said in a line, and how to say otherwise.
   if [ -n "$PLACE_MANY" ]; then
     PLACE_WIKIS="" PLACE_HAVE="" PLACE_LACK=""
-    PLACE_NOTE="This folder isn't a git repository. It holds more than 30 folders, so it is taken for where repositories are kept, not the folder of one piece of work: nothing is read into the clones in it, and the shared wiki is this session's. Tell the user so in one line. If they want sessions here to use one wiki, or none, record it: $bt$WIKI_CMD workflows add '$own' <wiki>$bt or $bt$WIKI_CMD workflows add '$own' none$bt."
+    PLACE_NOTE="This folder isn't a git repository. It holds more than 30 folders, so it is taken for where repositories are kept, not the folder of one piece of work: nothing is read into the clones in it, and the shared wiki is this session's. Tell the user so in one line, in plain words. If they want sessions here to use one wiki, or none, record it: $bt$WIKI_CMD workflows add '$own' <wiki>$bt or $bt$WIKI_CMD workflows add '$own' none$bt."
     return 0
   fi
   PLACE_NOTE="$(place_note)"
