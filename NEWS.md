@@ -4,6 +4,12 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-12-20: a finished ticket asks before closing what only sat in its folder
+
+- `wiki jira check --close` no longer closes an item tied to a ticket only by a note's `Ticket:` line. It asks you whether that one is finished too.
+- An item whose heading names the ticket still closes by itself when the ticket is done.
+- Do: run `wiki update`, then `wiki upgrade --all`, for handbook version 38.
+
 ## 2026-12-19: a chat with no wikis says where setup happens
 
 - On a machine with no wikis, the chat connector now says setup takes a terminal and names the agent-led guide, not just "Run: wiki setup".

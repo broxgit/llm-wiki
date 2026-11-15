@@ -22,7 +22,7 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 
 - **Why:** llm-wiki assumed a session belongs to one repository. Most of one team starts sessions in a folder for a ticket, which holds clones, and for weeks their project wikis never loaded and nothing said so. Decided on 2026-11-11: never guess silently; ask when unsure; write what is learned into the person's own wiki, so the questions get rarer.
 - **Sketch:** steps 1 to 3 are done (see Done): a folder of clones uses their wikis, patterns remember the answer, and a note taken in a ticket folder carries the ticket's key. Next, `wiki setup` asks how you work, and writes the first pattern.
-- **Open:** how many wikis to read in full when a folder's clones belong to many. Whether an open item tied to a ticket only through its notes should close without asking: where closing is on it does, and a note ending `Ticket: none` keeps an item out. Where a ticket's own state goes: the maintainer said "both, maybe", the repo's wiki and the personal journal. Whether a git repository that holds clones is placed as a folder of clones is: a teammate asked on 2026-11-12 about checking her ticket folder into git, and the "home repo" pattern (one repository you always start in, with the others cloned inside it and ignored) has the same shape. Today such a folder is a repository like any other, so the wikis of the clones inside aren't used. Whether a wiki's `repos.md` should say more than a name for each repository: what it is, where it lives on this machine and where to clone it from, so a session in a ticket folder can find or fetch a repository the ticket needs and the folder lacks. Seen on a real ticket the same day. A clone two folders down isn't seen, and two different repositories with one name share a wiki: both found in the first hand test on real ticket folders, neither decided.
+- **Open:** how many wikis to read in full when a folder's clones belong to many. Where a ticket's own state goes: the maintainer said "both, maybe", the repo's wiki and the personal journal. Whether a git repository that holds clones is placed as a folder of clones is: a teammate asked on 2026-11-12 about checking her ticket folder into git, and the "home repo" pattern (one repository you always start in, with the others cloned inside it and ignored) has the same shape. Today such a folder is a repository like any other, so the wikis of the clones inside aren't used. Whether a wiki's `repos.md` should say more than a name for each repository: what it is, where it lives on this machine and where to clone it from, so a session in a ticket folder can find or fetch a repository the ticket needs and the folder lacks. Seen on a real ticket the same day. A clone two folders down isn't seen, and two different repositories with one name share a wiki: both found in the first hand test on real ticket folders, neither decided.
 
 ### Know whether sessions capture and compile
 
@@ -35,6 +35,7 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 - **Find repeated work in transcripts.** Scan the transcripts on disk (`~/.claude/projects`, Antigravity's) for command sequences repeated across sessions, and report them as candidate toil. Look at this only if handbook v32 still misses repeats.
 - **Merge requests in standups.** Reviews and MRs opened live in GitHub or GitLab, not in git history. Pulling them in would need an API token and a host per remote.
 - **Backfill from more places.** The desktop app's Chat tab and claude.ai aren't on disk, so they're out of reach without an agent that has chat search. (The desktop Code tab is in `~/.claude/projects`, and Gemini's Antigravity conversations are read since 2026-10-29.)
+- **The chat connector creates a wiki.** Through the connector a person can read and save, but can't make a wiki or a collection: with none, it sends them to a terminal or to an agent that has one. Letting it create one means the connector writes outside a wiki's folder for the first time, so decide first what it may create and where.
 - **A hosted MCP server,** so web agents can search everything and save notes. A claude.ai Project covers reading for now. Build this only if saving notes from the web keeps coming up: it puts private notes behind a public URL, so it needs sign-in and a security review first.
 - **Team digest.** A weekly roll-up across several people's journals, for a lead. Needs a shared, opt-in journal location.
 - **Review flow for teams.** Agents push straight to the collection. A team may want a weekly digest of changes, or pull requests.
@@ -84,6 +85,12 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### A finished ticket asks before closing an item tied to it only by notes (2026-11-15)
+
+- **Why:** the last leftover from the real-session tests. A note taken in a ticket's folder gets that ticket's `Ticket:` line whatever it is about, so a finished ticket could close an open item that only sat in its folder.
+- **What changed:** `wiki jira check --close` closes an item whose heading names the ticket, as before. For one tied only through its notes it opens "Jira: PROJ-1 is done: is "…" finished too?", once. The question closes itself when the item closes or the ticket reopens, and an answer of no isn't asked again. Handbook version 38 tells the agent to ask the user.
+- **Still untested:** a real Jira site, and whether sessions ask the question or just close it.
 
 ### First run says where setup happens (2026-11-15)
 

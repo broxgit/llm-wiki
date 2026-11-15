@@ -23,9 +23,9 @@ Work the user puts off goes in the owning repository's `ROADMAP.md`, or its equi
 
 ## Ticket lines
 
-`wiki.sh capture` ends a note with `Ticket: <KEY>` when the session's folder, or its branch, is named for a ticket. Leave the line there. It ties the note's `Waiting:` and `Due:` lines to that ticket, and where the Jira extension is set to close items, their entries close when the ticket is done.
+`wiki.sh capture` ends a note with `Ticket: <KEY>` when the session's folder, or its branch, is named for a ticket. Leave the line there. It ties the note's `Waiting:` and `Due:` lines to that ticket. Where the Jira extension is set to close items, an entry whose heading names the ticket closes when the ticket is done. One tied only by this line stays open, and an entry that begins `Jira:` asks whether it is finished too. Ask the user. On a yes, close the entry with a `Done:` line. On a no, close only the question.
 
-- An item that isn't about that ticket goes in a note of its own that ends with `Ticket: none`. Capture adds nothing to a note that has a `Ticket:` line, so the entry closes only with a `Done:`.
+- An item that isn't about that ticket goes in a note of its own that ends with `Ticket: none`. Capture adds nothing to a note that has a `Ticket:` line, so the entry closes only with a `Done:`, and nothing asks about it.
 - A note about another ticket ends with that ticket's line, such as `Ticket: PROJ-123`.
 
 Compile does nothing with the line: it stays in the note, and the entry's `from:` line is what leads to it.
