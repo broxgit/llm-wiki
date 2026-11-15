@@ -35,7 +35,6 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 - **Find repeated work in transcripts.** Scan the transcripts on disk (`~/.claude/projects`, Antigravity's) for command sequences repeated across sessions, and report them as candidate toil. Look at this only if handbook v32 still misses repeats.
 - **Merge requests in standups.** Reviews and MRs opened live in GitHub or GitLab, not in git history. Pulling them in would need an API token and a host per remote.
 - **Backfill from more places.** The desktop app's Chat tab and claude.ai aren't on disk, so they're out of reach without an agent that has chat search. (The desktop Code tab is in `~/.claude/projects`, and Gemini's Antigravity conversations are read since 2026-10-29.)
-- **The chat connector creates a wiki.** Through the connector a person can read and save, but can't make a wiki or a collection: with none, it sends them to a terminal or to an agent that has one. Letting it create one means the connector writes outside a wiki's folder for the first time, so decide first what it may create and where.
 - **A hosted MCP server,** so web agents can search everything and save notes. A claude.ai Project covers reading for now. Build this only if saving notes from the web keeps coming up: it puts private notes behind a public URL, so it needs sign-in and a security review first.
 - **Team digest.** A weekly roll-up across several people's journals, for a lead. Needs a shared, opt-in journal location.
 - **Review flow for teams.** Agents push straight to the collection. A team may want a weekly digest of changes, or pull requests.
@@ -85,6 +84,12 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### The chat connector creates a wiki (2026-11-15)
+
+- **Why:** someone who only uses a chat could read and save, but not begin: with no wiki, the connector sent them to a terminal. Decided by the maintainer on 2026-11-15: it may create a wiki, and the first folder, and nothing else.
+- **What changed:** a new tool, `wiki_new`, in both connector copies. It creates a wiki by name in the folder the wikis are kept in, and when that folder isn't there it runs `wiki init` first: the shared wiki, no git. A name with spaces becomes one that works, and the reply says which. A name that is a path (a slash, a backslash, a leading dot, dash or tilde) is refused before anything runs, so nothing is made outside the folder. With no wikis, `wiki_list` now says the chat can create the first, and what still takes a terminal. The connector's instructions tell the agent to ask before creating. The helper protocol is 20.
+- **Still untested:** in the desktop app's Chat tab, and with a person. It records no pattern for how the person works, and sets up no backup.
 
 ### The setup guide after a second round with real agents (2026-11-15)
 

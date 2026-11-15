@@ -90,6 +90,8 @@ var tools = []tool{
 		map[string]any{"collection": collectionProp}, []string{}, true},
 	{"wiki_capture", (*Server).wikiCapture, "Save a note in a wiki, for a later session to compile: a decision and its reason, a correction, a finding with its source. Plain markdown. It commits and pushes that wiki.",
 		map[string]any{"wiki": str(""), "slug": str("A short name, such as postgres-over-sqlite."), "note": str(""), "collection": collectionProp}, []string{"wiki", "slug", "note"}, false},
+	{"wiki_new", (*Server).wikiNew, "Create a wiki, when the user asked for one or agreed to one: for a project, a client, a subject. It is made in the folder the wikis are kept in, on this computer, and that folder is made first if it isn't there. A name with spaces becomes one that works, and the reply says which. Not for a note: wiki_capture saves those.",
+		map[string]any{"name": str("What the user called it, such as Client Notes."), "collection": collectionProp}, []string{"name"}, false},
 	{"wiki_feedback", (*Server).wikiFeedback, "Keep one note about llm-wiki itself when it got in your way, if wiki_start shows a Feedback section. Nothing is sent anywhere; the user reads it.",
 		map[string]any{
 			"kind":    map[string]any{"type": "string", "enum": []string{"bug", "friction", "docs", "idea"}},
@@ -167,6 +169,9 @@ func wikisIn(folder string) []string {
 // mcp/server.py has the same words.
 const setupHow = "This chat can't set them up: it takes a terminal. Tell the user to open one and run: wiki setup. Or to ask an agent that has one, such as Claude Code: \"run wiki setup --guide and walk me through it\""
 
+// firstWiki is what wiki_list says when there is no wiki yet: this chat can create the first one.
+const firstWiki = "No wikis yet. With the user's yes, wiki_new creates the first one, and the folder they are kept in. A backup, sharing and the rest of setup take a terminal: wiki setup. Or an agent that has one, such as Claude Code: \"run wiki setup --guide and walk me through it\""
+
 func (s *Server) pickCollection(called string) (Collection, error) {
 	if len(s.Collections) == 0 {
 		return Collection{}, toolError("no wiki collections are set up. " + setupHow)
@@ -226,7 +231,11 @@ func (s *Server) wikiList(args) (string, error) {
 		}
 	}
 	if len(lines) == 0 {
-		return "No wikis yet. " + setupHow, nil
+		// wiki_new needs a collection to create in. wiki.sh always passes one, the default.
+		if len(s.Collections) == 0 {
+			return "No wikis yet. " + setupHow, nil
+		}
+		return firstWiki, nil
 	}
 	return strings.Join(lines, "\n"), nil
 }
@@ -618,6 +627,51 @@ func (s *Server) capture(folder, wiki, slug, note string) (string, error) {
 		return s.must(folder, note, "capture", wiki, slug)
 	}
 	return line, nil
+}
+
+// wikiNew is server.py's wiki_new: a wiki by name, inside a collection's folder and nowhere else.
+func (s *Server) wikiNew(a args) (string, error) {
+	called, err := a.text("name")
+	if err != nil {
+		return "", err
+	}
+	called = strip(called)
+	if called == "" {
+		return "", toolError("wiki_new needs a name.")
+	}
+	bad := utf8.RuneCountInString(called) > 80 || strings.ContainsAny(called[:1], ".-~") || strings.ContainsAny(called, "/\\")
+	for _, r := range called {
+		// utf8.RuneError is what the JSON decoder leaves for half a surrogate pair or bad bytes.
+		if r < 32 || r == 127 || r == utf8.RuneError {
+			bad = true
+		}
+	}
+	if bad {
+		return "", toolError("that can't be a wiki's name. A wiki is made in the folder the wikis are kept in, so its name is a name, not a path: letters, digits and spaces, 80 characters at most.")
+	}
+	in, err := a.text("collection")
+	if err != nil {
+		return "", err
+	}
+	c, err := s.pickCollection(in)
+	if err != nil {
+		return "", err
+	}
+	first := ""
+	if !isDir(c.Folder) {
+		if _, err := s.must(c.Folder, "", "init"); err != nil {
+			return "", err
+		}
+		first = "The folder the wikis are kept in wasn't there, so it was created first, with the shared wiki.\n"
+	}
+	out, err := s.must(c.Folder, "", "new", called)
+	if err != nil {
+		return "", err
+	}
+	if strings.HasPrefix(out, "exists:  ") || strings.Contains(out, "\nexists:  ") {
+		return first + out + "\nNothing was created: that wiki was already there. Notes go into it with wiki_capture.", nil
+	}
+	return first + out + "\nCreated on this machine. Notes go into it with wiki_capture, under the name on the created line.", nil
 }
 
 func (s *Server) wikiFeedback(a args) (string, error) {

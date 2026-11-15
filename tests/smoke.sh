@@ -2555,14 +2555,50 @@ mcp_call() {
 }
 # Someone with no wikis yet, in a chat with no shell: both servers say where setup happens, and name the guide.
 mkdir -p "$T/mcp-empty"
-FIRST='No wikis yet. This chat can'"'"'t set them up: it takes a terminal. Tell the user to open one and run: wiki setup. Or to ask an agent that has one, such as Claude Code: "run wiki setup --guide and walk me through it"'
+FIRST='No wikis yet. With the user'"'"'s yes, wiki_new creates the first one, and the folder they are kept in. A backup, sharing and the rest of setup take a terminal: wiki setup. Or an agent that has one, such as Claude Code: "run wiki setup --guide and walk me through it"'
 out="$(WIKIS_DIR="$T/mcp-empty" mcp_call wiki_list)"
-[ "$out" = "$FIRST" ] && ok "with no wikis, the Python server says setup takes a terminal, and names the guide" || bad "with no wikis, the Python server says setup takes a terminal, and names the guide" "$out"
+[ "$out" = "$FIRST" ] && ok "with no wikis, the Python server says it can create the first, and what still takes a terminal" || bad "with no wikis, the Python server says it can create the first, and what still takes a terminal" "$out"
 if [ -x "$T/bin/llm-wiki" ]; then
   MCP_GO="$T/bin/llm-wiki"; out="$(WIKIS_DIR="$T/mcp-empty" mcp_call wiki_list)"; MCP_GO=""
   [ "$out" = "$FIRST" ] && ok "and the helper's server says the same" || bad "and the helper's server says the same" "$out"
 else
   skipped "and the helper's server says the same (no Go here)"
+fi
+# wiki_new: someone in a chat, starting from nothing, gets a wiki and the folder it lives in.
+# Both servers, each on a folder that isn't there yet, and what they say must match.
+mcp_new() { # mcp_new <who> <helper or ""> <folder>
+  local who="$1" dir="$3" out
+  MCP_GO="$2"
+  out="$(WIKIS_DIR="$dir" mcp_call wiki_new '{"name":"Client Notes"}')"
+  case "$out" in "The folder the wikis are kept in wasn't there, so it was created first, with the shared wiki."*"so this one is called Client-Notes, not \"Client Notes\"."*"created: "*"Created on this machine. Notes go into it with wiki_capture, under the name on the created line.") ok "$who: wiki_new makes the wikis' folder, then the wiki, and says both" ;; *) bad "$who: wiki_new makes the wikis' folder, then the wiki, and says both" "$out" ;; esac
+  case "$out" in *"Next:"* | *"Give your agent access"*) bad "$who: with none of init's steps for a terminal" "$out" ;; *) ok "$who: with none of init's steps for a terminal" ;; esac
+  check "$who: the folder is a collection, with the shared wiki" test -f "$dir/WIKIS.md" -a -f "$dir/global/AGENTS.md"
+  check "$who: and the wiki is there under the name that works" test -f "$dir/Client-Notes/AGENTS.md" -a -f "$dir/Client-Notes/index.md"
+  check "$who: with no git, since nobody asked for it" test ! -e "$dir/.git"
+  printf '%s\n' "$out" | sed "s|$dir|DIR|g" > "$T/mcp-new.$who.1"
+  out="$(WIKIS_DIR="$dir" mcp_call wiki_new '{"name":"Client Notes"}')"
+  case "$out" in *"exists:  "*"Nothing was created: that wiki was already there. Notes go into it with wiki_capture.") ok "$who: asked again, it creates nothing and says the wiki was there" ;; *) bad "$who: asked again, it creates nothing and says the wiki was there" "$out" ;; esac
+  case "$out" in *"wasn't there"*) bad "$who: and doesn't say the folder was made" "$out" ;; *) ok "$who: and doesn't say the folder was made" ;; esac
+  printf '%s\n' "$out" | sed "s|$dir|DIR|g" > "$T/mcp-new.$who.2"
+  # shellcheck disable=SC2088
+  for bad_name in '../outside' 'a/b' '.hidden' '-rf' '~/x' 'back\\slash' 'half\ud800pair' 'mark\ufffdhere'; do
+    out="$(WIKIS_DIR="$dir" mcp_call wiki_new "{\"name\":\"$bad_name\"}")"
+    case "$out" in "ERROR: that can't be a wiki's name."*) ok "$who: wiki_new refuses $bad_name, which isn't a name" ;; *) bad "$who: wiki_new refuses $bad_name, which isn't a name" "$out" ;; esac
+  done
+  check "$who: and nothing was made beside the wikis' folder" test ! -e "${dir%/*}/outside" -a ! -e "$dir/a"
+  expect "$who: a name of spaces alone is no name" "ERROR: wiki_new needs a name." env WIKIS_DIR="$dir" bash -c "$(declare -f mcp_call mcp_serve); MCP_GO='$2' W='$W'; mcp_call wiki_new '{\"name\":\"   \"}'"
+  expect "$who: a note goes into the new wiki" "captured: " env WIKIS_DIR="$dir" bash -c "$(declare -f mcp_call mcp_serve); MCP_GO='$2' W='$W'; mcp_call wiki_capture '{\"wiki\":\"Client-Notes\",\"slug\":\"first\",\"note\":\"n\"}'"
+  expect "$who: and wiki_list has it" "Client-Notes (collection " env WIKIS_DIR="$dir" bash -c "$(declare -f mcp_call mcp_serve); MCP_GO='$2' W='$W'; mcp_call wiki_list"
+  MCP_GO=""
+}
+mkdir -p "$T/mcp-new-py" "$T/mcp-new-go"
+mcp_new python "" "$T/mcp-new-py/wikis"
+if [ -x "$T/bin/llm-wiki" ]; then
+  mcp_new helper "$T/bin/llm-wiki" "$T/mcp-new-go/wikis"
+  sed -i.bak 's|mcp-new-go|mcp-new-py|g' "$T/mcp-new.helper.1" "$T/mcp-new.helper.2"
+  cmp -s "$T/mcp-new.python.1" "$T/mcp-new.helper.1" && cmp -s "$T/mcp-new.python.2" "$T/mcp-new.helper.2" && ok "the two servers say the same thing, byte for byte" || bad "the two servers say the same thing, byte for byte" "$(diff "$T/mcp-new.python.1" "$T/mcp-new.helper.1"; diff "$T/mcp-new.python.2" "$T/mcp-new.helper.2")"
+else
+  skipped "wiki_new on the helper's server (no Go here)"
 fi
 # mcp_tools <who> <slug>: the protocol and every tool, from the server MCP_GO chose.
 mcp_tools() {
@@ -2570,7 +2606,7 @@ mcp_tools() {
   out="$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}' '{"jsonrpc":"2.0","method":"notifications/initialized"}' 'not json' '{"jsonrpc":"2.0","id":2,"method":"ping"}' '{"jsonrpc":"2.0","id":3,"method":"nope"}' '{"jsonrpc":"2.0","id":4,"method":"tools/list"}' | mcp_serve)"
   check "$who: initialize answers in the client's protocol version, with instructions" python3 -c "import json,sys; r=json.loads(sys.argv[1].splitlines()[0])['result']; assert r['protocolVersion']=='2025-03-26' and 'wiki_start' in r['instructions'] and 'tools' in r['capabilities']" "$out"
   check "$who: a notification gets no reply, bad JSON a parse error, and the server carries on" python3 -c "import json,sys; l=[json.loads(x) for x in sys.argv[1].splitlines()]; assert len(l)==5 and l[1]['error']['code']==-32700 and l[2]['id']==2 and l[3]['error']['code']==-32601" "$out"
-  check "$who: it lists its tools, each with a schema" python3 -c "import json,sys; t=json.loads(sys.argv[1].splitlines()[4])['result']['tools']; assert [x['name'] for x in t]==['wiki_list','wiki_start','wiki_search','wiki_read','wiki_status','wiki_capture','wiki_feedback'] and all(x['inputSchema']['type']=='object' for x in t)" "$out"
+  check "$who: it lists its tools, each with a schema" python3 -c "import json,sys; t=json.loads(sys.argv[1].splitlines()[4])['result']['tools']; assert [x['name'] for x in t]==['wiki_list','wiki_start','wiki_search','wiki_read','wiki_status','wiki_capture','wiki_new','wiki_feedback'] and all(x['inputSchema']['type']=='object' for x in t)" "$out"
   check "$who: it tells chat agents the wikis come before memory and past chats" python3 -c "import json,sys; l=sys.argv[1].splitlines(); r=json.loads(l[0])['result']['instructions']; t={x['name']:x['description'] for x in json.loads(l[4])['result']['tools']}; assert 'before memory' in r and 'before memory' in t['wiki_start'] and 'before memory' in t['wiki_search']" "$out"
   check "$who: and to tell the user what it did in everyday words" python3 -c "import json,sys; r=json.loads(sys.argv[1].splitlines()[0])['result']['instructions']; assert 'in everyday words' in r and 'raw, compile, push and repo' in r" "$out"
   expect "$who: wiki_list lists the wikis and what they cover" "covers: api web" mcp_call wiki_list
