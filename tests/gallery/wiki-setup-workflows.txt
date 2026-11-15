@@ -1,0 +1,10 @@
+Setup for <tmp>/wikis. Enter keeps the value in brackets.
+  Or ask your agent to walk you through it in its session: it runs [36mwiki setup --guide[0m. In Claude Code, /llm-wiki:setup does.
+[34m●[0m [1m[44m[97m SETUP [0m  [1mHow you work[0m
+[2m│[0m     Your assistant picks a wiki from the folder a conversation starts in. Say where you usually start, so it doesn't have to ask.
+[2m│[0m       1  inside one project's own folder. Nothing to set: that project's wiki is used.
+[2m│[0m       2  in a folder for each task or ticket, which holds copies of one or more projects
+[2m│[0m       3  in one folder you use for everything, such as Documents
+[2m│[0m       4  it varies, or you aren't sure. Your assistant asks the first time, and remembers the answer.
+[2m│[0m   [1mWhere do you usually start (1, 2, 3 or 4)[0m [4] [1m[33m›[0m [2m│[0m   [32m✓[0m Done. After you pull template updates, wiki setup --new shows what's new.
+[2m│[0m     To see what it can do, ask your agent for the llm-wiki tour. It runs on a made-up project.

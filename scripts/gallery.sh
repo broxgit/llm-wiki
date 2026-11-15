@@ -97,6 +97,7 @@ render news "" news --all
 render setup-list "" setup --list
 render setup-feedback 'notes\n' setup feedback
 render setup-delegation '\n\n' setup delegation
+render setup-workflows '4\n' setup workflows
 render delegation "" delegation
 render feedback "" feedback
 render helper "" helper

@@ -2,6 +2,7 @@ collection          <tmp>/wikis
 git                 not a repo
 claude              missing
 completion          off[33m  <- new[0m
+workflows           0 pattern(s) for where sessions outside a project belong[33m  <- new[0m
 delegation.mode     ask[33m  <- new[0m
 palette             default[33m  <- new[0m
 theme               auto[33m  <- new[0m
@@ -26,4 +27,4 @@ journal.max_commits 15  (default)[33m  <- new[0m
 (git questions not yet answered on this machine)
 
 Change one:    [36mwiki setup journal.<key>[0m   or   [36mwiki setup git.identity[0m
-Or a section:  [36mwiki setup collection | collections | tools | git | claude | plugin | permissions | upgrade | skills | completion | delegation | feedback | palette | theme | helper | chat | journal | microsoft-copilot[0m
+Or a section:  [36mwiki setup collection | collections | tools | git | claude | plugin | permissions | upgrade | skills | completion | workflows | delegation | feedback | palette | theme | helper | chat | journal | microsoft-copilot[0m
