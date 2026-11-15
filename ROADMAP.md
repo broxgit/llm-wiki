@@ -85,6 +85,12 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### A finished ticket asks before closing an item tied to it only by notes (2026-11-15)
+
+- **Why:** the last leftover from the real-session tests. A note taken in a ticket's folder gets that ticket's `Ticket:` line whatever it is about, so a finished ticket could close an open item that only sat in its folder.
+- **What changed:** `wiki jira check --close` closes an item whose heading names the ticket, as before. For one tied only through its notes it opens "Jira: PROJ-1 is done: is "…" finished too?", once. The question closes itself when the item closes or the ticket reopens, and an answer of no isn't asked again. Handbook version 38 tells the agent to ask the user.
+- **Still untested:** a real Jira site, and whether sessions ask the question or just close it.
+
 ### First run says where setup happens (2026-11-15)
 
 - **Why:** left over from the plainer wording. A person with no wikis who asked in a chat got "Run: wiki setup", with no word that it needs a terminal the chat doesn't have, and no mention of the guide. Setup is meant to name the guide wherever it is named.
