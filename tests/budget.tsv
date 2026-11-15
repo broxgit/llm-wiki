@@ -19,7 +19,7 @@ hook: a ticket key, the Jira extension set up	129
 list: the fixture wikis	68
 mcp: INSTRUCTIONS	1481
 setup: the guide for Jira, on and not set up	1546
-setup: the whole guide	5981
+setup: the whole guide	6119
 skill: the description	197
 start: a branch named for a ticket, no wiki	1022
 start: a clone with a wiki	765
@@ -39,4 +39,4 @@ template/rules/patterns.md	9611
 template/rules/peers.md	5989
 template/rules/sync.md	1995
 template/rules/workflows.md	3741
-workflows: one pattern recorded	317
+workflows: one pattern recorded	362

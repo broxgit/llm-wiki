@@ -5654,7 +5654,19 @@ case "$g" in *"If the user is new to llm-wiki, first say what it is"*"a memory t
 case "$g" in *"Say folder, not repository, unless the user does."*) ok "in everyday words" ;; *) bad "in everyday words" "$g" ;; esac
 case "$g" in *"Then give two or three tips"*"say how they can help improve it"*"https://github.com/broxgit/llm-wiki/issues"*) ok "and end with tips and how to help improve it" ;; *) bad "and end with tips and how to help improve it" "$g" ;; esac
 g="$(env -u WIKIS_DIR HOME="$SF/none" XDG_CONFIG_HOME="$SF/none/.config" LLM_WIKI_CMD=wiki "$W" setup --guide collection 2>&1)"
-case "$g" in *"There is none yet"*"With the user's yes, create it: wiki init"*) ok "with no collection, the guide gives the command that creates one, so no terminal is needed" ;; *) bad "with no collection, the guide gives the command that creates one, so no terminal is needed" "$g" ;; esac
+case "$g" in *"a folder of their own"*"apart from the folders the user works in"*"With the user's yes, create it: wiki init"*) ok "with no collection, the guide gives the command that creates one, so no terminal is needed" ;; *) bad "with no collection, the guide gives the command that creates one, so no terminal is needed" "$g" ;; esac
+case "$g" in *"Then run wiki setup --guide again: the other topics appear once it exists"*) ok "and says to read the guide again once it exists, since the other topics appear only then" ;; *) bad "and says to read the guide again once it exists, since the other topics appear only then" "$g" ;; esac
+g="$(sf setup --guide)"
+case "$g" in *"Don't hand the user a list of Terminal only commands."*) ok "the whole guide tells the agent not to hand over a list of terminal chores" ;; *) bad "the whole guide tells the agent not to hand over a list of terminal chores" "$g" ;; esac
+lacks "a section's guide doesn't carry that rule, or the opening" "Terminal only commands" sf setup --guide palette
+# With nowhere to send it, recording a pattern says nothing about other machines.
+# shellcheck disable=SC2088
+lacks "with no remote, a new pattern doesn't talk about other machines" "other machines" sf workflows add '~/elsewhere' none
+git -C "$SF/home/wikis" remote add origin "$SF/remote.git" 2>/dev/null
+# shellcheck disable=SC2088
+expect "with a remote, it says how to send it" "Send it to your other machines: wiki sync global" sf workflows add '~/elsewhere2' none
+expect "workflows --help lists what it takes, with no error" "Nothing to record: wiki workflows skip" sf workflows --help
+check "and exits 0" test "$(code_of sf workflows --help)" = 0
 rm -rf "$SF"
 
 # Extensions: a version 3 one still works, and has only a terminal section.

@@ -8,7 +8,7 @@ Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title i
 
 - `wiki setup` now opens by saying what llm-wiki is and why, and ends with tips and ways to help improve it.
 - It asks how you work: in a project's folder, in a folder per task, or in one folder for everything, and whether you work more than one way.
-- An agent walking you through setup does the same, and can create the wikis' folder itself, so no terminal is needed to begin.
+- Each step says what it is in everyday words first. An agent walking you through setup does the same, and needs no terminal to begin.
 - Do: run `wiki setup --new` to be asked how you work. It is one question.
 
 ## 2026-12-20: a finished ticket asks before closing what only sat in its folder

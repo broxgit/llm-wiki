@@ -1360,7 +1360,7 @@ cmd_workflows() {
   f="$(workflows_file)"
   [ $# -eq 0 ] || shift
   case "$sub" in
-    "")
+    "" | -h | --help)
       if [ -f "$f" ] && grep -q "^- in $bt" "$f"; then
         ui_stage WORKFLOWS "Where sessions outside a repository belong, from $(tilde "$f"). The first that fits wins."
         sed -n "s/^- in $bt/in $bt/p" "$f" | while IFS= read -r line; do ui_detail "$line"; done
@@ -1370,6 +1370,7 @@ cmd_workflows() {
       ui_detail "Add one:    $(typed "$WIKI_CMD workflows add '<pattern>' inside|none|<wiki>")"
       ui_detail "Remove one: $(typed "$WIKI_CMD workflows remove '<pattern>'")"
       ui_detail "Try one:    $(typed "$WIKI_CMD workflows check <folder>")"
+      ui_detail "Nothing to record: $(typed "$WIKI_CMD workflows skip")"
       ;;
     add)
       [ $# -eq 2 ] || die_usage "workflows add needs a pattern and what to do there: inside, none, or a wiki's name"
@@ -1398,7 +1399,7 @@ cmd_workflows() {
         END { if (!done) print line }' "$f" > "$tmp" && mv "$tmp" "$f"
       setup_mark workflows
       ui_item ok "$([ -n "$had" ] && echo changed || echo added): ${line#- }"
-      ui_detail "Send it to your other machines: $(typed "$WIKI_CMD sync $SHARED -m \"$SHARED: where sessions belong\"")"
+      ! git -C "$WIKIS_DIR" remote get-url origin >/dev/null 2>&1 || ui_detail "Send it to your other machines: $(typed "$WIKI_CMD sync $SHARED -m \"$SHARED: where sessions belong\"")"
       ;;
     remove)
       [ $# -eq 1 ] || die_usage "workflows remove needs the pattern to take out"
@@ -1407,7 +1408,7 @@ cmd_workflows() {
       tmp="$f.tmp.$$"
       WF_PRE="- in $bt$glob$bt: " awk 'index($0, ENVIRON["WF_PRE"]) != 1' "$f" > "$tmp" && mv "$tmp" "$f"
       ui_item ok "removed: in $bt$glob$bt"
-      ui_detail "Send it to your other machines: $(typed "$WIKI_CMD sync $SHARED -m \"$SHARED: where sessions belong\"")"
+      ! git -C "$WIKIS_DIR" remote get-url origin >/dev/null 2>&1 || ui_detail "Send it to your other machines: $(typed "$WIKI_CMD sync $SHARED -m \"$SHARED: where sessions belong\"")"
       ;;
     check)
       dir="${1:-$PWD}"
@@ -5453,7 +5454,7 @@ setup_feedback() {
   cur="$(feedback_mode)"
   setup_due feedback || return 0
   section "Feedback on llm-wiki"
-  ui_detail "Agents can keep a note when llm-wiki itself gets in their way: a command that failed or misled, instructions that"
+  ui_detail "Your assistant can keep a note when llm-wiki itself gets in its way: a command that failed or misled, instructions that"
   ui_detail "conflicted, work a command should have done. At most one a session, never mid-task. Notes stay on this machine."
   ui_detail "  off    nothing is kept"
   ui_detail "  notes  keep notes for you to read: $WIKI_CMD feedback"
@@ -5705,10 +5706,10 @@ setup_helper() {
   setup_due helper || return 0
   if [ ! -f "$HELPER_LOCK" ] || [ -z "$(helper_platform)" ]; then setup_mark helper; return 0; fi
   section "The helper"
-  ui_detail "wiki report and wiki standup run several times faster through a small compiled helper, about 3 MB."
+  ui_detail "wiki report and wiki standup run several times faster with a small helper program, about 3 MB."
   ui_detail "$WIKI_CMD update downloads it from this project's GitHub releases, and keeps it only if it matches a"
-  ui_detail "checksum that came with the code you already run. It can also be fetched at session start, in the"
-  ui_detail "background, whenever it is missing or out of date, so a plugin update doesn't leave it behind."
+  ui_detail "fingerprint that came with llm-wiki, so nothing else can take its place. It can also be fetched when a"
+  ui_detail "conversation starts, in the background, whenever it is missing or out of date."
   if ask_yn "Fetch it automatically at session start?" "$(helper_auto_on && echo y || echo n)"; then
     helper_auto_set on && ui_item ok "helper auto: on"
   else
@@ -9271,8 +9272,8 @@ setup_permissions() {
     ui_item ok "Claude Code may run the wiki commands that write without asking."
     return 0
   fi
-  ui_detail "Agents commit and push the wikis themselves with \`wiki sync\`. Claude Code stops to ask before a push, and"
-  ui_detail "a session can't give itself permission. Allow rules let sessions run these without asking:"
+  ui_detail "Your assistant saves and backs up notes by running wiki commands. Claude Code stops to ask you each time,"
+  ui_detail "and it can't give itself permission. Allowing these once lets it run them without asking, and nothing else:"
   echo "  $WIKI_CMD $(printf '%s' "$PERM_SUBCOMMANDS" | sed 's/ /, /g')"
   if ask_yn "Add $n allow rule(s) to ~/.claude/settings.json?" y; then
     if perm_add; then ui_item ok "added (backup beside it). New sessions use them."; else ui_item warn "couldn't change ~/.claude/settings.json."; fi
@@ -9438,7 +9439,8 @@ setup_collection() {
     for d in "$WIKIS_DIR"/*/; do is_wiki "${d%/}" && n=$((n + 1)); done
     ui_detail "Wikis live in $(tilde "$WIKIS_DIR"): $n found."
   else
-    ui_detail "Wikis will live in $(tilde "$WIKIS_DIR"). For another folder, quit and rerun with WIKIS_DIR=<path> set."
+    ui_detail "Your wikis are kept together in one folder: $(tilde "$WIKIS_DIR"). It doesn't exist yet."
+    ui_detail "To keep them somewhere else, quit and run this again as: WIKIS_DIR=<folder> $WIKI_CMD setup"
     if ask_yn "Create it now?" y; then
       init_collection | sed 's/^/  /'
     else
@@ -9448,7 +9450,8 @@ setup_collection() {
   fi
   write_collection_marker | sed 's/^/  /'
   if ! is_wiki "$WIKIS_DIR/$SHARED"; then
-    ui_detail "There is no shared wiki at $(tilde "$WIKIS_DIR/$SHARED"). It holds knowledge that applies to every project."
+    ui_detail "One wiki is shared by all your projects, for what is true everywhere, such as how you like things done."
+    ui_detail "There is none yet at $(tilde "$WIKIS_DIR/$SHARED")."
     if ask_yn "Create it?" y; then scaffold "$WIKIS_DIR/$SHARED" 0 | sed 's/^/  /'; fi
   fi
 }
@@ -9460,8 +9463,9 @@ setup_git() {
     if in_git_repo "$WIKIS_DIR"; then
       ui_item ok "The collection is a git repo. Agents commit and push their wiki changes to it."
     else
-      ui_detail "The collection isn't a git repo. Git gives it history, undo, and sync between machines."
-      if ask_yn "Make it one?" y; then
+      ui_detail "Git is a free tool that keeps every earlier version of your notes, so a change can be undone and nothing is lost."
+      ui_detail "It is also how notes reach your other computers or a team. Saying yes sends nothing anywhere: it all stays on this computer."
+      if ask_yn "Keep a history of your wikis with git?" y; then
         git_init_collection | sed 's/^/  /'
       else
         setup_mark git
@@ -9472,7 +9476,8 @@ setup_git() {
     if [ -n "$url" ]; then
       ui_detail "Remote: $url"
     else
-      ui_detail "No remote yet. With one, agents push and your other machines pull."
+      ui_detail "A remote is a private copy of your wikis on a service such as GitHub: a backup, and the way to share them."
+      ui_detail "If you don't have one, press Enter. You can add it later: $(typed "$WIKI_CMD setup git")"
       ask "Remote URL, such as git@github.com:you/wikis.git. Enter for none" ""
       if [ -n "$ANSWER" ]; then
         git -C "$WIKIS_DIR" remote add origin "$ANSWER"
@@ -9509,18 +9514,19 @@ setup_identity() {
   cur="$(git -C "$WIKIS_DIR" config user.name 2>/dev/null || true)"
   if [ -z "$cur" ]; then
     while :; do
-      ask "Name for commits in this repo" ""
+      ui_detail "Each saved version of your wikis is signed with a name and an email, kept in the history."
+      ask "Your name, for the history of your wikis" ""
       [ -n "$ANSWER" ] && break
-      ui_detail "Commits need a name."
+      ui_detail "The history needs a name."
     done
     git -C "$WIKIS_DIR" config user.name "$ANSWER"
   fi
   cur="$(git -C "$WIKIS_DIR" config user.email 2>/dev/null || true)"
-  ui_detail "Commits are made as: ${cur:-nobody yet}"
+  ui_detail "Saved versions of your wikis are signed as: ${cur:-nobody yet}. Anyone you share the wikis with can see it."
   while :; do
-    ask "Email for commits in this repo only" "$cur"
+    ask "Email for the history of your wikis only" "$cur"
     [ -n "$ANSWER" ] && break
-    ui_detail "Commits need an email."
+    ui_detail "The history needs an email."
   done
   if [ "$ANSWER" != "$cur" ] || [ -z "$(git -C "$WIKIS_DIR" config --local user.email || true)" ]; then
     git -C "$WIKIS_DIR" config user.email "$ANSWER"
@@ -9631,8 +9637,8 @@ setup_claude() {
       ;;
     unreadable) ui_detail "Can't read $(tilde "$CLAUDE_FILE") from this shell, so there's no telling whether it has the wiki line." ;;
     missing)
-      ui_detail "One line in $(tilde "$CLAUDE_FILE") lets every Claude Code session find its wiki."
-      ui_detail "Other agents: put the same line in their user-level instruction file."
+      ui_detail "Claude Code reads standing instructions from $(tilde "$CLAUDE_FILE"). One line there tells every conversation where your wikis are."
+      ui_detail "For another assistant, the same line goes in its own instructions file: $(typed "$WIKI_CMD claude --print") shows it."
       if ask_yn "Add it?" y; then cmd_claude | sed -n '1s/^/  /p'; fi
       ;;
   esac
@@ -9759,7 +9765,8 @@ setup_delegation() {
   section "Delegation"
   write_delegation_file | sed 's/^/  /'
   apply_delegation_ignore | sed 's/^/  /'
-  ui_detail "Sessions can hand big, self-contained work, like test runs and file sweeps, to sub-agents on cheaper models."
+  ui_detail "Your assistant can hand big, routine jobs, like running tests or searching many files, to helpers on cheaper models."
+  ui_detail "That saves money and time on long work. If you aren't sure, keep ask."
   ui_detail "off: never unless you ask. ask: suggest each one and wait for a yes. auto: do it and say so after."
   ui_detail "Which kinds of work go to which model is a table in $(tilde "$DELEG_FILE"). Edit it any time."
   cur="$(deleg_mode)"
@@ -9821,7 +9828,8 @@ setup_journal() {
   [ -n "$due" ] || return 0
   section "Work journal"
   write_journal_config | sed 's/^/  /'
-  ui_detail "Agents note work that leaves no commit, and $WIKI_CMD standup turns your day into a report."
+  ui_detail "Your assistant keeps a short diary of what you worked on, and $WIKI_CMD standup turns a day of it into a report."
+  ui_detail "If you aren't sure about a question here, press Enter: the answers filled in suit most people."
   for k in $due; do
     [ "$(journal_field "$k" 3)" = basic ] || { adv="$adv $k"; continue; }
     setup_journal_key "$k"
@@ -10257,7 +10265,7 @@ guide_entry() {
   case "$id" in
     collection)
       if [ -d "$WIKIS_DIR" ]; then echo "Where the wikis live. Terminal only: $c setup collection"
-      else echo "Where the wikis will live. There is none yet, and nothing else can be set without one. With the user's yes, create it: $c init"; fi
+      else echo "The wikis get a folder of their own, $(tilde "$WIKIS_DIR"), apart from the folders the user works in. It doesn't exist yet, and nothing else can be set without it. With the user's yes, create it: $c init. Then run $c setup --guide again: the other topics appear once it exists"; fi
       ;;
     workflows) echo "Where conversations that start outside a project's own folder belong. Ask where the user usually starts: one project's folder (nothing to record), a folder for each task or ticket that holds copies of projects, or one folder for everything. Then ask whether they also work another way. Change: $c workflows add '<folder>/*' inside, $c workflows add '<folder>' <wiki>|none, or $c workflows skip" ;;
     git) echo "Whether the collection is a git repo with a remote, so it syncs. Terminal only: $c setup git" ;;
@@ -10317,6 +10325,7 @@ setup_guide() {
   if [ -z "$sec" ]; then
     first="- If the user is new to llm-wiki, first say what it is in two or three plain sentences: notes on this computer, a wiki for each project, that give their assistant a memory that lasts.
 - Use everyday words. Say folder, not repository, unless the user does.
+- Don't hand the user a list of Terminal only commands. Give one only when they asked for that topic, or it is marked [not answered yet].
 "
     last="- Finish with $c setup --list and tell the user what changed. Then give two or three tips (say \"remember this\" to save something, ask what was decided, $c status, the llm-wiki tour), and say how they can help improve it: feedback notes ($c setup feedback notes) and issues at https://github.com/$(feedback_repo)/issues."
   fi
