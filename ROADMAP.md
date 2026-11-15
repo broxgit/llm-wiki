@@ -85,6 +85,12 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### First run says where setup happens (2026-11-15)
+
+- **Why:** left over from the plainer wording. A person with no wikis who asked in a chat got "Run: wiki setup", with no word that it needs a terminal the chat doesn't have, and no mention of the guide. Setup is meant to name the guide wherever it is named.
+- **What changed:** both connector copies say the chat can't set wikis up, that it takes a terminal, and that an agent with one can walk the person through it with `wiki setup --guide`. The session hook, with no collection, offers the guide first and the terminal command second. The helper protocol is 19.
+- **Still untested:** in the desktop app's Chat tab, and with a person. The connector can't create a wiki or a collection itself: that is a larger change, and not built.
+
 ### `wiki new` takes a name with spaces (2026-11-15)
 
 - **Why:** left over from the plainer wording. A person who doesn't use git asked for a wiki called "Acme Holdings" and got a rule back, with the name that would work offered but not used.

@@ -163,9 +163,13 @@ func wikisIn(folder string) []string {
 	return names
 }
 
+// setupHow is what a chat with no shell tells a person who has no wikis yet.
+// mcp/server.py has the same words.
+const setupHow = "This chat can't set them up: it takes a terminal. Tell the user to open one and run: wiki setup. Or to ask an agent that has one, such as Claude Code: \"run wiki setup --guide and walk me through it\""
+
 func (s *Server) pickCollection(called string) (Collection, error) {
 	if len(s.Collections) == 0 {
-		return Collection{}, toolError("no wiki collections are set up. Run: wiki setup")
+		return Collection{}, toolError("no wiki collections are set up. " + setupHow)
 	}
 	if called == "" {
 		return s.Collections[0], nil
@@ -222,7 +226,7 @@ func (s *Server) wikiList(args) (string, error) {
 		}
 	}
 	if len(lines) == 0 {
-		return "No wikis yet. Run: wiki setup", nil
+		return "No wikis yet. " + setupHow, nil
 	}
 	return strings.Join(lines, "\n"), nil
 }

@@ -382,7 +382,7 @@ func TestList(t *testing.T) {
 		t.Errorf("wiki_list = %q\nwant        %q", got, want)
 	}
 	s.Collections = nil
-	if got, _ := call(t, s, "wiki_list", nil); got != "No wikis yet. Run: wiki setup" {
+	if got, _ := call(t, s, "wiki_list", nil); got != "No wikis yet. "+setupHow {
 		t.Errorf("with no collections: %q", got)
 	}
 }
@@ -579,7 +579,7 @@ func TestStart(t *testing.T) {
 		t.Errorf("a repository that is a path: %q", got)
 	}
 	s.Collections = nil
-	if got, isErr := call(t, s, "wiki_start", m{"repository": "web"}); !isErr || got != "no wiki collections are set up. Run: wiki setup" {
+	if got, isErr := call(t, s, "wiki_start", m{"repository": "web"}); !isErr || got != "no wiki collections are set up. "+setupHow {
 		t.Errorf("with no collections: %q", got)
 	}
 }

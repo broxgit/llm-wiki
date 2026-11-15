@@ -56,10 +56,14 @@ def wikis_in(folder):
     return [n for n in names if not n.startswith(".") and is_wiki(os.path.join(folder, n))]
 
 
+# What a chat with no shell tells a person who has no wikis yet. The Go server has the same words.
+SETUP_HOW = "This chat can't set them up: it takes a terminal. Tell the user to open one and run: wiki setup. Or to ask an agent that has one, such as Claude Code: \"run wiki setup --guide and walk me through it\""
+
+
 def pick_collection(name):
     found = collections()
     if not found:
-        raise ToolError("no wiki collections are set up. Run: wiki setup")
+        raise ToolError("no wiki collections are set up. " + SETUP_HOW)
     if not name:
         return found[0]
     for item in found:
@@ -143,7 +147,7 @@ def wiki_list(_):
             except OSError:
                 pass
             lines.append("%s (collection %s): %d page(s)%s" % (w, name, pages, covers))
-    return "\n".join(lines) or "No wikis yet. Run: wiki setup"
+    return "\n".join(lines) or "No wikis yet. " + SETUP_HOW
 
 
 def collection_covering(repo):

@@ -2553,6 +2553,17 @@ mcp_call() {
   printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"%s","arguments":%s}}\n' "$1" "$a" | mcp_serve \
     | python3 -c 'import json,sys; r=json.loads(sys.stdin.readline())["result"]; print(("ERROR: " if r.get("isError") else "")+r["content"][0]["text"])'
 }
+# Someone with no wikis yet, in a chat with no shell: both servers say where setup happens, and name the guide.
+mkdir -p "$T/mcp-empty"
+FIRST='No wikis yet. This chat can'"'"'t set them up: it takes a terminal. Tell the user to open one and run: wiki setup. Or to ask an agent that has one, such as Claude Code: "run wiki setup --guide and walk me through it"'
+out="$(WIKIS_DIR="$T/mcp-empty" mcp_call wiki_list)"
+[ "$out" = "$FIRST" ] && ok "with no wikis, the Python server says setup takes a terminal, and names the guide" || bad "with no wikis, the Python server says setup takes a terminal, and names the guide" "$out"
+if [ -x "$T/bin/llm-wiki" ]; then
+  MCP_GO="$T/bin/llm-wiki"; out="$(WIKIS_DIR="$T/mcp-empty" mcp_call wiki_list)"; MCP_GO=""
+  [ "$out" = "$FIRST" ] && ok "and the helper's server says the same" || bad "and the helper's server says the same" "$out"
+else
+  skipped "and the helper's server says the same (no Go here)"
+fi
 # mcp_tools <who> <slug>: the protocol and every tool, from the server MCP_GO chose.
 mcp_tools() {
   local who="$1" slug="$2" out SC
@@ -5506,7 +5517,7 @@ TB="$(printf '\t')"
 expect "status, with setup never run, says the guide exists" 'setup: never run on this machine. Run: wiki setup. Or ask an agent: "run wiki setup --guide and walk me through it"' gw status
 expect "the opening of setup says it" "Or ask your agent to walk you through it in its session: it runs wiki setup --guide. In Claude Code, /llm-wiki:setup does." bash -c "printf '' | env HOME='$GH' WIKIS_DIR='$GH/wikis' LLM_WIKI_CMD=wiki LLM_WIKI_TEST_TTY=1 '$W' setup palette"
 expect "init's next steps say it" "ask it to run wiki setup --guide" env HOME="$GH" WIKIS_DIR="$GH/other" LLM_WIKI_CMD=wiki "$W" init
-expect "the session hook, with no collection, says it" "setup --guide and walk them through it" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; export WIKIS_DIR='$T/none'; hook '$T' | context"
+expect "the session hook, with no collection, offers the guide before the terminal" "offer to walk them through setup: run $T/data/bin/wiki setup --guide and follow it. Or they run $T/data/bin/wiki setup in a terminal" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; export WIKIS_DIR='$T/none'; hook '$T' | context"
 
 # The guide lists every row of setup --list.
 rows="$(gw setup --list | awk 'NF == 0 { exit } $1 !~ /^[(]/ { print $1 }')"
