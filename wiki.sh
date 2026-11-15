@@ -515,8 +515,8 @@ valid_name() {
   esac
 }
 
-# name_hint: the nearest name valid_name takes, for a refusal to offer. "Acme Holdings"
-# gives Acme-Holdings. Prints nothing when nothing usable is left.
+# name_hint: the nearest name valid_name takes, which `new` uses in place of one it can't.
+# "Acme Holdings" gives Acme-Holdings. Prints nothing when nothing usable is left.
 name_hint() {
   printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9._-' '-' | sed -e 's/--*/-/g' -e 's/^[.-]*//' -e 's/-$//'
 }
@@ -10638,10 +10638,17 @@ case "$cmd" in
   init) cmd_init "$want_git" ;;
   new)
     need_target
+    # A name with a space or another character a name can't have is turned into the nearest
+    # one that works, and the first line says so: the person asked for a wiki, not for a rule.
     if ! valid_name "${target##*/}"; then
-      hint="$(name_hint "${target##*/}")"
-      [ -z "$hint" ] || hint=" Try: $hint"
-      die "\"${target##*/}\" can't be a wiki name. A name is letters, digits, dots, dashes and underscores, with no spaces.$hint"
+      asked="${target##*/}"
+      hint="$(name_hint "$asked")"
+      valid_name "$hint" || die "\"$asked\" can't be a wiki name. A name is letters, digits, dots, dashes and underscores, with no spaces."
+      case "$target" in
+        */*) target="${target%/*}/$hint" ;;
+        *) target="$hint" ;;
+      esac
+      echo "A wiki's name is letters, digits, dots, dashes and underscores, so this one is called $hint, not \"$asked\"."
     fi
     case "$target" in
       */*) ;;

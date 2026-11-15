@@ -85,6 +85,12 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### `wiki new` takes a name with spaces (2026-11-15)
+
+- **Why:** left over from the plainer wording. A person who doesn't use git asked for a wiki called "Acme Holdings" and got a rule back, with the name that would work offered but not used.
+- **What changed:** `wiki new` turns a name it can't use into the nearest one it can, and its first line says so: "so this one is called Acme-Holdings". A path keeps its folder and only the name changes. A name with no letter or digit left is still refused.
+- **Still untested:** with a person, and whether an agent that asked for one name notices it got another. `wiki cover` and `wiki uncover` still refuse such a name.
+
 ### Session start asks for plain words about a folder with no git (2026-11-15)
 
 - **Why:** the last piece of the plainer wording. The session-start lines that begin "This folder isn't a git repository" are written for the agent, and agents passed the phrase on to people who don't use git.
