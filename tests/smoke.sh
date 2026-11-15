@@ -5641,7 +5641,8 @@ expect "setup --list has the patterns" "workflows           3 pattern(s) for whe
 sed -i.bak '/^workflows$/d' "$SF/home/.config/llm-wiki/setup"; rm -f "$SF/home/.config/llm-wiki/setup.bak"
 expect "a machine that hasn't answered sees it as new" "pattern(s) for where sessions outside a project belong  <- new" sf setup --list
 expect "the guide tells an agent what to ask, and that people work more than one way" "Then ask whether they also work another way" sf setup --guide workflows
-expect "and the commands that record each answer" "wiki workflows add '<folder>/*' inside" sf setup --guide workflows
+expect "and the commands that record each answer" "task folders, wiki workflows add '<folder>/*' inside. One folder, wiki workflows add '<folder>' <wiki>|none, no /* at the end." sf setup --guide workflows
+expect "and to try the pattern on a folder" "Then try it: wiki workflows check <folder>" sf setup --guide workflows
 expect "workflows skip answers it with nothing to record" "No pattern recorded." sf workflows skip
 lacks "and it is no longer new" "<- new" bash -c "$(declare -f sf); SF='$SF' W='$W'; sf setup --list | grep '^workflows'"
 sed -i.bak '/^workflows$/d' "$SF/home/.config/llm-wiki/setup"; rm -f "$SF/home/.config/llm-wiki/setup.bak"
@@ -5651,14 +5652,21 @@ check "recording a pattern answers it too" grep -qx workflows "$SF/home/.config/
 # The guide, for an agent walking someone through it: the same opening and the same ending.
 g="$(sf setup --guide)"
 case "$g" in *"If the user is new to llm-wiki, first say what it is"*"a memory that lasts"*) ok "the guide has the agent say what llm-wiki is to someone new" ;; *) bad "the guide has the agent say what llm-wiki is to someone new" "$g" ;; esac
-case "$g" in *"Say folder, not repository, unless the user does."*) ok "in everyday words" ;; *) bad "in everyday words" "$g" ;; esac
-case "$g" in *"Then give two or three tips"*"say how they can help improve it"*"https://github.com/broxgit/llm-wiki/issues"*) ok "and end with tips and how to help improve it" ;; *) bad "and end with tips and how to help improve it" "$g" ;; esac
+case "$g" in *"folder, not repository; a history or a backup, not git or sync. Never say a setting's internal name."*) ok "in everyday words, with the words to use and the ones to leave out" ;; *) bad "in everyday words, with the words to use and the ones to leave out" "$g" ;; esac
+case "$g" in *"only what they chose, not every row"*) ok "to say what changed, not to read out every setting" ;; *) bad "to say what changed, not to read out every setting" "$g" ;; esac
+case "$g" in *"Then give two or three tips"*"- Your last line, always: how they can help improve llm-wiki"*"https://github.com/broxgit/llm-wiki/issues"*) ok "and end with tips, then how to help improve it as a rule of its own" ;; *) bad "and end with tips, then how to help improve it as a rule of its own" "$g" ;; esac
 g="$(env -u WIKIS_DIR HOME="$SF/none" XDG_CONFIG_HOME="$SF/none/.config" LLM_WIKI_CMD=wiki "$W" setup --guide collection 2>&1)"
 case "$g" in *"a folder of their own"*"apart from the folders the user works in"*"With the user's yes, create it: wiki init"*) ok "with no collection, the guide gives the command that creates one, so no terminal is needed" ;; *) bad "with no collection, the guide gives the command that creates one, so no terminal is needed" "$g" ;; esac
 case "$g" in *"Then run wiki setup --guide again: the other topics appear once it exists"*) ok "and says to read the guide again once it exists, since the other topics appear only then" ;; *) bad "and says to read the guide again once it exists, since the other topics appear only then" "$g" ;; esac
 g="$(sf setup --guide)"
 case "$g" in *"Don't hand the user a list of Terminal only commands."*) ok "the whole guide tells the agent not to hand over a list of terminal chores" ;; *) bad "the whole guide tells the agent not to hand over a list of terminal chores" "$g" ;; esac
 lacks "a section's guide doesn't carry that rule, or the opening" "Terminal only commands" sf setup --guide palette
+# A pattern for the folders inside, given one wiki or none, says what it leaves out.
+# shellcheck disable=SC2088
+out="$(sf workflows add '~/clients/*' none)"
+case "$out" in *"That is for the folders inside ~/clients, not ~/clients itself. For that folder too: wiki workflows add '~/clients' none"*) ok "a pattern ending /* given one answer says it leaves the folder itself out, and how to add it" ;; *) bad "a pattern ending /* given one answer says it leaves the folder itself out, and how to add it" "$out" ;; esac
+# shellcheck disable=SC2088
+lacks "task folders, which use what is inside, get no such line" "itself" sf workflows add '~/tasks/*' inside
 # With nowhere to send it, recording a pattern says nothing about other machines.
 # shellcheck disable=SC2088
 lacks "with no remote, a new pattern doesn't talk about other machines" "other machines" sf workflows add '~/elsewhere' none

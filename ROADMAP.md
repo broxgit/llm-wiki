@@ -86,6 +86,12 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### The setup guide after a second round with real agents (2026-11-15)
+
+- **Why:** nine real sessions reran the guide on main after the first fixes. Both cells that had failed passed, and three smaller faults were left: one agent recorded `<folder>/*` for a person who works in that folder itself, technical words still reached the person, and only four of nine replies said how to help improve the tool.
+- **What changed:** the guide says which pattern goes with which answer and to try it with `wiki workflows check`. Its wording rule names the words to use and the ones to leave out, and tells the agent to say what changed, not read out every setting. How to help is a rule of its own, as the last line. `wiki workflows add` with a pattern ending `/*` and one wiki, or none, says it leaves the folder itself out and gives the command that adds it.
+- **Still untested:** these three with real agents, and all of it with a person.
+
 ### Setup from start to finish, for anyone (2026-11-15)
 
 - **Why:** the maintainer asked for a setup that someone outside tech can follow from nothing: why llm-wiki is worth having, well guided, asking how they work and whether they work more than one way, and ending with tips and how to help improve it. It is also step 4 of "Learn where a person works, by asking".
