@@ -32,7 +32,7 @@
   uncover <repo>... [--new]
                        Stop a wiki covering a repository. --new gives it a wiki
                        of its own.
-  workflows [add <pattern> inside|none|<wiki> | remove <pattern> | check [<folder>]]
+  workflows [add <pattern> inside|none|<wiki> | remove <pattern> | check [<folder>] | skip]
                        Where sessions outside a repository belong: which folders
                        use the wikis of their clones, one wiki, or none.
   collections          List the wiki collections and the repositories each one takes.

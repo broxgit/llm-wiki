@@ -21,7 +21,7 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 ### Learn where a person works, by asking
 
 - **Why:** llm-wiki assumed a session belongs to one repository. Most of one team starts sessions in a folder for a ticket, which holds clones, and for weeks their project wikis never loaded and nothing said so. Decided on 2026-11-11: never guess silently; ask when unsure; write what is learned into the person's own wiki, so the questions get rarer.
-- **Sketch:** steps 1 to 3 are done (see Done): a folder of clones uses their wikis, patterns remember the answer, and a note taken in a ticket folder carries the ticket's key. Next, `wiki setup` asks how you work, and writes the first pattern.
+- **Sketch:** steps 1 to 3 are done (see Done): a folder of clones uses their wikis, patterns remember the answer, and a note taken in a ticket folder carries the ticket's key. Step 4 is done too: `wiki setup` asks how you work, and writes the patterns.
 - **Open:** how many wikis to read in full when a folder's clones belong to many. Whether an open item tied to a ticket only through its notes should close without asking: where closing is on it does, and a note ending `Ticket: none` keeps an item out. Where a ticket's own state goes: the maintainer said "both, maybe", the repo's wiki and the personal journal. Whether a git repository that holds clones is placed as a folder of clones is: a teammate asked on 2026-11-12 about checking her ticket folder into git, and the "home repo" pattern (one repository you always start in, with the others cloned inside it and ignored) has the same shape. Today such a folder is a repository like any other, so the wikis of the clones inside aren't used. Whether a wiki's `repos.md` should say more than a name for each repository: what it is, where it lives on this machine and where to clone it from, so a session in a ticket folder can find or fetch a repository the ticket needs and the folder lacks. Seen on a real ticket the same day. A clone two folders down isn't seen, and two different repositories with one name share a wiki: both found in the first hand test on real ticket folders, neither decided.
 
 ### Know whether sessions capture and compile
@@ -84,6 +84,12 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Setup from start to finish, for anyone (2026-11-15)
+
+- **Why:** the maintainer asked for a setup that someone outside tech can follow from nothing: why llm-wiki is worth having, well guided, asking how they work and whether they work more than one way, and ending with tips and how to help improve it. It is also step 4 of "Learn where a person works, by asking".
+- **What changed:** a whole `wiki setup` opens with a WELCOME stage in plain words and ends with TIPS and IMPROVE stages. A new step, `wiki setup workflows`, asks where conversations usually start, records each answer as a pattern, offers to create a wiki that doesn't exist yet, and asks whether the person also works another way. `wiki setup --new` asks it once on each machine. `wiki workflows skip` answers it with nothing to record. `wiki setup --guide` has an agent open and end the same way, in everyday words, and with no collection it gives `wiki init`, so the first step no longer needs a terminal.
+- **Still untested:** with a person who isn't in tech, at a terminal or through an agent. The steps between the welcome and the tips (Claude Code's line, permissions, delegation, the journal) still use their older wording.
 
 ### First run says where setup happens (2026-11-15)
 

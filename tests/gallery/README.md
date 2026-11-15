@@ -18,6 +18,8 @@ What each command a person reads prints at a terminal, made by `scripts/gallery.
 
 - `wiki setup delegation`: kit. Pieces: detail item prompt stage typed. [wiki-setup-delegation.txt](wiki-setup-delegation.txt)
 
+- `wiki setup workflows`: kit. Pieces: detail item prompt stage typed. [wiki-setup-workflows.txt](wiki-setup-workflows.txt)
+
 - `wiki delegation`: kit. Pieces: detail stage. [wiki-delegation.txt](wiki-delegation.txt)
 
 - `wiki feedback`: kit. Pieces: detail stage. [wiki-feedback.txt](wiki-feedback.txt)

@@ -4,6 +4,13 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-12-21: setup from start to finish, for anyone
+
+- `wiki setup` now opens by saying what llm-wiki is and why, and ends with tips and ways to help improve it.
+- It asks how you work: in a project's folder, in a folder per task, or in one folder for everything, and whether you work more than one way.
+- An agent walking you through setup does the same, and can create the wikis' folder itself, so no terminal is needed to begin.
+- Do: run `wiki setup --new` to be asked how you work. It is one question.
+
 ## 2026-12-19: a chat with no wikis says where setup happens
 
 - On a machine with no wikis, the chat connector now says setup takes a terminal and names the agent-led guide, not just "Run: wiki setup".

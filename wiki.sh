@@ -171,7 +171,7 @@ Usage: $WIKI_CMD <command> [options]
   uncover <repo>... [--new]
                        Stop a wiki covering a repository. --new gives it a wiki
                        of its own.
-  workflows [add <pattern> inside|none|<wiki> | remove <pattern> | check [<folder>]]
+  workflows [add <pattern> inside|none|<wiki> | remove <pattern> | check [<folder>] | skip]
                        Where sessions outside a repository belong: which folders
                        use the wikis of their clones, one wiki, or none.
   collections          List the wiki collections and the repositories each one takes.
@@ -1396,6 +1396,7 @@ cmd_workflows() {
         exact && !done && index($0, "- in `") == 1 { print line; done = 1 }
         { print }
         END { if (!done) print line }' "$f" > "$tmp" && mv "$tmp" "$f"
+      setup_mark workflows
       ui_item ok "$([ -n "$had" ] && echo changed || echo added): ${line#- }"
       ui_detail "Send it to your other machines: $(typed "$WIKI_CMD sync $SHARED -m \"$SHARED: where sessions belong\"")"
       ;;
@@ -1423,7 +1424,13 @@ cmd_workflows() {
         echo "$PLACE_NOTE"
       fi
       ;;
-    *) die_usage "unknown workflows command: $sub. Use add, remove or check" ;;
+    skip)
+      # The answer to setup's question when there is nothing to record: it isn't asked again.
+      [ $# -eq 0 ] || die_usage "workflows skip takes nothing"
+      setup_mark workflows
+      ui_item ok "No pattern recorded. A session in a folder that isn't a project's asks the first time, and remembers the answer."
+      ;;
+    *) die_usage "unknown workflows command: $sub. Use add, remove, check or skip" ;;
   esac
 }
 
@@ -9347,6 +9354,7 @@ setup_pending() {
   [ -d "$WIKIS_DIR" ] || return 0
   setup_done git || echo git
   if in_git_repo "$WIKIS_DIR"; then setup_done git.identity || echo git.identity; fi
+  if is_wiki "$WIKIS_DIR/$SHARED"; then setup_done workflows || echo workflows; fi
   setup_done delegation.mode || echo delegation.mode
   setup_done feedback || echo feedback
   setup_done palette || echo palette
@@ -9654,6 +9662,97 @@ setup_upgrade() {
   fi
 }
 
+# workflows_count: how many patterns the shared wiki holds.
+workflows_count() {
+  local f n=0
+  f="$(workflows_file)"
+  [ ! -f "$f" ] || n="$(grep -c '^- in `' "$f" || true)"
+  printf '%s' "${n:-0}"
+}
+
+# setup_welcome: what llm-wiki is and why, at the top of a whole run, and once on a machine
+# that only ever runs setup --new.
+setup_welcome() {
+  [ "$SETUP_MODE" = all ] || ! setup_done welcome || return 0
+  ui_stage WELCOME "llm-wiki gives your AI assistant a memory that lasts"
+  ui_detail "An assistant forgets everything when a conversation ends, so you explain the same things again."
+  ui_detail "llm-wiki keeps what matters as plain notes on this computer, a wiki for each project:"
+  ui_detail "what you decided, what you learned, how you like things done."
+  ui_detail "Your assistant reads them when a conversation starts and adds to them as you work."
+  ui_detail "They are ordinary text files. You can read them, edit them, back them up and share them with a team."
+  ui_detail "Setup is a few questions. Each has an answer filled in: press Enter to keep it. You can change any of them later."
+  setup_mark welcome
+}
+
+# setup_workflows: how the person works, asked in their words, kept as patterns in the shared wiki.
+setup_workflows() {
+  local dir what hint
+  setup_due workflows || return 0
+  is_wiki "$WIKIS_DIR/$SHARED" || return 0
+  section "How you work"
+  ui_detail "Your assistant picks a wiki from the folder a conversation starts in. Say where you usually start, so it doesn't have to ask."
+  ui_detail "  1  inside one project's own folder. Nothing to set: that project's wiki is used."
+  ui_detail "  2  in a folder for each task or ticket, which holds copies of one or more projects"
+  ui_detail "  3  in one folder you use for everything, such as Documents"
+  ui_detail "  4  it varies, or you aren't sure. Your assistant asks the first time, and remembers the answer."
+  [ "$(workflows_count)" = 0 ] || ui_detail "$(workflows_count) recorded already. See them: $(typed "$WIKI_CMD workflows")"
+  while :; do
+    ask "Where do you usually start (1, 2, 3 or 4)" 4
+    case "$ANSWER" in
+      1 | 4) break ;;
+      2)
+        ask "The folder that holds those task folders, such as ~/tickets" ""
+        dir="${ANSWER%/}"
+        [ -n "$dir" ] || break
+        ( cmd_workflows add "$dir/*" inside ) || continue
+        ;;
+      3)
+        ask "The folder, such as ~/Documents/work" ""
+        dir="${ANSWER%/}"
+        [ -n "$dir" ] || break
+        ui_detail "Wikis here: $(cmd_list --names | tr '\n' ' ')"
+        ask "The wiki its conversations use: a name from that list, a new name, or none" "$SHARED"
+        what="$ANSWER"
+        case "$what" in
+          "" | inside) ui_item warn "Answer a wiki's name, or none."; continue ;;
+          none) ;;
+          *)
+            if ! is_wiki "$WIKIS_DIR/$what"; then
+              hint="$(name_hint "$what")"
+              valid_name "$hint" || { ui_item warn "\"$what\" can't be a wiki name. A name is letters, digits, dots, dashes and underscores."; continue; }
+              what="$hint"
+              if ! is_wiki "$WIKIS_DIR/$what"; then
+                ask_yn "There is no wiki called $what yet. Create it?" y || continue
+                scaffold "$WIKIS_DIR/$what" 0 | sed 's/^/  /'
+              fi
+            fi
+            ;;
+        esac
+        ( cmd_workflows add "$dir" "$what" ) || continue
+        ;;
+      *) ui_item warn "Answer 1, 2, 3 or 4."; continue ;;
+    esac
+    ask_yn "Do you also work another way?" n || break
+  done
+  setup_mark workflows
+}
+
+# setup_goodbye: the end of a whole run: tips, and how to help make llm-wiki better.
+setup_goodbye() {
+  ui_stage TIPS "A few things worth knowing"
+  ui_detail "Say \"remember this\" and your assistant saves it. Ask \"what did we decide about ...\" and it looks it up."
+  ui_detail "Start conversations in a project's folder when you can: that is how your assistant knows which wiki to use."
+  ui_detail "$(typed "$WIKI_CMD status") shows what needs your attention. $(typed "$WIKI_CMD standup") writes up what you did."
+  ui_detail "Change an answer any time: $(typed "$WIKI_CMD setup --list") shows them all."
+  ui_stage IMPROVE "llm-wiki gets better when you say what got in your way"
+  case "$(feedback_mode)" in
+    off) ui_detail "Your assistant can keep a note when llm-wiki itself fails or confuses it. That is off. Turn it on: $(typed "$WIKI_CMD setup feedback notes")" ;;
+    *) ui_detail "Your assistant keeps a note when llm-wiki itself fails or confuses it. Read them: $(typed "$WIKI_CMD feedback")" ;;
+  esac
+  ui_detail "Was a step here unclear, or is something missing? Say so: https://github.com/$(feedback_repo)/issues"
+  ui_detail "Ideas and fixes are welcome there too. Nothing is ever sent without your yes."
+}
+
 setup_delegation() {
   local cur
   setup_due delegation.mode || return 0
@@ -9786,6 +9885,11 @@ setup_list_rows() {
     case "$pending" in *" completion."*) printf '%s' "$new_note" ;; esac
     printf '\n'
   fi
+  if is_wiki "$WIKIS_DIR/$SHARED"; then
+    printf '%-19s %s' "workflows" "$(workflows_count) pattern(s) for where sessions outside a project belong"
+    case "$pending" in *" workflows "*) printf '%s' "$new_note" ;; esac
+    printf '\n'
+  fi
   printf '%-19s %s' "delegation.mode" "$(deleg_mode)"
   case "$pending" in *" delegation.mode "*) printf '%s' "$new_note" ;; esac
   printf '\n'
@@ -9831,7 +9935,7 @@ setup_list_end() {
   [ "$(agy_state)" = none ] || tools="$tools | antigravity"
   [ "$(codex_state)" = none ] || tools="$tools | codex"
   [ "$(cursor_state)" = none ] || tools="$tools | cursor"
-  echo "Or a section:  $(typed "$WIKI_CMD setup collection | collections | tools | git | claude | plugin | permissions$tools | upgrade | skills | completion | delegation | feedback | palette | theme | helper | chat | journal | microsoft-copilot")"
+  echo "Or a section:  $(typed "$WIKI_CMD setup collection | collections | tools | git | claude | plugin | permissions$tools | upgrade | skills | completion | workflows | delegation | feedback | palette | theme | helper | chat | journal | microsoft-copilot")"
 }
 
 # Antigravity's grants: what lets Gemini read and write the wikis and run wiki.sh
@@ -10115,7 +10219,7 @@ setup_set_value() {
 # value, whether setup --new would ask about it, what it does, and how to change it with a
 # command that asks nothing, or that only a terminal can do. It never prints, asks for or
 # writes a token or a password, and changes nothing itself.
-GUIDE_SECTIONS="collection collections tools git git.identity claude plugin permissions antigravity codex cursor upgrade skills completion journal delegation feedback palette theme helper obsidian extensions chat"
+GUIDE_SECTIONS="collection collections tools git git.identity workflows claude plugin permissions antigravity codex cursor upgrade skills completion journal delegation feedback palette theme helper obsidian extensions chat"
 
 # guide_known <section>: succeed for a name `setup --guide` takes.
 guide_known() {
@@ -10151,7 +10255,11 @@ guide_unanswered() {
 guide_entry() {
   local c="$WIKI_CMD" id="$1" type
   case "$id" in
-    collection) echo "Where the wikis live. Terminal only: $c setup collection" ;;
+    collection)
+      if [ -d "$WIKIS_DIR" ]; then echo "Where the wikis live. Terminal only: $c setup collection"
+      else echo "Where the wikis will live. There is none yet, and nothing else can be set without one. With the user's yes, create it: $c init"; fi
+      ;;
+    workflows) echo "Where conversations that start outside a project's own folder belong. Ask where the user usually starts: one project's folder (nothing to record), a folder for each task or ticket that holds copies of projects, or one folder for everything. Then ask whether they also work another way. Change: $c workflows add '<folder>/*' inside, $c workflows add '<folder>' <wiki>|none, or $c workflows skip" ;;
     git) echo "Whether the collection is a git repo with a remote, so it syncs. Terminal only: $c setup git" ;;
     git.identity) echo "The name and email on commits in the collection. Terminal only: $c setup git.identity" ;;
     claude) echo "The wiki line in ~/.claude/CLAUDE.md. Terminal only: $c setup claude" ;;
@@ -10204,13 +10312,21 @@ setup_guide() {
   [ -z "$sec" ] || guide_known "$sec" || die_usage "no setup section called $sec. Sections: $GUIDE_SECTIONS, journal.<key>, or an extension such as jira"
   style_off
   GUIDE_PENDING=" $(setup_pending | tr '\n' ' ')"
+  # The whole guide opens and ends as a whole setup does: what llm-wiki is, then tips and how to help.
+  local first="" last="- Finish with $c setup --list and tell the user what changed."
+  if [ -z "$sec" ]; then
+    first="- If the user is new to llm-wiki, first say what it is in two or three plain sentences: notes on this computer, a wiki for each project, that give their assistant a memory that lasts.
+- Use everyday words. Say folder, not repository, unless the user does.
+"
+    last="- Finish with $c setup --list and tell the user what changed. Then give two or three tips (say \"remember this\" to save something, ask what was decided, $c status, the llm-wiki tour), and say how they can help improve it: feedback notes ($c setup feedback notes) and issues at https://github.com/$(feedback_repo)/issues."
+  fi
   cat <<EOF
 llm-wiki setup guide, to follow with the user in this session, one topic at a time.
-- Start with topics marked [not answered yet] ($c setup --new would ask them), then ask what else to change.
+${first}- Start with topics marked [not answered yet] ($c setup --new would ask them), then ask what else to change.
 - Per topic: say what it does and its value in a line, ask, then run its Change command.
 - Never ask for, accept or write a token or password. If the user pastes one, don't store or repeat it: they put it in their keychain themselves.
 - Change only what the user chose. Where it says Terminal only, the user runs the command: give it to them.
-- Finish with $c setup --list and tell the user what changed.
+$last
 
 EOF
   while IFS= read -r line; do
@@ -10310,7 +10426,7 @@ Usage: $WIKI_CMD setup [--new | --list | --guide [section] | <section> | <settin
                    ever asked for or written by the agent.
   setup palette <default|colorblind>, setup theme <auto|dark|light>, setup feedback <off|notes|share>
                    Set one without questions.
-  setup <section>  Just one section: collection, collections, tools, git, claude, permissions, antigravity, codex, cursor, upgrade, delegation, feedback, palette, theme, chat, obsidian, extensions, journal.
+  setup <section>  Just one section: collection, collections, tools, git, workflows, claude, permissions, antigravity, codex, cursor, upgrade, delegation, feedback, palette, theme, chat, obsidian, extensions, journal.
   setup chat --yes Add the Chat tab's server without asking, for an agent the user told to. The app must be closed.
   setup microsoft-copilot --repo OWNER/REPO
                    Set up a Microsoft 365 Copilot agent that reads a wiki repository on GitHub. --help for its options.
@@ -10319,7 +10435,7 @@ Usage: $WIKI_CMD setup [--new | --list | --guide [section] | <section> | <settin
 EOF
         return 0
         ;;
-      collection | collections | tools | git | claude | plugin | permissions | antigravity | codex | cursor | upgrade | skills | completion | journal | delegation | feedback | palette | theme | helper | obsidian | extensions | chat | git.identity) what="$a" ;;
+      collection | collections | tools | git | workflows | claude | plugin | permissions | antigravity | codex | cursor | upgrade | skills | completion | journal | delegation | feedback | palette | theme | helper | obsidian | extensions | chat | git.identity) what="$a" ;;
       journal.*)
         [ -n "$(journal_field "${a#journal.}" 2)" ] || die "no journal setting called ${a#journal.}. Settings: $JOURNAL_KEYS"
         what="$a"
@@ -10347,6 +10463,10 @@ EOF
     claude) SETUP_MODE=all; setup_claude ;;
     upgrade) SETUP_MODE=all; setup_upgrade ;;
     journal) SETUP_MODE=all; setup_journal ;;
+    workflows)
+      is_wiki "$WIKIS_DIR/$SHARED" || die "there's no shared wiki at $(tilde "$WIKIS_DIR/$SHARED") to keep patterns in. Run: $WIKI_CMD setup collection"
+      SETUP_MODE=all; setup_workflows
+      ;;
     delegation) SETUP_MODE=all; setup_delegation ;;
     feedback) SETUP_MODE=all; setup_feedback ;;
     palette) SETUP_MODE=all; setup_palette ;;
@@ -10374,9 +10494,11 @@ EOF
     collections) setup_collections ;;
     tools) setup_tools ;;
     '')
+      setup_welcome
       setup_plugin
       setup_collection
       setup_git
+      setup_workflows
       setup_claude
       setup_permissions
       setup_antigravity
@@ -10406,6 +10528,7 @@ EOF
     ui_item ok "Done. After you pull template updates, $WIKI_CMD setup --new shows what's new."
   fi
   ui_detail "To see what it can do, ask your agent for the llm-wiki tour. It runs on a made-up project."
+  [ -n "$what" ] || setup_goodbye
 }
 
 # Names of wikis behind the template handbook, space separated.

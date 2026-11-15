@@ -5537,7 +5537,7 @@ case "$guide" in *"- git = "*"Terminal only: wiki setup git"*) ok "one with no s
 lacks "the session's command name is used, never a path" "$REPO/wiki.sh" gw setup --guide
 case "$(gw setup --guide | grep -c '^- journal.format = standup')" in 1) ok "a journal setting shows its value" ;; *) bad "a journal setting shows its value" ;; esac
 expect "a journal setting says which values it takes" "Change: wiki journal set format <standup|summary|detailed>" gw setup --guide
-check "the whole guide is under 6,000 bytes here" test "$(gw setup --guide | wc -c | tr -d ' ')" -lt 6000
+check "the whole guide is under 6,500 bytes here" test "$(gw setup --guide | wc -c | tr -d ' ')" -lt 6500
 
 # It is plain: style forced on, or a pipe, gives no colour code.
 esc="$(printf '\033')"
@@ -5591,6 +5591,54 @@ check "so does another" grep -qx 'journal.depth' "$GCFG/setup"
 gw helper auto off >/dev/null 2>&1
 check "helper auto counts as answering the helper step" grep -qx 'helper' "$GCFG/setup"
 expect "status now counts only what is left, and names the guide" 'new setting(s). Run: wiki setup --new. Or ask an agent: "run wiki setup --guide and walk me through it"' gw status
+
+# Setup from start to finish, for someone new: why, the questions, how they work, then tips
+# and how to help. A fresh machine, and every answer Enter.
+SF="$T/sflow"; mkdir -p "$SF/home"
+printf '[user]\n\tname = t\n\temail = t@example.test\n' > "$SF/home/.gitconfig"
+sf() { env -u WIKIS_DIR HOME="$SF/home" XDG_CONFIG_HOME="$SF/home/.config" XDG_STATE_HOME="$SF/state" XDG_DATA_HOME="$SF/data" PATH="/usr/bin:/bin" LLM_WIKI_NO_GO=1 LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE=off LLM_WIKI_CMD=wiki "$W" "$@" 2>&1; }
+out="$(printf '%.0s\n' $(seq 1 200) | sf setup)"
+case "$out" in *"WELCOME  llm-wiki gives your AI assistant a memory that lasts"*"SETUP  Collection"*) ok "a whole setup opens by saying what llm-wiki is, before any question" ;; *) bad "a whole setup opens by saying what llm-wiki is, before any question" "$out" ;; esac
+case "$out" in *"press Enter to keep it"*) ok "and says Enter keeps an answer" ;; *) bad "and says Enter keeps an answer" "$out" ;; esac
+case "$out" in *"SETUP  Collection"*"SETUP  How you work"*"Where do you usually start (1, 2, 3 or 4) [4]"*) ok "it asks how the person works, once the collection is there" ;; *) bad "it asks how the person works, once the collection is there" "$out" ;; esac
+case "$out" in *"Done."*"TIPS  A few things worth knowing"*'Say "remember this"'*"IMPROVE  llm-wiki gets better when you say what got in your way"*"https://github.com/broxgit/llm-wiki/issues"*) ok "it ends with tips, then how to help improve it" ;; *) bad "it ends with tips, then how to help improve it" "$out" ;; esac
+check "Enter at how-you-work records no pattern" test ! -e "$SF/home/wikis/global/workflows.md"
+check "and counts as answered" grep -qx workflows "$SF/home/.config/llm-wiki/setup"
+out="$(printf '%.0s\n' $(seq 1 200) | sf setup --new)"
+case "$out" in *WELCOME*) bad "setup --new doesn't repeat the welcome on a machine that has seen it" "$out" ;; *) ok "setup --new doesn't repeat the welcome on a machine that has seen it" ;; esac
+case "$out" in *"How you work"*) bad "or ask again how the person works" "$out" ;; *) ok "or ask again how the person works" ;; esac
+out="$(printf 'notes\n' | sf setup feedback)"
+case "$out" in *TIPS* | *WELCOME*) bad "one section alone has no welcome and no tips" "$out" ;; *"Done."*) ok "one section alone has no welcome and no tips" ;; *) bad "one section alone has no welcome and no tips" "$out" ;; esac
+# More than one way of working: task folders, then one folder with a wiki that doesn't exist yet.
+out="$(printf '9\n2\n~/tickets\ny\n3\n~/Documents/work\nAcme Holdings\ny\nn\n' | sf setup workflows)"
+case "$out" in *"Answer 1, 2, 3 or 4."*) ok "an answer that isn't a choice is asked again" ;; *) bad "an answer that isn't a choice is asked again" "$out" ;; esac
+check "task folders are recorded as a pattern for the folders inside" grep -qxF -- '- in `~/tickets/*`: the wikis of the repositories inside.' "$SF/home/wikis/global/workflows.md"
+check "asked whether they also work another way, a second is recorded" grep -qxF -- '- in `~/Documents/work`: `Acme-Holdings`.' "$SF/home/wikis/global/workflows.md"
+check "and the wiki it names is created, under a name that works" test -f "$SF/home/wikis/Acme-Holdings/AGENTS.md"
+out="$(printf '3\n~/notes\nnone\nn\n' | sf setup workflows)"
+check "one folder can be told to use no wiki" grep -qxF -- '- in `~/notes`: no wiki.' "$SF/home/wikis/global/workflows.md"
+out="$(printf '2\nnot-a-path\n4\n' | sf setup workflows)"
+case "$out" in *"a pattern is a full path"*"Where do you usually start (1, 2, 3 or 4) [4]"*) ok "a folder that isn't a full path is refused, and the question comes back" ;; *) bad "a folder that isn't a full path is refused, and the question comes back" "$out" ;; esac
+expect "setup --list has the patterns" "workflows           3 pattern(s) for where sessions outside a project belong" sf setup --list
+# A machine that set up before this question existed is asked once, and a session can answer it.
+sed -i.bak '/^workflows$/d' "$SF/home/.config/llm-wiki/setup"; rm -f "$SF/home/.config/llm-wiki/setup.bak"
+expect "a machine that hasn't answered sees it as new" "pattern(s) for where sessions outside a project belong  <- new" sf setup --list
+expect "the guide tells an agent what to ask, and that people work more than one way" "Then ask whether they also work another way" sf setup --guide workflows
+expect "and the commands that record each answer" "wiki workflows add '<folder>/*' inside" sf setup --guide workflows
+expect "workflows skip answers it with nothing to record" "No pattern recorded." sf workflows skip
+lacks "and it is no longer new" "<- new" bash -c "$(declare -f sf); SF='$SF' W='$W'; sf setup --list | grep '^workflows'"
+sed -i.bak '/^workflows$/d' "$SF/home/.config/llm-wiki/setup"; rm -f "$SF/home/.config/llm-wiki/setup.bak"
+# shellcheck disable=SC2088
+sf workflows add '~/scratch' none >/dev/null
+check "recording a pattern answers it too" grep -qx workflows "$SF/home/.config/llm-wiki/setup"
+# The guide, for an agent walking someone through it: the same opening and the same ending.
+g="$(sf setup --guide)"
+case "$g" in *"If the user is new to llm-wiki, first say what it is"*"a memory that lasts"*) ok "the guide has the agent say what llm-wiki is to someone new" ;; *) bad "the guide has the agent say what llm-wiki is to someone new" "$g" ;; esac
+case "$g" in *"Say folder, not repository, unless the user does."*) ok "in everyday words" ;; *) bad "in everyday words" "$g" ;; esac
+case "$g" in *"Then give two or three tips"*"say how they can help improve it"*"https://github.com/broxgit/llm-wiki/issues"*) ok "and end with tips and how to help improve it" ;; *) bad "and end with tips and how to help improve it" "$g" ;; esac
+g="$(env -u WIKIS_DIR HOME="$SF/none" XDG_CONFIG_HOME="$SF/none/.config" LLM_WIKI_CMD=wiki "$W" setup --guide collection 2>&1)"
+case "$g" in *"There is none yet"*"With the user's yes, create it: wiki init"*) ok "with no collection, the guide gives the command that creates one, so no terminal is needed" ;; *) bad "with no collection, the guide gives the command that creates one, so no terminal is needed" "$g" ;; esac
+rm -rf "$SF"
 
 # Extensions: a version 3 one still works, and has only a terminal section.
 mkdir -p "$GXD"
