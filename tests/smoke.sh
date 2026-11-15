@@ -225,9 +225,17 @@ check "the collection is a git repo" git -C "$WIKIS_DIR" rev-parse --is-inside-w
 check "the shared wiki starts with a conventions page" grep -q '^## For agents' "$WIKIS_DIR/global/wiki/conventions.md"
 check "the shared index lists it" grep -q 'wiki/conventions.md' "$WIKIS_DIR/global/index.md"
 expect "new creates a wiki" "created:" "$W" new demo
-refuse "new refuses a name with a space" "$W" new "My Repo"
-expect "and offers the nearest name it would take" "can't be a wiki name. A name is letters, digits, dots, dashes and underscores, with no spaces. Try: My-Repo" "$W" new "My Repo"
-out="$("$W" new '!!!' 2>&1)"; case "$out" in *"with no spaces."*"Try:"*) bad "with nothing offered when no letter is left" "$out" ;; *"with no spaces."*) ok "with nothing offered when no letter is left" ;; *) bad "with nothing offered when no letter is left" "$out" ;; esac
+out="$("$W" new "My Repo" 2>&1)"
+case "$out" in "A wiki's name is letters, digits, dots, dashes and underscores, so this one is called My-Repo, not \"My Repo\"."*"created:"*) ok "new turns a name with a space into the nearest one that works, and says so first" ;; *) bad "new turns a name with a space into the nearest one that works, and says so first" "$out" ;; esac
+check "and the wiki is there under that name" test -f "$WIKIS_DIR/My-Repo/AGENTS.md"
+check "with no folder under the name as typed" test ! -e "$WIKIS_DIR/My Repo"
+mkdir -p "$T/loose"
+out="$("$W" new "$T/loose/Acme & Sons" 2>&1)"
+case "$out" in *"so this one is called Acme-Sons, not \"Acme & Sons\"."*) ok "a path keeps its folder and changes only the name" ;; *) bad "a path keeps its folder and changes only the name" "$out" ;; esac
+check "and that wiki is in the folder named" test -f "$T/loose/Acme-Sons/AGENTS.md"
+out="$("$W" new demo 2>&1)"; case "$out" in *"is called"*) bad "a name that already works is left as typed, with nothing said" "$out" ;; *) ok "a name that already works is left as typed, with nothing said" ;; esac
+refuse "new refuses a name with no letter or digit left" "$W" new '!!!'
+out="$("$W" new '!!!' 2>&1)"; case "$out" in *"is called"*) bad "and says what a name is, with nothing made up" "$out" ;; *"\"!!!\" can't be a wiki name. A name is letters, digits, dots, dashes and underscores, with no spaces.") ok "and says what a name is, with nothing made up" ;; *) bad "and says what a name is, with nothing made up" "$out" ;; esac
 # Someone with no git: sync says what that means for them, in their words, and how to change it.
 mkdir -p "$T/nogit" "$T/loose"
 out="$(WIKIS_DIR="$T/nogit" "$W" new plainw 2>&1 && WIKIS_DIR="$T/nogit" "$W" sync plainw 2>&1)"
