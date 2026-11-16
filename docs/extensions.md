@@ -14,7 +14,7 @@ wiki extensions add jira
 
 `wiki extensions` lists them, on or off. `wiki extensions remove jira` turns one off. `wiki setup --new` asks about a new one once.
 
-Turning one on is not the same as setting it up, and it says so. When you answer yes in `wiki setup`, the extension asks at once for what it needs. `wiki extensions setup jira` asks again at any time. Your agent can walk you through it instead: ask it to run `wiki setup --guide jira` (in Claude Code, `/llm-wiki:setup jira`). It sets what isn't secret with `wiki extensions set jira <key> <value>`, and `wiki extensions settings jira` lists what is set. A token is never the agent's to see or store: it tells you the command to run yourself. Until an extension that is on has what it needs, `wiki status` lists it with that command, `wiki extensions` shows it as not ready, and no event runs it.
+Turning one on is not the same as setting it up, and it says so. When you answer yes in `wiki setup`, the extension asks at once for what it needs. `wiki extensions setup jira` asks again at any time. Your agent can walk you through it instead: ask it to run `wiki setup --guide jira` (in Claude Code, `/llm-wiki:setup jira`). It sets what isn't part of the sign-in with `wiki extensions set jira <key> <value>`, and `wiki extensions settings jira` lists what is set. The sign-in itself (the address, the account and where the token comes from) is never a session's: `extensions set` refuses those with exit 2 and the agent tells you to run `wiki extensions setup jira` in a terminal. A token is never the agent's to see or store. Until an extension that is on has what it needs, `wiki status` lists it with that command, `wiki extensions` shows it as not ready, and no event runs it.
 
 ### Signing in to Atlassian
 
@@ -31,7 +31,7 @@ token_cmd = security find-generic-password -s atlassian -w
 - `token_cmd` is a command that prints the token, so the token itself stays in your keychain or password manager and out of the file. `ATLASSIAN_API_TOKEN` in the environment works too.
 - On a Mac, store the token from the clipboard: copy it, then run `security add-generic-password -a "$USER" -s atlassian -U -w "$(pbpaste)"`. Don't let `security` prompt for it: the prompt keeps only the first 128 characters, and an Atlassian token is longer.
 
-Each value is looked for in this order, and the first one found is used: the extension's own environment variable, such as `JIRA_URL`; Atlassian's, such as `ATLASSIAN_SITE`; the extension's own file; then this shared file. So an extension's file needs `url`, `email` or `token_cmd` only where its own differs, as on servers where Jira and Confluence have different addresses. `wiki jira config` and `wiki confluence config` say where each value came from.
+Each value is looked for in this order, and the first one found is used: the extension's own environment variable, such as `JIRA_URL`; Atlassian's, such as `ATLASSIAN_SITE`; the extension's own file; then this shared file. So an extension's file needs `url`, `email` or `token_cmd` only where its own differs, as on servers where Jira and Confluence have different addresses. `wiki jira config` and `wiki confluence config` say where each value came from. An address, wherever it comes from, is read by a parser: `https://`, or `http://` only for localhost, 127.0.0.1 and ::1; a host; no login, query, fragment or space. One that fails is not used: the command stops with exit 1 and says which setting to fix, before any token is fetched. The sign-in settings (Jira's `site`, `email` and `token_cmd`; Confluence's `site`, `url`, `email` and `token_cmd`; Jenkins' `url`, `user` and `token_cmd`) are never set, changed or cleared from a session, whatever they hold, because a session that was misled could have the token sent somewhere else: `--wiki-set` refuses them with exit 2 and `--wiki-settings` marks them `terminal`.
 
 ### Jira
 
@@ -233,6 +233,36 @@ The settings, set only by `wiki github fix on` and `wiki extensions setup github
 
 Read every fix before you rely on it. A pull request it opens says so, and so does the commit.
 
+### GitLab CI
+
+`wiki gitlab` says what failed in GitLab CI and why, as `wiki github` does for GitHub Actions. It is for agents that have no CI watching of their own, and for a session that would otherwise read megabytes of log. Turn it on with `wiki extensions add gitlab`; `wiki extensions setup gitlab` walks through it. It does not fix anything: there is no unattended fix for GitLab, no agent is started, and nothing is written to GitLab or pushed anywhere.
+
+It reads GitLab through `glab`, the GitLab command line, and nothing else, run in the watched clone so that `glab` picks the host and the project from the clone's remote, on gitlab.com or on your own server. Every call is `glab api --method GET <endpoint>`, with `:fullpath` or `:id` for the project, or `glab auth status`. Every call runs with prompts off and a timeout. It never reads, asks for, prints or stores a token: `glab` holds the sign-in, and `glab auth login` is how you sign in. `GLAB_BIN` names a different `glab`.
+
+`wiki gitlab check [<folder>]` is the default. For the project the folder is a clone of, its name comes from the clone's own `origin` address, and the server has to agree with it (otherwise the folder is skipped); it looks at the newest pipeline of each kind (`push`, `merge_request_event`, `schedule`...) on the folder's branch, on the default branch, and on the branch of each open merge request you opened in that project (at most ten of them; a merge request from a fork is left out; a merge request's own pipelines, which GitLab keeps on `refs/merge-requests/<number>/head`, are looked at too):
+
+What it prints for each failing pipeline: the kind and branch (and the merge request), the pipeline's address, the failing job and its stage, the error line, whether a wiki already holds it, the saved excerpt's path, and a note of how many jobs that are allowed to fail also failed.
+
+- **What fails.** A pipeline is failing when GitLab says `failed`, passing on `success`. `canceled`, `skipped`, `manual` and every pipeline that has not finished leave the state alone. Of a failing pipeline's jobs, the first (lowest id) that failed and is not allowed to fail is the failure; jobs with `allow_failure` are only counted.
+- **The excerpt and the signature** are as for GitHub, from the job's log (`projects/:id/jobs/<id>/trace`, of which only the last 2 MB is read). GitLab's section markers and its escape codes are taken out first. A job has no steps, so the whole log goes through the cut: the lines around its first failures and its end, 120 lines and 8,000 bytes at most, kept seven days in a folder only you can read, and never in a wiki.
+- **Exits.** 0 whenever it could look, 1 with a fix for `glab` missing or not signed in, 2 for a call it doesn't understand, and 75 from an event when GitLab can't be reached or `glab` isn't signed in.
+
+In a tick a project or job that can't be read (403, 404, no network) is logged and skipped and the others go on, the event ends 75 only if none could be read, and one project gets 60 seconds. `watch`, `unwatch`, `config`, the tick, the notice (`CI failed on <branch>: pipeline (push) / <job>: <signature>. The failing job's log, cut down: <path>. More: wiki gitlab check`), the desktop notification and the note for a fixed failure are as for GitHub, with the same settings (`watch`, `remember`, `notice`, `desktop`) in `~/.config/llm-wiki/gitlab`, the state in `~/.local/state/llm-wiki/extensions/gitlab/`, and notice ids that begin `gl-`. A `ci-fixed` note holds the pipeline kind, job and stage, the signature, the failed and the passing pipeline, the commit and the merge request, and ends `Ticket: none`; a pipeline that fails and passes again on the same commit is a `ci-flaky` note. `--wiki-ready` is a file check: `glab` is on the path and its configuration file names a host.
+
+### Jenkins
+
+`wiki jenkins` says what failed in a Jenkins job and why. Turn it on with `wiki extensions add jenkins`; `wiki extensions setup jenkins` walks through it. Like `wiki gitlab`, it only reads: every request is a GET, no agent is started, and nothing is written to Jenkins or pushed anywhere.
+
+It talks to Jenkins over its JSON API, as `wiki jira` talks to Jira. The sign-in is `url`, `user` and an API token, which is never printed, logged, stored or put in an error. `token_cmd` is a command that prints it, such as the keychain; `JENKINS_URL`, `JENKINS_USER` and `JENKINS_API_TOKEN` win over the file. `wiki extensions settings` never runs `token_cmd` and says only `set` or `not set`, and `extensions set` refuses a token and the sign-in settings `url`, `user` and `token_cmd`, as for Jira. The address is `https://` anywhere, or `http://` on this machine only: a plain `http://` address to another host is refused, because the token would cross the network in the clear. A redirect to another host is never followed, so the sign-in never leaves the address you set. Every request has a timeout and a cap on what is read.
+
+Jenkins doesn't know which repository a job builds, so you say: `wiki jenkins watch <folder> <job>`, where the job is its path as Jenkins shows it (`team/app`) or its address on your Jenkins, which is turned into the path. The path is checked strictly (letters, digits, spaces and `._-` in each part, parts joined by `/`, no `..`) and each part is percent-encoded into `/job/<part>/job/<part>`. A clone can have more than one job. `wiki jenkins check [<folder> [<job>]]` reads the job's latest build and, for a multibranch project, the job for the clone's branch and the job for the default branch (a branch's name is encoded as Jenkins does, so `feature/x` is the job `feature%2Fx`, and that name again in the address):
+
+What it prints for each failing build: the job, build number and result, the build's address (made from your `url`, never from what Jenkins says), the stage or `not known`, what started it, the error line, whether a wiki already holds it, and the saved excerpt's path.
+
+`FAILURE` and `UNSTABLE` are failures, and it says which; `SUCCESS` is a pass; `ABORTED`, `NOT_BUILT` and a build still running leave the state alone. The stage is named when Pipeline's API (`wfapi/describe`) says which failed, and is `not known` when it doesn't. The log is `consoleText`, of which only the tail is read: the request carries `Range: bytes=-2000000`, and a server that ignores it and sends the whole is read as a stream that keeps the last 2 MB, so a console of any size is never held. Jenkins' console notes and escape codes are taken out. The excerpt, the signature, `watch`, `unwatch`, `config`, the tick, the notice, the desktop notification and the note for a fixed failure are as for GitLab, with `url`, `user`, `token_cmd`, `watch` (`<folder>=<job>, ...`), `remember`, `notice` and `desktop` in `~/.config/llm-wiki/jenkins`, the state in `~/.local/state/llm-wiki/extensions/jenkins/`, and notice ids that begin `jk-`. A plain job has no branch, so its notice is for any branch of the clone.
+
+Text from Jenkins, such as a job name, a branch or a log line, is data: control characters are stripped, it is cut, it is never part of a shell command, and no path is made from it beyond numbers.
+
 ## Write one
 
 An extension is an executable file named `wiki-<name>`, in any language, in the extensions folder. `wiki extensions path` prints the folder:
@@ -356,7 +386,7 @@ llm-wiki does the rest:
 | Call | What to do |
 |---|---|
 | `wiki-<name> --wiki-settings` | Print one line for each setting, tab separated: its key, its value now (empty when unset), where that came from (`file`, `shared file`, `environment` or `default`), what it means in a line, and `set` if a session may change it or `terminal` if only a person may. Read files and the environment, and nothing else |
-| `wiki-<name> --wiki-set <key> <value>` | Check the key and the shape of the value, save it, and say so in one line. A value of `-` clears the setting. Exit 2 with a one-line reason for what you refuse: an unknown key, a bad value, anything secret |
+| `wiki-<name> --wiki-set <key> <value>` | Check the key and the shape of the value, save it, and say so in one line. A value of `-` clears the setting. Exit 2 with a one-line reason for what you refuse: an unknown key, a bad value, anything secret, and anything that says where a sign-in goes: an address, an account, where a token comes from |
 
 Two rules keep a secret out of a session. Never print one: say `set` or `not set` in the value's place, and put how the person stores it, in their own terminal, in the line of meaning. And never run a command to answer `--wiki-settings`, a command that prints a token least of all.
 
@@ -370,5 +400,6 @@ Something else is checked for every extension, with or without those comments: t
 - **A command of llm-wiki's own always wins.** An extension named `wiki-status` is never run, and `wiki extensions` says so.
 - **Extensions are per machine.** The folder is outside every collection, so pulling a shared collection can never add a command to your machine. To share one with a team, keep it in a repository and have each person copy or link it into their folder.
 - **`LLM_WIKI_EXTENSIONS_DIR`** names a different folder.
+- **Shared code.** An extension that ships with llm-wiki may keep code it shares with others in a plain module beside it, such as `extensions/ci_common.py`, which `wiki-github`, `wiki-gitlab` and `wiki-jenkins` import. It has no `wiki-` name and no header, so it is never listed or run, and an extension that needs one is turned on with `wiki extensions add`, never copied alone.
 
 An extension runs with your permissions and can read every wiki. Install one only if you would run its code yourself.

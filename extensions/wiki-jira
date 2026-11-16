@@ -31,6 +31,7 @@ import sys
 import tempfile
 import unicodedata
 import urllib.error
+import urllib.parse
 import urllib.request
 
 CMD = os.environ.get("LLM_WIKI_CMD", "wiki")
@@ -77,6 +78,9 @@ JIRA_AUTO_CLOSE, JIRA_DONE_STATUSES, and for every Atlassian extension ATLASSIAN
 ATLASSIAN_EMAIL and ATLASSIAN_API_TOKEN, which Jira's own names win over.
 Keep the token out of the file. With an email the sign-in is Jira Cloud's (email and
 API token); without one the token is sent as a Data Center personal access token.
+The sign-in (site, email, token_cmd) is the user's: a session never sets it, because the token
+would go to wherever it pointed. The user runs {CMD} extensions setup jira in a terminal. An address
+is https://, or http:// only on this machine, with no login, query or fragment in it.
 """
 
 
@@ -324,8 +328,8 @@ def atlassian_setup():
     print(f"Jira and Confluence share one Atlassian sign-in, kept in {SHARED}.")
     print("Enter keeps the value in brackets.")
     site = ask("Site, such as https://your-company.atlassian.net", shared.get("site", ""))
-    if site and not site.startswith(("https://", "http://")):
-        print("  " + warn(f"{site} isn't an address, so it wasn't saved. An address starts with https://"))
+    if site and address_problem(site):
+        print("  " + warn(f"That address {address_problem(site)}, so it wasn't saved."))
     else:
         set_conf(SHARED, "site", site.rstrip("/"))
     email = ask("Email of your Atlassian account. Leave it empty on Data Center", shared.get("email", ""))
@@ -351,8 +355,47 @@ def atlassian_setup():
         set_conf(SHARED, "token_cmd", cmd)
 
 
+def origin(url):
+    u = urllib.parse.urlsplit(url)
+    port = u.port or (443 if u.scheme == "https" else 80)
+    return (u.scheme, (u.hostname or "").lower(), port)
+
+
+class SameOrigin(urllib.request.HTTPRedirectHandler):
+    """A redirect is followed only to the same address it came from: the sign-in is never sent
+    anywhere else. urllib's own handler carries the Authorization header to wherever a
+    redirect points, another host or plain http included."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        try:
+            if origin(urllib.parse.urljoin(req.full_url, newurl)) != origin(req.full_url):
+                return None
+        except ValueError:
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+OPENER = urllib.request.build_opener(SameOrigin)
+
+
+def address_trouble():
+    """The first address that is set, from the environment or a file, and can't be used, as "<setting> <why>", or nothing.
+    An address that fails is not used: nothing is asked of Jira, and no token is fetched."""
+    shared = read_conf(SHARED)
+    own = read_conf(CONFIG)
+    for name, value in (("JIRA_URL", os.environ.get("JIRA_URL")), ("ATLASSIAN_SITE", os.environ.get("ATLASSIAN_SITE")),
+                        (f"url in {CONFIG}", own.get("url")), (f"site in {SHARED}", shared.get("site"))):
+        # As written, not stripped: a leading space is a fault here, and would otherwise
+        # pass this check and fail later, after the token was fetched.
+        if value and address_problem(value):
+            return f"{name} {address_problem(value)}"
+    return ""
+
+
 def sign_in_missing(conf):
     """What the sign-in lacks, in a few words, or nothing."""
+    if address_trouble():
+        return address_trouble()
     if not conf["url"]:
         return "no Atlassian site yet"
     if not has_token(conf):
@@ -439,8 +482,8 @@ class Jira:
     def __init__(self, conf):
         if not conf["url"]:
             die(f"no Jira address. Set site in {SHARED}, or url in {CONFIG}, or JIRA_URL. {CMD} jira --help has the settings.")
-        if not conf["url"].startswith(("https://", "http://")):
-            die(f"url has to start with https:// (it is {conf['url']})")
+        if address_trouble():
+            die(f"{address_trouble()}. Do: fix it, in a terminal: {CMD} extensions setup jira")
         tok, _ = token(conf)
         if not tok:
             die(f"no API token. Set token_cmd in {SHARED}, or JIRA_API_TOKEN. {CMD} jira --help has the settings.")
@@ -458,7 +501,7 @@ class Jira:
         soft: None for any refusal too, for a read the run can do without."""
         req = urllib.request.Request(self.url + path, headers=self.headers)
         try:
-            with urllib.request.urlopen(req, timeout=15) as r:
+            with OPENER.open(req, timeout=15) as r:
                 return json.load(r)
         except urllib.error.HTTPError as e:
             if e.code == 404 or soft:
@@ -806,6 +849,10 @@ def cmd_config(args):
     if args:
         die_usage("config takes no arguments")
     conf = settings()
+    # The address is checked before the token is fetched, as everywhere else.
+    bad = address_trouble()
+    if bad:
+        die(f"{bad}. Do: fix it, in a terminal: {CMD} extensions setup jira")
     _, where = token(conf)
     print(f"shared    {SHARED}{'' if os.path.isfile(SHARED) else ' (not there yet)'}")
     print(f"file      {CONFIG}{'' if os.path.isfile(CONFIG) else ' (not there yet)'}")
@@ -879,9 +926,9 @@ def setting_rows():
     src = conf["_from"]
     mac = on_mac()
     rows = [
-        ("site", conf["url"], source_name(src["url"]), "Jira's address, https://your-company.atlassian.net or your server's",
-         "terminal" if token_source() else "set"),
-        ("email", conf.get("email", ""), source_name(src["email"]), "Atlassian account email; empty on Data Center", "set"),
+        ("site", conf["url"], source_name(src["url"]), f"Jira's address. The user runs {CMD} extensions setup jira in a terminal: it asks for the address, "
+         f"the account and where the token comes from. Then {CMD} jira config tests it", "terminal"),
+        ("email", conf.get("email", ""), source_name(src["email"]), "Atlassian account email; empty on Data Center. Part of that setup", "terminal"),
     ]
     tok_env = next((n for n in TOKEN_ENV if os.environ.get(n)), "")
     tok_from = source_name(tok_env) if tok_env else (source_name(src["token_cmd"]) if conf.get("token_cmd") else "")
@@ -892,10 +939,7 @@ def setting_rows():
                     if mac else "keeps it in their own password manager, such as pass"), "terminal"))
     cmd = conf.get("token_cmd", "")
     shown = "keychain" if cmd == KEYCHAIN_CMD else ("custom command" if cmd else "")
-    if mac:
-        what = f"The user runs {CMD} extensions setup jira and keeps the keychain command it offers. Then {CMD} jira config, which contacts the site, tests sign-in"
-    else:
-        what = f"A command that prints the token, such as pass show atlassian. The user sets it in a terminal: {CMD} extensions setup jira"
+    what = "Where the token comes from: the keychain command the setup offers, or a command of your own. Part of that setup"
     rows.append(("token_cmd", shown, source_name(src["token_cmd"]) if cmd else "default", what, "terminal"))
     for key, env_name, what in (
             ("projects", "JIRA_PROJECTS", "Ticket project keys, such as PROJ, OPS; empty: any"),
@@ -906,32 +950,46 @@ def setting_rows():
     return rows
 
 
-def token_source():
-    """What gives this extension a token, in a few words, or nothing. Never the token itself,
-    and never by running anything."""
-    name = next((n for n in TOKEN_ENV if os.environ.get(n)), "")
-    if name:
-        return f"{name} is set"
-    return "token_cmd is set" if settings().get("token_cmd") else ""
+LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
 
 
-def cleartext_address(value):
-    """Whether an address would send the sign-in in the clear to another machine."""
-    if not value.startswith("http://"):
+def address_problem(url):
+    """Why an address can't be used, in words that don't repeat it, or nothing: https://, or http:// only for this machine; a
+    host; no login, query or fragment; no space or control character. A person types it, or a file or the environment holds
+    it, and the sign-in is sent there, so it is read by a parser and not by how the string ends."""
+    if not url or unfit(url) or any(c.isspace() or c == "\\" for c in url):
+        return "has a space, a backslash or a control character in it, or is empty"
+    try:
+        u = urllib.parse.urlsplit(url)
+        host = u.hostname or ""
+        u.port  # noqa: B018 (a bad port raises here)
+    except ValueError:
+        return "isn't an address"
+    if u.scheme not in ("http", "https") or not host:
+        return "isn't an address: it starts with https:// and names a host"
+    if "@" in u.netloc or u.username is not None or u.password is not None:
+        return "has a login in it, which is never sent"
+    if u.query or u.fragment or "?" in url or "#" in url:
+        return "has a query or a # in it: give only the address"
+    if u.scheme == "http" and host.lower() not in LOCAL_HOSTS:
+        return "is plain http:// to another machine, where the sign-in would cross the network in the clear: use https://"
+    return ""
+
+
+def is_cloud(site):
+    """Whether an address is on Atlassian Cloud: its parsed host, not how the string ends."""
+    try:
+        host = (urllib.parse.urlsplit(site).hostname or "").lower()
+    except ValueError:
         return False
-    host = value[len("http://"):].split("/")[0].rsplit("@", 1)[-1]
-    host = host[1:].split("]")[0] if host.startswith("[") else host.split(":")[0]
-    return host.lower() not in ("localhost", "127.0.0.1", "::1")
+    return host.endswith(".atlassian.net") and not address_problem(site)
 
 
-def address_locked(key, name):
-    """Refuse a session changing where the token is sent once there is a token to send. A
-    session that was misled could otherwise point the extension at a server of its own, and
-    the next check, or the background one, would hand the token over."""
-    why = token_source()
-    if why:
-        die_usage(f"{key} can't be changed from a session once a token is set up ({why}): the token would go to the new address. "
-                  f"The user changes it in a terminal: {CMD} extensions setup {name}")
+def signin_key(key, name):
+    """A sign-in setting is never set, changed or cleared from a session, whatever it is now: a session that was misled
+    could otherwise have the token sent somewhere else."""
+    die_usage(f"{key} is part of the sign-in, and a session never sets it: a session that was misled could have the token sent somewhere else. "
+              f"The user sets up sign-in in a terminal: {CMD} extensions setup {name}")
 
 
 def wiki_settings():
@@ -962,6 +1020,8 @@ def wiki_set(args):
     names = [r[0] for r in setting_rows()]
     if secret_key(key):
         die_usage(f"{key} is a secret, and a session never sets one. The user puts the token in their keychain themselves, and then sets up sign-in in a terminal: {CMD} extensions setup jira")
+    if key in ("site", "email", "token_cmd"):
+        signin_key(key, "jira")
     if key not in names:
         die_usage(f"no setting called {key}. Settings: {', '.join(n for n in names if n != 'token')}")
     if not value:
@@ -970,28 +1030,7 @@ def wiki_set(args):
         die_usage(f"{key} can't hold a #, which starts a comment in the settings file")
     clear = value == "-"
     path = CONFIG
-    if key in ('site',):
-        address_locked(key, "jira")
-        if not clear and cleartext_address(value):
-            die_usage(f"{key} is an http:// address on another machine, which would send the sign-in in the clear. Use https://")
-    if key == "site":
-        path = SHARED
-        if not clear and (not value.startswith(("http://", "https://")) or len(value.split()) != 1 or value.count("://") != 1):
-            die_usage("site isn't an address: it starts with https:// or http://, with no spaces")
-        out = "" if clear else value.rstrip("/")
-    elif key == "email":
-        path = SHARED
-        if not clear and (len(value.split()) != 1 or "@" not in value):
-            die_usage(f"{key} isn't an email address: it needs an @ and no spaces")
-        out = "" if clear else value
-    elif key == "token_cmd":
-        path = SHARED
-        if not clear:
-            # Never from a session, not even the keychain preset: a session that was misled
-            # could set an address of its own and then have the keychain's token sent there.
-            die_usage(f"token_cmd says where the token comes from, and a session never sets it. The user sets up sign-in in a terminal: {CMD} extensions setup jira")
-        out = ""
-    elif key == "projects":
+    if key == "projects":
         parts = [x.strip() for x in value.split(",") if x.strip()]
         if not clear and (not parts or not all(re.fullmatch(r"[A-Za-z][A-Za-z0-9]{1,9}", x) for x in parts)):
             die_usage("projects takes project keys separated by commas, such as PROJ, OPS")
@@ -1008,11 +1047,6 @@ def wiki_set(args):
     env = WIN_ENV.get(key)
     if env and os.environ.get(env):
         line += f", but {env} is set, and it wins"
-    elif key in ("site", "email"):
-        for name in (("JIRA_URL", "ATLASSIAN_SITE") if key == "site" else ("JIRA_EMAIL", "ATLASSIAN_EMAIL")):
-            if os.environ.get(name):
-                line += f", but {name} is set, and it wins"
-                break
     print(line)
     return 0
 
