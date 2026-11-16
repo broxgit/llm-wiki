@@ -4,6 +4,13 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-12-26: an agent can fix a failing CI run, if you turn it on
+
+- Off unless you turn it on: `wiki github fix on`, in a terminal, for one clone. An agent then changes code and llm-wiki pushes it, with nobody watching.
+- On your pull request: one commit to its branch. On the default branch: a new branch and a pull request. Never a force-push. Your repository's hooks don't run.
+- Checked first: limits, no `.github/`, CI, key or build files (unless allowed), no secrets, no links. Gives up after two tries. `wiki github fix` lists them.
+- Do: only if you want it, `wiki github watch` then `wiki github fix on` in a clone, and read what it says the agent may do.
+
 ## 2026-12-25: a failed CI run, on your desktop, with no session open
 
 - `wiki extensions schedule on` has your machine check in every 5 minutes by itself, with no session open. `schedule off` removes it.
