@@ -224,7 +224,7 @@ func TestProtocol(t *testing.T) {
 			t.Errorf("%s: a schema needs a type, properties and a list of what is required: %+v", tool.Name, tool.InputSchema)
 		}
 	}
-	if got := strings.Join(names, " "); got != "wiki_list wiki_start wiki_search wiki_read wiki_status wiki_capture wiki_feedback" {
+	if got := strings.Join(names, " "); got != "wiki_list wiki_start wiki_search wiki_read wiki_status wiki_capture wiki_new wiki_feedback" {
 		t.Errorf("tools: %s", got)
 	}
 	if r[5].Result.ProtocolVersion != defaultProtocol {
@@ -381,9 +381,18 @@ func TestList(t *testing.T) {
 	if isErr || got != want {
 		t.Errorf("wiki_list = %q\nwant        %q", got, want)
 	}
+	s.Collections = []Collection{{Name: "default", Folder: root + "/not-there"}}
+	if got, _ := call(t, s, "wiki_list", nil); got != firstWiki {
+		t.Errorf("with a collection and no wikis: %q", got)
+	}
 	s.Collections = nil
 	if got, _ := call(t, s, "wiki_list", nil); got != "No wikis yet. "+setupHow {
 		t.Errorf("with no collections: %q", got)
+	}
+	for _, bad := range []string{"a\ufffdb", "../x", "a/b", ".x", "-x", "~x", "a\\b", "a\tb"} {
+		if got, isErr := call(t, s, "wiki_new", m{"name": bad}); !isErr || !strings.HasPrefix(got, "that can't be a wiki's name.") {
+			t.Errorf("wiki_new %q = %q, %v", bad, got, isErr)
+		}
 	}
 }
 

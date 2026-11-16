@@ -4,6 +4,11 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-12-23: a chat can create your first wiki
+
+- Through the chat connector, your assistant can now create a wiki when you ask for one, and the folder wikis are kept in if there is none yet.
+- It asks first, makes nothing outside that folder, and sets up no git. A backup and sharing still take `wiki setup`.
+
 ## 2026-12-22: a pattern for the folders inside says what it leaves out
 
 - `wiki workflows add '<folder>/*' <wiki>` now says it covers the folders inside, not the folder itself, and gives the command for that folder too.
