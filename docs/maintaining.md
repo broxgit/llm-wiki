@@ -153,7 +153,7 @@ To add a section:
 
 1. Write it as `if section "<name>"; then` ... `fi`, like the others. The function a check needs from another section belongs with the helpers at the top, not in the section that first used it.
 2. Add a line to the table: its part, its name, and the earlier sections whose state it reads. A section missing from the table fails the run.
-3. Put it in the part that is quickest now. `SMOKE_TIMES=1 tests/smoke.sh --part <n>` prints how long each section takes. CI prints the same, so the macOS job logs give the real times. The two slowest sections, the weekly report and the standup, each take most of a part.
+3. Put it in the part that is quickest now. `SMOKE_TIMES=1 tests/smoke.sh --part <n>` prints how long each section takes. CI prints the same, so the macOS job logs give the real times. The slowest section by far is the GitHub extension, at about five minutes on a Mac: more than an even share, so it has a part nearly to itself. The next, the weekly report, the size budget and the collections, take a minute to a minute and a half each.
 4. Run `tests/smoke-parts.sh`. It runs the whole suite and every part, and fails unless each check of the whole run is made in exactly one part, and every check passes. A check that passes in its part only because state is missing, such as a `lacks` with nothing there to find, is the risk it can't see. When a section reads what another made, name that section in the table.
 
 To add a part, add its number to the `smoke` matrix in `.github/workflows/ci.yml`. The lint job fails when the matrix and the table don't list the same parts. Branch protection requires `smoke (ubuntu-latest)` and `smoke (macos-latest)`, which pass when every part has, so the required checks stay the same.

@@ -42,9 +42,9 @@ read -r -d '' PARTS <<'TABLE' || true
 3 | Setup fixes | Collection
 3 | Stats | Collection
 3 | Plugin updates reach the wiki command | Session hook
-2 | Journal and standup | Collection
-2 | Commit distance | Journal and standup
-2 | Dependency map | Journal and standup
+1 | Journal and standup | Collection
+1 | Commit distance | Journal and standup
+1 | Dependency map | Journal and standup
 3 | Sync takes turns | Two clones merge index.md and log.md, Seed
 3 | Session start in one call | Two clones merge index.md and log.md
 3 | A folder of clones | Collection
@@ -62,18 +62,18 @@ read -r -d '' PARTS <<'TABLE' || true
 2 | Missing flag values | Collection
 3 | Update | Two clones merge index.md and log.md
 2 | News |
-2 | Terminal style |
-2 | The kit |
+3 | Terminal style |
+3 | The kit |
 2 | What moved to llm-relay |
-2 | Extensions | Collection
-2 | Jira extension | Collection
-2 | Confluence extension | Collection
+4 | Extensions | Collection
+4 | Jira extension | Collection
+4 | Confluence extension | Collection
 2 | GitHub extension | Collection
-2 | Extension events | Collection
-2 | Extension schedule | Collection
-2 | Guided setup | Collection
+4 | Extension events | Collection
+4 | Extension schedule | Collection
+1 | Guided setup | Collection
 2 | Content as data | Collection
-2 | Size budget |
+3 | Size budget |
 3 | Tour |
 4 | The released helper | Session hook
 TABLE
@@ -155,6 +155,27 @@ bad() {
 }
 skipped() { [ "$section_mode" = setup ] || { skip=$((skip + 1)); printf 'skip  %s\n' "$1"; }; }
 clock() { perl -MTime::HiRes=time -e 'printf "%.1f", time'; }
+# copy_repo <folder> [<path to leave out>...]: a copy of this checkout without tests/, made
+# from the files git knows or would add, and so without what a run leaves behind: Python's
+# __pycache__ folders, a built helper in bin/, an editor's folder. Copying the folder as it
+# stood, with tar, read those while another part of the suite was writing them, and four
+# checks of `wiki update` in a clone failed now and then when parts ran side by side.
+copy_repo() {
+  local dest="$1" f x
+  shift
+  mkdir -p "$dest" || return 1
+  if ! git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    (cd "$REPO" && tar cf - --exclude .git --exclude tests .) | (cd "$dest" && tar xf -)
+    return
+  fi
+  (cd "$REPO" && git ls-files -co --exclude-standard -z | while IFS= read -r -d '' f; do
+    case "$f" in tests/*) continue ;; esac
+    for x in "$@"; do case "$f" in "$x"/*) continue 2 ;; esac; done
+    [ -e "$f" ] || [ -L "$f" ] || continue
+    printf '%s\0' "$f"
+  done | tar cf - --null -T -) | (cd "$dest" && tar xf -)
+}
+
 # section_time: how long the section that just ended took, with SMOKE_TIMES=1.
 section_time() { [ -z "${SMOKE_TIMES:-}" ] || [ -z "${section_start:-}" ] || awk -v a="$section_start" -v b="$(clock)" -v s="$1" 'BEGIN { printf "time  %5.1fs  %s\n", b - a, s }'; }
 # section <name>: starts a section, and fails when this run skips it.
@@ -415,7 +436,7 @@ expect "run by a path, messages name that path, not ./wiki.sh" "Run: $T/bin/wk i
 expect "run from its own folder, it's ./wiki.sh" "Run: ./wiki.sh init" bash -c "cd '$REPO' && WIKIS_DIR='$T/none' ./wiki.sh status"
 P="$HOME/.claude/plugins/cache/llm-wiki/llm-wiki/abc123"
 mkdir -p "$P"
-(cd "$REPO" && tar cf - --exclude .git --exclude tests .) | (cd "$P" && tar xf -)
+copy_repo "$P"
 expect "from the plugin, claude skips the CLAUDE.md line" "came with the llm-wiki Claude Code plugin" "$P/wiki.sh" claude
 expect "from the plugin, claude --print names the stable command" "plugins/data/llm-wiki-llm-wiki/bin/wiki start" "$P/wiki.sh" claude --print
 lacks "from the plugin, claude --print never names the versioned folder" "abc123" "$P/wiki.sh" claude --print
@@ -1755,8 +1776,8 @@ if section "Plugin updates reach the wiki command"; then
 C1="$HOME/.claude/plugins/cache/mk/llm-wiki/v1"
 C2="$HOME/.claude/plugins/cache/mk/llm-wiki/v2"
 mkdir -p "$C1" "$C2"
-(cd "$REPO" && tar cf - --exclude .git --exclude tests .) | (cd "$C1" && tar xf -)
-(cd "$REPO" && tar cf - --exclude .git --exclude tests .) | (cd "$C2" && tar xf -)
+copy_repo "$C1"
+copy_repo "$C2"
 set_version "$C2/template/AGENTS.md" 98
 CLAUDE_PLUGIN_ROOT="$C1" CLAUDE_PLUGIN_DATA="$T/pdata" CLAUDE_PROJECT_DIR="$T" bash "$C1/hooks/session-start.sh" </dev/null >/dev/null
 check "the hook writes the command for an installed plugin" test -x "$T/pdata/bin/wiki"
@@ -3387,7 +3408,7 @@ goes"
   fi
   # From the plugin, a wiki ahead of the template is the plugin's to fix.
   SPL="$HOME/.claude/plugins/cache/llm-wiki/llm-wiki/st123"
-  mkdir -p "$SPL" && (cd "$REPO" && tar cf - --exclude .git --exclude tests --exclude tour --exclude bin .) | (cd "$SPL" && tar xf -)
+  copy_repo "$SPL" tour bin
   SW="$SPL/wiki.sh" ssame "status, helper and Bash: from the plugin, with a wiki ahead of its template" helper
   SW="$SPL/wiki.sh" expect "and the helper says so" "<- ahead of this plugin's template v$TV" srun "$T/bin/llm-wiki"
   rm -rf "$SPL"
@@ -3992,7 +4013,7 @@ case "$out" in *"paste this into each"*"Run wiki start in this repository"*) ok 
 set_version "$WIKIS_DIR/demo/AGENTS.md" 1
 expect "upgrade says it too" "paste this into each" "$W" upgrade --all
 # A clone: update pulls, then the new version, not the old, does the rest.
-U="$T/upd-src"; mkdir -p "$U" && (cd "$REPO" && tar cf - --exclude .git --exclude tests .) | (cd "$U" && tar xf -)
+U="$T/upd-src"; copy_repo "$U"
 git -C "$U" init -q && git -C "$U" add -A && git -C "$U" commit -qm v1
 git clone -q "$U" "$T/upd-clone"
 sed -i.bak 's/^update_wikis() {$/update_wikis() {\n  echo "NEW VERSION RAN"/' "$U/wiki.sh" && rm -f "$U/wiki.sh.bak"
@@ -4343,7 +4364,7 @@ case "$upstyled" in *"${ESC}[1m${ESC}[33m!${ESC}[0m the push failed. Run: ${ESC}
 [ "$(printf '%s\n' "$upstyled" | kitw)" = "$(printf '%s\n' "$uplain" | kitw)" ] && ok "update: the failed push's words are the plain words too" || bad "update: the failed push's words are the plain words too" "$(diff <(printf '%s\n' "$upstyled" | kitw) <(printf '%s\n' "$uplain" | kitw))"
 # update in a clone, with the plugin installed too: it pulls, refreshes the plugin's copy, and says to restart.
 UU="$UW/src"; mkdir -p "$UU" "$UW/bin" "$HOME/.cursor"
-(cd "$REPO" && tar cf - --exclude .git --exclude tests .) | (cd "$UU" && tar xf -)
+copy_repo "$UU"
 git -C "$UU" init -q && git -C "$UU" add -A && git -C "$UU" commit -qm v1 && git clone -q "$UU" "$UW/clone"
 mkdir -p "$HOME/.claude/plugins"
 printf '{"version":2,"plugins":{"llm-wiki@mk":[{"scope":"user","installPath":"%s"}]}}\n' "$UW/clone" > "$HOME/.claude/plugins/installed_plugins.json"
