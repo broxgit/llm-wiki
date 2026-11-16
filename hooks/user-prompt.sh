@@ -5,6 +5,9 @@
 # doesn't go looking for one. What the search counts, what is handed over once a session
 # and how it is cut are in wiki.sh (prompt_recall); this reads Claude Code's JSON, in
 # which the message is `prompt`, and replies with hookSpecificOutput.additionalContext.
+# Lines an extension left for this repository (a CI failure on this branch) ride along:
+# wiki.sh takes them in the same call, once the JSON has named the folder, and only when
+# the notices folder exists, so this hook starts nothing more with none.
 # It prints nothing at all when there is nothing to hand over. With no python3 it does
 # nothing. A hook must never block a session by accident: every path exits 0.
 
