@@ -5678,7 +5678,7 @@ setup_obsidian() {
 # One question for each extension that ships with llm-wiki, so a new one is offered
 # once on each machine and is otherwise off.
 setup_extensions() {
-  local f n d
+  local f n d asked_sched=0
   for f in "$EXT_SHIPPED"/wiki-*; do
     [ -f "$f" ] || continue
     n="${f##*/wiki-}"
@@ -5702,6 +5702,25 @@ setup_extensions() {
         ext_setup "$n"
         ui_detail "To go through this again: $(typed "$WIKI_CMD extensions setup $n")"
       fi
+      # Offered once, and never under --yes: it installs something that runs by itself.
+      case " $(ext_events "$f") " in
+        *" tick "*)
+          if [ "$asked_sched" = 0 ] && [ -z "${SETUP_YES:-}" ] && [ -z "$(sched_means)" ]; then
+            asked_sched=1
+            echo
+            ui_detail "An extension can look at things on its own, even with no session open, and tell you with a"
+            ui_detail "desktop notification. That takes a job on this machine, every 5 minutes. $(typed "$WIKI_CMD extensions schedule off") removes it."
+            if ask_yn "Check in the background every few minutes, with no session open?" n; then
+              if sched_install; then
+                ui_item ok "schedule on: every 5 minutes, by $SCHED_MEANS. Log: $(tilde "$(sched_log)")"
+                sched_hints
+              else
+                ui_item warn "$SCHED_ERR"
+              fi
+            fi
+          fi
+          ;;
+      esac
     else
       ext_set "$n" off
       ui_detail "  off"
@@ -7875,17 +7894,25 @@ ext_sync_event() {
   done
 }
 
+# ext_tick_due <name>: succeeds when its interval has passed since the last tick, and it is not
+# waiting out a "not now". Session start and `extensions tick --due` ask the same question.
+ext_tick_due() {
+  local every
+  every="${LLM_WIKI_TICK_MINUTES:-$(dur_minutes "$(ext_every "$1")")}"
+  [ -z "$(find "$EXT_STATE/$1/tick.stamp" -mmin "-$every" 2>/dev/null)" ] || return 1
+  # After a run that said "not now", wait half an hour: offline, every session start would try.
+  [ -z "$(find "$EXT_STATE/$1/tick.retry" -mmin -30 2>/dev/null)" ] || return 1
+  return 0
+}
+
 # ext_tick: the tick event, for each extension that asks for it and hasn't had one
 # within the interval. Session start calls it, so it starts runs and returns.
 ext_tick() {
-  local n every
+  local n
   [ -z "${LLM_WIKI_IN_EVENT:-}" ] && [ -z "${LLM_WIKI_BACKGROUND:-}" ] || return 0
   for n in $(ext_wanting tick); do
     mkdir -p "$EXT_STATE/$n" 2>/dev/null || continue
-    every="${LLM_WIKI_TICK_MINUTES:-$(dur_minutes "$(ext_every "$n")")}"
-    [ -z "$(find "$EXT_STATE/$n/tick.stamp" -mmin "-$every" 2>/dev/null)" ] || continue
-    # After a run that said "not now", wait half an hour: offline, every session start would try.
-    [ -z "$(find "$EXT_STATE/$n/tick.retry" -mmin -30 2>/dev/null)" ] || continue
+    ext_tick_due "$n" || continue
     : 2>/dev/null > "$EXT_STATE/$n/tick.stamp" || continue
     ext_launch "$n" tick
   done
@@ -8189,8 +8216,384 @@ cmd_notice() {
   return 0
 }
 
+# ---- the schedule: ticks with no session open, and a desktop notification ---------------------
+# `extensions schedule on` has the machine run `extensions tick --due` every five minutes: a
+# LaunchAgent on a Mac, a systemd user timer on Linux, or a crontab line where there is no
+# systemd. It is per machine and opt-in. LLM_WIKI_LAUNCHCTL, LLM_WIKI_SYSTEMCTL and
+# LLM_WIKI_CRONTAB name the system tools, LLM_WIKI_OSASCRIPT and LLM_WIKI_NOTIFY_SEND the
+# notifiers, and LLM_WIKI_TEST_OS the system, for the smoke tests.
+SCHED_LABEL="io.github.llm-wiki.tick"
+SCHED_MARK="# llm-wiki tick"
+SCHED_ERR=""
+SCHED_MEANS=""
+SCHED_WHERE=""
+
+# sched_os: darwin or linux.
+sched_os() {
+  if [ -n "${LLM_WIKI_TEST_OS:-}" ]; then printf '%s' "$LLM_WIKI_TEST_OS"; return 0; fi
+  case "$(uname -s)" in Darwin) printf darwin ;; *) printf linux ;; esac
+}
+# sched_tool <launchctl|systemctl|crontab|osascript|notify-send>: the command to run for it.
+sched_tool() {
+  case "$1" in
+    launchctl) printf '%s' "${LLM_WIKI_LAUNCHCTL:-launchctl}" ;;
+    systemctl) printf '%s' "${LLM_WIKI_SYSTEMCTL:-systemctl}" ;;
+    crontab) printf '%s' "${LLM_WIKI_CRONTAB:-crontab}" ;;
+    osascript) printf '%s' "${LLM_WIKI_OSASCRIPT:-osascript}" ;;
+    notify-send) printf '%s' "${LLM_WIKI_NOTIFY_SEND:-notify-send}" ;;
+  esac
+}
+sched_have() { command -v "$(sched_tool "$1")" >/dev/null 2>&1; }
+sched_plist() { printf '%s/Library/LaunchAgents/%s.plist' "$HOME" "$SCHED_LABEL"; }
+sched_unit() { printf '%s/systemd/user/llm-wiki-tick.%s' "${XDG_CONFIG_HOME:-$HOME/.config}" "$1"; }
+sched_log() { printf '%s/llm-wiki/schedule.log' "${XDG_STATE_HOME:-$HOME/.local/state}"; }
+# sched_cmd: the wiki command as an absolute path, one that survives a plugin update.
+sched_cmd() {
+  case "${LLM_WIKI_CMD:-}" in /*) printf '%s' "$LLM_WIKI_CMD"; return 0 ;; esac
+  if from_plugin; then plugin_cmd; else printf '%s/wiki.sh' "$REPO"; fi
+}
+# sched_plain <text>: succeeds when the text has no control character, a newline included.
+sched_plain() { local LC_ALL=C; case "$1" in *[[:cntrl:]]*) return 1 ;; esac; return 0; }
+# sched_env: what the job takes from the shell that installs it, as NAME=value lines.
+sched_env() {
+  printf 'PATH=%s\n' "$PATH"
+  [ "$WIKIS_DIR" = "$HOME/wikis" ] || printf 'WIKIS_DIR=%s\n' "$WIKIS_DIR"
+  [ -z "${XDG_CONFIG_HOME:-}" ] || printf 'XDG_CONFIG_HOME=%s\n' "$XDG_CONFIG_HOME"
+  [ -z "${XDG_STATE_HOME:-}" ] || printf 'XDG_STATE_HOME=%s\n' "$XDG_STATE_HOME"
+  # What a tool needs to reach the network as this shell does. Never a token: a job's file
+  # is no place for one, and a proxy address that holds a password is left out too.
+  local n v
+  for n in HTTPS_PROXY HTTP_PROXY ALL_PROXY NO_PROXY https_proxy http_proxy all_proxy no_proxy GH_HOST GH_CONFIG_DIR SSL_CERT_FILE; do
+    v="$(printenv "$n" 2>/dev/null || true)"
+    [ -n "$v" ] || continue
+    case "$v" in *@*) continue ;; esac
+    sched_plain "$v" || continue
+    printf '%s=%s\n' "$n" "$v"
+  done
+}
+
+# sched_left_out: the names of what this shell has set that a job is never given: tokens,
+# and a proxy address with a password in it. Names only, never a value.
+sched_left_out() {
+  local n v out=""
+  for n in GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN JIRA_API_TOKEN CONFLUENCE_API_TOKEN ATLASSIAN_API_TOKEN; do
+    [ -z "$(printenv "$n" 2>/dev/null || true)" ] || out="$out $n"
+  done
+  for n in HTTPS_PROXY HTTP_PROXY ALL_PROXY https_proxy http_proxy all_proxy; do
+    v="$(printenv "$n" 2>/dev/null || true)"
+    case "$v" in *@*) out="$out $n" ;; esac
+  done
+  printf '%s' "${out# }"
+}
+# sched_xml <text>: text for inside an XML element.
+sched_xml() {
+  local q="'"
+  printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g' -e "s/$q/\&apos;/g"
+}
+# sched_sh_quote <text>: one word for sh, quoted only when it has to be.
+sched_sh_quote() {
+  local q="'" r="'\\''"
+  case "$1" in
+    "" | *[!A-Za-z0-9_/.:@+=,-]*) printf '%s%s%s' "$q" "${1//$q/$r}" "$q" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+# sched_sd_quote <text>: one word for a systemd unit's command or environment.
+sched_sd_quote() { printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/%/%%/g' -e 's/\$/$$/g')"; }
+
+# sched_means: how it is installed on this machine, one a line: launchd, systemd, cron.
+sched_means() {
+  local cur
+  [ ! -f "$(sched_plist)" ] || echo launchd
+  [ ! -f "$(sched_unit timer)" ] || echo systemd
+  # cron is what Linux falls back to. A Mac never gets a cron line from here, so listing
+  # the settings there does not run crontab at all.
+  if [ "$(sched_os)" != darwin ] && sched_have crontab; then
+    cur="$("$(sched_tool crontab)" -l 2>/dev/null || true)"
+    case "$cur" in *"$SCHED_MARK"*) echo cron ;; esac
+  fi
+  return 0
+}
+# sched_value: the value for setup --list.
+sched_value() {
+  local m
+  m="$(sched_means)"
+  m="${m%%$'\n'*}"
+  if [ -n "$m" ]; then printf 'on, every 5 minutes (%s)' "$m"; else printf off; fi
+}
+
+# sched_check <command>: fails, with why and what to do in SCHED_ERR, for a value a job can not hold.
+sched_check() {
+  local e
+  sched_plain "$1" || { SCHED_ERR="the wiki command's path has a control character in it. Do: move llm-wiki to a folder with a plain path, then run this again"; return 1; }
+  sched_plain "$PATH" || { SCHED_ERR="this shell's PATH has a control character in it. Do: open a new terminal with a plain PATH, then run this again"; return 1; }
+  for e in "$WIKIS_DIR" "${XDG_CONFIG_HOME:-}" "${XDG_STATE_HOME:-}" "$HOME"; do
+    sched_plain "$e" || { SCHED_ERR="a folder path has a control character in it. Do: use plain folder names, then run this again"; return 1; }
+  done
+  return 0
+}
+
+sched_plist_text() {
+  local c="$1" log="$2" line
+  cat <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$SCHED_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$(sched_xml "$c")</string>
+    <string>extensions</string>
+    <string>tick</string>
+    <string>--due</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>300</integer>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+EOF
+  while IFS= read -r line; do
+    printf '    <key>%s</key>\n    <string>%s</string>\n' "${line%%=*}" "$(sched_xml "${line#*=}")"
+  done <<EOF
+$(sched_env)
+EOF
+  cat <<EOF
+  </dict>
+  <key>StandardOutPath</key>
+  <string>$(sched_xml "$log")</string>
+  <key>StandardErrorPath</key>
+  <string>$(sched_xml "$log")</string>
+</dict>
+</plist>
+EOF
+}
+
+sched_service_text() {
+  local c="$1" log line
+  log="$(printf '%s' "$2" | sed 's/%/%%/g')"
+  printf '[Unit]\nDescription=llm-wiki: run the extensions whose tick is due\n\n[Service]\nType=oneshot\n'
+  printf 'ExecStart=%s extensions tick --due\n' "$(sched_sd_quote "$c")"
+  while IFS= read -r line; do printf 'Environment=%s\n' "$(sched_sd_quote "$line")"; done <<EOF
+$(sched_env)
+EOF
+  printf 'StandardOutput=append:%s\nStandardError=append:%s\n' "$log" "$log"
+}
+
+sched_cron_line() {
+  local c="$1" log="$2" line envs=""
+  while IFS= read -r line; do envs="$envs ${line%%=*}=$(sched_sh_quote "${line#*=}")"; done <<EOF
+$(sched_env)
+EOF
+  printf '*/5 * * * *%s %s extensions tick --due >> %s 2>&1 %s\n' "$envs" "$(sched_sh_quote "$c")" "$(sched_sh_quote "$log")" "$SCHED_MARK" | sed 's/%/\\%/g'
+}
+
+# sched_remove: take the job away by every means it is installed. Prints nothing: SCHED_MEANS
+# says which were removed. Fails, with SCHED_ERR, when one could not be.
+sched_remove() {
+  local m lc sc ct cur
+  SCHED_MEANS=""
+  lc="$(sched_tool launchctl)"
+  sc="$(sched_tool systemctl)"
+  ct="$(sched_tool crontab)"
+  for m in $(sched_means); do
+    case "$m" in
+      launchd)
+        if sched_have launchctl; then
+          "$lc" bootout "gui/$(id -u)/$SCHED_LABEL" >/dev/null 2>&1 || "$lc" unload "$(sched_plist)" >/dev/null 2>&1 || true
+        fi
+        rm -f "$(sched_plist)"
+        ;;
+      systemd)
+        if sched_have systemctl; then "$sc" --user disable --now llm-wiki-tick.timer >/dev/null 2>&1 || true; fi
+        rm -f "$(sched_unit timer)" "$(sched_unit service)"
+        if sched_have systemctl; then "$sc" --user daemon-reload >/dev/null 2>&1 || true; fi
+        ;;
+      cron)
+        cur="$("$ct" -l 2>/dev/null || true)"
+        if ! { printf '%s\n' "$cur" | { grep -vF -- "$SCHED_MARK" || true; }; } | "$ct" - >/dev/null 2>&1; then
+          SCHED_ERR="crontab would not take the change. Do: run crontab -e and delete the line that ends $SCHED_MARK"
+          return 1
+        fi
+        ;;
+    esac
+    SCHED_MEANS="${SCHED_MEANS:+$SCHED_MEANS, }$m"
+  done
+  return 0
+}
+
+# sched_install: install it, replacing what is there. Fails, with SCHED_ERR, when it can not.
+# On success SCHED_MEANS and SCHED_WHERE say how and where.
+sched_install() {
+  local c log lc sc ct plist cur by_hand dir keep=""
+  c="$(sched_cmd)"
+  log="$(sched_log)"
+  by_hand="run $c extensions tick --due every 5 minutes from a scheduler of your own"
+  sched_check "$c" || return 1
+  sched_plain "$log" || { SCHED_ERR="the log's folder has a control character in its path. Do: use plain folder names, then run this again"; return 1; }
+  lc="$(sched_tool launchctl)"
+  sc="$(sched_tool systemctl)"
+  ct="$(sched_tool crontab)"
+  # Nothing is taken away until this machine is known to have a way to install: a job
+  # that works is worth more than an error.
+  if [ "$(sched_os)" = darwin ]; then
+    sched_have launchctl || { SCHED_ERR="launchctl isn't on this machine, so nothing was changed. Do: $by_hand"; return 1; }
+  elif sched_have systemctl && "$sc" --user show-environment >/dev/null 2>&1; then
+    case "$log" in *[[:space:]]*) SCHED_ERR="the log's path has a space in it, which a systemd unit can't take, so nothing was changed. Do: set XDG_STATE_HOME to a folder with no spaces, then run this again"; return 1 ;; esac
+  elif ! sched_have crontab; then
+    SCHED_ERR="this machine has neither a systemd user session nor crontab, so nothing was changed. Do: $by_hand"
+    return 1
+  fi
+  keep=""
+  if [ "$(sched_os)" = darwin ] && [ -f "$(sched_plist)" ]; then
+    keep="$(sched_plist).keep"
+    cp -p "$(sched_plist)" "$keep" 2>/dev/null || keep=""
+  fi
+  sched_remove || { [ -z "$keep" ] || rm -f "$keep"; return 1; }
+  mkdir -p "${log%/*}" 2>/dev/null || { SCHED_ERR="can't make $(tilde "${log%/*}"). Do: make it writable"; return 1; }
+  if [ "$(sched_os)" = darwin ]; then
+    sched_have launchctl || { SCHED_ERR="launchctl isn't on this machine, so nothing was installed. Do: $by_hand"; return 1; }
+    plist="$(sched_plist)"
+    mkdir -p "${plist%/*}" 2>/dev/null || { SCHED_ERR="can't make $(tilde "${plist%/*}"). Do: make it writable"; return 1; }
+    if ! { sched_plist_text "$c" "$log" > "$plist.new" && mv -f "$plist.new" "$plist"; } 2>/dev/null; then
+      rm -f "$plist.new"
+      SCHED_ERR="can't write $(tilde "$plist"). Do: make it writable"
+      return 1
+    fi
+    if ! "$lc" bootstrap "gui/$(id -u)" "$plist" >/dev/null 2>&1 && ! "$lc" load -w "$plist" >/dev/null 2>&1; then
+      rm -f "$plist"
+      if [ -n "$keep" ] && mv -f "$keep" "$plist" 2>/dev/null; then
+        "$lc" bootstrap "gui/$(id -u)" "$plist" >/dev/null 2>&1 || "$lc" load -w "$plist" >/dev/null 2>&1 || true
+        SCHED_ERR="launchctl wouldn't load the new job, so the one that was there was put back. Do: $by_hand"
+      else
+        SCHED_ERR="launchctl wouldn't load the job, so nothing was installed. Do: $by_hand"
+      fi
+      return 1
+    fi
+    [ -z "$keep" ] || rm -f "$keep"
+    SCHED_MEANS=launchd
+    SCHED_WHERE="$(tilde "$plist")"
+  elif sched_have systemctl && "$sc" --user show-environment >/dev/null 2>&1; then
+    case "$log" in *[[:space:]]*) SCHED_ERR="the log's path has a space in it, which a systemd unit can't take. Do: set XDG_STATE_HOME to a folder with no spaces, then run this again"; return 1 ;; esac
+    dir="$(dirname "$(sched_unit timer)")"
+    mkdir -p "$dir" 2>/dev/null || { SCHED_ERR="can't make $(tilde "$dir"). Do: make it writable"; return 1; }
+    if ! {
+      sched_service_text "$c" "$log" > "$(sched_unit service)"
+      printf '[Unit]\nDescription=llm-wiki: every 5 minutes, run the extensions whose tick is due\n\n[Timer]\nOnBootSec=5min\nOnUnitActiveSec=5min\nUnit=llm-wiki-tick.service\n\n[Install]\nWantedBy=timers.target\n' > "$(sched_unit timer)"
+    } 2>/dev/null; then
+      rm -f "$(sched_unit timer)" "$(sched_unit service)"
+      SCHED_ERR="can't write the unit files in $(tilde "$dir"). Do: make it writable"
+      return 1
+    fi
+    "$sc" --user daemon-reload >/dev/null 2>&1 || true
+    if ! "$sc" --user enable --now llm-wiki-tick.timer >/dev/null 2>&1; then
+      rm -f "$(sched_unit timer)" "$(sched_unit service)"
+      SCHED_ERR="systemctl wouldn't start the timer, so nothing was installed. Do: $by_hand"
+      return 1
+    fi
+    SCHED_MEANS=systemd
+    SCHED_WHERE="$(tilde "$(sched_unit timer)")"
+  elif sched_have crontab; then
+    cur="$("$ct" -l 2>/dev/null || true)"
+    if ! { [ -z "$cur" ] || printf '%s\n' "$cur"; sched_cron_line "$c" "$log"; } | "$ct" - >/dev/null 2>&1; then
+      SCHED_ERR="crontab wouldn't take the line, so nothing was installed. Do: $by_hand"
+      return 1
+    fi
+    SCHED_MEANS=cron
+    SCHED_WHERE="your crontab"
+  else
+    SCHED_ERR="this machine has neither a systemd user session nor crontab, so nothing was installed. Do: $by_hand"
+    return 1
+  fi
+  return 0
+}
+
+# sched_hints: for each extension on tick that waits more than an hour, how to shorten that.
+sched_hints() {
+  local n m
+  for n in $(ext_wanting tick); do
+    m="$(dur_minutes "$(ext_every "$n")")" || continue
+    [ "$m" -gt 60 ] || continue
+    ui_detail "$n checks every $(ext_every "$n"), so a change can wait that long. To check sooner: $(typed "$WIKI_CMD extensions every $n 10m")"
+  done
+}
+
+cmd_schedule() {
+  local what="${1:-status}" n
+  [ $# -le 1 ] || die_usage "usage: $WIKI_CMD extensions schedule [on|off|status]"
+  case "$what" in
+    status)
+      n="$(sched_value)"
+      if [ "$n" = off ]; then
+        ui_item warn "schedule: off. Extensions that work by themselves run only when a session starts."
+        ui_detail "Run: $(typed "$WIKI_CMD extensions schedule on")"
+      else
+        ui_item ok "schedule: $n"
+        ui_detail "It runs $WIKI_CMD extensions tick --due, which does only what is due. Log: $(tilde "$(sched_log)")"
+        ui_detail "To turn it off: $(typed "$WIKI_CMD extensions schedule off")"
+      fi
+      for n in $(ext_wanting tick); do ui_detail "$n: every $(ext_every "$n")"; done
+      [ -n "$(ext_wanting tick)" ] || ui_detail "No extension that is on works by itself, so there is nothing to run. Run: $(typed "$WIKI_CMD extensions add github")"
+      ;;
+    on)
+      [ -n "$(ext_wanting tick)" ] || die "no extension that is on works by itself, so a schedule would have nothing to run. Run: $(typed_err "$WIKI_CMD extensions add github")"
+      sched_install || die "$SCHED_ERR"
+      ui_item ok "schedule on: every 5 minutes, by $SCHED_MEANS."
+      ui_detail "It runs $(sched_cmd) extensions tick --due, which does only what is due and nothing else."
+      ui_detail "Installed in: $SCHED_WHERE"
+      ui_detail "Log: $(tilde "$(sched_log)")"
+      ui_detail "To turn it off: $(typed "$WIKI_CMD extensions schedule off")"
+      n="$(sched_left_out)"
+      [ -z "$n" ] || ui_item warn "Not given to the job, since a job's file is no place for a secret: $n. An extension that signs in with one won't be signed in there. Do: sign in a way that lasts, such as gh auth login or a keychain."
+      sched_hints
+      ;;
+    off)
+      sched_remove || die "$SCHED_ERR"
+      if [ -n "$SCHED_MEANS" ]; then ui_item ok "schedule off: removed ($SCHED_MEANS). Extensions run when a session starts."
+      else ui_item ok "schedule is already off."; fi
+      ;;
+    *) die_usage "usage: $WIKI_CMD extensions schedule [on|off|status]" ;;
+  esac
+  return 0
+}
+
+# __notify <title> <text>: a desktop notification, when this machine can show one. Plain, and
+# exits 0 whether or not one was shown. The words go to the tool as arguments, never into a script.
+cmd_notify() {
+  local title text tool pid t
+  [ $# -eq 2 ] || die_usage "usage: __notify <title> <text>"
+  title="$1"
+  text="$2"
+  notice_ok title "$title" 80 || die_usage "a notification's title is one line of at most 80 bytes with no control character"
+  notice_ok text "$text" 240 || die_usage "a notification's text is one line of at most 240 bytes with no control character"
+  [ -z "${LLM_WIKI_NO_NOTIFY:-}" ] || return 0
+  if [ "$(sched_os)" = darwin ]; then
+    sched_have osascript || return 0
+    tool="$(sched_tool osascript)"
+    "$tool" -e "on run argv" -e "display notification (item 2 of argv) with title (item 1 of argv)" -e "end run" -- "$title" "$text" </dev/null >/dev/null 2>&1 &
+  else
+    sched_have notify-send || return 0
+    tool="$(sched_tool notify-send)"
+    "$tool" -- "$title" "$text" </dev/null >/dev/null 2>&1 &
+  fi
+  pid=$!
+  t=0
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$t" -ge 50 ]; then kill "$pid" 2>/dev/null || true; break; fi
+    sleep 0.1
+    t=$((t + 1))
+  done
+  wait "$pid" 2>/dev/null || true
+  return 0
+}
+
 cmd_extensions() {
-  local f n d any=0 bad=0
+  local f n d any=0 bad=0 due
   case "${1:-}" in
     "") ;;
     path) [ $# -eq 1 ] || die_usage "extensions path takes nothing more"; printf '%s\n' "$EXT_DIR"; return 0 ;;
@@ -8249,10 +8652,18 @@ cmd_extensions() {
       return 0
       ;;
     tick)
-      [ $# -eq 1 ] || die_usage "extensions tick takes nothing more"
+      due=0
+      if [ "${2:-}" = --due ]; then due=1; set -- tick "${@:3}"; fi
+      [ $# -eq 1 ] || die_usage "extensions tick takes nothing more, or --due"
+      # From a schedule: only what is due, in the foreground, and nothing said when nothing was.
+      [ "$due" = 0 ] || [ -z "${LLM_WIKI_IN_EVENT:-}" ] || return 0
       any=0
       bad=0
       for n in $(ext_wanting tick); do
+        if [ "$due" = 1 ]; then
+          mkdir -p "$EXT_STATE/$n" 2>/dev/null || continue
+          ext_tick_due "$n" || continue
+        fi
         any=1
         mkdir -p "$EXT_STATE/$n" 2>/dev/null && : > "$EXT_STATE/$n/tick.stamp"
         d="$(ext_run "$n" tick)"
@@ -8263,9 +8674,14 @@ cmd_extensions() {
           *) printf '%s\n' "$d" ;;
         esac
       done
-      [ "$any" = 1 ] || echo "No extension that is on asks for the tick event."
+      [ "$any" = 1 ] || [ "$due" = 1 ] || echo "No extension that is on asks for the tick event."
       # For cron: a run that failed fails the command.
       [ "$bad" = 0 ] || return 1
+      return 0
+      ;;
+    schedule)
+      shift
+      cmd_schedule "$@"
       return 0
       ;;
     every)
@@ -8305,7 +8721,7 @@ cmd_extensions() {
       esac
       return 0
       ;;
-    *) die_usage "extensions takes path, add <name>, remove <name>, setup <name>, settings <name>, set <name> <key> <value>, log <name>, tick, every, or nothing" ;;
+    *) die_usage "extensions takes path, add <name>, remove <name>, setup <name>, settings <name>, set <name> <key> <value>, log <name>, tick [--due], every, schedule, or nothing" ;;
   esac
   ui_stage EXTENSIONS "what this machine has"
   for f in "$EXT_DIR"/wiki-*; do
@@ -8394,9 +8810,11 @@ cmd_complete() {
     open) [ "$i" -eq 2 ] && echo --data; [ "$i" -eq 3 ] && wiki_names ;;
     pages) [ "$i" -eq 2 ] && wiki_names; echo --data ;;
     extensions)
-      [ "$i" -eq 2 ] && printf 'path\nadd\nremove\nsetup\nsettings\nset\nlog\ntick\nevery\n'
+      [ "$i" -eq 2 ] && printf 'path\nadd\nremove\nsetup\nsettings\nset\nlog\ntick\nevery\nschedule\n'
       if [ "$i" -eq 3 ] && { [ "${2:-}" = log ] || [ "${2:-}" = every ] || [ "${2:-}" = setup ] || [ "${2:-}" = settings ] || [ "${2:-}" = set ]; }; then extension_names; return 0; fi
       if [ "$i" -eq 4 ] && [ "${2:-}" = every ]; then echo default; return 0; fi
+      if [ "$i" -eq 3 ] && [ "${2:-}" = schedule ]; then printf 'on\noff\nstatus\n'; return 0; fi
+      if [ "$i" -eq 3 ] && [ "${2:-}" = tick ]; then echo --due; return 0; fi
       if [ "$i" -eq 3 ]; then for k in "$EXT_SHIPPED"/wiki-*; do [ ! -f "$k" ] || printf '%s\n' "${k##*/wiki-}"; done; fi
       ;;
     log)
@@ -10038,6 +10456,7 @@ setup_list_rows() {
   [ -z "$(ext_wanting tick)" ] || printf ' (by themselves every %s)' "$(ext_every_all)"
   case "$pending" in *" extension."* | *" extensions.every "*) printf '%s' "$new_note" ;; esac
   printf '\n'
+  [ -z "$(ext_wanting tick)" ] || printf '%-19s %s\n' "schedule" "$(sched_value)"
   printf '%-19s %s\n' "compile" "$(compile_auto_on && echo "in the background at session start" || echo "by sessions (background compile is off)")"
   printf '%-19s %s' "helper" "$(setup_typed_tail "$(cmd_helper | sed -n '1s/^helper: //p')"), fetched at session start: $(helper_auto_on && echo on || echo off)"
   case "$pending" in *" helper "*) printf '%s' "$new_note" ;; esac
@@ -10344,7 +10763,7 @@ setup_set_value() {
 # value, whether setup --new would ask about it, what it does, and how to change it with a
 # command that asks nothing, or that only a terminal can do. It never prints, asks for or
 # writes a token or a password, and changes nothing itself.
-GUIDE_SECTIONS="collection collections tools git git.identity workflows claude plugin permissions antigravity codex cursor upgrade skills completion journal delegation feedback palette theme helper obsidian extensions chat"
+GUIDE_SECTIONS="collection collections tools git git.identity workflows claude plugin permissions antigravity codex cursor upgrade skills completion journal delegation feedback palette theme helper obsidian extensions schedule chat"
 
 # guide_known <section>: succeed for a name `setup --guide` takes.
 guide_known() {
@@ -10397,6 +10816,7 @@ guide_entry() {
     feedback) echo "Whether agents keep notes about llm-wiki itself: off, notes or share. Change: $c setup feedback <off|notes|share>" ;;
     obsidian) echo "Starter settings so Obsidian can open the wikis as a vault. Change: $c obsidian --no-open" ;;
     extensions) echo "Optional commands, such as Jira and Confluence. Change: $c extensions add|remove <name>, $c extensions every <time>" ;;
+    schedule) echo "Whether this machine checks on extensions by itself every few minutes, with no session open, so a failed CI run is noticed at once. It is off until the user turns it on. Change: $c extensions schedule on|off" ;;
     compile) echo "Whether session start compiles waiting notes in the background. Change: $c compile <on|off>" ;;
     helper) echo "A compiled helper that speeds up report and standup. Change: $c helper auto <on|off>" ;;
     chat) echo "The server for the Claude app's Chat tab. Terminal only, with the app closed: $c setup chat" ;;
@@ -10464,7 +10884,7 @@ EOF
     val="${val%  <- new}"
     val="${val//  (default)/ (default)}"
     guide_in "$sec" "$id" || continue
-    case "$id" in collection | claude | compile) mark="" ;; *) if guide_unanswered "$id"; then mark=" [not answered yet]"; else mark=" [answered]"; fi ;; esac
+    case "$id" in collection | claude | compile | schedule) mark="" ;; *) if guide_unanswered "$id"; then mark=" [not answered yet]"; else mark=" [answered]"; fi ;; esac
     any=1
     printf -- '- %s = %s%s: %s\n' "$id" "${val:-(none)}" "$mark" "$(guide_entry "$id")"
     if [ "$id" = extensions ] && { [ -z "$sec" ] || [ "$sec" = extensions ]; }; then guide_all_ext; fi
@@ -10727,6 +11147,8 @@ case "$cmd" in
   __ext-run) ext_run "$@" >/dev/null 2>&1 || true; exit 0 ;;
   # An extension leaves a line for the next session in a repository, and hooks take it.
   __notice) cmd_notice "$@"; exit 0 ;;
+  # A desktop notification, for an extension that has something to say now.
+  __notify) cmd_notify "$@"; exit 0 ;;
   # The session hook asks for a wiki's reminders, to hand out at tool calls.
   __reminders) session_reminders "$(wiki_root "${1:-}")"; exit 0 ;;
   # The session hook asks where a folder that is in no repository belongs: the wiki to

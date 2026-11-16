@@ -4,6 +4,13 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-12-25: a failed CI run, on your desktop, with no session open
+
+- `wiki extensions schedule on` has your machine check in every 5 minutes by itself, with no session open. `schedule off` removes it.
+- With `wiki github` on, a run that starts failing shows a desktop notification. `wiki extensions set github desktop no` turns that off.
+- `wiki extensions tick --due` runs only the extensions that are due. `wiki setup extensions` offers the schedule once.
+- Do: run `wiki extensions schedule on`, and `wiki extensions every github 10m` to check more often than daily.
+
 ## 2026-12-24: what failed in GitHub Actions, and why
 
 - `wiki extensions add github` adds `wiki github`: which CI run failed, in which job and step, the first error line, and a short saved excerpt of the log.
