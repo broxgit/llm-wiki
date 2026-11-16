@@ -8260,6 +8260,10 @@ sched_env() {
   [ "$WIKIS_DIR" = "$HOME/wikis" ] || printf 'WIKIS_DIR=%s\n' "$WIKIS_DIR"
   [ -z "${XDG_CONFIG_HOME:-}" ] || printf 'XDG_CONFIG_HOME=%s\n' "$XDG_CONFIG_HOME"
   [ -z "${XDG_STATE_HOME:-}" ] || printf 'XDG_STATE_HOME=%s\n' "$XDG_STATE_HOME"
+  # Where extensions are kept, when that is not the usual folder: without it the job would
+  # look in the usual one and never run an extension of the person's own.
+  [ -z "${XDG_DATA_HOME:-}" ] || printf 'XDG_DATA_HOME=%s\n' "$XDG_DATA_HOME"
+  [ -z "${LLM_WIKI_EXTENSIONS_DIR:-}" ] || printf 'LLM_WIKI_EXTENSIONS_DIR=%s\n' "$LLM_WIKI_EXTENSIONS_DIR"
   # What a tool needs to reach the network as this shell does. Never a token: a job's file
   # is no place for one, and a proxy address that holds a password is left out too.
   local n v
@@ -8327,7 +8331,7 @@ sched_check() {
   local e
   sched_plain "$1" || { SCHED_ERR="the wiki command's path has a control character in it. Do: move llm-wiki to a folder with a plain path, then run this again"; return 1; }
   sched_plain "$PATH" || { SCHED_ERR="this shell's PATH has a control character in it. Do: open a new terminal with a plain PATH, then run this again"; return 1; }
-  for e in "$WIKIS_DIR" "${XDG_CONFIG_HOME:-}" "${XDG_STATE_HOME:-}" "$HOME"; do
+  for e in "$WIKIS_DIR" "${XDG_CONFIG_HOME:-}" "${XDG_STATE_HOME:-}" "${XDG_DATA_HOME:-}" "${LLM_WIKI_EXTENSIONS_DIR:-}" "$HOME"; do
     sched_plain "$e" || { SCHED_ERR="a folder path has a control character in it. Do: use plain folder names, then run this again"; return 1; }
   done
   return 0
