@@ -4,6 +4,13 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-12-24: what failed in GitHub Actions, and why
+
+- `wiki extensions add github` adds `wiki github`: which CI run failed, in which job and step, the first error line, and a short saved excerpt of the log.
+- With a clone watched, a run that starts failing on your branch is handed to your next session in one line, once.
+- It can save a note in the wiki when a failure is fixed, so the same error is recognised next time. That is off until you turn it on.
+- Do: run `wiki extensions add github`, then `wiki github watch` in a clone.
+
 ## 2026-12-23: a chat can create your first wiki
 
 - Through the chat connector, your assistant can now create a wiki when you ask for one, and the folder wikis are kept in if there is none yet.

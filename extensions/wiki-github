@@ -1,0 +1,1126 @@
+#!/usr/bin/env python3
+# wiki-extension: Say what failed in GitHub Actions and why, and note in the wiki when it is fixed.
+# wiki-events: tick
+# wiki-setup: yes
+# wiki-settings: yes
+"""wiki github: an llm-wiki extension. Standard library only.
+
+For agents that have no CI watching of their own. It asks GitHub, through the gh program, which
+workflow runs are failing in a clone's repository, and why: the failing job and step, the first
+line that looks like the error, and a short excerpt of the failing step's log, kept on this
+machine. With a folder watched, the tick event leaves a line for the next session on that branch
+when a run starts failing, and can save a note in the wiki when the failure is fixed.
+
+It only ever READS GitHub: gh run list, gh run view, gh pr list, gh repo view, gh auth status.
+It never reruns, cancels or changes anything there, and never reads, asks for, prints or stores
+a token: gh holds the sign-in.
+"""
+import datetime
+import hashlib
+import json
+import os
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+import unicodedata
+
+CMD = os.environ.get("LLM_WIKI_CMD", "wiki")
+GH_BIN = os.environ.get("GH_BIN") or "gh"
+CONFIG_DIR = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "llm-wiki")
+CONFIG = os.path.join(CONFIG_DIR, "github")
+STATE_HOME = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+STATE_DIR = os.path.join(STATE_HOME, "llm-wiki", "extensions", "github")
+STATE_FILE = os.path.join(STATE_DIR, "state.json")
+LOG_DIR = os.path.join(STATE_DIR, "logs")
+GUIDE = f'Or ask an agent: "run {CMD} setup --guide github and walk me through it"'
+
+KEEP_LINES = 120
+KEEP_BYTES = 8000
+KEEP_DAYS = 7
+SIGNATURE_CHARS = 160
+FAILING = ("failure", "timed_out", "startup_failure")
+RUNNING = ("queued", "in_progress", "waiting", "requested", "pending")
+DEFAULTS = {"remember": "no", "notice": "yes"}
+
+USAGE = f"""Usage: {CMD} github [check] [<folder>]
+       {CMD} github watch [<folder>]
+       {CMD} github watch --list
+       {CMD} github unwatch [<folder>]
+       {CMD} github config
+
+  check    For the GitHub repository a folder is a clone of (the current folder unless you
+           name one), say which workflows are failing and why. It looks at the newest run of
+           each workflow on the folder's branch, on the default branch, and on the branch of
+           each open pull request you opened. For each failing run it prints the workflow, the
+           branch, the failing job and step, the first line that looks like the error, whether
+           your wikis already know that error, and where a short excerpt of the failing step's
+           log is saved. The default. It reads GitHub and changes nothing there.
+  watch    Add the folder's clone to the ones the tick event looks at. --list prints them.
+  unwatch  Take it off again.
+  config   What is set, whether gh is installed and signed in, and which folders are watched.
+
+It talks to GitHub only through gh, and reads only: it never reruns, cancels or changes a run.
+The sign-in is gh's own: {CMD} github never sees a token. Sign in with: gh auth login
+
+The excerpt is the failing step's last {KEEP_LINES} lines, at most {KEEP_BYTES:,} bytes, kept {KEEP_DAYS} days in
+{LOG_DIR}/<owner>__<repo>/<run>-<job>.txt
+and never in a wiki.
+
+Settings go in {CONFIG}, one `name = value` a line:
+  watch     folders whose repository the tick looks at, separated by commas
+  remember  yes: when a failure the tick saw is fixed, save a note in the wiki that covers
+            the repository, through capture. It holds the error's first line, never the log.
+            Off unless you turn it on.
+  notice    yes (the default): when a run starts failing, hand one line to the next session in
+            that repository, on that branch.
+"""
+
+# True while llm-wiki runs this for an event, in the background, with nobody watching.
+EVENT = False
+SEPARATORS = "\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"
+
+
+def die(msg, code=1):
+    sys.stdout.flush()
+    print(f"error: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def die_usage(msg):
+    """Called wrongly: an unknown command or option, a missing argument. Exits 2."""
+    die(msg, 2)
+
+
+def not_now(msg):
+    """During an event, no gh or no sign-in or no network is for later: 75 asks llm-wiki to try again."""
+    print(f"not now: {msg}")
+    sys.exit(75)
+
+
+def unreachable(msg):
+    if EVENT:
+        not_now(msg)
+    die(f"{msg}. Do: check the network, then run: {CMD} github check")
+
+
+def clean(text, limit=300):
+    """Text from GitHub, safe to print and to save: no control character and no line separator,
+    one line, cut at limit characters."""
+    out = []
+    for c in str(text):
+        cat = unicodedata.category(c)
+        if c in "\t\n\r":
+            out.append(" ")
+        elif c in SEPARATORS or cat[0] == "C" or cat in ("Zl", "Zp"):
+            continue
+        else:
+            out.append(c)
+    return " ".join("".join(out).split())[:limit]
+
+
+# ---- settings, as wiki-jira keeps them ------------------------------------------------------
+
+def conf_lines(path):
+    """The lines of a settings file, by the one rule everything that reads or writes it shares:
+    a line ends at a newline, and a trailing carriage return is dropped. Nothing else splits one."""
+    with open(path, encoding="utf-8", errors="surrogateescape", newline="") as f:
+        text = f.read()
+    lines = [l[:-1] if l.endswith("\r") else l for l in text.split("\n")]
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
+def read_conf(path):
+    conf = {}
+    try:
+        for line in conf_lines(path):
+            line = line.split("#", 1)[0].strip()
+            if "=" in line:
+                k, v = line.split("=", 1)
+                conf[k.strip()] = v.strip()
+    except FileNotFoundError:
+        pass
+    return conf
+
+
+def unfit(text):
+    """Why a key or value can't be written to a settings file, in words that don't repeat it, or nothing."""
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return "isn't valid UTF-8"
+    for c in text:
+        cat = unicodedata.category(c)
+        if c in SEPARATORS or cat[0] == "C" or cat in ("Zl", "Zp"):
+            return "can't hold a control character or a line separator"
+    return ""
+
+
+def set_conf(path, key, value):
+    """Set one `name = value` line in a settings file, or take it out when value is empty.
+    Every other line stays as it is. The file is written beside itself and moved into place,
+    so a write that fails leaves the old one."""
+    why = unfit(key) or unfit(value) or ("is more than one line" if len(value.splitlines()) > 1 else "")
+    if why:
+        die_usage(f"the value of {key} {why}, so nothing was written")
+    try:
+        lines = conf_lines(path)
+    except FileNotFoundError:
+        lines = []
+    kept = [l for l in lines if l.split("#", 1)[0].split("=", 1)[0].strip() != key or "=" not in l.split("#", 1)[0]]
+    if value:
+        kept.append(f"{key} = {value}")
+    path = os.path.realpath(path)
+    folder = os.path.dirname(path)
+    tmp = None
+    try:
+        os.makedirs(folder, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=folder, prefix=".settings-")
+        with os.fdopen(fd, "w", encoding="utf-8", errors="surrogateescape", newline="") as f:
+            f.write("\n".join(kept) + ("\n" if kept else ""))
+        try:
+            mode = stat.S_IMODE(os.stat(path).st_mode)
+        except FileNotFoundError:
+            mask = os.umask(0)
+            os.umask(mask)
+            mode = 0o666 & ~mask
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except OSError as e:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        die(f"can't write {path}: {e.strerror or e}. The old file is as it was")
+
+
+def is_yes(value):
+    return str(value).strip().lower() in ("yes", "true", "on", "1")
+
+
+def watched(conf=None):
+    """The folders in the watch setting, as written."""
+    conf = conf if conf is not None else read_conf(CONFIG)
+    return [os.path.expanduser(p.strip()) for p in conf.get("watch", "").split(",") if p.strip()]
+
+
+def settings():
+    own = read_conf(CONFIG)
+    return {
+        "watch": watched(own),
+        "remember": is_yes(own.get("remember", DEFAULTS["remember"])),
+        "notice": is_yes(own.get("notice", DEFAULTS["notice"])),
+    }
+
+
+# ---- gh: the one way to GitHub ---------------------------------------------------------------
+
+class GhMissing(Exception):
+    pass
+
+
+class GhTimeout(Exception):
+    pass
+
+
+class NotGitHub(Exception):
+    """The folder isn't a clone of a repository GitHub knows, or the repository can't be seen."""
+
+
+def run_gh(args, timeout=30, cwd=None):
+    """(exit code, stdout, stderr) of one gh call. Never asks a question, and never waits for ever."""
+    env = dict(os.environ)
+    env["GH_PROMPT_DISABLED"] = "1"
+    env["GH_NO_UPDATE_NOTIFIER"] = "1"
+    env["NO_COLOR"] = "1"
+    try:
+        r = subprocess.run([GH_BIN] + args, stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout, cwd=cwd, env=env)
+    except (FileNotFoundError, PermissionError):
+        raise GhMissing()
+    except subprocess.TimeoutExpired:
+        raise GhTimeout()
+    return r.returncode, r.stdout.decode("utf-8", "replace"), r.stderr.decode("utf-8", "replace")
+
+
+def first_line(text):
+    for line in text.splitlines():
+        if line.strip():
+            return clean(line, 200)
+    return ""
+
+
+def gh_missing():
+    if EVENT:
+        not_now("gh isn't installed")
+    die("gh isn't installed, so GitHub can't be read. Do: install the GitHub CLI from https://cli.github.com, then run: gh auth login")
+
+
+def need_sign_in():
+    if EVENT:
+        not_now("gh isn't signed in to GitHub")
+    die("gh isn't signed in to GitHub. Run: gh auth login")
+
+
+NETWORK = ("error connecting", "dial tcp", "no such host", "could not resolve", "timeout", "timed out", "network is unreachable",
+           "connection refused", "connection reset", "tls handshake", "i/o timeout", "unexpected eof", "proxyconnect", "service unavailable")
+
+
+def looks_offline(err):
+    low = err.lower()
+    return any(p in low for p in NETWORK)
+
+
+def signed_in():
+    """Whether gh holds a sign-in that works. Offline is no answer: it is for later."""
+    try:
+        code, _, err = run_gh(["auth", "status"], timeout=20)
+    except GhMissing:
+        gh_missing()
+    except GhTimeout:
+        unreachable("gh took more than 20 seconds to check the sign-in")
+    if code != 0 and looks_offline(err):
+        unreachable(f"gh couldn't check the sign-in: {first_line(err)}")
+    return code == 0
+
+
+NOT_A_REPO = ("none of the git remotes", "no git remotes", "not a git repository", "could not resolve to a repository")
+
+
+def gh_failed(what, err, soft):
+    low = err.lower()
+    if any(p in low for p in NOT_A_REPO):
+        raise NotGitHub(first_line(err))
+    if looks_offline(err):
+        unreachable(f"gh couldn't {what}: {first_line(err)}")
+    if not signed_in():
+        need_sign_in()
+    if soft:
+        return None
+    unreachable(f"gh couldn't {what}: {first_line(err) or 'no reason given'}")
+
+
+def gh_ok(args, what, timeout=30, cwd=None, soft=False):
+    """Standard output of a gh call that worked. When it didn't: NotGitHub for a folder GitHub
+    doesn't know, an exit for no gh or no sign-in or no network, or None when soft and that is all."""
+    try:
+        code, out, err = run_gh(args, timeout, cwd)
+    except GhMissing:
+        gh_missing()
+    except GhTimeout:
+        unreachable(f"gh took more than {timeout} seconds to {what}")
+    if code != 0:
+        return gh_failed(what, err, soft)
+    return out
+
+
+def gh_json(args, what, **kw):
+    out = gh_ok(args, what, **kw)
+    if out is None:
+        return None
+    try:
+        return json.loads(out)
+    except ValueError:
+        unreachable(f"gh didn't answer with JSON when asked to {what}")
+
+
+# ---- the repository, its branches and its newest runs ----------------------------------------
+
+REPO_NAME = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
+
+
+def git(folder, *args):
+    """A line from a local git command, or nothing. Never a failure."""
+    try:
+        r = subprocess.run(["git", "-C", folder] + list(args), capture_output=True, timeout=15, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return r.stdout.decode("utf-8", "replace").strip() if r.returncode == 0 else ""
+
+
+def clone_top(folder):
+    """The top of the git work tree a folder is in, as a real path, or nothing."""
+    top = git(folder, "rev-parse", "--show-toplevel")
+    return os.path.realpath(top) if top else ""
+
+
+def repo_info(folder):
+    """The repository the folder is a clone of: name as owner/repo, default branch and address."""
+    d = gh_json(["repo", "view", "--json", "nameWithOwner,defaultBranchRef,url"], "look up the repository", cwd=folder)
+    name = d.get("nameWithOwner") if isinstance(d, dict) else ""
+    if not isinstance(name, str) or not REPO_NAME.match(name):
+        raise NotGitHub("gh didn't name a repository")
+    default = (d.get("defaultBranchRef") or {}).get("name") or ""
+    return {"name": name, "default": clean(default, 250), "url": clean(d.get("url") or "", 300)}
+
+
+def int_or_none(v):
+    return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+
+def fetch(folder, info):
+    """(branches, [newest run of each workflow on each branch], {branch: pull request number})."""
+    repo = info["name"]
+    prs = {}
+    listed = gh_json(["pr", "list", "-R", repo, "--author", "@me", "--state", "open", "--limit", "30",
+                      "--json", "number,headRefName"], "list your open pull requests", soft=True)
+    for p in listed if isinstance(listed, list) else []:
+        n, b = int_or_none(p.get("number")), clean(p.get("headRefName") or "", 250)
+        if n is not None and b and not b.startswith("-"):
+            prs[b] = n
+    branches = []
+    for b in [clean(git(folder, "branch", "--show-current"), 250), info["default"]] + list(prs):
+        if b and not b.startswith("-") and b not in branches:
+            branches.append(b)
+    runs = []
+    for b in branches:
+        rows = gh_json(["run", "list", "-R", repo, "--branch", b, "--limit", "40", "--json",
+                        "databaseId,workflowName,workflowDatabaseId,status,conclusion,headSha,url,displayTitle,createdAt"],
+                       f"list the runs on {b}")
+        newest = {}
+        for r in rows if isinstance(rows, list) else []:
+            rid = int_or_none(r.get("databaseId"))
+            if rid is None:
+                continue
+            wf = str(r.get("workflowDatabaseId") or r.get("workflowName") or "")
+            if wf not in newest or rid > newest[wf]["id"]:
+                sha = clean(r.get("headSha") or "", 40)
+                newest[wf] = {"id": rid, "wfid": wf, "workflow": clean(r.get("workflowName") or "?", 100), "branch": b,
+                              "status": clean(r.get("status") or "", 30), "conclusion": clean(r.get("conclusion") or "", 30),
+                              "sha": sha if re.fullmatch(r"[0-9a-fA-F]{7,64}", sha) else "",
+                              "url": clean(r.get("url") or "", 300), "title": clean(r.get("displayTitle") or "", 200),
+                              "pr": prs.get(b), "created": clean(r.get("createdAt") or "", 40)}
+        runs.extend(newest.values())
+    return branches, runs, prs
+
+
+def failing(o):
+    return o["status"] == "completed" and o["conclusion"] in FAILING
+
+
+def passing(o):
+    return o["status"] == "completed" and o["conclusion"] == "success"
+
+
+# ---- the failing step, its log, its signature ----------------------------------------------------
+
+ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]")
+STAMP = re.compile(r"^\ufeff?\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z ?")
+ERRORISH = re.compile(r"(?i)error|fail|fatal|exception|panic|traceback|not ok|\u2717")
+# A line that is a failure's own first line, as test runners and compilers write one. It
+# leads the excerpt and the signature, ahead of a line that only has "fail" somewhere in it.
+STRONG = re.compile(r"^\s*(?:FAIL(?:ED|URE)?\b|not ok\b|\u2717|(?:[\w./-]+:)?\s?(?:fatal |syntax )?[Ee]rror\b[: ]|ERROR\b|E   |panic:|fatal:|Traceback \(most recent call last\)|--- FAIL|AssertionError|Exception\b)")
+# What a runner says after any failure at all: true, and no help in telling one from another.
+GENERIC = re.compile(r"^##\[error\]Process completed with exit code \d+\.?$")
+AROUND_BEFORE, AROUND_AFTER, TAIL_LINES, STRONG_MAX = 3, 14, 30, 6
+TIME = re.compile(r"\b\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:?\d\d)?|\b\d{1,2}:\d\d:\d\d(?:\.\d+)?\b")
+TMPPATH = re.compile(r"(?:/private)?/(?:tmp|var/folders|var/tmp)/[^\s:'\"),]*|/[^\s:'\"),]*/_temp/[^\s:'\"),]*")
+HEX = re.compile(r"\b0x[0-9a-fA-F]+\b|\b(?=[0-9a-fA-F]*\d)[0-9a-fA-F]{7,}\b")
+DURATION = re.compile(r"\b\d+(?:\.\d+)?\s?(?:ms|\u00b5s|us|ns|sec|secs|seconds|min|s|m|h)\b")
+BIGNUM = re.compile(r"\b\d{4,}\b")
+
+
+def tidy(line):
+    """One line of a log with the escape codes, the timestamp and other control characters gone."""
+    line = STAMP.sub("", ANSI.sub("", line))
+    return clean_keep(line).rstrip()
+
+
+def clean_keep(text):
+    """Like clean, but keeps the spaces inside the line, which a log's indentation needs."""
+    out = []
+    for c in text:
+        cat = unicodedata.category(c)
+        if c == "\t":
+            out.append("    ")
+        elif c in SEPARATORS or cat[0] == "C" or cat in ("Zl", "Zp"):
+            continue
+        else:
+            out.append(c)
+    return "".join(out)
+
+
+def excerpt_lines(log, job, step):
+    """The failing step's lines of `gh run view --log-failed`, whose lines are job, step and
+    text, separated by tabs: only that step's (or that job's, or all, when none matches)."""
+    rows = []
+    for line in log.splitlines():
+        parts = line.split("\t", 2)
+        rows.append((parts[0].strip(), parts[1].strip(), parts[2]) if len(parts) == 3 else ("", "", line))
+    pick = [r for r in rows if r[0] == job and r[1] == step] or [r for r in rows if r[0] == job] or rows
+    lines = [tidy(r[2]) for r in pick]
+    while lines and not lines[-1]:
+        lines.pop()
+    lines = around_failures(lines)
+    while len(lines) > 1 and sum(len(l.encode("utf-8")) + 1 for l in lines) > KEEP_BYTES:
+        lines.pop(0)
+    if lines and sum(len(l.encode("utf-8")) + 1 for l in lines) > KEEP_BYTES:
+        lines = [lines[-1].encode("utf-8")[-(KEEP_BYTES - 1):].decode("utf-8", "ignore")]
+    return lines
+
+
+def around_failures(lines):
+    """The lines worth keeping of a long log: a few around each of the first failures, and
+    the end. A log's last lines alone often hold the summary and miss what failed."""
+    if len(lines) <= KEEP_LINES:
+        return lines
+    keep = set(range(max(0, len(lines) - TAIL_LINES), len(lines)))
+    strong = [i for i, l in enumerate(lines) if STRONG.search(l) and not GENERIC.search(l.strip())][:STRONG_MAX]
+    for i in strong:
+        keep.update(range(max(0, i - AROUND_BEFORE), min(len(lines), i + AROUND_AFTER + 1)))
+    if not strong:
+        return lines[-KEEP_LINES:]
+    out, last = [], None
+    for i in sorted(keep)[:KEEP_LINES]:
+        if last is not None and i != last + 1:
+            out.append("[...]")
+        out.append(lines[i])
+        last = i
+    return out
+
+
+def signature_of(lines, step):
+    """The first line that looks like the error, with the noise that changes from run to run
+    folded away, or the last line that isn't empty, cut to a length."""
+    chosen = next((l for l in lines if STRONG.search(l) and not GENERIC.search(l.strip())), "")
+    if not chosen:
+        chosen = next((l for l in lines if ERRORISH.search(l) and not GENERIC.search(l.strip())), "")
+    if not chosen:
+        chosen = next((l for l in reversed(lines) if l.strip() and not GENERIC.search(l.strip())), "")
+    if not chosen:
+        chosen = next((l for l in reversed(lines) if l.strip()), "")
+    s = TIME.sub("<time>", chosen.strip())
+    s = TMPPATH.sub("<tmp>", s)
+    s = HEX.sub("<hex>", s)
+    s = DURATION.sub("<dur>", s)
+    s = BIGNUM.sub("<n>", s)
+    s = " ".join(s.split())[:SIGNATURE_CHARS].rstrip()
+    return s or clean(f'step "{step}" failed', SIGNATURE_CHARS)
+
+
+def safe_part(text):
+    s = re.sub(r"[^A-Za-z0-9._-]", "_", text)
+    return ("_" + s) if s.startswith(".") else s
+
+
+def under(path, folder):
+    path, folder = os.path.realpath(path), os.path.realpath(folder)
+    return path == folder or path.startswith(folder.rstrip(os.sep) + os.sep)
+
+
+def private_dir(path):
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    os.chmod(path, 0o700)
+
+
+def prune_logs():
+    """Excerpts older than a week go."""
+    cutoff = time.time() - KEEP_DAYS * 86400
+    for root, dirs, files in os.walk(LOG_DIR, topdown=False):
+        for f in files:
+            p = os.path.join(root, f)
+            try:
+                if f.endswith(".txt") and os.lstat(p).st_mtime < cutoff:
+                    os.unlink(p)
+            except OSError:
+                pass
+        if root != LOG_DIR:
+            try:
+                os.rmdir(root)
+            except OSError:
+                pass
+
+
+def save_excerpt(repo, run_id, job_id, lines):
+    """Write the excerpt where only this user reads it, and say where. Never in a wiki."""
+    wikis = os.environ.get("WIKIS_DIR")
+    if wikis and under(LOG_DIR, wikis):
+        die(f"the log folder {LOG_DIR} is inside the wikis at {wikis}, and a log never goes in a wiki. Do: set XDG_STATE_HOME to a folder outside it")
+    folder = os.path.join(LOG_DIR, safe_part(repo.replace("/", "__")))
+    try:
+        for d in (STATE_DIR, LOG_DIR, folder):
+            private_dir(d)
+        path = os.path.join(folder, f"{int(run_id)}-{int(job_id)}.txt")
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + ("\n" if lines else ""))
+        os.chmod(path, 0o600)
+        prune_logs()
+    except OSError as e:
+        print(f"couldn't save the log excerpt in {folder}: {e.strerror or e}", file=sys.stderr)
+        return ""
+    return path
+
+
+def failure_detail(info, o):
+    """Why a run failed: its first failing job and step, the signature of the error and the
+    saved excerpt. Reads GitHub only."""
+    repo = info["name"]
+    d = gh_json(["run", "view", str(o["id"]), "-R", repo, "--json", "jobs"], "read the run")
+    jobs = [j for j in (d.get("jobs") if isinstance(d, dict) else None) or [] if isinstance(j, dict)]
+    bad = [j for j in jobs if j.get("conclusion") in ("failure", "timed_out")]
+    job = bad[0] if bad else {}
+    steps = [s for s in job.get("steps") or [] if isinstance(s, dict) and s.get("conclusion") in ("failure", "timed_out")]
+    job_name = clean(job.get("name") or "-", 100)
+    step_name = clean(steps[0].get("name") or "-", 100) if steps else "-"
+    job_id = int_or_none(job.get("databaseId")) or 0
+    log = gh_ok(["run", "view", str(o["id"]), "-R", repo, "--log-failed"], "read the failing log", timeout=60, soft=True)
+    lines = excerpt_lines(log, job_name, step_name) if log else []
+    path = save_excerpt(repo, o["id"], job_id, lines) if lines else ""
+    return {"job": job_name, "step": step_name, "signature": signature_of(lines, step_name), "excerpt": path,
+            "more": max(0, len(bad) - 1)}
+
+
+def llm_wiki(*args, **kw):
+    """Run llm-wiki's own command, as the contract says: through $LLM_WIKI."""
+    exe = os.environ.get("LLM_WIKI")
+    if not exe:
+        return None
+    try:
+        return subprocess.run([exe] + list(args), capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL, **kw)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def parse_find(out, mark="no mentions"):
+    """The first page or note `wiki find` names, as "<wiki>: <path>", or nothing."""
+    wiki = ""
+    for line in out.splitlines():
+        if line.startswith(mark):
+            return ""
+        if line and not line[0].isspace() and line.endswith(":"):
+            wiki = line[:-1]
+            continue
+        m = re.match(r"^ {4}(\S+\.md):", line) or re.search(r"\]\(([^)\s]+)\)", line)
+        if wiki and m:
+            return f"{wiki}: {clean(m.group(1), 200)}"
+        if wiki and line.startswith("  ") and not line.strip().endswith(":") and not line.strip().startswith("also in"):
+            return f"{wiki}: index.md"
+    return ""
+
+
+def known_in_wikis(signature):
+    """Whether any wiki already holds this signature: "<wiki>: <page>", "" for none, None for not asked."""
+    r = llm_wiki("find", signature.lstrip("- ").strip() or signature)
+    if r is None or r.returncode != 0:
+        return None
+    return parse_find(r.stdout)
+
+
+# ---- check -------------------------------------------------------------------------------------
+
+def cmd_check(args):
+    rest = [a for a in args]
+    if any(a.startswith("-") for a in rest) or len(rest) > 1:
+        die_usage(f"check takes one folder, and no option. Run: {CMD} github --help")
+    folder = os.path.abspath(os.path.expanduser(rest[0])) if rest else os.getcwd()
+    if not os.path.isdir(folder):
+        die_usage(f"{rest[0] if rest else folder} isn't a command or a folder. Run: {CMD} github --help")
+    try:
+        info = repo_info(folder)
+    except NotGitHub as e:
+        die(f"{folder} isn't a clone of a GitHub repository" + (f" (gh says: {e})" if str(e) else "")
+            + f". Do: run this in a clone, or name one: {CMD} github check <folder>")
+    branches, runs, prs = fetch(folder, info)
+    repo = info["name"]
+    bad = [o for o in runs if failing(o)]
+    running = [o for o in runs if o["status"] in RUNNING]
+    print(f"== {repo}  (looked at: {', '.join(branches) or 'no branch'})")
+    for o in bad:
+        d = failure_detail(info, o)
+        where = known_in_wikis(d["signature"])
+        print(f"FAILING  {o['workflow']} on {o['branch']}" + (f" (pull request #{o['pr']})" if o["pr"] else ""))
+        print(f"  run:     {o['url'] or o['id']}")
+        print(f"  job:     {d['job']}" + (f"  (and {d['more']} more failing job(s))" if d["more"] else ""))
+        print(f"  step:    {d['step']}")
+        print(f"  error:   {d['signature']}")
+        if where is None:
+            print("  known:   not looked up (no wiki command to ask)")
+        elif where:
+            print(f"  known:   yes, in {where}")
+        else:
+            print("  known:   no wiki or note holds it yet")
+        print(f"  log:     {d['excerpt'] or 'none kept: GitHub has no log for this run'}")
+    if not bad:
+        print(f"Nothing is failing in CI for {repo}." if runs else f"No workflow runs were found for {repo} on those branches.")
+    if running:
+        print("Still running: " + "; ".join(f"{o['workflow']} on {o['branch']}" for o in running) + ".")
+    return 0
+
+
+# ---- watch ---------------------------------------------------------------------------------------
+
+def folder_arg(args, what):
+    if len(args) > 1 or any(a.startswith("-") for a in args):
+        die_usage(f"{what} takes one folder, or none for the current one. Run: {CMD} github --help")
+    folder = os.path.abspath(os.path.expanduser(args[0])) if args else os.getcwd()
+    if not os.path.isdir(folder):
+        die_usage(f"{args[0] if args else folder} isn't a folder. Do: name a clone, or run it inside one")
+    return folder
+
+
+def write_watch(paths):
+    set_conf(CONFIG, "watch", ", ".join(paths))
+
+
+def cmd_watch(args):
+    if args == ["--list"]:
+        paths = watched()
+        if not paths:
+            print(f"No folders are watched. Run: {CMD} github watch <folder>")
+        for p in paths:
+            print(p + ("" if os.path.isdir(p) else "  (gone)"))
+        return 0
+    folder = folder_arg(args, "watch")
+    top = clone_top(folder)
+    if not top:
+        die(f"{folder} isn't in a git clone. Do: run this in a clone of a GitHub repository, or name one")
+    if "," in top or "#" in top:
+        die(f"{top} has a comma or a # in its path, which the settings file can't hold. Do: watch a clone whose path has neither")
+    paths = watched()
+    if top in [os.path.realpath(p) for p in paths]:
+        print(f"{top} is already watched.")
+        return 0
+    write_watch(paths + [top])
+    print(f"Watching {top}. The tick event looks at it with the other watched folders, once a day unless {CMD} extensions every github says otherwise.")
+    print(f"To look now: {CMD} github check {top}")
+    return 0
+
+
+def cmd_unwatch(args):
+    folder = folder_arg(args, "unwatch")
+    top = clone_top(folder) or folder
+    paths = watched()
+    keep = [p for p in paths if os.path.realpath(p) != top and p != top and p != folder]
+    if len(keep) == len(paths):
+        print(f"{top} wasn't watched.")
+        return 0
+    write_watch(keep)
+    print(f"No longer watching {top}.")
+    return 0
+
+
+def cmd_config(args):
+    if args:
+        die_usage("config takes no arguments")
+    conf = settings()
+    exe = shutil.which(GH_BIN)
+    print(f"file      {CONFIG}{'' if os.path.isfile(CONFIG) else ' (not there yet)'}")
+    print(f"gh        {exe or 'not installed'}")
+    ok = False
+    if exe:
+        try:
+            ok = run_gh(["auth", "status"], timeout=20)[0] == 0
+        except (GhMissing, GhTimeout):
+            ok = False
+    print(f"signed in {'yes' if ok else 'no'}")
+    print(f"watch     {', '.join(conf['watch']) or 'none'}")
+    print(f"remember  {'yes' if conf['remember'] else 'no'}")
+    print(f"notice    {'yes' if conf['notice'] else 'no'}")
+    print(f"state     {STATE_DIR}")
+    if not exe:
+        print("\nNot set up: gh isn't installed. Do: install the GitHub CLI from https://cli.github.com, then run: gh auth login")
+        return 1
+    if not ok:
+        print("\nNot set up: gh isn't signed in. Run: gh auth login")
+        return 1
+    return 0
+
+
+# ---- the tick event ----------------------------------------------------------------------------
+
+def load_state():
+    try:
+        with open(STATE_FILE, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(state):
+    try:
+        private_dir(STATE_DIR)
+        fd, tmp = tempfile.mkstemp(dir=STATE_DIR, prefix=".state-")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=1, sort_keys=True)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, STATE_FILE)
+    except OSError as e:
+        print(f"couldn't save {STATE_FILE}: {e.strerror or e}")
+
+
+def notice_id(repo, key):
+    return "gh-" + safe_part(repo.replace("/", "__")) + "-" + hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
+
+
+def cut_bytes(text, limit):
+    b = text.encode("utf-8")
+    return text if len(b) <= limit else b[:limit].decode("utf-8", "ignore").rstrip()
+
+
+def put_notice(nid, folder, o, d):
+    """Leave one line for the next session in this repository on this branch."""
+    log = f" The failing step's log, cut down: {d['excerpt']}." if d["excerpt"] else ""
+    head = f"CI failed on {o['branch']}: {o['workflow']} / {d['job']} / {d['step']}: "
+    tail = f".{log} More: {CMD} github check"
+    sig = cut_bytes(d["signature"], max(40, 590 - len((head + tail).encode("utf-8"))))
+    text = clean(head + sig + tail, 590)
+    r = llm_wiki("__notice", "put", nid, folder, o["branch"], text)
+    if r is None or r.returncode != 0:
+        print(f"couldn't leave a notice for {folder}: {first_line((r.stderr if r else '') or 'no wiki command to ask')}")
+        return False
+    print(f"left a notice for {folder} on {o['branch']}")
+    return True
+
+
+def clear_notice(nid):
+    llm_wiki("__notice", "clear", nid)
+
+
+def commit_subject(folder, sha, fallback):
+    s = git(folder, "log", "-1", "--format=%s", sha) if re.fullmatch(r"[0-9a-fA-F]{7,64}", sha or "") else ""
+    return clean(s or fallback, 200)
+
+
+def save_note(folder, info, o, prev, flaky):
+    """The note about a failure that ended: saved with capture, then synced. True when it is
+    saved or when there is nothing to save it in, False when a save failed and should be tried again."""
+    repo = info["name"]
+    r = llm_wiki("which", repo.split("/")[1])
+    wiki = os.path.basename(r.stdout.strip().rstrip("/")) if r and r.returncode == 0 and r.stdout.strip() else ""
+    if not wiki:
+        print(f"{repo}: no wiki covers {repo.split('/')[1]}, so no note was saved. Run: {CMD} cover <wiki> {repo.split('/')[1]}")
+        return True
+    pr = o.get("pr") or prev.get("pr")
+    sha = o["sha"][:7]
+    word = "flaky" if flaky else "fixed"
+    lines = [f"# CI {word}: {prev['workflow']} on {prev['branch']} ({repo})", ""]
+    if flaky:
+        lines += ["It failed, then passed on a re-run of the same commit, so nothing changed in between: it may be flaky.", ""]
+    lines += [f"Workflow: {prev['workflow']}", f"Job: {prev['job']}", f"Step: {prev['step']}",
+              f"Signature: {prev['signature']}", "",
+              f"Failed run: {prev['run_id']} {prev.get('url', '')}".rstrip(),
+              f"Passing run: {o['id']} {o['url']}".rstrip(),
+              f"Commit of the passing run: {sha} {commit_subject(folder, o['sha'], o['title'])}".rstrip()]
+    if pr:
+        lines.append(f"Pull request: #{pr}")
+    lines += ["", "Ticket: none"]
+    wikis_dir = os.environ.get("WIKIS_DIR") or os.getcwd()
+    slug = "ci-flaky" if flaky else "ci-fixed"
+    exe = os.environ.get("LLM_WIKI")
+    if not exe:
+        print(f"{repo}: LLM_WIKI isn't set, so no note was saved. Run this as: {CMD} github")
+        return True
+    try:
+        # From the wikis' folder, so a note taken in a ticket's folder gets no Ticket: line of that ticket.
+        c = subprocess.run([exe, "capture", wiki, slug], input="\n".join(lines) + "\n", text=True, capture_output=True,
+                           cwd=wikis_dir, timeout=120)
+        s = subprocess.run([exe, "sync", wiki, "-m", f"{wiki}: CI failure {'was flaky' if flaky else 'fixed'}"],
+                           capture_output=True, text=True, timeout=300) if c.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print(f"{repo}: couldn't save the note in {wiki}: {e}")
+        return False
+    if c.returncode != 0 or s is None:
+        print(f"{repo}: couldn't save the note in {wiki}: {first_line(c.stderr)}")
+        return False
+    if s.returncode != 0:
+        print(f"{repo}: saved the note in {wiki}, but the sync failed. Run: {CMD} sync {wiki}")
+    else:
+        print(f"{repo}: noted in {wiki} that {prev['workflow']} on {prev['branch']} " + ("was flaky." if flaky else "is fixed."))
+    return True
+
+
+NOTICE_DAYS = 3
+
+
+def stale(created):
+    """Whether a run began too long ago to be news. A run with no readable time is fresh."""
+    try:
+        then = datetime.datetime.strptime(created or "", "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+    except ValueError:
+        return False
+    return (datetime.datetime.now(datetime.timezone.utc) - then).days >= NOTICE_DAYS
+
+
+def tick_folder(folder, state, conf):
+    """One watched folder. Returns False when something should be tried again."""
+    try:
+        info = repo_info(folder)
+    except NotGitHub:
+        print(f"{folder} isn't a clone of a GitHub repository, so it was skipped.")
+        return True
+    repo = info["name"]
+    _, runs, _ = fetch(folder, info)
+    book = state.setdefault("repos", {}).setdefault(repo, {}).setdefault("workflows", {})
+    ok = True
+    for o in runs:
+        key = f"{o['wfid']}|{o['branch']}"
+        prev = book.get(key)
+        was_failing = bool(prev) and prev.get("conclusion") in FAILING
+        if failing(o):
+            if was_failing and prev.get("run_id") == o["id"]:
+                continue
+            d = failure_detail(info, o)
+            book[key] = {"workflow": o["workflow"], "branch": o["branch"], "run_id": o["id"], "conclusion": o["conclusion"],
+                         "sha": o["sha"], "url": o["url"], "job": d["job"], "step": d["step"], "signature": d["signature"],
+                         "excerpt": d["excerpt"], "pr": o["pr"]}
+            print(f"{repo}: CI failed on {o['branch']}: {o['workflow']} / {d['job']} / {d['step']}: {d['signature']}")
+            save_state(state)
+            if conf["notice"] and stale(o.get("created")):
+                print(f"{repo}: that run is more than {NOTICE_DAYS} days old, so no notice was left.")
+            elif conf["notice"]:
+                put_notice(notice_id(repo, key), folder, o, d)
+        elif passing(o):
+            if was_failing:
+                clear_notice(notice_id(repo, key))
+                if conf["remember"] and not save_note(folder, info, o, prev, bool(o["sha"]) and o["sha"] == prev.get("sha")):
+                    ok = False
+                    continue
+                if not conf["remember"]:
+                    print(f"{repo}: {o['workflow']} on {o['branch']} passes again.")
+            book[key] = {"workflow": o["workflow"], "branch": o["branch"], "run_id": o["id"], "conclusion": "success",
+                         "sha": o["sha"], "url": o["url"]}
+            save_state(state)
+    return ok
+
+
+def on_event(args):
+    """Run by llm-wiki for an event."""
+    global EVENT
+    EVENT = True
+    if args[:1] != ["tick"]:
+        return 0
+    conf = settings()
+    if not conf["watch"]:
+        print(f"No folder is watched, so nothing was checked. Run: {CMD} github watch <folder>")
+        return 0
+    state = load_state()
+    begun = time.time()
+    all_ok = True
+    for folder in conf["watch"]:
+        if not os.path.isdir(folder):
+            print(f"{folder} is gone, so it was skipped.")
+            continue
+        if time.time() - begun > 240:
+            print(f"Out of time before {folder}. The rest wait for the next tick.")
+            break
+        all_ok = tick_folder(folder, state, conf) and all_ok
+        save_state(state)
+    return 0 if all_ok else 1
+
+
+# ---- setup, and what a session can change ----------------------------------------------------------
+
+def read_line():
+    """One line from standard input, a byte at a time, so nothing meant for whoever
+    reads next is taken. None when the input has ended."""
+    buf = b""
+    while True:
+        c = os.read(0, 1)
+        if not c:
+            return buf.decode(errors="replace") if buf else None
+        if c == b"\n":
+            return buf.decode(errors="replace")
+        buf += c
+
+
+def ask_yn(prompt, default=False):
+    sys.stdout.write(f"{prompt} [{'Y/n' if default else 'y/N'}]: ")
+    sys.stdout.flush()
+    line = read_line()
+    if line is None:
+        print()
+        return default
+    line = line.strip().lower()
+    return default if line == "" else line.startswith("y")
+
+
+def hosts_file():
+    base = os.environ.get("GH_CONFIG_DIR") or os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "gh")
+    return os.path.join(base, "hosts.yml")
+
+
+def ready():
+    """Whether gh is there and has been signed in. Files only: no network, no questions."""
+    if not shutil.which(GH_BIN):
+        return "gh isn't installed"
+    try:
+        if os.path.getsize(hosts_file()) > 0:
+            return ""
+    except OSError:
+        pass
+    return "gh isn't signed in yet"
+
+
+def setup():
+    """Run by `wiki setup` and `wiki extensions setup github`, at a terminal."""
+    print("GitHub Actions, for your wikis")
+    print("When a CI run fails, it can tell you which workflow, job and step, and the first line that")
+    print("looks like the error, and keep a short excerpt of the failing log on this machine, in place of")
+    print("megabytes of it. It reads GitHub through gh and never changes anything there: it never reruns,")
+    print("cancels or edits a run, and it never sees your sign-in.")
+    print()
+    print("Enter keeps the answer in brackets. You can run this again at any time:")
+    print(f"  {CMD} extensions setup github")
+    print()
+    print("== Step 1 of 3: sign in")
+    exe = shutil.which(GH_BIN)
+    if not exe:
+        print("  gh, the GitHub command line, isn't installed. Install it from https://cli.github.com,")
+        print("  then run this again.")
+        return 0
+    try:
+        ok = run_gh(["auth", "status"], timeout=20)[0] == 0
+    except (GhMissing, GhTimeout):
+        ok = False
+    if ok:
+        print("  gh is signed in to GitHub.")
+    else:
+        print("  gh isn't signed in. In your terminal, run:  gh auth login")
+        print("  then run this again. The sign-in stays with gh.")
+    print()
+    print("== Step 2 of 3: which clones to watch")
+    print("A watched clone is looked at in the background, by the tick event, once a day: a run that")
+    print("starts failing on its branch, the default branch or one of your pull requests leaves one line for")
+    print("the next session in that clone.")
+    cwd = clone_top(os.getcwd())
+    paths = watched()
+    if cwd and cwd not in [os.path.realpath(p) for p in paths] and "," not in cwd and "#" not in cwd:
+        if ask_yn(f"Watch {cwd}?", True):
+            write_watch(paths + [cwd])
+    elif cwd:
+        print(f"  {cwd} is already watched.")
+    else:
+        print(f"  This folder isn't in a clone. To watch one later: {CMD} github watch <folder>")
+    print()
+    print("== Step 3 of 3: notes in the wiki")
+    print("When a failure the tick saw is fixed, it can save a note in the wiki that covers the repository:")
+    print("what failed, the first line of the error, and which commit fixed it, never the log itself. A")
+    print("later session that meets the same error finds it. This writes into a wiki, so it is off until")
+    print("you say yes.")
+    conf = settings()
+    remember = ask_yn("Save a note when a failure is fixed?", conf["remember"])
+    set_conf(CONFIG, "remember", "yes" if remember else "")
+    conf = settings()
+    print()
+    print("What is set")
+    print("  gh        " + ("signed in" if ok else "not signed in"))
+    print("  watch     " + (", ".join(conf["watch"]) or "nothing yet"))
+    print("  notes     " + ("on: a fixed failure is noted in its wiki" if conf["remember"] else "off"))
+    print("  notices   " + ("on: a failing run is handed to the next session on its branch" if conf["notice"] else "off"))
+    print()
+    print("What happens now")
+    print(f"  To look now: {CMD} github check")
+    print(f"  The tick runs about once a day; {CMD} extensions every github 1h makes it hourly.")
+    print(f"  Every setting is in {CONFIG}, and {CMD} github --help lists them.")
+    return 0
+
+
+def source(own, key):
+    return "file" if key in own else "default"
+
+
+def setting_rows():
+    own = read_conf(CONFIG)
+    conf = settings()
+    return [
+        ("watch", ", ".join(conf["watch"]), source(own, "watch"),
+         "Clones whose GitHub repository the tick looks at: absolute paths separated by commas. wiki github watch adds the current one", "set"),
+        ("remember", "yes" if conf["remember"] else "no", source(own, "remember"),
+         "yes: when a failure is fixed, save a note in the wiki that covers the repository (the error's first line, never the log)", "set"),
+        ("notice", "yes" if conf["notice"] else "no", source(own, "notice"),
+         "yes: a run that starts failing is handed to the next session in that clone, on that branch", "set"),
+    ]
+
+
+def wiki_settings():
+    for row in setting_rows():
+        print("\t".join(" ".join(str(f).split()) for f in row))
+    return 0
+
+
+def secret_key(key):
+    k = key.lower()
+    return any(w in k for w in ("token", "password", "passwd", "secret", "api_key", "apikey"))
+
+
+def wiki_set(args):
+    """--wiki-set <key> <value>: check the key and the shape of the value, then write it where
+    the interactive setup would. A - clears it. Exit 2, and one line why, for what it refuses."""
+    if len(args) != 2:
+        die_usage("usage: --wiki-set <key> <value>")
+    for what, text in (("key", args[0]), ("value", args[1])):
+        if unfit(text):
+            die_usage(f"the {what} {unfit(text)}, so nothing was written")
+    key, value = args[0].strip(), args[1].strip()
+    names = [r[0] for r in setting_rows()]
+    if secret_key(key):
+        die_usage(f"{key} is a secret, and a session never sets one. {CMD} github never sees a token: gh holds the sign-in. The user runs: gh auth login")
+    if key not in names:
+        die_usage(f"no setting called {key}. Settings: {', '.join(names)}")
+    if not value:
+        die_usage(f"give {key} a value, or - to clear it")
+    if "#" in value:
+        die_usage(f"{key} can't hold a #, which starts a comment in the settings file")
+    clear = value == "-"
+    if key == "watch":
+        out = ""
+        if not clear:
+            parts = [p.strip() for p in value.split(",") if p.strip()]
+            if not parts:
+                die_usage("watch takes folders separated by commas, such as ~/dev/app, ~/dev/api")
+            paths = []
+            for p in parts:
+                full = os.path.expanduser(p)
+                if not os.path.isabs(full):
+                    die_usage(f"{p} isn't an absolute path. Give a path from / or ~/")
+                if not os.path.isdir(full):
+                    die_usage(f"{p} isn't a folder that exists")
+                if full not in paths:
+                    paths.append(full)
+            out = ", ".join(paths)
+    else:
+        if not clear and value.lower() not in ("yes", "no"):
+            die_usage(f"{key} takes yes or no")
+        out = "" if clear else value.lower()
+    set_conf(CONFIG, key, out)
+    print(f"{key} {'cleared' if not out else 'set'} in {CONFIG}")
+    return 0
+
+
+def main(argv):
+    if argv and argv[0] == "--wiki-settings":
+        return wiki_settings()
+    if argv and argv[0] == "--wiki-set":
+        return wiki_set(argv[1:])
+    if argv and argv[0] == "--wiki-event":
+        return on_event(argv[1:])
+    if argv and argv[0] == "--wiki-ready":
+        msg = ready()
+        if msg:
+            print(msg)
+        return 1 if msg else 0
+    if argv and argv[0] == "--wiki-setup":
+        return setup()
+    if argv and argv[0] in ("-h", "--help", "help"):
+        print(USAGE, end="")
+        return 0
+    if argv and argv[0] == "watch":
+        return cmd_watch(argv[1:])
+    if argv and argv[0] == "unwatch":
+        return cmd_unwatch(argv[1:])
+    if argv and argv[0] == "config":
+        return cmd_config(argv[1:])
+    if argv and argv[0] == "check":
+        argv = argv[1:]
+    return cmd_check(argv)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
