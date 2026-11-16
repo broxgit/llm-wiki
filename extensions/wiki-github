@@ -44,7 +44,7 @@ KEEP_DAYS = 7
 SIGNATURE_CHARS = 160
 FAILING = ("failure", "timed_out", "startup_failure")
 RUNNING = ("queued", "in_progress", "waiting", "requested", "pending")
-DEFAULTS = {"remember": "no", "notice": "yes"}
+DEFAULTS = {"remember": "no", "notice": "yes", "desktop": "yes"}
 
 USAGE = f"""Usage: {CMD} github [check] [<folder>]
        {CMD} github watch [<folder>]
@@ -77,6 +77,9 @@ Settings go in {CONFIG}, one `name = value` a line:
             Off unless you turn it on.
   notice    yes (the default): when a run starts failing, hand one line to the next session in
             that repository, on that branch.
+  desktop   yes (the default): with a notice, also show a desktop notification when the tick
+            finds a run that has started failing, if this machine can show one. The tick can run
+            with no session open: {CMD} extensions schedule on.
 """
 
 # True while llm-wiki runs this for an event, in the background, with nobody watching.
@@ -216,6 +219,7 @@ def settings():
         "watch": watched(own),
         "remember": is_yes(own.get("remember", DEFAULTS["remember"])),
         "notice": is_yes(own.get("notice", DEFAULTS["notice"])),
+        "desktop": is_yes(own.get("desktop", DEFAULTS["desktop"])),
     }
 
 
@@ -722,6 +726,7 @@ def cmd_config(args):
     print(f"watch     {', '.join(conf['watch']) or 'none'}")
     print(f"remember  {'yes' if conf['remember'] else 'no'}")
     print(f"notice    {'yes' if conf['notice'] else 'no'}")
+    print(f"desktop   {'yes' if conf['desktop'] else 'no'}")
     print(f"state     {STATE_DIR}")
     if not exe:
         print("\nNot set up: gh isn't installed. Do: install the GitHub CLI from https://cli.github.com, then run: gh auth login")
@@ -777,6 +782,16 @@ def put_notice(nid, folder, o, d):
         return False
     print(f"left a notice for {folder} on {o['branch']}")
     return True
+
+
+def notify_desktop(repo, o, d):
+    """A desktop notification for a run that started failing. Everything in it is from GitHub, so
+    it is cleaned, cut, and handed to llm-wiki as two arguments, never joined into a command."""
+    title = cut_bytes(clean(f"CI failed: {repo}", 80), 80)
+    text = cut_bytes(clean(f"{o['branch']}: {o['workflow']} / {d['job']}: {d['signature']}", 240), 240)
+    r = llm_wiki("__notify", title, text)
+    if r is None or r.returncode != 0:
+        print(f"couldn't show a desktop notification: {first_line((r.stderr if r else '') or 'no wiki command to ask')}")
 
 
 def clear_notice(nid):
@@ -876,6 +891,8 @@ def tick_folder(folder, state, conf):
                 print(f"{repo}: that run is more than {NOTICE_DAYS} days old, so no notice was left.")
             elif conf["notice"]:
                 put_notice(notice_id(repo, key), folder, o, d)
+                if conf["desktop"]:
+                    notify_desktop(repo, o, d)
         elif passing(o):
             if was_failing:
                 clear_notice(notice_id(repo, key))
@@ -1014,10 +1031,12 @@ def setup():
     print("  watch     " + (", ".join(conf["watch"]) or "nothing yet"))
     print("  notes     " + ("on: a fixed failure is noted in its wiki" if conf["remember"] else "off"))
     print("  notices   " + ("on: a failing run is handed to the next session on its branch" if conf["notice"] else "off"))
+    print("  desktop   " + ("on: and shown as a desktop notification, if this machine can" if conf["desktop"] else "off"))
     print()
     print("What happens now")
     print(f"  To look now: {CMD} github check")
-    print(f"  The tick runs about once a day; {CMD} extensions every github 1h makes it hourly.")
+    print(f"  The tick runs about once a day, when a session starts; {CMD} extensions every github 1h makes it hourly.")
+    print(f"  To have it run with no session open, and show a desktop notification: {CMD} extensions schedule on")
     print(f"  Every setting is in {CONFIG}, and {CMD} github --help lists them.")
     return 0
 
@@ -1036,6 +1055,8 @@ def setting_rows():
          "yes: when a failure is fixed, save a note in the wiki that covers the repository (the error's first line, never the log)", "set"),
         ("notice", "yes" if conf["notice"] else "no", source(own, "notice"),
          "yes: a run that starts failing is handed to the next session in that clone, on that branch", "set"),
+        ("desktop", "yes" if conf["desktop"] else "no", source(own, "desktop"),
+         "yes: with a notice, a run that starts failing also shows a desktop notification, if this machine can show one", "set"),
     ]
 
 
