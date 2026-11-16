@@ -1541,7 +1541,8 @@ def setting_rows():
     else:
         site, site_from = jira.get("url", ""), ("file" if jira.get("url") else "default")
     rows = [
-        ("site", site.rstrip("/"), site_from, "The Atlassian site, such as https://your-company.atlassian.net. On Cloud, Confluence is at its /wiki", "set"),
+        ("site", site.rstrip("/"), site_from, "The Atlassian site, such as https://your-company.atlassian.net. On Cloud, Confluence is at its /wiki",
+         "terminal" if token_source() else "set"),
         ("email", conf.get("email", ""), source_name(src["email"]), "Your Atlassian account's email. Empty on Data Center", "set"),
     ]
     tok_env = next((n for n in TOKEN_ENV if os.environ.get(n)), "")
@@ -1554,12 +1555,12 @@ def setting_rows():
     cmd = conf.get("token_cmd", "")
     shown = "keychain" if cmd == KEYCHAIN_CMD else ("custom command" if cmd else "")
     if mac:
-        what = f"Then set this to keychain, and run {CMD} confluence config, which contacts the site, to test sign-in"
+        what = f"The user runs {CMD} extensions setup confluence and keeps the keychain command it offers. Then {CMD} confluence config, which contacts the site, tests sign-in"
     else:
         what = f"A command that prints the token, such as pass show atlassian. The user sets it in a terminal: {CMD} extensions setup confluence"
-    rows.append(("token_cmd", shown, source_name(src["token_cmd"]) if cmd else "default", what, "set" if mac else "terminal"))
+    rows.append(("token_cmd", shown, source_name(src["token_cmd"]) if cmd else "default", what, "terminal"))
     url, url_from = own_value(own, "CONFLUENCE_URL", "url")
-    rows.append(("url", url, url_from, "Confluence's own address, only where the site isn't on Atlassian Cloud", "set"))
+    rows.append(("url", url, url_from, "Confluence's own address, only where the site isn't on Atlassian Cloud", "terminal" if token_source() else "set"))
     watching = sorted(k for k in own if k.startswith("watch.") and own[k].strip())
     watch_what = "Pages that wiki hears about when they change: page addresses or ids, or space:KEY for a whole space. Watching only reads"
     for k in watching:
@@ -1577,6 +1578,34 @@ def setting_rows():
     if not own.get("parent"):
         rows.append(("parent", "", "default", PUBLISH, "terminal"))
     return rows
+
+
+def token_source():
+    """What gives this extension a token, in a few words, or nothing. Never the token itself,
+    and never by running anything."""
+    name = next((n for n in TOKEN_ENV if os.environ.get(n)), "")
+    if name:
+        return f"{name} is set"
+    return "token_cmd is set" if settings().get("token_cmd") else ""
+
+
+def cleartext_address(value):
+    """Whether an address would send the sign-in in the clear to another machine."""
+    if not value.startswith("http://"):
+        return False
+    host = value[len("http://"):].split("/")[0].rsplit("@", 1)[-1]
+    host = host[1:].split("]")[0] if host.startswith("[") else host.split(":")[0]
+    return host.lower() not in ("localhost", "127.0.0.1", "::1")
+
+
+def address_locked(key, name):
+    """Refuse a session changing where the token is sent once there is a token to send. A
+    session that was misled could otherwise point the extension at a server of its own, and
+    the next check, or the background one, would hand the token over."""
+    why = token_source()
+    if why:
+        die_usage(f"{key} can't be changed from a session once a token is set up ({why}): the token would go to the new address. "
+                  f"The user changes it in a terminal: {CMD} extensions setup {name}")
 
 
 def wiki_settings():
@@ -1603,7 +1632,7 @@ def wiki_set(args):
             die_usage(f"the {what} {unfit(text)}, so nothing was written")
     key, value = args[0].strip(), args[1].strip()
     if secret_key(key):
-        die_usage(f"{key} is a secret, and a session never sets one. The user puts the token in their keychain themselves, and then {CMD} extensions set confluence token_cmd keychain")
+        die_usage(f"{key} is a secret, and a session never sets one. The user puts the token in their keychain themselves, and then sets up sign-in in a terminal: {CMD} extensions setup confluence")
     if key in ("space", "parent", "auto") or key.startswith(("space.", "parent.")):
         die_usage(f"{key} is for publishing, which writes to Confluence. The user sets it in a terminal: {CMD} extensions setup confluence")
     fixed = ("site", "email", "token_cmd", "url", "done_states")
@@ -1615,6 +1644,10 @@ def wiki_set(args):
         die_usage(f"{key} can't hold a #, which starts a comment in the settings file")
     clear = value == "-"
     path = CONFIG
+    if key in ('site', 'url'):
+        address_locked(key, "confluence")
+        if not clear and cleartext_address(value):
+            die_usage(f"{key} is an http:// address on another machine, which would send the sign-in in the clear. Use https://")
     if key == "site":
         path = SHARED
         if not clear and (not value.startswith(("http://", "https://")) or len(value.split()) != 1 or value.count("://") != 1):
@@ -1631,14 +1664,11 @@ def wiki_set(args):
         out = "" if clear else value
     elif key == "token_cmd":
         path = SHARED
-        if clear:
-            out = ""
-        elif value != "keychain":
-            die_usage(f"token_cmd takes only the preset keychain from a session. The user sets a command of their own in a terminal: {CMD} extensions setup confluence")
-        elif not on_mac():
-            die_usage(f"the keychain preset is macOS's. On this machine the user sets token_cmd in a terminal: {CMD} extensions setup confluence")
-        else:
-            out = KEYCHAIN_CMD
+        if not clear:
+            # Never from a session, not even the keychain preset: a session that was misled
+            # could set an address of its own and then have the keychain's token sent there.
+            die_usage(f"token_cmd says where the token comes from, and a session never sets it. The user sets up sign-in in a terminal: {CMD} extensions setup confluence")
+        out = ""
     elif key == "done_states":
         out = "" if clear else value
     else:

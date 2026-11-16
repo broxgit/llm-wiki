@@ -85,6 +85,13 @@ Things that have never been run for real. Treat them as unproven until crossed o
 
 ## Done
 
+### A session can't change where the Atlassian token is sent (2026-11-16)
+
+- **Why:** a security review of the new Jenkins extension found that a session could set the address its token is sent to, and the same was true of the Jira and Confluence extensions on main since the guided setup: `wiki extensions set jira site <address>` was open to a session, so one that had been misled could point the extension at a server of its own, and the next check or background tick would hand the token over.
+- **What changed:** once anything gives the extension a token (a token variable, or `token_cmd`), `--wiki-set site`, and Confluence's `url`, is refused, also for clearing it, and the settings list shows it as for a terminal. An `http://` address is taken only for this machine.
+- **Also closed, on the maintainer's word (2026-11-16):** `token_cmd` is never set from a session, not even to the keychain preset. Where the keychain already held a token and llm-wiki had no settings, a session could otherwise have set an address of its own and then the preset. The guided setup now ends with one command for the user: `wiki extensions setup <name>`. A session may still clear `token_cmd`, which only takes access away. This replaces the rule of 2026-11-13 that a session may set `token_cmd` to the preset `keychain`.
+- **Still open:** the terminal check is a guard, not a lock: a session with a shell can edit the settings file by hand.
+
 ### Extensions: an unattended fix for a failed CI run, stage 3 (2026-11-16)
 
 - **Why:** a failed CI run was reported and left for a person. Decided with the maintainer: an opt-in unattended fix, where the agent only edits files and llm-wiki itself checks, commits and pushes. It is the first time an agent's change is committed and pushed with nobody watching, and the first time `wiki-github` writes to GitHub, so it is narrow and refuses over guessing. A security review found holes in the first build (checks that read working files and the index after the agent had run, repository hooks run on the agent's changed code, a push to the name `origin`, a fork's run on a same-named branch); the build was reworked on one principle: after the agent ends, llm-wiki freezes the change into git objects, checks the objects, and builds and pushes the commit from them.

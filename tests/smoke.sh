@@ -7753,8 +7753,9 @@ for k in site email token token_cmd projects auto_close done_statuses; do
 done
 ok "and every setting the interactive setup asks for"
 case "$out" in *"https://id.atlassian.com/manage-profile/security/api-tokens"*'security add-generic-password -a "$USER" -s atlassian -U -w "$(pbpaste)"'*"Terminal only."*) ok "the token step names the page, and the command, for the user's own terminal" ;; *) bad "the token step names the page, and the command, for the user's own terminal" "$out" ;; esac
-case "$out" in *"set this to keychain, and run wiki jira config, which contacts the site"*) ok "then the keychain preset and the test, which says it contacts the site" ;; *) bad "then the keychain preset and the test, which says it contacts the site" "$out" ;; esac
-check "the jira section is under 1,600 bytes" test "$(printf '%s' "$out" | wc -c | tr -d ' ')" -lt 1600
+case "$out" in *"The user runs wiki extensions setup jira and keeps the keychain command it offers. Then wiki jira config, which contacts the site"*) ok "then the terminal setup for where the token comes from, and the test, which says it contacts the site" ;; *) bad "then the terminal setup for where the token comes from, and the test, which says it contacts the site" "$out" ;; esac
+# The site, once there is a token, and where the token comes from are for a terminal, and their lines say so.
+check "the jira section is under 1,700 bytes" test "$(printf '%s' "$out" | wc -c | tr -d ' ')" -lt 1700
 printf 'site = https://acme.atlassian.net\ntoken_cmd = touch %s; echo %s\n' "$MARK" "$FAKE" > "$GCFG/atlassian"
 rm -f "$MARK"
 settings_out="$(env JIRA_API_TOKEN="$FAKE" HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_CMD=wiki "$W" extensions settings jira 2>&1)"
@@ -7798,12 +7799,33 @@ expect "and the terminal command to use" "wiki extensions setup jira" jlinux tok
 check "and nothing is written" test ! -e "$GCFG/atlassian"
 check "confluence refuses it the same way" test "$(code_of env HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_TEST_OS=linux "$REPO/extensions/wiki-confluence" --wiki-set token_cmd keychain)" = 2
 out="$(glinux setup --guide jira)"
-case "$out" in *"security add-generic-password"*|*pbpaste*|*"set this to keychain"*) bad "off a Mac the guide names no macOS command and no keychain preset" "$out" ;; *) ok "off a Mac the guide names no macOS command and no keychain preset" ;; esac
+case "$out" in *"security add-generic-password"*|*pbpaste*|*"keeps the keychain command"*) bad "off a Mac the guide names no macOS command and no keychain preset" "$out" ;; *) ok "off a Mac the guide names no macOS command and no keychain preset" ;; esac
 case "$out" in *"https://id.atlassian.com/manage-profile/security/api-tokens"*"password manager"*"A command that prints the token"*"wiki extensions setup jira"*) ok "it names the token page, a password manager, and the terminal setup for the command" ;; *) bad "it names the token page, a password manager, and the terminal setup for the command" "$out" ;; esac
-gw extensions set jira token_cmd keychain >/dev/null 2>&1
-check "token_cmd keychain writes the macOS preset to the shared file" grep -qx 'token_cmd = security find-generic-password -s atlassian -w' "$GCFG/atlassian"
-expect "and settings shows it as keychain" "keychain" gw extensions settings jira
-rm -f "$GCFG/atlassian" "$MARK"
+# Where the token comes from is never a session's to set, not even the keychain preset: a
+# session that was misled could set an address of its own and then have the token sent there.
+check "token_cmd keychain is refused from a session, with exit 2" test "$(code_of gw extensions set jira token_cmd keychain)" = 2
+expect "and says the user sets up sign-in in a terminal" "a session never sets it. The user sets up sign-in in a terminal: wiki extensions setup jira" gw extensions set jira token_cmd keychain
+check "nothing was written" test ! -e "$GCFG/atlassian"
+check "confluence refuses it too" test "$(code_of env HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_TEST_OS=darwin "$REPO/extensions/wiki-confluence" --wiki-set token_cmd keychain)" = 2
+check "settings marks token_cmd as for a terminal" bash -c "env HOME='$GH' WIKIS_DIR='$GH/wikis' LLM_WIKI_TEST_OS=darwin '$JX' --wiki-settings | awk -F '\t' '\$1 == \"token_cmd\" && \$5 == \"terminal\"' | grep -q ."
+# The address is the user's to change once there is a token.
+check "an http:// address on another machine is refused, since it would send the sign-in in the clear" test "$(code_of gw extensions set jira site http://jira.example.test)" = 2
+check "one on this machine is taken" gw extensions set jira site http://127.0.0.1:8080
+gw extensions set jira site https://acme.atlassian.net >/dev/null 2>&1
+printf 'token_cmd = security find-generic-password -s atlassian -w\n' >> "$GCFG/atlassian"
+expect "a token command the user set shows as keychain" "keychain" gw extensions settings jira
+out="$(gw extensions set jira site https://evil.example 2>&1)"; code=$?
+check "with a token set up, a session can't change the site: exit 2" test "$code" = 2
+case "$out" in *"site can't be changed from a session once a token is set up (token_cmd is set): the token would go to the new address."*"wiki extensions setup jira"*) ok "and it says why, and that the user changes it in a terminal" ;; *) bad "and it says why, and that the user changes it in a terminal" "$out" ;; esac
+check "the site is what it was" grep -qx 'site = https://acme.atlassian.net' "$GCFG/atlassian"
+check "nor clear it" test "$(code_of gw extensions set jira site -)" = 2
+check "settings marks the site as for a terminal now" bash -c "env HOME='$GH' WIKIS_DIR='$GH/wikis' LLM_WIKI_TEST_OS=darwin '$JX' --wiki-settings | awk -F '\t' '\$1 == \"site\" && \$5 == \"terminal\"' | grep -q ."
+check "confluence refuses its site and its own address the same way" bash -c "test \"\$(env HOME='$GH' WIKIS_DIR='$GH/wikis' LLM_WIKI_TEST_OS=darwin '$REPO/extensions/wiki-confluence' --wiki-set site https://evil.example >/dev/null 2>&1; echo \$?)\" = 2 && test \"\$(env HOME='$GH' WIKIS_DIR='$GH/wikis' LLM_WIKI_TEST_OS=darwin '$REPO/extensions/wiki-confluence' --wiki-set url https://evil.example/wiki >/dev/null 2>&1; echo \$?)\" = 2"
+check "a session may still clear token_cmd, which only takes access away" gw extensions set jira token_cmd -
+lacks "and then it is gone" "token_cmd" cat "$GCFG/atlassian"
+check "a token in the environment locks the site too" bash -c "rm -f '$GCFG/atlassian'; test \"\$(env JIRA_API_TOKEN=smoke-token HOME='$GH' WIKIS_DIR='$GH/wikis' LLM_WIKI_TEST_OS=darwin '$JX' --wiki-set site https://evil.example >/dev/null 2>&1; echo \$?)\" = 2 && test ! -e '$GCFG/atlassian'"
+check "other settings still change with a token set up" gw extensions set jira projects PAY
+rm -f "$GCFG/atlassian" "$GCFG/jira" "$MARK"
 out="$(gw extensions set jira site https://acme.atlassian.net/ 2>&1)"
 case "$out" in "site set in $GCFG/atlassian"*"jira isn't ready yet: no API token yet"*) ok "set says what it set and where, then whether it is ready" ;; *) bad "set says what it set and where, then whether it is ready" "$out" ;; esac
 check "into the shared file the interactive setup writes" grep -qx 'site = https://acme.atlassian.net' "$GCFG/atlassian"

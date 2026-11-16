@@ -4,6 +4,13 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-12-27: a session can no longer change where your Atlassian token is sent
+
+- Security fix: once a token is set up, a session can't change the Jira or Confluence address. A misled session could have sent your token elsewhere.
+- The address, and where the token comes from, are yours to set in a terminal: `wiki extensions setup jira` or `confluence`. An agent still sets the rest.
+- A plain `http://` address is taken only for your own machine, since it would send your sign-in unencrypted.
+- Do: run `wiki update`. If a session ever changed your site, check it: `wiki extensions settings jira`.
+
 ## 2026-12-26: an agent can fix a failing CI run, if you turn it on
 
 - Off unless you turn it on: `wiki github fix on`, in a terminal, for one clone. An agent then changes code and llm-wiki pushes it, with nobody watching.
