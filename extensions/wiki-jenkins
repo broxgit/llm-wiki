@@ -3,6 +3,7 @@
 # wiki-events: tick
 # wiki-setup: yes
 # wiki-settings: yes
+# wiki-detect: Jenkinsfile
 """wiki jenkins: an llm-wiki extension. Standard library only.
 
 For agents that have no CI watching of their own. It asks Jenkins, over its JSON API, whether the latest
@@ -1163,6 +1164,8 @@ def main(argv):
         return wiki_set(argv[1:])
     if argv and argv[0] == "--wiki-event":
         return on_event(argv[1:])
+    if argv and argv[0] == "--wiki-watches":
+        return cc.watches([f for f, _ in watch_entries()], argv[1:])
     if argv and argv[0] == "--wiki-ready":
         conf = settings()
         msg = sign_in_missing(conf)

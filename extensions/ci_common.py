@@ -203,6 +203,23 @@ def clone_top(folder, env=None):
     return os.path.realpath(top) if top else ""
 
 
+def common_dir(folder):
+    """The git folder a clone's work trees share, as a real path, or nothing."""
+    d = git(folder, "rev-parse", "--git-common-dir") if os.path.isdir(folder) else ""
+    return os.path.realpath(os.path.join(folder, d)) if d else ""
+
+
+def watches(folders, args):
+    """--wiki-watches <folder>: exit 0 when one of the watched folders is this folder's clone, or a work tree of it, and 1
+    when none is. It reads the settings file and asks git, nothing else."""
+    if len(args) != 1:
+        return 2
+    mine = common_dir(args[0])
+    if not mine:
+        return 1
+    return 0 if any(common_dir(f) == mine for f in folders) else 1
+
+
 # ---- the failing log, its excerpt, its signature ----------------------------------------------------
 
 ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]")

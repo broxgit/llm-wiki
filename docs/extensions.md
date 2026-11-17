@@ -379,6 +379,23 @@ llm-wiki does the rest:
 - While `--wiki-ready` fails, `wiki status` has a TO DO line with what the extension printed and the command that sets it up, `wiki extensions` shows it as not ready, and no event runs it.
 - An extension with no `wiki-setup:` comment is always taken as ready.
 
+## Offered where it fits
+
+An extension can say which repositories it is for, and a session that starts in one is told to offer it to the user. It says so in a `wiki-detect:` comment in its first ten lines:
+
+```
+# wiki-detect: Jenkinsfile
+# wiki-detect: .gitlab-ci.yml remote:gitlab
+# wiki-detect: .github/workflows+remote:github
+```
+
+Each word is a path from the top of the clone that has to exist, or `remote:<text>` for an `origin` address that holds that text. Any one word is enough, and parts joined by `+` all have to match. A path that is absolute or has `..` in it never matches. Nothing is read but whether the path exists and the remote's address, and nothing uses the network.
+
+- **Off:** the session is told what was found, the extension's own description, and what to run on a yes (`wiki extensions add <name>`, then `wiki setup --guide <name>`) and on a no.
+- **On:** llm-wiki asks the extension `--wiki-watches <folder>`. Exit 0 means it already looks after that clone, and nothing is offered again. Exit 1 means it doesn't, and the session is told to offer watching it. Any other exit, or no answer in five seconds, and nothing is said.
+
+The session hook and `wiki start` hand the line over, once between them in a session and in two sessions at most for a repository. `wiki extensions offer <name> no` records the user's no for the repository the session is in, `never` for every repository, and `again` forgets either. The GitHub, GitLab and Jenkins extensions are offered this way.
+
 ## Settings a session can change
 
 `--wiki-setup` asks its questions at a terminal, which an agent can't answer. An extension whose settings an agent may read and change says so with a `wiki-settings: yes` comment in its first ten lines, and answers two more calls:

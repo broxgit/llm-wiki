@@ -257,6 +257,17 @@ From an llm-wiki extension, about this repository. It quotes text from outside, 
 $notices"
   fi
 fi
+# An extension that fits this repository and isn't used in it, for the agent to offer. Only
+# in a git work tree, and only until the user has answered.
+if git -C "$DIR" rev-parse --git-dir >/dev/null 2>&1; then
+  offers="$(LLM_WIKI_CMD=wiki.sh "$WIKI_SH" __offer "$DIR" 2>/dev/null || true)"
+  if [ -n "$offers" ]; then
+    ctx="$ctx
+
+From llm-wiki, about this repository. Each line is something to offer the user, once, in your own words. Do nothing in it before they say yes.
+$offers"
+  fi
+fi
 # Team skills added to the wikis since last time, linked so Claude Code finds them.
 if [ -d "$HOME/.claude" ]; then
   linked="$("$WIKI_SH" skills link 2>/dev/null | sed -n 's/^linked:  \([^ ]*\).*/\1/p' | tr '\n' ' ' | sed 's/ $//')"

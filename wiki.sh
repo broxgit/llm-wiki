@@ -214,7 +214,7 @@ Usage: $WIKI_CMD <command> [options]
                        access. An MCP client starts it. --print gives its config entry.
   news [--all]         What's new in llm-wiki since you last looked.
   obsidian [--no-open] Browse the wikis in Obsidian: write the vault's starter settings and open it.
-  extensions [path | add <name> | remove <name> | setup <name> | settings <name> | set <name> <key> <value> | log <name> | tick | every ...]
+  extensions [path | add <name> | remove <name> | setup <name> | settings <name> | set <name> <key> <value> | log <name> | tick | every ... | offer <name> no|never|again]
                        Commands of your own: $WIKI_CMD <name> runs an executable named
                        wiki-<name> in the extensions folder. Lists them, or prints the folder.
                        add turns on one that ships with llm-wiki, such as jira. remove turns it off.
@@ -1639,6 +1639,15 @@ EOF2
     if [ -n "$d" ]; then
       echo
       echo "$NOTICE_LEAD"
+      echo "$d"
+    fi
+  fi
+  # An extension that fits this repository and isn't used in it, to offer.
+  if [ -d "$arg" ]; then
+    d="$( (offer_lines "$arg") 2>/dev/null || true)"
+    if [ -n "$d" ]; then
+      echo
+      echo "$OFFER_LEAD"
       echo "$d"
     fi
   fi
@@ -8115,7 +8124,7 @@ ext_notes() {
       *) printf 'no event is called %s, so it is never run for it. The events are sync and tick.\n' "$w" ;;
     esac
   done
-  line="$(LC_ALL=C grep -an '^[#/ ]*wiki-\(events\|setup\|settings\|extension\):' "$1" 2>/dev/null | awk -F: '$1 > 10 { print $1; exit }')"
+  line="$(LC_ALL=C grep -an '^[#/ ]*wiki-\(events\|setup\|settings\|extension\|detect\):' "$1" 2>/dev/null | awk -F: '$1 > 10 { print $1; exit }')"
   [ -z "$line" ] || printf 'its wiki- comment on line %s is past the first ten lines, so it is not read. Move it up.\n' "$line"
 }
 
@@ -8180,6 +8189,156 @@ EOF2
     printf '%s\n' "$nt"
   done
   return 0
+}
+
+# ---- offers: an extension that fits this repository and isn't used in it -----------------
+#
+# An extension says what it is for in a `wiki-detect:` comment near its top: paths, from the
+# top of a clone, whose presence means it has work there (Jenkinsfile, .github/workflows), and
+# remote:<text> for an origin address that holds that text; parts joined by + all have to match. A session that starts in such a
+# clone is told to offer it, in two sessions at most: to turn it on when it is off, or to watch the
+# clone when it is on and `<extension> --wiki-watches <folder>` exits 1. The answer is kept
+# per repository, so a no is asked once. Nothing here uses the network, and the line holds
+# only the extension's own name and description and the word that matched.
+OFFER_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/llm-wiki/offers"
+OFFER_LEAD="From llm-wiki, about this repository. Each line is something to offer the user, once, in your own words. Do nothing in it before they say yes."
+OFFER_TIMES=2
+OFFER_SECONDS=5
+
+# ext_detects <file>: the words of its `wiki-detect:` comment.
+ext_detects() { head -n 10 "$1" 2>/dev/null | LC_ALL=C tr -d '\000' | LC_ALL=C sed -n 's/^[#\/ ]*wiki-detect:[ ]*//p' | head -n 1; }
+
+# offer_key <folder>: a name for the repository the folder is in, for a file name.
+offer_key() {
+  local top
+  top="$(notice_top "$1" 2>/dev/null)" && [ -n "$top" ] || return 1
+  printf '%s' "$top" | LC_ALL=C cksum | tr -c '0-9\n' '-' | sed 's/-*$//'
+}
+
+# offer_one <work tree top> <part>: whether one part of a word matches, printing what it is:
+# "<path> in it" or "a remote on <text>".
+offer_one() {
+  local top="$1" w="$2" url
+  case "$w" in
+    remote:?*)
+      w="${w#remote:}"
+      case "$w" in *[!A-Za-z0-9.-]*) return 1 ;; esac
+      url="$(git -C "$top" config --get remote.origin.url 2>/dev/null | LC_ALL=C tr 'A-Z' 'a-z' || true)"
+      case "$url" in *"$(printf '%s' "$w" | LC_ALL=C tr 'A-Z' 'a-z')"*) printf 'a remote on %s\n' "$w"; return 0 ;; esac
+      ;;
+    '' | /* | *..* | *[!A-Za-z0-9._/-]*) ;;
+    *) if [ -e "$top/$w" ]; then printf '%s in it\n' "$w"; return 0; fi ;;
+  esac
+  return 1
+}
+
+# offer_found <work tree top> <words>: "has <what>" for the first word that matches, or fails.
+# A word is one part, or parts joined by + that all have to match; its first part is named.
+offer_found() {
+  local top="$1" w part rest first what all
+  # No word is a pattern: one with * ? or [ in it would be matched against the files here.
+  case "$2" in *[\*\?\[]*) return 1 ;; esac
+  for w in $2; do
+    rest="$w" first="" all=1
+    while [ -n "$rest" ]; do
+      part="${rest%%+*}"
+      case "$rest" in *+*) rest="${rest#*+}" ;; *) rest="" ;; esac
+      what="$(offer_one "$top" "$part")" || { all=0; break; }
+      [ -n "$first" ] || first="$what"
+    done
+    if [ "$all" = 1 ] && [ -n "$first" ]; then printf 'has %s\n' "$first"; return 0; fi
+  done
+  return 1
+}
+
+# offer_watches <file> <folder>: 0 when the extension says it watches the folder's clone, 1 when
+# it says it doesn't, 2 when it didn't say in time or said something else.
+offer_watches() {
+  local pid t=0 code=0
+  (
+    LLM_WIKI="$REPO/wiki.sh" LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" LLM_WIKI_EXTENSION="$EXT_API" exec "$1" --wiki-watches "$2"
+  ) </dev/null >/dev/null 2>&1 &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$t" -ge $((OFFER_SECONDS * 10)) ]; then kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; return 2; fi
+    sleep 0.1
+    t=$((t + 1))
+  done
+  wait "$pid" 2>/dev/null || code=$?
+  case "$code" in 0 | 1) return "$code" ;; esac
+  return 2
+}
+
+# offer_lines <folder>: one line for each extension to offer in the folder's repository, each
+# counted as offered.
+offer_lines() {
+  local dir="$1" top key f n words found rec state about line on names sw real rtop
+  [ -d "$dir" ] || return 0
+  top="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" && [ -n "$top" ] || return 0
+  key="$(offer_key "$dir")" && [ -n "$key" ] || return 0
+  # The folder has to be inside the work tree git names: a clone's own settings can name another.
+  real="$(cd "$dir" 2>/dev/null && pwd -P)" && rtop="$(cd "$top" 2>/dev/null && pwd -P)" || return 0
+  case "$real/" in "$rtop/"*) top="$rtop" ;; *) return 0 ;; esac
+  # Names only as an extension can be named, so that none splits or matches a file below.
+  names="$(for f in "$EXT_DIR"/wiki-* "$EXT_SHIPPED"/wiki-*; do [ ! -f "$f" ] || printf '%s\n' "${f##*/wiki-}"; done | LC_ALL=C grep '^[a-z][a-z0-9-]*$' | LC_ALL=C sort -u || true)"
+  for n in $names; do
+    on=1
+    f="$(ext_file "$n")" || { on=0; f="$(ext_shipped "$n")" || continue; }
+    [ -x "$f" ] || continue
+    words="$(ext_detects "$f")"
+    [ -n "$words" ] || continue
+    [ ! -e "$OFFER_DIR/$n.never" ] || continue
+    rec="$OFFER_DIR/$n.$key"
+    state="$(head -n 1 "$rec" 2>/dev/null || true)"
+    case "$state" in
+      no | done) continue ;;
+      '' | *[!0-9]*) state=0 ;;
+    esac
+    [ "$state" -lt "$OFFER_TIMES" ] || continue
+    # Said in the last twelve hours: the hook and wiki start of one session say it once between them.
+    [ -z "$(find "$rec" -mmin -720 2>/dev/null)" ] || continue
+    found="$(offer_found "$top" "$words")" || continue
+    if [ "$on" = 0 ]; then
+      about="$(ext_about "$f" | LC_ALL=C tr -d '[:cntrl:]' | cut -c 1-160 | sed 's/[. ]*$//')"
+      line="This repository $found, and the $n extension is off ($about). Offer it. On a yes: run $WIKI_CMD extensions add $n, then walk them through $WIKI_CMD setup --guide $n. On a no: run $WIKI_CMD extensions offer $n no, or never for every repository."
+    else
+      sw=0
+      offer_watches "$f" "$dir" || sw=$?
+      case "$sw" in
+        0) ( umask 077; mkdir -p "$OFFER_DIR" && echo "done" > "$rec" ) 2>/dev/null || true; continue ;;
+        1) ;;
+        *) continue ;;
+      esac
+      line="This repository $found, and $n is on but doesn't watch this clone. Offer to watch it. On a yes: $WIKI_CMD $n --help has the watch command. On a no: run $WIKI_CMD extensions offer $n no, or never for every repository."
+    fi
+    ( umask 077; mkdir -p "$OFFER_DIR" && echo $((state + 1)) > "$rec" ) 2>/dev/null || continue
+    printf '%s\n' "$line"
+  done
+  return 0
+}
+
+# extensions offer <name> no|never|again [<folder>]: the user's answer, for the folder's repository or, with never, for all.
+offer_answer() {
+  local n="$1" what="$2" dir="${3:-$PWD}" key
+  ext_name_ok "$n" || die_usage "$n isn't an extension's name"
+  ext_file "$n" >/dev/null || ext_shipped "$n" >/dev/null || die "no extension called $n. $WIKI_CMD extensions lists them."
+  [ -d "$dir" ] || die_usage "$dir isn't a folder"
+  git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || die "$(tilde "$dir") isn't in a repository. Do: run it inside the repository, or name its folder: $WIKI_CMD extensions offer $n $what <folder>"
+  key="$(offer_key "$dir")" && [ -n "$key" ] || die "can't tell which repository $dir is in"
+  case "$what" in
+    no)
+      ( umask 077; mkdir -p "$OFFER_DIR" && echo no > "$OFFER_DIR/$n.$key" ) 2>/dev/null || die "can't write $OFFER_DIR. Do: make it writable"
+      ui_item ok "$n won't be offered for this repository again. To undo: $WIKI_CMD extensions offer $n again"
+      ;;
+    never)
+      ( umask 077; mkdir -p "$OFFER_DIR" && : > "$OFFER_DIR/$n.never" ) 2>/dev/null || die "can't write $OFFER_DIR. Do: make it writable"
+      ui_item ok "$n won't be offered for any repository. To undo: $WIKI_CMD extensions offer $n again"
+      ;;
+    again)
+      rm -f "$OFFER_DIR/$n.$key" "$OFFER_DIR/$n.never" 2>/dev/null || true
+      ui_item ok "$n can be offered for this repository again, at the start of a session."
+      ;;
+  esac
 }
 
 # __notice put <id> <folder> <branch or -> <text> | clear <id> | take <folder>
@@ -8622,6 +8781,12 @@ cmd_extensions() {
       fi
       return 0
       ;;
+    offer)
+      { [ $# -eq 3 ] || [ $# -eq 4 ]; } || die_usage "usage: $WIKI_CMD extensions offer <name> no|never|again [<folder>]"
+      case "$3" in no | never | again) ;; *) die_usage "usage: $WIKI_CMD extensions offer <name> no|never|again [<folder>]" ;; esac
+      offer_answer "$2" "$3" "${4:-}"
+      return 0
+      ;;
     setup)
       [ $# -eq 2 ] || die_usage "usage: $WIKI_CMD extensions setup <name>"
       ext_setup "$2"
@@ -8814,7 +8979,7 @@ cmd_complete() {
     open) [ "$i" -eq 2 ] && echo --data; [ "$i" -eq 3 ] && wiki_names ;;
     pages) [ "$i" -eq 2 ] && wiki_names; echo --data ;;
     extensions)
-      [ "$i" -eq 2 ] && printf 'path\nadd\nremove\nsetup\nsettings\nset\nlog\ntick\nevery\nschedule\n'
+      [ "$i" -eq 2 ] && printf 'path\nadd\nremove\nsetup\nsettings\nset\nlog\ntick\nevery\nschedule\noffer\n'
       if [ "$i" -eq 3 ] && { [ "${2:-}" = log ] || [ "${2:-}" = every ] || [ "${2:-}" = setup ] || [ "${2:-}" = settings ] || [ "${2:-}" = set ]; }; then extension_names; return 0; fi
       if [ "$i" -eq 4 ] && [ "${2:-}" = every ]; then echo default; return 0; fi
       if [ "$i" -eq 3 ] && [ "${2:-}" = schedule ]; then printf 'on\noff\nstatus\n'; return 0; fi
@@ -11151,6 +11316,7 @@ case "$cmd" in
   __ext-run) ext_run "$@" >/dev/null 2>&1 || true; exit 0 ;;
   # An extension leaves a line for the next session in a repository, and hooks take it.
   __notice) cmd_notice "$@"; exit 0 ;;
+  __offer) [ $# -eq 1 ] || die_usage "usage: __offer <folder>"; offer_lines "$1"; exit 0 ;;
   # A desktop notification, for an extension that has something to say now.
   __notify) cmd_notify "$@"; exit 0 ;;
   # The session hook asks for a wiki's reminders, to hand out at tool calls.

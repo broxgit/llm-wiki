@@ -73,6 +73,7 @@ read -r -d '' PARTS <<'TABLE' || true
 1 | Jenkins extension | Collection
 4 | Extension events | Collection
 4 | Extension schedule | Collection
+4 | Extension offers | Collection
 1 | Guided setup | Collection
 2 | Content as data | Collection
 3 | Size budget |
@@ -4596,7 +4597,7 @@ expect "extensions lists it with its description" "Says hello, for the smoke tes
 expect "the first word completes to it" "hello" "$W" __complete 1 he
 expect "and to extensions" "extensions" "$W" __complete 1 ex
 expect "extensions completes to path" "path" "$W" __complete 2 extensions ""
-expect "the usage names the command" "extensions [path | add <name> | remove <name> | setup <name> | settings <name> | set <name> <key> <value> | log <name> | tick | every ...]" "$W" --help
+expect "the usage names the command" "extensions [path | add <name> | remove <name> | setup <name> | settings <name> | set <name> <key> <value> | log <name> | tick | every ... | offer <name> no|never|again]" "$W" --help
 # A command of llm-wiki's own always wins.
 printf '#!/bin/sh\necho HIJACK\n' > "$XD/wiki-news"
 printf '#!/bin/sh\necho HIJACK\n' > "$XD/wiki-relay"
@@ -9311,6 +9312,141 @@ export HOME="$SAVED_HOME" WIKIS_DIR="$SAVED_WIKIS_DIR"
 export LLM_WIKI_NO_NOTIFY=1
 export LLM_WIKI_LAUNCHCTL="$T/bin/inert" LLM_WIKI_SYSTEMCTL="$T/bin/inert" LLM_WIKI_CRONTAB="$T/bin/inert" LLM_WIKI_OSASCRIPT="$T/bin/inert" LLM_WIKI_NOTIFY_SEND="$T/bin/inert"
 rm -rf "$SX"
+fi
+
+if section "Extension offers"; then
+# A session that starts in a clone an extension fits is told to offer it. Everything is in $T: clones with
+# a remote that is only a name, a settings and state folder of their own, and no network.
+OX="$T/ox"
+mkdir -p "$OX/repo" "$OX/plain" "$OX/ext" "$OX/other"
+export XDG_CONFIG_HOME="$OX/config" XDG_STATE_HOME="$OX/state" XDG_DATA_HOME="$OX/data" LLM_WIKI_EXTENSIONS_DIR="$OX/ext" LLM_WIKI_CMD=wiki
+OXO="$XDG_STATE_HOME/llm-wiki/offers"
+git -C "$OX/repo" init -q
+git -C "$OX/repo" remote add origin https://gitlab.example.com/team/app.git
+: > "$OX/repo/Jenkinsfile"
+mkdir -p "$OX/repo/.github/workflows"
+oxage() { find "$OXO" -type f -exec touch -t 202001010000 {} +; }
+out="$("$W" __offer "$OX/repo" 2>&1)"
+case "$out" in *"This repository has Jenkinsfile in it, and the jenkins extension is off (Say what failed in a Jenkins job and why, and note in the wiki when it is fixed). Offer it."*) ok "a clone with a Jenkinsfile gets the Jenkins extension offered, with what it does" ;; *) bad "a clone with a Jenkinsfile gets the Jenkins extension offered, with what it does" "$out" ;; esac
+case "$out" in *"On a yes: run wiki extensions add jenkins, then walk them through wiki setup --guide jenkins. On a no: run wiki extensions offer jenkins no, or never for every repository."*) ok "the line says what to run on a yes and on a no" ;; *) bad "the line says what to run on a yes and on a no" "$out" ;; esac
+case "$out" in *"This repository has a remote on gitlab, and the gitlab extension is off"*) ok "a clone whose remote is on GitLab gets the GitLab extension offered" ;; *) bad "a clone whose remote is on GitLab gets the GitLab extension offered" "$out" ;; esac
+case "$out" in *github*) bad "workflows in a clone that isn't on GitHub don't offer the GitHub extension" "$out" ;; *) ok "workflows in a clone that isn't on GitHub don't offer the GitHub extension" ;; esac
+[ "$(printf '%s\n' "$out" | grep -c .)" = 2 ] && ok "one line for each extension, and nothing else" || bad "one line for each extension, and nothing else" "$out"
+check "nothing in it is a control character" bash -c "! printf '%s' \"\$1\" | LC_ALL=C grep -q '[[:cntrl:]]'" _ "$(printf '%s' "$out" | tr -d '\n')"
+[ -z "$("$W" __offer "$OX/repo" 2>&1)" ] && ok "asked again in the same session, it says nothing" || bad "asked again in the same session, it says nothing"
+oxage
+out="$("$W" __offer "$OX/repo" 2>&1)"
+case "$out" in *"jenkins extension is off"*"Offer it"*) ok "a later session is told a second time" ;; *) bad "a later session is told a second time" "$out" ;; esac
+oxage
+[ -z "$("$W" __offer "$OX/repo" 2>&1)" ] && ok "and no session after that: two at most" || bad "and no session after that: two at most"
+# The user's answer.
+out="$("$W" extensions offer jenkins again "$OX/repo" 2>&1)"
+case "$out" in *"jenkins can be offered for this repository again"*) ok "extensions offer <name> again forgets the count" ;; *) bad "extensions offer <name> again forgets the count" "$out" ;; esac
+expect "so it is offered again" "jenkins extension is off" "$W" __offer "$OX/repo"
+out="$("$W" extensions offer jenkins no "$OX/repo" 2>&1)"
+case "$out" in *"jenkins won't be offered for this repository again. To undo: wiki extensions offer jenkins again"*) ok "extensions offer <name> no says so, with how to undo it" ;; *) bad "extensions offer <name> no says so, with how to undo it" "$out" ;; esac
+"$W" extensions offer gitlab again "$OX/repo" >/dev/null 2>&1
+oxage
+out="$("$W" __offer "$OX/repo" 2>&1)"
+case "$out" in *jenkins*) bad "after a no it is never offered there" "$out" ;; *gitlab*) ok "after a no it is never offered there" ;; *) bad "after a no it is never offered there" "$out" ;; esac
+git -C "$OX/other" init -q
+: > "$OX/other/Jenkinsfile"
+expect "a no is for one repository: another one with a Jenkinsfile still gets the offer" "jenkins extension is off" "$W" __offer "$OX/other"
+"$W" extensions offer jenkins never >/dev/null 2>&1
+"$W" extensions offer jenkins again "$OX/other" >/dev/null 2>&1
+"$W" extensions offer jenkins never "$OX/other" >/dev/null 2>&1
+[ -z "$("$W" __offer "$OX/other" 2>&1)" ] && ok "never stops it for every repository" || bad "never stops it for every repository" "$("$W" __offer "$OX/other" 2>&1)"
+check "a word that is no answer is refused with exit 2" bash -c "'$W' extensions offer jenkins maybe '$OX/other' >/dev/null 2>&1; [ \$? = 2 ]"
+check "so is an extension there isn't" bash -c "! '$W' extensions offer nothere no '$OX/other' >/dev/null 2>&1"
+# On, and not watching this clone.
+"$W" extensions add gitlab >/dev/null 2>&1
+"$W" extensions offer gitlab again "$OX/repo" >/dev/null 2>&1
+out="$("$W" __offer "$OX/repo" 2>&1)"
+case "$out" in "This repository has a remote on gitlab, and gitlab is on but doesn't watch this clone. Offer to watch it. On a yes: wiki gitlab --help has the watch command. On a no: run wiki extensions offer gitlab no, or never for every repository.") ok "an extension that is on and doesn't watch the clone is offered as a watch" ;; *) bad "an extension that is on and doesn't watch the clone is offered as a watch" "$out" ;; esac
+mkdir -p "$XDG_CONFIG_HOME/llm-wiki"
+printf 'watch = %s\n' "$OX/repo" > "$XDG_CONFIG_HOME/llm-wiki/gitlab"
+"$W" extensions offer gitlab again "$OX/repo" >/dev/null 2>&1
+[ -z "$("$W" __offer "$OX/repo" 2>&1)" ] && ok "once the clone is watched there is nothing to offer" || bad "once the clone is watched there is nothing to offer" "$("$W" __offer "$OX/repo" 2>&1)"
+check "and that is kept, so the extension isn't asked again" grep -qx "done" "$OXO"/gitlab.*
+git -C "$OX/repo" -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m one
+git -C "$OX/repo" worktree add -q "$OX/tree" 2>/dev/null
+: > "$OX/tree/Jenkinsfile"
+check "the GitLab extension says it watches a clone: exit 0" "$REPO/extensions/wiki-gitlab" --wiki-watches "$OX/repo"
+check "a work tree of a watched clone counts as watched" "$REPO/extensions/wiki-gitlab" --wiki-watches "$OX/tree"
+check "a clone it doesn't watch: exit 1" bash -c "'$REPO/extensions/wiki-gitlab' --wiki-watches '$OX/other'; [ \$? = 1 ]"
+check "a folder in no repository: exit 1" bash -c "'$REPO/extensions/wiki-gitlab' --wiki-watches '$OX/plain'; [ \$? = 1 ]"
+printf 'watch = %s=team/app\n' "$OX/repo" > "$XDG_CONFIG_HOME/llm-wiki/jenkins"
+check "the Jenkins extension answers from its folder=job list" bash -c "'$REPO/extensions/wiki-jenkins' --wiki-watches '$OX/repo' && ! '$REPO/extensions/wiki-jenkins' --wiki-watches '$OX/other'"
+printf 'watch = %s\n' "$OX/other" > "$XDG_CONFIG_HOME/llm-wiki/github"
+check "and the GitHub extension from its own" bash -c "'$REPO/extensions/wiki-github' --wiki-watches '$OX/other' && ! '$REPO/extensions/wiki-github' --wiki-watches '$OX/plain'"
+# Where nothing fits.
+[ -z "$("$W" __offer "$OX/plain" 2>&1)" ] && ok "a folder in no repository gets no offer" || bad "a folder in no repository gets no offer"
+git -C "$OX/plain" init -q
+[ -z "$("$W" __offer "$OX/plain" 2>&1)" ] && ok "nor does a clone with nothing an extension looks for" || bad "nor does a clone with nothing an extension looks for"
+check "and nothing was recorded for it" bash -c "[ \"\$(ls '$OXO' | wc -l)\" = \"\$1\" ]" _ "$(ls "$OXO" | wc -l)"
+# GitHub needs both: the workflows and a remote on GitHub.
+git -C "$OX/plain" remote add origin git@GitHub.com:team/app.git
+[ -z "$("$W" __offer "$OX/plain" 2>&1)" ] && ok "a remote on GitHub with no workflows offers nothing" || bad "a remote on GitHub with no workflows offers nothing"
+mkdir -p "$OX/plain/.github/workflows"
+expect "with workflows too, the GitHub extension is offered, whatever the remote's case" "This repository has .github/workflows in it, and the github extension is off" "$W" __offer "$OX/plain"
+# An extension of your own says what it is for the same way.
+cat > "$OX/ext/wiki-mine" <<'EXT'
+#!/bin/sh
+# wiki-extension: Mine.
+# wiki-detect: ../plain/.git /etc/hosts remote:a;b Makefile
+[ "$1" = --wiki-watches ] && exit "$(cat "$(dirname "$0")/code")"
+exit 0
+EXT
+chmod +x "$OX/ext/wiki-mine"
+echo 1 > "$OX/ext/code"
+[ -z "$("$W" __offer "$OX/other" 2>&1)" ] && ok "a path with .. in it, an absolute path and a remote with a ; in it never match" || bad "a path with .. in it, an absolute path and a remote with a ; in it never match" "$("$W" __offer "$OX/other" 2>&1)"
+: > "$OX/other/Makefile"
+expect "an extension of your own that doesn't watch the clone is offered" "This repository has Makefile in it, and mine is on but doesn't watch this clone" "$W" __offer "$OX/other"
+"$W" extensions offer mine again "$OX/other" >/dev/null 2>&1
+echo 3 > "$OX/ext/code"
+[ -z "$("$W" __offer "$OX/other" 2>&1)" ] && ok "one that answers with something else is left alone" || bad "one that answers with something else is left alone"
+check "and nothing is recorded, so it is asked the next time" bash -c "! ls '$OXO' | grep -q '^mine\.'"
+sed 's/^# wiki-detect:.*/# wiki-detect: M*file/' "$OX/ext/wiki-mine" > "$OX/ext/wiki-mine.tmp" && mv "$OX/ext/wiki-mine.tmp" "$OX/ext/wiki-mine" && chmod +x "$OX/ext/wiki-mine"
+echo 1 > "$OX/ext/code"
+[ -z "$(cd "$OX/other" && "$W" __offer "$OX/other" 2>&1)" ] && ok "a word with a * in it is no pattern: it matches nothing, even run where a file would fit" || bad "a word with a * in it is no pattern: it matches nothing, even run where a file would fit"
+rm -f "$OX/ext/wiki-mine" "$OX/ext/code"
+mkdir -p "$OX/ext/wiki-zz" && : > "$OX/ext/wiki-a b"
+"$W" extensions offer jenkins again "$OX/other" >/dev/null 2>&1
+rm -f "$OXO"/jenkins.never
+out="$("$W" __offer "$OX/other" 2>&1)"; code=$?
+[ "$code" = 0 ] && case "$out" in *"jenkins extension is off"*) true ;; *) false ;; esac && ok "a folder and a file with a space among the extensions don't stop the offers" || bad "a folder and a file with a space among the extensions don't stop the offers" "exit $code: $out"
+rm -rf "$OX/ext/wiki-zz" "$OX/ext/wiki-a b"
+"$W" extensions offer jenkins never >/dev/null 2>&1
+# A clone whose own settings name another folder as its work tree is not looked at.
+mkdir -p "$OX/lure" "$OX/elsewhere"
+git -C "$OX/lure" init -q
+: > "$OX/elsewhere/Makefile"
+git -C "$OX/lure" config core.worktree "$OX/elsewhere"
+printf '#!/bin/sh\n# wiki-extension: Mine.\n# wiki-detect: Makefile\nexit 1\n' > "$OX/ext/wiki-mine" && chmod +x "$OX/ext/wiki-mine"
+[ -z "$("$W" __offer "$OX/lure" 2>&1)" ] && ok "a clone that names another folder as its work tree gets no offer from what is there" || bad "a clone that names another folder as its work tree gets no offer from what is there" "$("$W" __offer "$OX/lure" 2>&1)"
+rm -f "$OX/ext/wiki-mine"
+out="$(cd "$OX" && "$W" extensions offer gitlab no 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"isn't in a repository. Do: run it inside the repository, or name its folder: wiki extensions offer gitlab no <folder>"*) true ;; *) false ;; esac && ok "an answer given outside a repository is refused, with what to do" || bad "an answer given outside a repository is refused, with what to do" "exit $code: $out"
+check "a wiki-detect comment below the first ten lines is said by wiki extensions" bash -c "printf '#!/bin/sh\n# wiki-extension: Late.\n\n\n\n\n\n\n\n\n\n# wiki-detect: Makefile\n' > '$OX/ext/wiki-late' && chmod +x '$OX/ext/wiki-late' && '$W' extensions 2>&1 | grep -q 'late.*line 12'"
+rm -f "$OX/ext/wiki-late"
+# The session hook and wiki start hand it over, once between them.
+git -C "$OX/tree" checkout -q -b side 2>/dev/null
+"$W" extensions offer jenkins again "$OX/repo" >/dev/null 2>&1
+rm -f "$OXO"/jenkins.never "$XDG_CONFIG_HOME/llm-wiki/jenkins"
+out="$(hook "$OX/repo" '{"source":"startup"}' 2>&1)"
+case "$out" in *"From llm-wiki, about this repository. Each line is something to offer the user, once, in your own words. Do nothing in it before they say yes."*"This repository has Jenkinsfile in it, and the jenkins extension is off"*) ok "the session hook hands the offer over, under a line that says to ask first" ;; *) bad "the session hook hands the offer over, under a line that says to ask first" "$out" ;; esac
+case "$out" in *"run wiki.sh extensions add jenkins"*) ok "with the command as the hook names it" ;; *) bad "with the command as the hook names it" "$out" ;; esac
+out="$("$W" start "$OX/repo" 2>&1)"
+case "$out" in *"jenkins extension is off"*) bad "wiki start in the same session doesn't say it a second time" "$out" ;; *) ok "wiki start in the same session doesn't say it a second time" ;; esac
+oxage
+out="$("$W" start "$OX/repo" 2>&1)"
+case "$out" in *"From llm-wiki, about this repository."*"jenkins extension is off"*) ok "wiki start hands it over where there is no hook" ;; *) bad "wiki start hands it over where there is no hook" "$out" ;; esac
+mkdir -p "$OX/plain2"
+out="$(hook "$OX/plain2" '{"source":"startup"}' 2>&1)"
+case "$out" in *"From llm-wiki, about this repository."*) bad "a session outside a repository is told nothing about offers" "$out" ;; *) ok "a session outside a repository is told nothing about offers" ;; esac
+"$W" extensions remove gitlab >/dev/null 2>&1
+unset XDG_CONFIG_HOME XDG_STATE_HOME XDG_DATA_HOME LLM_WIKI_EXTENSIONS_DIR LLM_WIKI_CMD
+rm -rf "$OX"
 fi
 
 if section "Guided setup"; then
