@@ -4,6 +4,12 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2027-01-01: wiki jenkins works out the job from the remote
+
+- Where jobs are named after the repository, set `job_pattern` once, such as `Platform/{path}`, and a clone with a `Jenkinsfile` needs no job named.
+- Watching a job by hand that is named after its remote prints the pattern to set. `wiki extensions setup jenkins` asks about it too.
+- `job_auto = yes` watches such a clone when a session starts in it. `job_remote` limits the pattern to your own group.
+
 ## 2026-12-31: an extension is offered where it fits
 
 - A session that starts in a repository with a `Jenkinsfile`, a GitLab remote or GitHub workflows offers you the extension for it, if you don't use it there.
