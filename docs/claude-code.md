@@ -99,8 +99,15 @@ Sessions started before you installed the plugin don't have it. Say "save this s
 
 ## Uninstall
 
+In a terminal, undo what setup did on this machine, then remove the plugin:
+
 ```
+wiki uninstall
 claude plugin uninstall llm-wiki@llm-wiki
 ```
 
-Your wikis in `~/wikis` stay as they are. Remove `~/.local/bin/wiki` too, since it points into the plugin.
+`wiki uninstall` asks before it changes anything, and `wiki uninstall --dry-run` only says what it would do. It takes away the background job, the `wiki` command's link, the tab completion line in your shell's startup file, the allow rules for wiki commands in `~/.claude/settings.json`, and the links to your wikis' skills. It moves llm-wiki's own settings to `~/llm-wiki-removed-<time>`, so nothing you set is lost: delete that folder when you are sure.
+
+Your wikis stay as they are. It lists what else it leaves and what to do about each: a plugin for Codex, Antigravity or Cursor, a token in your keychain, a line about the wiki in a project's own instructions.
+
+To start again from nothing and keep your wikis, run `wiki setup --fresh`: it does the same, then walks through setup as if for the first time.

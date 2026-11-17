@@ -77,6 +77,7 @@ read -r -d '' PARTS <<'TABLE' || true
 1 | Guided setup | Collection
 2 | Content as data | Collection
 3 | Size budget |
+3 | Uninstall | Collection
 3 | Tour |
 4 | The released helper | Session hook
 TABLE
@@ -9839,6 +9840,208 @@ case "$out" in *"From llm-wiki, about this repository."*) bad "a session outside
 "$W" extensions remove gitlab >/dev/null 2>&1
 unset XDG_CONFIG_HOME XDG_STATE_HOME XDG_DATA_HOME LLM_WIKI_EXTENSIONS_DIR LLM_WIKI_CMD
 rm -rf "$OX"
+fi
+
+if section "Uninstall"; then
+# Undoing what setup did, in a home of its own: every file here is made by this section, the system
+# tools are stand-ins, and the wikis are a folder that must come through untouched.
+UN="$T/un"
+UNH="$UN/home"
+UNW="$UN/wikis"
+UN_SAVED_HOME="$HOME"
+UN_SAVED_WIKIS_DIR="$WIKIS_DIR"
+mkdir -p "$UNH/.claude/skills" "$UNH/.local/bin" "$UNH/Library/LaunchAgents" "$UNW/global/skills/team-skill" "$UN/outside/skill" "$UN/bin"
+export HOME="$UNH" WIKIS_DIR="$UNW" LLM_WIKI_CMD=wiki LLM_WIKI_TEST_OS=darwin
+unset XDG_CONFIG_HOME XDG_STATE_HOME XDG_DATA_HOME
+printf '#!/bin/sh\necho "$*" >> "%s/launchctl.calls"\n' "$UN" > "$UN/bin/launchctl"; chmod +x "$UN/bin/launchctl"
+export LLM_WIKI_LAUNCHCTL="$UN/bin/launchctl"
+unw() { env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u CODEX_SANDBOX -u CODEX_CI -u GEMINI_CLI -u CURSOR_AGENT "$W" "$@"; }
+# unmake: a machine as setup leaves it, with things of the user's own beside each thing of llm-wiki's.
+unmake() {
+  rm -rf "$UNH/.config" "$UNH/.local/state" "$UNH/.local/share" "$UNH"/llm-wiki-removed-* "$UN/launchctl.calls" "$UNH"/.zshrc* "$UNH"/.claude/*.bak "$UNH/dotfiles" "$UNH/llm-wiki"
+  mkdir -p "$UNH/.config/llm-wiki" "$UNH/.local/state/llm-wiki/notices" "$UNH/.local/share/llm-wiki/extensions" "$UNH/.config/other-tool"
+  printf 'theme\n' > "$UNH/.config/llm-wiki/setup"
+  printf 'url = https://ci.example.com\n' > "$UNH/.config/llm-wiki/jenkins"
+  : > "$UNH/.local/state/llm-wiki/notices/x.notice"
+  : > "$UNH/.config/other-tool/keep"
+  ln -sfn "$REPO/wiki.sh" "$UNH/.local/bin/wiki"
+  printf '#!/bin/sh\n' > "$UNH/.local/bin/other"; chmod +x "$UNH/.local/bin/other"
+  ln -sfn "$UNW/global/skills/team-skill" "$UNH/.claude/skills/team-skill"
+  ln -sfn "$UN/outside/skill" "$UNH/.claude/skills/own-skill"
+  printf 'export EDITOR=vim\n[ -f "%s/.config/llm-wiki/completion.zsh" ] && source "%s/.config/llm-wiki/completion.zsh"\nexport PATH="$HOME/.local/bin:$PATH"\nalias wiki-notes="echo mine"\n' "$UNH" "$UNH" > "$UNH/.zshrc"
+  printf '{"permissions":{"allow":["Bash(wiki sync *)","Bash(npm test)","Bash(%s/wiki.sh capture *)","Bash(~/.claude/plugins/data/llm-wiki-llm-wiki/bin/wiki log *)","Bash(wiki-notes sync *)","Bash(wiki delete *)"],"deny":["Bash(rm *)"]},"model":"x"}\n' "$REPO" > "$UNH/.claude/settings.json"
+  printf '# Mine\n\nMy knowledge wikis live in ~/wikis, one folder per project. Wherever their handbooks say `wiki.sh`, run it.\n\nAnother line of mine.\n' > "$UNH/.claude/CLAUDE.md"
+  : > "$UNH/Library/LaunchAgents/io.github.llm-wiki.tick.plist"
+  : > "$UNH/Library/LaunchAgents/com.example.other.plist"
+  printf 'a page\n' > "$UNW/global/page.md"
+  printf '# Handbook\n' > "$UNW/global/AGENTS.md"; printf '# Index\n' > "$UNW/global/index.md"
+}
+unsum() { (cd "$UNW" && find . -type f -exec cksum {} + | sort); }
+unmake
+before="$(unsum)"
+tree_before="$(cd "$UNH" && find . | sort)"
+out="$(unw uninstall --dry-run 2>&1)"; code=$?
+[ "$code" = 0 ] && case "$out" in *"UNINSTALL  What would be undone on this machine"*"the background job that runs every few minutes (launchd)"*"the wiki command's link, ~/.local/bin/wiki"*"the tab completion line in ~/.zshrc"*"3 allow rule(s) for wiki commands in ~/.claude/settings.json"*"the wiki line in ~/.claude/CLAUDE.md"*"1 link(s) to your wikis' skills in ~/.claude/skills"*"~/.config/llm-wiki, moved to ~/llm-wiki-removed-"*"~/.local/state/llm-wiki, moved to"*"~/.local/share/llm-wiki, moved to"*) true ;; *) false ;; esac && ok "--dry-run lists each thing it would undo" || bad "--dry-run lists each thing it would undo" "exit $code: $out"
+case "$out" in *"KEPT  What is left as it is"*"Your wikis in "*"untouched."*"This copy of llm-wiki, in "*"The line that puts ~/.local/bin on your PATH"*"A token in your keychain"*) ok "and what it leaves, with the wikis first" ;; *) bad "and what it leaves, with the wikis first" "$out" ;; esac
+[ "$(cd "$UNH" && find . | sort)" = "$tree_before" ] && ok "--dry-run changes nothing" || bad "--dry-run changes nothing"
+check "--dry-run works from an agent's shell" env CLAUDECODE=1 "$W" uninstall --dry-run
+# Who may run it.
+out="$(printf 'y\n' | env CLAUDECODE=1 LLM_WIKI_TEST_TTY=1 "$W" uninstall 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"uninstall is a person's decision, so it isn't taken from an agent's shell. Do: run it yourself in a terminal: wiki uninstall."*) true ;; *) false ;; esac && ok "from an agent's shell it is refused, with what to do" || bad "from an agent's shell it is refused, with what to do" "exit $code: $out"
+out="$(unw uninstall </dev/null 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"there is no terminal to ask at. Do: run it in a terminal, or see what it would do: wiki uninstall --dry-run"*) true ;; *) false ;; esac && ok "with no terminal to ask at it is refused" || bad "with no terminal to ask at it is refused" "exit $code: $out"
+out="$(printf 'n\n' | LLM_WIKI_TEST_TTY=1 unw uninstall 2>&1)"
+case "$out" in *"Go ahead?"*"Nothing was changed."*) ok "it asks first, and a no changes nothing" ;; *) bad "it asks first, and a no changes nothing" "$out" ;; esac
+[ "$(cd "$UNH" && find . | sort)" = "$tree_before" ] && ok "after a no, every file is where it was" || bad "after a no, every file is where it was"
+out="$(printf '\n' | LLM_WIKI_TEST_TTY=1 unw uninstall 2>&1)"
+case "$out" in *"Nothing was changed."*) ok "Enter is a no" ;; *) bad "Enter is a no" "$out" ;; esac
+check "an option there isn't is a usage error" bash -c "'$W' uninstall --purge >/dev/null 2>&1; [ \$? = 2 ]"
+# A yes.
+out="$(printf 'y\n' | LLM_WIKI_TEST_TTY=1 unw uninstall 2>&1)"; code=$?
+[ "$code" = 0 ] && case "$out" in *"background job removed"*"removed ~/.local/bin/wiki"*"tab completion line taken out of ~/.zshrc"*"copy: ~/.zshrc.llm-wiki-"*"allow rules taken out of ~/.claude/settings.json"*"wiki line taken out of ~/.claude/CLAUDE.md"*"1 link(s) to your wikis' skills removed"*"settings moved to ~/llm-wiki-removed-"*"DONE  llm-wiki's set-up on this machine is undone"*) true ;; *) false ;; esac && ok "a yes undoes each thing and says so" || bad "a yes undoes each thing and says so" "exit $code: $out"
+[ "$(unsum)" = "$before" ] && ok "the wikis are byte for byte what they were" || bad "the wikis are byte for byte what they were"
+check "the background job's file is gone, and another program's is not" bash -c "[ ! -e '$UNH/Library/LaunchAgents/io.github.llm-wiki.tick.plist' ] && [ -e '$UNH/Library/LaunchAgents/com.example.other.plist' ]"
+check "the job was unloaded through launchctl" grep -q 'io.github.llm-wiki.tick' "$UN/launchctl.calls"
+check "the wiki link is gone, and another command in that folder is not" bash -c "[ ! -e '$UNH/.local/bin/wiki' ] && [ ! -L '$UNH/.local/bin/wiki' ] && [ -x '$UNH/.local/bin/other' ]"
+check "the startup file lost the completion line and kept every other line" bash -c "[ \"\$(cat '$UNH/.zshrc')\" = \"\$(printf 'export EDITOR=vim\nexport PATH=\"\$HOME/.local/bin:\$PATH\"\nalias wiki-notes=\"echo mine\"')\" ]"
+check "with a copy of how it was, named with the time" bash -c "grep -q 'completion.zsh' '$UNH'/.zshrc.llm-wiki-*.bak"
+check "the three allow rules for wiki commands are gone, and every other rule and setting is kept" python3 -c "
+import json, sys
+s = json.load(open(sys.argv[1]))
+sys.exit(0 if s == {'permissions': {'allow': ['Bash(npm test)', 'Bash(wiki-notes sync *)', 'Bash(wiki delete *)'], 'deny': ['Bash(rm *)']}, 'model': 'x'} else 1)" "$UNH/.claude/settings.json"
+check "with a copy of how it was, named with the time" bash -c "grep -q 'wiki sync' '$UNH'/.claude/settings.json.llm-wiki-*.bak"
+check "CLAUDE.md lost the wiki line and kept the rest" bash -c "! grep -q 'knowledge wikis live in' '$UNH/.claude/CLAUDE.md' && grep -q 'Another line of mine' '$UNH/.claude/CLAUDE.md' && grep -q 'knowledge wikis live in' '$UNH'/.claude/CLAUDE.md.llm-wiki-*.bak"
+check "the link to a wiki's skill is gone, the skill itself is not, and a skill from elsewhere stays linked" bash -c "[ ! -L '$UNH/.claude/skills/team-skill' ] && [ -d '$UNW/global/skills/team-skill' ] && [ -L '$UNH/.claude/skills/own-skill' ]"
+aside="$(ls -d "$UNH"/llm-wiki-removed-* 2>/dev/null | head -n 1)"
+check "the settings, state and data are moved, not deleted: every file is in the folder it names" bash -c "[ -f '$aside/settings/jenkins' ] && [ -f '$aside/state/notices/x.notice' ] && [ -d '$aside/data/extensions' ] && [ ! -e '$UNH/.config/llm-wiki' ] && [ ! -e '$UNH/.local/state/llm-wiki' ] && [ ! -e '$UNH/.local/share/llm-wiki' ]"
+check "another tool's settings beside them are untouched" test -f "$UNH/.config/other-tool/keep"
+out="$(unw uninstall --dry-run 2>&1)"
+case "$out" in *"UNINSTALL  Nothing of llm-wiki's is set up on this machine"*) ok "run again, there is nothing left to undo" ;; *) bad "run again, there is nothing left to undo" "$out" ;; esac
+check "and a second yes changes nothing more" bash -c "printf 'y\n' | LLM_WIKI_TEST_TTY=1 env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT '$W' uninstall >/dev/null 2>&1 && [ \"\$(ls -d '$UNH'/llm-wiki-removed-* | wc -l | tr -d ' ')\" = 1 ]"
+# Putting it back is one move each.
+mv "$aside/settings" "$UNH/.config/llm-wiki"; mv "$aside/state" "$UNH/.local/state/llm-wiki"; mv "$aside/data" "$UNH/.local/share/llm-wiki"
+check "moved back, the settings are read as before" bash -c "grep -q 'ci.example.com' '$UNH/.config/llm-wiki/jenkins'"
+# What isn't llm-wiki's is never taken.
+unmake
+rm -f "$UNH/.local/bin/wiki"; printf '#!/bin/sh\necho mine\n' > "$UNH/.local/bin/wiki"; chmod +x "$UNH/.local/bin/wiki"
+printf 'y\n' | LLM_WIKI_TEST_TTY=1 unw uninstall >/dev/null 2>&1
+check "a command called wiki that isn't a link to llm-wiki is left alone" bash -c "[ -x '$UNH/.local/bin/wiki' ] && grep -q 'echo mine' '$UNH/.local/bin/wiki'"
+unmake
+ln -sfn "$UN/outside/skill" "$UNH/.local/bin/wiki"
+printf 'not json' > "$UNH/.claude/settings.json"
+printf 'y\n' | LLM_WIKI_TEST_TTY=1 unw uninstall >/dev/null 2>&1
+check "a link called wiki that leads somewhere else is left alone" test -L "$UNH/.local/bin/wiki"
+check "a settings file that can't be read as JSON is left as it is" bash -c "[ \"\$(cat '$UNH/.claude/settings.json')\" = 'not json' ]"
+# What a review found: states where the cautious thing is to leave it.
+unmake
+mkdir -p "$UNH/dotfiles/skills/mine"
+mv "$UNH/.zshrc" "$UNH/dotfiles/zshrc"; ln -s "$UNH/dotfiles/zshrc" "$UNH/.zshrc"
+printf 'my own backup\n' > "$UNH/.claude/settings.json.bak"
+printf 'my own backup\n' > "$UNH/.claude/CLAUDE.md.bak"
+printf '# Notes\n\nA note of mine: my knowledge wikis live in a shed.\nMy knowledge wikis live in Obsidian, which I like.\nMy knowledge wikis live in ~/wikis, one folder per project. Wherever their handbooks say `wiki.sh`, run it.\n' > "$UNH/.claude/CLAUDE.md"
+python3 -c "import json, sys; p = sys.argv[1]; s = json.load(open(p)); s['permissions']['allow'] += ['Bash(/opt/other/bin/wiki sync *)', 'Bash(/srv/tool/wiki.sh sync *)']; json.dump(s, open(p, 'w'))" "$UNH/.claude/settings.json"
+printf 'y\n' | LLM_WIKI_TEST_TTY=1 unw uninstall >/dev/null 2>&1
+check "a startup file that is a link stays a link, and the file it leads to lost the line" bash -c "[ -L '$UNH/.zshrc' ] && ! grep -q 'completion.zsh' '$UNH/dotfiles/zshrc' && grep -q 'EDITOR=vim' '$UNH/dotfiles/zshrc'"
+check "a backup of your own beside a file is never written over" bash -c "[ \"\$(cat '$UNH/.claude/settings.json.bak')\" = 'my own backup' ] && [ \"\$(cat '$UNH/.claude/CLAUDE.md.bak')\" = 'my own backup' ]"
+check "lines of your own about your wikis are kept, even one that starts as setup's does, and setup's line is taken" bash -c "grep -q 'in a shed' '$UNH/.claude/CLAUDE.md' && grep -q 'live in Obsidian' '$UNH/.claude/CLAUDE.md' && ! grep -q 'wiki.sh' '$UNH/.claude/CLAUDE.md'"
+check "an allow rule for another program called wiki is kept" bash -c "grep -q '/opt/other/bin/wiki sync' '$UNH/.claude/settings.json' && grep -q '/srv/tool/wiki.sh sync' '$UNH/.claude/settings.json' && ! grep -q 'Bash(wiki sync' '$UNH/.claude/settings.json'"
+# A collection that is the home folder is no way to tell whose a skill link is.
+unmake
+mkdir -p "$UNH/dotfiles/skills/mine"
+ln -sfn "$UNH/dotfiles/skills/mine" "$UNH/.claude/skills/mine"
+printf 'y\n' | WIKIS_DIR="$UNH" LLM_WIKI_TEST_TTY=1 unw uninstall >/dev/null 2>&1
+check "with the home folder as the collection, a skill link of your own is not removed" test -L "$UNH/.claude/skills/mine"
+rm -f "$UNH/.claude/skills/mine"
+# A folder of llm-wiki's that holds a wiki collection is left where it is.
+unmake
+mkdir -p "$UNH/.local/share/llm-wiki/wikis/global"
+printf 'a page\n' > "$UNH/.local/share/llm-wiki/wikis/global/page.md"
+out="$(printf 'y\n' | WIKIS_DIR="$UNH/.local/share/llm-wiki/wikis" LLM_WIKI_TEST_TTY=1 unw uninstall 2>&1)"
+case "$out" in *"~/.local/share/llm-wiki: left where it is, because it holds your wikis in ~/.local/share/llm-wiki/wikis."*|*"~/.local/share/llm-wiki: left where it is, because there is a wiki in it."*) ok "a folder that holds your wikis is left where it is, and it says why" ;; *) bad "a folder that holds your wikis is left where it is, and it says why" "$out" ;; esac
+check "the wikis in it are where they were" test -f "$UNH/.local/share/llm-wiki/wikis/global/page.md"
+check "and the other two folders were still moved" bash -c "[ ! -e '$UNH/.config/llm-wiki' ] && [ ! -e '$UNH/.local/state/llm-wiki' ]"
+# A wiki in one of its folders that no list of collections names is found by looking.
+unmake
+mkdir -p "$UNH/.local/state/llm-wiki/My Wikis/notes"
+printf '# H\n' > "$UNH/.local/state/llm-wiki/My Wikis/notes/AGENTS.md"; printf '# I\n' > "$UNH/.local/state/llm-wiki/My Wikis/notes/index.md"
+out="$(printf 'y\n' | LLM_WIKI_TEST_TTY=1 unw uninstall 2>&1)"
+case "$out" in *"~/.local/state/llm-wiki: left where it is, because there is a wiki in it."*) ok "a folder with a wiki in it that no collection names is still left, and it says why" ;; *) bad "a folder with a wiki in it that no collection names is still left, and it says why" "$out" ;; esac
+check "that wiki is where it was" test -f "$UNH/.local/state/llm-wiki/My Wikis/notes/index.md"
+# A collection reached through a link is still seen to be inside.
+unmake
+mkdir -p "$UN/real-share/llm-wiki/extensions" "$UN/real-share/llm-wiki/col/w"
+rm -rf "$UNH/.local/share"; ln -s "$UN/real-share" "$UNH/.local/share"
+out="$(printf 'y\n' | WIKIS_DIR="$UN/real-share/llm-wiki/col" LLM_WIKI_TEST_TTY=1 unw uninstall 2>&1)"
+case "$out" in *"~/.local/share/llm-wiki: left where it is, because it holds your wikis in "*) ok "a collection inside it by another path, through a link, is still seen" ;; *) bad "a collection inside it by another path, through a link, is still seen" "$out" ;; esac
+check "and it is where it was" test -d "$UN/real-share/llm-wiki/col/w"
+rm -f "$UNH/.local/share"; rm -rf "$UN/real-share"
+# A list of collections that can't be read: nothing is moved.
+if [ "$(id -u)" != 0 ]; then
+  unmake
+  printf 'work\t%s\n' "$UN/elsewhere" > "$UNH/.config/llm-wiki/collections"; chmod 000 "$UNH/.config/llm-wiki/collections"
+  out="$(printf 'y\n' | LLM_WIKI_TEST_TTY=1 unw uninstall 2>&1)"; code=$?
+  chmod 600 "$UNH/.config/llm-wiki/collections"
+  case "$out" in *"left where it is, because the list of your collections can't be read"*) ok "when the list of collections can't be read, no folder is moved, and it says why" ;; *) bad "when the list of collections can't be read, no folder is moved, and it says why" "exit $code: $out" ;; esac
+  check "the settings are where they were" test -f "$UNH/.config/llm-wiki/jenkins"
+else
+  ok "when the list of collections can't be read, no folder is moved (not checked as root)"
+  ok "the settings are where they were (not checked as root)"
+fi
+# A skill link into a folder that is in the collection's folder but is no wiki is not llm-wiki's.
+unmake
+mkdir -p "$UNW/some-project/skills/tool"
+ln -sfn "$UNW/some-project/skills/tool" "$UNH/.claude/skills/tool"
+printf 'y\n' | LLM_WIKI_TEST_TTY=1 unw uninstall >/dev/null 2>&1
+check "a skill link into a folder beside the wikis that is no wiki is kept" test -L "$UNH/.claude/skills/tool"
+rm -f "$UNH/.claude/skills/tool"; rm -rf "$UNW/some-project"
+# Two runs in a second never write one copy over another.
+unmake
+: > "$UNH/.zshrc.llm-wiki-$(date +%Y%m%d-%H%M%S).bak"; : > "$UNH/.zshrc.llm-wiki-$(date -v+1S +%Y%m%d-%H%M%S 2>/dev/null || date -d '+1 second' +%Y%m%d-%H%M%S).bak"
+printf 'y\n' | LLM_WIKI_TEST_TTY=1 unw uninstall >/dev/null 2>&1
+check "a copy is never written over a file that is already there" bash -c "n=0; for f in '$UNH'/.zshrc.llm-wiki-*.bak; do [ -s \"\$f\" ] && n=\$((n + 1)); done; [ \"\$n\" = 1 ] && [ \"\$(ls '$UNH'/.zshrc.llm-wiki-*.bak | wc -l | tr -d ' ')\" -ge 2 ]"
+# A folder called llm-wiki that holds nothing of llm-wiki's is somebody else's.
+unmake
+mkdir -p "$UNH/llm-wiki"; printf 'my notes\n' > "$UNH/llm-wiki/notes.txt"
+out="$(printf 'y\n' | XDG_DATA_HOME="$UNH" LLM_WIKI_TEST_TTY=1 unw uninstall 2>&1)"
+case "$out" in *"~/llm-wiki: left where it is, because nothing in it is something llm-wiki keeps there."*) ok "a folder with that name and nothing of llm-wiki's in it is left, and it says why" ;; *) bad "a folder with that name and nothing of llm-wiki's in it is left, and it says why" "$out" ;; esac
+check "and it is untouched" bash -c "[ \"\$(cat '$UNH/llm-wiki/notes.txt')\" = 'my notes' ]"
+# Something that can't be undone is said, the rest goes on, and it ends as unfinished.
+unmake
+mkdir -p "$UN/ro"; chmod 500 "$UN/ro"
+unmake
+out="$(printf 'y\n' | LLM_WIKI_REMOVED_DIR="$UN/ro" LLM_WIKI_TEST_TTY=1 unw uninstall 2>&1)"; code=$?
+chmod 700 "$UN/ro"
+if [ "$(id -u)" = 0 ]; then
+  ok "when the settings can't be moved it exits 1 and says so (not checked as root, which can write anywhere)"
+  ok "the settings are still where they were (not checked as root)"
+  ok "and what could be undone was (not checked as root)"
+else
+  [ "$code" = 1 ] && case "$out" in *"couldn't make "*"so the settings are where they were"*"UNFINISHED  Some of it could not be undone."*) true ;; *) false ;; esac && ok "when the settings can't be moved it exits 1 and says so" || bad "when the settings can't be moved it exits 1 and says so" "exit $code: $out"
+  check "the settings are still where they were" test -f "$UNH/.config/llm-wiki/jenkins"
+  check "and what could be undone was" bash -c "[ ! -L '$UNH/.local/bin/wiki' ]"
+  unmake
+  mkdir -p "$UN/ro"; chmod 500 "$UN/ro"
+  out="$(printf 'y\n' | LLM_WIKI_REMOVED_DIR="$UN/ro" LLM_WIKI_TEST_TTY=1 unw setup --fresh 2>&1)"; code=$?
+  chmod 700 "$UN/ro"
+  [ "$code" = 1 ] && case "$out" in *"the old set-up is only partly undone, so setup wasn't started."*) true ;; *) false ;; esac && ok "setup --fresh stops there, and doesn't start setup on half-undone settings" || bad "setup --fresh stops there, and doesn't start setup on half-undone settings" "exit $code: $(printf '%s' "$out" | tail -4)"
+  case "$out" in *"Setup for "*) bad "so setup's first line is never printed" "$out" ;; *) ok "so setup's first line is never printed" ;; esac
+fi
+# setup --fresh: the same, then setup from the start.
+unmake
+check "--fresh takes no section" bash -c "LLM_WIKI_TEST_TTY=1 '$W' setup --fresh journal </dev/null >/dev/null 2>&1; [ \$? = 2 ]"
+out="$(printf 'n\n' | LLM_WIKI_TEST_TTY=1 unw setup --fresh 2>&1)"
+case "$out" in *"Nothing was changed."*) ok "setup --fresh asks first, and a no stops there" ;; *) bad "setup --fresh asks first, and a no stops there" "$out" ;; esac
+case "$out" in *"Setup for "*) bad "after a no, setup doesn't start" "$out" ;; *) ok "after a no, setup doesn't start" ;; esac
+check "and nothing was moved" test -f "$UNH/.config/llm-wiki/setup"
+out="$(printf 'y\n' | LLM_WIKI_TEST_TTY=1 unw setup --fresh 2>&1 || true)"
+case "$out" in *"DONE  llm-wiki's set-up on this machine is undone"*"Setup for "*) ok "after a yes it undoes the set-up, then starts setup" ;; *) bad "after a yes it undoes the set-up, then starts setup" "$(printf '%s' "$out" | tail -5)" ;; esac
+case "$out" in *"claude plugin uninstall"*|*"Delete the folder to remove it."*) bad "and doesn't tell you to remove the program you are about to set up" "$out" ;; *) ok "and doesn't tell you to remove the program you are about to set up" ;; esac
+check "the old record of what setup had asked is in the folder moved aside, not where setup reads it" bash -c "ls '$UNH'/llm-wiki-removed-*/settings/setup >/dev/null 2>&1 && ! grep -qx theme '$UNH/.config/llm-wiki/setup' 2>/dev/null"
+# Setup itself may add to a collection (a git folder, a shared wiki), so here only what was there is compared.
+check "every file the wikis had is still there, unchanged" bash -c "cd '$UNW' && printf '%s\n' \"\$1\" | while read -r sum size name; do [ \"\$(cksum \"\$name\")\" = \"\$sum \$size \$name\" ] || exit 1; done" _ "$before"
+export HOME="$UN_SAVED_HOME" WIKIS_DIR="$UN_SAVED_WIKIS_DIR" LLM_WIKI_LAUNCHCTL="$T/bin/inert"
+unset LLM_WIKI_CMD LLM_WIKI_TEST_OS
+rm -rf "$UN"
 fi
 
 if section "Guided setup"; then
