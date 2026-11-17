@@ -415,6 +415,7 @@ def fetch(folder, info):
     budget()
     listed = glab_json(f"projects/:id/merge_requests?scope=created_by_me&state=opened&per_page={MAX_MRS}",
                        "list your open merge requests", cwd=folder, soft=True)
+    info["mrs_listed"] = isinstance(listed, list)
     for m in (listed if isinstance(listed, list) else [])[:MAX_MRS]:
         if not isinstance(m, dict):
             continue
@@ -630,6 +631,18 @@ def cmd_config(args):
 # ---- comments on merge requests ------------------------------------------------------------------
 
 USER_OK = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,59}$")
+PATH_OK = re.compile(r"[A-Za-z0-9._/@+-]{1,200}")
+NAMES = 5                            # people named in one line
+
+
+def names(who):
+    """The people in a line: the first few, and how many more."""
+    who = sorted(who)
+    return ", ".join(who[:NAMES]) + (f" and {len(who) - NAMES} more" if len(who) > NAMES else "")
+
+
+def same_user(a, b):
+    return bool(a) and bool(b) and a.lower() == b.lower()
 
 
 def count_or_none(v):
@@ -667,7 +680,8 @@ def notes_of(folder, iid):
         line = int_or_none(pos.get("new_line"))
         out.append({"id": nid, "who": user_of(r.get("author")), "when": iso_z(clean(r.get("created_at") or "", 40)),
                     "body": r.get("body") if isinstance(r.get("body"), str) else "",
-                    "path": clean(path, 200) if isinstance(path, str) else "",
+                    # A path is shown on the program's own line, so only one made of a path's usual characters is.
+                    "path": (path if PATH_OK.fullmatch(path) else "a file") if isinstance(path, str) and path else "",
                     "line": line if line is not None else int_or_none(pos.get("old_line")),
                     "resolved": r.get("resolvable") is True and r.get("resolved") is True})
     return out
@@ -709,6 +723,8 @@ def tick_comments(folder, info, conf):
     request only notes where it stands, so old comments are never news. A merge request that is no longer open has its
     line taken away."""
     repo = info["name"]
+    if not info.get("mrs_listed"):
+        return True     # the list couldn't be read: nothing is known to be closed
     book = comment_book(repo)
     mrs = info.get("mrs", {})
     ok = True
@@ -728,19 +744,19 @@ def tick_comments(folder, info, conf):
         newest = max([n["id"] for n in notes], default=0)
         first = prev is None
         told = 0 if first else (int_or_none(prev.get("told")) or 0)
-        fresh = [] if first else [n for n in notes if n["id"] > told and not n["resolved"] and not (n["who"] and n["who"] == m["me"])]
+        fresh = [] if first else [n for n in notes if n["id"] > told and not n["resolved"] and not same_user(n["who"], m["me"])]
         if not record(repo, key, comment_entry(repo, key, m["branch"], m["notes"], max(newest, told), 0)):
             ok = False
             continue
         if not fresh:
             continue
-        who = sorted({n["who"] or "someone" for n in fresh})
+        who = names({n["who"] or "someone" for n in fresh})
         many = f"{len(fresh)} or more" if len(notes) >= MAX_NOTES and len(fresh) == len(notes) else str(len(fresh))
-        print(f"{repo}: {many} new comment(s) on merge request !{iid} from {', '.join(who)}")
-        text = clean(f"{many} new comment(s) on your merge request !{iid} from {', '.join(who)}. Read them: {CMD} gitlab comments {iid}", 590)
+        print(f"{repo}: {many} new comment(s) on merge request !{iid} from {who}")
+        text = clean(f"{many} new comment(s) on your merge request !{iid} from {who}. Read them: {CMD} gitlab comments {iid}", 590)
         cc.put_notice(notice_id(repo, key), folder, m["branch"], text)
         if conf["desktop"]:
-            cc.notify_desktop(f"New comments: {repo}", f"!{iid}: {many} from {', '.join(who)}")
+            cc.notify_desktop(f"New comments: {repo}", f"!{iid}: {many} from {who}")
     return ok
 
 
@@ -809,7 +825,7 @@ def cmd_comments(args):
             key = comment_key(iid)
             prev = book.get(key) if isinstance(book.get(key), dict) else {}
             read = int_or_none(prev.get("read")) or 0
-            theirs = [n for n in notes if not (n["who"] and n["who"] == m["me"])]
+            theirs = [n for n in notes if not same_user(n["who"], m["me"])]
             show = theirs if show_all else [n for n in theirs if n["id"] > read and not n["resolved"]]
             if show:
                 if not any_shown:
