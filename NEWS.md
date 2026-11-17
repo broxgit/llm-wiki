@@ -9,6 +9,12 @@ Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title i
 - Setting up Jenkins now tests the sign-in and says in its summary whether it works, and as whom.
 - It looks at what you saved as the token first. A wrong paste is caught there, with a chance to paste again, and is never sent to Jenkins.
 - When Jenkins refuses the sign-in and the user isn't an email address, it says that may be the cause.
+## 2027-01-07: the guided setup, after a real run
+
+- Where your agent can show a question with answers to pick from, as Claude Code can, the guided setup asks that way, with its own pick first.
+- It makes `wiki` a command first, and then says `wiki`, not a long path nobody can type.
+- The journal's settings are one question, keep them as they are or not, where they were fourteen. `wiki journal keep` is the yes.
+- For a step only you can do in a terminal, the agent can offer to start it there for you to answer.
 
 ## 2027-01-06: wiki uninstall covers Codex, Antigravity, Cursor and the Claude app
 
