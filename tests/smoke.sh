@@ -78,6 +78,7 @@ read -r -d '' PARTS <<'TABLE' || true
 2 | Content as data | Collection
 3 | Size budget |
 3 | Uninstall | Collection
+3 | What CI skips |
 3 | Tour |
 4 | The released helper | Session hook
 TABLE
@@ -10042,6 +10043,33 @@ check "every file the wikis had is still there, unchanged" bash -c "cd '$UNW' &&
 export HOME="$UN_SAVED_HOME" WIKIS_DIR="$UN_SAVED_WIKIS_DIR" LLM_WIKI_LAUNCHCTL="$T/bin/inert"
 unset LLM_WIKI_CMD LLM_WIKI_TEST_OS
 rm -rf "$UN"
+fi
+
+if section "What CI skips"; then
+# scripts/ci-changes.sh says whether a change needs this suite. It says no only for files
+# nothing reads, and yes whenever it can't be sure.
+cic() { printf '%s\n' "$@" | "$REPO/scripts/ci-changes.sh"; }
+RM="ROAD""MAP.md"
+RS="docs/rese""arch"
+[ "$(cic "$RM")" = false ] && ok "a change to the roadmap alone needs no suite" || bad "a change to the roadmap alone needs no suite" "$(cic "$RM")"
+[ "$(cic "$RM" "$RS/notes/a.md")" = false ] && ok "nor one to the roadmap and the research folder" || bad "nor one to the roadmap and the research folder"
+[ "$(cic "$RM" wiki.sh)" = true ] && ok "one file that is read, among those that aren't, needs it" || bad "one file that is read, among those that aren't, needs it"
+for f in NEWS.md CHANGELOG.md README.md AGENTS.md template/AGENTS.md docs/using.md docs/maintaining.md tests/smoke.sh .github/workflows/ci.yml scripts/ci-changes.sh "sub/$RM" "${RS}x/a.md" "$RS"; do
+  [ "$(cic "$f")" = true ] && ok "$f needs the suite" || bad "$f needs the suite" "$(cic "$f")"
+done
+[ "$(printf '' | "$REPO/scripts/ci-changes.sh")" = true ] && ok "no files at all is not a reason to skip" || bad "no files at all is not a reason to skip"
+[ "$(printf '\n\n' | "$REPO/scripts/ci-changes.sh")" = true ] && ok "nor are blank lines" || bad "nor are blank lines"
+[ "$(cic "$RM " )" = true ] && ok "a name that only looks like one on the list needs it" || bad "a name that only looks like one on the list needs it"
+# The list is only right while nothing reads those files.
+check "no command, hook, script or other test reads the roadmap or the research folder" bash -c "! grep -l -e '$RM' -e '$RS' '$REPO/wiki.sh' '$REPO/ui.sh' '$REPO'/hooks/* '$REPO/scripts/gallery.sh' '$REPO/scripts/helper.sh' '$REPO/scripts/migrate-to-plugin.sh' '$REPO/tests/budget.sh' '$REPO/tests/ui-lint.sh' '$REPO/tests/smoke-parts.sh' '$REPO/mcp/server.py' 2>/dev/null | grep -q ."
+check "nor does the compiled helper" bash -c "! grep -rl -e '$RM' -e '$RS' '$REPO/cmd' '$REPO/internal' 2>/dev/null | grep -q ."
+# The workflow uses it, runs once for a pull request's commit, and can't pass a suite that was needed and didn't run.
+CIY="$REPO/.github/workflows/ci.yml"
+check "CI asks the script what a change needs" grep -q 'scripts/ci-changes.sh)' "$CIY"
+check "a push runs CI only on main, so a pull request's commit runs it once" bash -c "sed -n '/^on:/,/^jobs:/p' '$CIY' | tr -d ' \n' | grep -q 'push:branches:\[main\]pull_request:'"
+check "the suite's jobs wait for that answer" bash -c "[ \"\$(grep -c \"if: needs.changes.outputs.suite == 'true'\" '$CIY')\" = 3 ]"
+check "the required check passes only when the suite passed, or wasn't needed and was skipped" bash -c "grep -q 'if \[ \"\$SMOKE\" = success \]; then exit 0; fi' '$CIY' && grep -q '\[ \"\$CHANGES\" = success \] && \[ \"\$SUITE\" = false \] && \[ \"\$SMOKE\" = skipped \]' '$CIY'"
+check "lint is never skipped: it waits for nothing and has no condition" bash -c "! sed -n '/^  lint:/,/^  go:/p' '$CIY' | grep -q 'needs:\|^    if:'"
 fi
 
 if section "Guided setup"; then
