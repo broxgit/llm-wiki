@@ -8192,6 +8192,107 @@ check "so is one that stands for a control character" jkexits 2 jkw check "$JK/j
 check "a % with no two hex digits after it" jkexits 2 jkw check "$JK/jkdemo" 'team/a%2'
 check "and escapes that read as .. between slashes" jkexits 2 jkw check "$JK/jkdemo" 'team/a%2F%2E%2E%2Fb'
 check "and none of those reached Jenkins" test ! -s "$JK/requests.log"
+# A job worked out from the clone's remote: job_pattern.
+cp "$JKCF" "$JK/jenkins.pat"
+mkdir -p "$JK/pat" "$JK/patother" "$JK/patnofile"
+for d in pat patother patnofile; do git -C "$JK/$d" init -q; done
+git -C "$JK/pat" remote add origin git@gitlab.example.com:grp/sub/app.git
+git -C "$JK/patother" remote add origin https://elsewhere.example.com/grp/sub/app.git
+git -C "$JK/patnofile" remote add origin git@gitlab.example.com:grp/sub/app.git
+: > "$JK/pat/Jenkinsfile"; : > "$JK/patother/Jenkinsfile"
+PATTOP="$(cd "$JK/pat" && pwd -P)"
+out="$(jkw watch "$JK/pat" 'Platform/grp%2Fsub%2Fapp' 2>&1)"
+case "$out" in *"This job is named after the clone's remote."*"wiki extensions set jenkins job_pattern 'Platform/{path}'"*) ok "a job watched by hand that is named after the remote's path suggests the pattern" ;; *) bad "a job watched by hand that is named after the remote's path suggests the pattern" "$out" ;; esac
+jkw unwatch "$JK/pat" >/dev/null 2>&1
+out="$(jkw watch "$JK/pat" 'Platform/grp/sub/app' 2>&1)"
+case "$out" in *"job_pattern 'Platform/{folders}'"*) ok "one that is the path as folders suggests {folders}" ;; *) bad "one that is the path as folders suggests {folders}" "$out" ;; esac
+jkw unwatch "$JK/pat" >/dev/null 2>&1
+lacks "a job that isn't named after the remote suggests nothing" "job_pattern" jkw watch "$JK/pat" team/app
+jkw unwatch "$JK/pat" >/dev/null 2>&1
+check "watch with no job and no pattern is a usage error" jkexits 2 jkw watch "$JK/pat"
+check "a pattern with no placeholder is refused: it would name one job for every clone" jkexits 2 "$W" extensions set jenkins job_pattern Platform/app
+check "so is one with .. in it" jkexits 2 "$W" extensions set jenkins job_pattern '../{path}'
+check "one with a placeholder there isn't" jkexits 2 "$W" extensions set jenkins job_pattern 'Platform/{branch}'
+check "and one with a character no job path has" jkexits 2 "$W" extensions set jenkins job_pattern 'Platform/{path};x'
+check "job_remote with a character no address has is refused" jkexits 2 "$W" extensions set jenkins job_remote 'gitlab.example.com/grp;x'
+check "a session sets the pattern" "$W" extensions set jenkins job_pattern 'Platform/{path}'
+check "and it is kept as written" grep -qx 'job_pattern = Platform/{path}' "$JKCF"
+lacks "with a pattern set, a job watched by hand suggests nothing more" "job_pattern" jkw watch "$JK/pat" team/app
+jkw unwatch "$JK/pat" >/dev/null 2>&1
+: > "$JK/requests.log"
+out="$(jkw check "$JK/pat" 2>&1)"
+case "$out" in "== Platform/grp%2Fsub%2Fapp  (Jenkins)"*) ok "check in an unwatched clone with a Jenkinsfile uses the job the pattern names" ;; *) bad "check in an unwatched clone with a Jenkinsfile uses the job the pattern names" "$out" ;; esac
+check "and asks Jenkins for exactly that job" grep -q '^GET /job/Platform/job/grp%252Fsub%252Fapp/api/json' "$JK/requests.log"
+check "a clone with no Jenkinsfile gets no job from the pattern" bash -c "! WIKIS_DIR='$JKW' '$W' jenkins check '$JK/patnofile' >/dev/null 2>&1"
+out="$(jkw watch "$JK/pat" 2>&1)"
+case "$out" in "Watching $PATTOP for the Jenkins job Platform/grp%2Fsub%2Fapp."*) ok "watch with no job watches the one the pattern names" ;; *) bad "watch with no job watches the one the pattern names" "$out" ;; esac
+jkw unwatch "$JK/pat" >/dev/null 2>&1
+"$W" extensions set jenkins job_pattern 'ci/{folders}/{name}' >/dev/null 2>&1
+expect "{folders} and {name} are the path as folders and its last part" "for the Jenkins job ci/grp/sub/app/app." jkw watch "$JK/pat"
+jkw unwatch "$JK/pat" >/dev/null 2>&1
+"$W" extensions set jenkins job_pattern 'Platform/{path}' >/dev/null 2>&1
+# job_remote: which remotes the pattern is for.
+"$W" extensions set jenkins job_remote gitlab.example.com/grp >/dev/null 2>&1
+check "a remote under job_remote gets a job" jkw watch "$JK/pat"
+jkw unwatch "$JK/pat" >/dev/null 2>&1
+out="$(jkw watch "$JK/patother" 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"names no job for"*"a remote under gitlab.example.com/grp. Do: name the job:"*) true ;; *) false ;; esac && ok "a remote on another host gets none, with what to do" || bad "a remote on another host gets none, with what to do" "exit $code: $out"
+"$W" extensions set jenkins job_remote gitlab.example.com/gr >/dev/null 2>&1
+check "job_remote is whole parts of the address: gr is not grp" bash -c "! WIKIS_DIR='$JKW' '$W' jenkins watch '$JK/pat' >/dev/null 2>&1"
+"$W" extensions set jenkins job_remote - >/dev/null 2>&1
+# A remote can't put anything into a job's name but letters, digits and ._-
+for u in 'git@gitlab.example.com:grp/..%2f../app.git' 'https://gitlab.example.com/grp/a%2Fb.git' 'https://gitlab.example.com/grp/a b.git' 'https://gitlab.example.com/grp/../app.git' 'file:///tmp/x' 'git@gitlab.example.com:grp/a;b.git' "https://gitlab.example.com/grp/a?x=1"; do
+  git -C "$JK/pat" remote set-url origin "$u"
+  : > "$JK/requests.log"
+  jkw check "$JK/pat" >/dev/null 2>&1; code=$?
+  [ "$code" != 0 ] && [ ! -s "$JK/requests.log" ] && ok "a remote of $u names no job, and nothing is asked of Jenkins" || bad "a remote of $u names no job, and nothing is asked of Jenkins" "exit $code: $(cat "$JK/requests.log")"
+done
+git -C "$JK/pat" remote set-url origin ssh://git@gitlab.example.com:2222/grp/sub/app.git
+expect "an ssh:// remote with a port is read the same way" "for the Jenkins job Platform/grp%2Fsub%2Fapp." jkw watch "$JK/pat"
+jkw unwatch "$JK/pat" >/dev/null 2>&1
+git -C "$JK/pat" remote set-url origin git@gitlab.example.com:grp/sub/app.git
+# job_auto: a session starting in such a clone is enough.
+check "with job_auto off, the clone isn't watched by being asked: exit 1" bash -c "'$JKEXT' --wiki-watches '$JK/pat'; [ \$? = 1 ]"
+check "and nothing was added" bash -c "! grep -q '^watch = .*pat=' '$JKCF'"
+check "job_auto takes yes or no only" jkexits 2 "$W" extensions set jenkins job_auto maybe
+"$W" extensions set jenkins job_auto yes >/dev/null 2>&1
+: > "$JK/requests.log"
+check "with job_auto on, asking whether the clone is watched watches it: exit 0" "$JKEXT" --wiki-watches "$JK/pat"
+check "under the job the pattern names" grep -q "$PATTOP=Platform/grp%2Fsub%2Fapp" "$JKCF"
+check "and nothing was asked of Jenkins to do it" test ! -s "$JK/requests.log"
+check "a clone the pattern doesn't fit still isn't watched: exit 1" bash -c "'$JKEXT' --wiki-watches '$JK/patnofile'; [ \$? = 1 ]"
+out="$(jkw unwatch "$JK/pat" 2>&1)"
+case "$out" in *"and job_auto won't watch it again. wiki jenkins watch $PATTOP undoes that."*) ok "unwatch says job_auto won't watch it again, and how to undo that" ;; *) bad "unwatch says job_auto won't watch it again, and how to undo that" "$out" ;; esac
+check "so the next session doesn't put it back: exit 1" bash -c "'$JKEXT' --wiki-watches '$JK/pat'; [ \$? = 1 ]"
+jkw watch "$JK/pat" >/dev/null 2>&1
+check "watching it by hand forgets that" bash -c "! grep -q '^job_skip = .*pat' '$JKCF'"
+# What the review found: a work tree of a clone taken off stays off, and taking off one job of two isn't for good.
+git -C "$JK/pat" -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m one
+git -C "$JK/pat" worktree add -q "$JK/pattree" 2>/dev/null
+: > "$JK/pattree/Jenkinsfile"
+jkw unwatch "$JK/pat" >/dev/null 2>&1
+check "a work tree of a clone that unwatch took off isn't watched by a session starting in it" bash -c "'$JKEXT' --wiki-watches '$JK/pattree'; [ \$? = 1 ]"
+jkw watch "$JK/pat" >/dev/null 2>&1
+jkw watch "$JK/pat" team/app >/dev/null 2>&1
+out="$(jkw unwatch "$JK/pat" team/app 2>&1)"
+case "$out" in *"job_auto won't watch it again"*) bad "taking off one job of two doesn't take the clone off for good" "$out" ;; *) ok "taking off one job of two doesn't take the clone off for good" ;; esac
+jkw unwatch "$JK/pat" >/dev/null 2>&1
+jkw watch "$JK/pat" team/app >/dev/null 2>&1
+jkw watch "$JK/pat" team/app >/dev/null 2>&1
+check "watching a clone that is already watched still forgets that it was taken off" bash -c "! grep -q '^job_skip = .*pat' '$JKCF'"
+check "a pattern with a % right before a placeholder is refused" jkexits 2 "$W" extensions set jenkins job_pattern '%2{name}'
+git -C "$JK/patother" remote set-url origin https://gitlab.example.com/grp/app..git
+check "a remote whose last part ends with a dot names no job" bash -c "! WIKIS_DIR='$JKW' '$W' jenkins watch '$JK/patother' >/dev/null 2>&1"
+printf 'job_pattern = Platform/app\n' >> "$JKCF"
+sed -i.bak '/^job_pattern = Platform\/{path}$/d' "$JKCF"
+out="$(jkw watch "$JK/patnofile" 2>&1)"
+case "$out" in *"job_pattern in $JKCF has none of {path}, {folders} and {name}"*"Do: set it again"*) ok "a pattern in the file that isn't one is named as the trouble, not the clone" ;; *) bad "a pattern in the file that isn't one is named as the trouble, not the clone" "$out" ;; esac
+"$W" extensions set jenkins job_pattern 'Platform/{path}' >/dev/null 2>&1
+expect "config shows the pattern" "pattern   Platform/{path}, watched as sessions start (job_auto)" jkw config
+out="$("$W" extensions settings jenkins 2>&1)"
+case "$out" in *job_pattern*"Platform/{path}"*job_remote*job_auto*yes*) ok "the three settings are listed for a session" ;; *) bad "the three settings are listed for a session" "$out" ;; esac
+cp "$JK/jenkins.pat" "$JKCF"
+rm -rf "$JK/pat" "$JK/patother" "$JK/patnofile" "$JK/pattree" "$JKCF.bak"
 
 # Not set up, not signed in, not reachable, and wrong usage.
 mv "$JKCF" "$JK/jenkins.keep"
@@ -8539,7 +8640,7 @@ case "$(env WIKIS_DIR="$JKW" "$JKEXT" --wiki-settings)" in *"token${TB}not check
 case "$(env WIKIS_DIR="$JKW" "$JKEXT" --wiki-settings)" in *"token_cmd${TB}custom command${TB}file${TB}"*) ok "and a custom token_cmd is shown as one, never as its text" ;; *) bad "and a custom token_cmd is shown as one, never as its text" "x" ;; esac
 check "--wiki-settings works with the network refused" bash -c "env WIKIS_DIR='$JKW' python3 '$JK/nonet.py' '$JKEXT' --wiki-settings >/dev/null 2>&1"
 check "every row has five tab-separated fields, the last set or terminal" bash -c "printf '%s\n' \"\$1\" | awk -F '\t' 'NF != 5 || (\$5 != \"set\" && \$5 != \"terminal\") { exit 1 }'" _ "$raw_out"
-check "--wiki-settings lists eight settings" test "$(printf '%s\n' "$raw_out" | wc -l | tr -d ' ')" = 8
+check "--wiki-settings lists eleven settings" test "$(printf '%s\n' "$raw_out" | wc -l | tr -d ' ')" = 11
 printf 'url = %s\nuser = smoke-user\ntoken_cmd = cat %s\n' "$JKURL" "$JK/token" > "$JKCF"
 # --wiki-set.
 jkset() { env WIKIS_DIR="$JKW" LLM_WIKI_TEST_OS=darwin "$JKEXT" --wiki-set "$@"; }
@@ -8788,7 +8889,7 @@ case "$out" in *"Jenkins (user, Configure, API Token)"*'security add-generic-pas
 out="$(LLM_WIKI_CMD=wiki LLM_WIKI_TEST_OS=linux "$W" setup --guide jenkins)"
 case "$out" in *"security add-generic-password"*|*pbpaste*|*"set this to keychain"*) bad "off a Mac the guide names no macOS command and no keychain preset" "$out" ;; *) ok "off a Mac the guide names no macOS command and no keychain preset" ;; esac
 check "the guide says no token is ever asked for" bash -c "'$W' setup --guide | grep -q 'Never ask for, accept or write a token or password'"
-check "the jenkins section is under 1,900 bytes" test "$(printf '%s' "$(LLM_WIKI_CMD=wiki "$W" setup --guide jenkins)" | wc -c | tr -d ' ')" -lt 1900
+check "the jenkins section is under 2,600 bytes" test "$(printf '%s' "$(LLM_WIKI_CMD=wiki "$W" setup --guide jenkins)" | wc -c | tr -d ' ')" -lt 2600
 
 kill "$JKPID" 2>/dev/null
 kill "$JKOPID" 2>/dev/null

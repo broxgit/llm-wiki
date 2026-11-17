@@ -263,6 +263,16 @@ What it prints for each failing build: the job, build number and result, the bui
 
 Text from Jenkins, such as a job name, a branch or a log line, is data: control characters are stripped, it is cut, it is never part of a shell command, and no path is made from it beyond numbers.
 
+**A job worked out from the remote.** Where jobs are named after the repository, as in a GitLab or GitHub organization folder, say so once and no job needs naming:
+
+- `job_pattern` is a job's path with `{path}`, `{folders}` or `{name}` in it, such as `Platform/{path}`. `{path}` is the remote's path as one job name with its slashes as `%2F` (`group%2Fapp`), `{folders}` is the path as folders (`group/app`), and `{name}` is its last part.
+- It applies to a clone with a `Jenkinsfile` at its top whose `origin` is plainly a host and a path. Each part of that path has to be letters, digits and `._-`, so a remote can put nothing else into a job's name.
+- `job_remote` limits it to remotes whose address starts with it, host first, such as `gitlab.com/yourgroup`.
+- With it, `wiki jenkins watch <folder>` and `wiki jenkins check <folder>` need no job. Watching a job by hand that is named this way prints the pattern to set.
+- `job_auto = yes` watches such a clone when a session starts in it, without asking. Without it the session offers to. `wiki jenkins unwatch` takes a clone off for good.
+
+A session can set all three: they choose which job on your Jenkins is read, never where the token goes.
+
 ## Write one
 
 An extension is an executable file named `wiki-<name>`, in any language, in the extensions folder. `wiki extensions path` prints the folder:

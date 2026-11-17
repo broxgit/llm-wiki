@@ -68,7 +68,7 @@ BUILD_TREE = "number,result,building,timestamp,url,displayName,actions[lastBuilt
 TOKEN_ENV = "JENKINS_API_TOKEN"
 
 USAGE = f"""Usage: {CMD} jenkins [check] [<folder> [<job>]]
-       {CMD} jenkins watch <folder> <job>
+       {CMD} jenkins watch <folder> [<job>]
        {CMD} jenkins watch --list
        {CMD} jenkins unwatch <folder> [<job>]
        {CMD} jenkins config
@@ -83,6 +83,7 @@ USAGE = f"""Usage: {CMD} jenkins [check] [<folder> [<job>]]
            nothing there.
   watch    Say which job builds this clone: the job's path as Jenkins shows it, such as team/app, or
            the job's address on your Jenkins. The tick event then looks at it. --list prints them.
+           With job_pattern set, the job can be left out: it is worked out from the clone's remote.
   unwatch  Take a clone off again (every job of it, unless you name one).
   config   What is set, and whether Jenkins accepts the sign-in.
 
@@ -99,6 +100,14 @@ Settings go in {CONFIG}, one `name = value` a line:
   token_cmd  a command that prints your API token, such as
              security find-generic-password -s jenkins -w
   watch      what the tick looks at: folder=job, separated by commas
+  job_pattern  how your jobs are named after a clone's remote, for clones with a Jenkinsfile, such as
+             Platform/{{path}}. {{path}} is the remote's path as one job name, its slashes as %2F
+             (group%2Fapp); {{folders}} is the path as folders (group/app); {{name}} is its last part.
+             With it, watch and check need no job for such a clone.
+  job_remote what the remote's address has to start with for job_pattern to apply, host first, such
+             as gitlab.com/yourgroup. Empty: any remote.
+  job_auto   yes: a clone job_pattern fits is watched when a session starts in it, without asking.
+             Off unless you turn it on. unwatch takes one off for good (job_skip).
   remember   yes: when a failure the tick saw is fixed, save a note in the wiki that covers the clone,
              through capture. It holds the error's first line, never the log. Off unless you turn it on.
   notice     yes (the default): when a build starts failing, hand one line to the next session in
@@ -139,6 +148,9 @@ def settings():
     return {
         "url": url.strip().rstrip("/"), "user": user.strip(), "token_cmd": own.get("token_cmd", ""), "_from": src,
         "watch": watch_entries(own),
+        "job_pattern": own.get("job_pattern", "").strip(), "job_remote": own.get("job_remote", "").strip(),
+        "job_auto": is_yes(own.get("job_auto", "no")),
+        "job_skip": [os.path.expanduser(p.strip()) for p in own.get("job_skip", "").split(",") if p.strip()],
         "remember": is_yes(own.get("remember", DEFAULTS["remember"])),
         "notice": is_yes(own.get("notice", DEFAULTS["notice"])),
         "desktop": is_yes(own.get("desktop", DEFAULTS["desktop"])),
@@ -452,6 +464,98 @@ def write_watch(entries):
     set_conf(CONFIG, "watch", ", ".join(f"{f}={j}" for f, j in entries))
 
 
+# ---- a job worked out from the clone's remote ------------------------------------------------------
+
+PLACEHOLDERS = ("{path}", "{folders}", "{name}")
+REMOTE_PART = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9_-])?$")
+REMOTE_TEXT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
+
+
+def pattern_problem(pat):
+    """Why a job_pattern can't be one, or nothing: a job path with at least one of {path}, {folders} and {name} in it."""
+    if not any(p in pat for p in PLACEHOLDERS):
+        return "has none of {path}, {folders} and {name} in it, so it would name the same job for every clone"
+    plain = pat
+    for p in PLACEHOLDERS:
+        plain = plain.replace(p, "a")
+    if "{" in plain or "}" in plain:
+        return "has a { or } that isn't {path}, {folders} or {name}"
+    if re.search(r"%[0-9A-Fa-f]?\{", pat):
+        return "has a % right before a placeholder, which would make an escape out of the clone's name"
+    return job_problem(plain)
+
+
+def remote_of(folder):
+    """(host, [parts of the path]) of a clone's origin, lower-case host, or nothing when it has none or one that isn't
+    plainly host and path: https://host/a/b.git, ssh://git@host/a/b.git or git@host:a/b.git. Each part is letters,
+    digits and ._- only, so nothing in a remote can put a slash, a % or a .. into a job's name."""
+    url = git(folder, "config", "--get", "remote.origin.url")
+    if not url or len(url) > 500:
+        return None
+    m = re.match(r"^(?:https?|ssh|git)://(?:[^@/]*@)?([^/:]+)(?::\d+)?/(.+)$", url) or re.match(r"^(?:[^@/]+@)?([^/:]+):(?!/)(.+)$", url)
+    if not m:
+        return None
+    host, path = m.group(1).lower(), m.group(2)
+    if path.endswith(".git"):
+        path = path[:-4]
+    parts = path.strip("/").split("/")
+    if not REMOTE_PART.match(host) or not parts or len(parts) > 8 or any(not REMOTE_PART.match(p) or ".." in p for p in parts):
+        return None
+    return host, parts
+
+
+def derived_job(folder, conf):
+    """The job job_pattern names for a clone, or nothing: the clone has a Jenkinsfile at its top, its remote is one
+    job_remote allows, and what comes out is a job path."""
+    pat = conf["job_pattern"]
+    top = clone_top(folder)
+    if not pat or pattern_problem(pat) or not top or not os.path.isfile(os.path.join(top, "Jenkinsfile")):
+        return ""
+    rem = remote_of(top)
+    if not rem:
+        return ""
+    host, parts = rem
+    want = conf["job_remote"].lower().strip("/")
+    if want and not (host + "/" + "/".join(parts) + "/").lower().startswith(want + "/"):
+        return ""
+    job = pat.replace("{path}", "%2F".join(parts)).replace("{folders}", "/".join(parts)).replace("{name}", parts[-1])
+    return "" if job_problem(job) else job
+
+
+def pattern_from(folder, job):
+    """The job_pattern a job watched by hand suggests, or nothing: its last part is the remote's path with %2F, or it
+    ends with the remote's path as folders."""
+    rem = remote_of(folder)
+    if not rem or len(rem[1]) < 2:
+        return ""
+    parts = rem[1]
+    segs = job.split("/")
+    if segs[-1] == "%2F".join(parts):
+        return "/".join(segs[:-1] + ["{path}"])
+    if segs[-len(parts):] == parts:
+        return "/".join(segs[:-len(parts)] + ["{folders}"])
+    return ""
+
+
+def skipped(top, conf):
+    """Whether unwatch took this clone off for good. A work tree of that clone counts as it."""
+    if top in [os.path.realpath(p) for p in conf["job_skip"]]:
+        return True
+    mine = cc.common_dir(top)
+    return bool(mine) and any(cc.common_dir(p) == mine for p in conf["job_skip"])
+
+
+def unskip(top, conf):
+    if skipped(top, conf):
+        mine = cc.common_dir(top)
+        set_conf(CONFIG, "job_skip", ", ".join(p for p in conf["job_skip"] if os.path.realpath(p) != top and not (mine and cc.common_dir(p) == mine)))
+
+
+def path_fits_file(top):
+    """A path the settings file can hold in a list: no comma, =, # or control character."""
+    return not any(c in top for c in ",#=") and not unfit(top)
+
+
 def int_or_none(v):
     return v if isinstance(v, int) and not isinstance(v, bool) else None
 
@@ -613,7 +717,11 @@ def clone_top(folder):
 
 def jobs_for(folder, conf):
     top = clone_top(folder) or os.path.realpath(folder)
-    return [j for f, j in conf["watch"] if os.path.realpath(f) == top]
+    jobs = [j for f, j in conf["watch"] if os.path.realpath(f) == top]
+    if not jobs:
+        d = derived_job(folder, conf)
+        jobs = [d] if d else []
+    return jobs
 
 
 def cmd_check(args):
@@ -675,25 +783,42 @@ def cmd_watch(args):
         for f, j in entries:
             print(f"{f}  {j}" + ("" if os.path.isdir(f) else "  (gone)"))
         return 0
-    if len(args) != 2 or any(a.startswith("-") for a in args):
+    if len(args) not in (1, 2) or any(a.startswith("-") for a in args):
         die_usage(f"watch takes a clone and the Jenkins job that builds it, such as {CMD} jenkins watch ~/dev/app team/app. Run: {CMD} jenkins --help")
     conf = settings()
     folder = os.path.abspath(os.path.expanduser(args[0]))
     if not os.path.isdir(folder):
         die_usage(f"{args[0]} isn't a folder. Do: name a clone")
-    job = job_from(args[1], conf)
     top = clone_top(folder)
     if not top:
         die(f"{folder} isn't in a git clone. Do: run this in a clone, or name one")
+    if len(args) == 2:
+        job = job_from(args[1], conf)
+    else:
+        job = derived_job(top, conf)
+        if not job:
+            if not conf["job_pattern"]:
+                die_usage(f"watch takes a clone and the Jenkins job that builds it, such as {CMD} jenkins watch ~/dev/app team/app. Run: {CMD} jenkins --help")
+            if pattern_problem(conf["job_pattern"]):
+                die(f"job_pattern in {CONFIG} {pattern_problem(conf['job_pattern'])}. Do: set it again, such as: {CMD} extensions set jenkins job_pattern 'Platform/{{path}}'")
+            die(f"job_pattern ({conf['job_pattern']}) names no job for {top}: it needs a Jenkinsfile at its top and a remote"
+                + (f" under {conf['job_remote']}" if conf["job_remote"] else "") + f". Do: name the job: {CMD} jenkins watch {top} <job>")
     if "," in top or "#" in top or "=" in top:
         die(f"{top} has a comma, a = or a # in its path, which the settings file can't hold. Do: watch a clone whose path has none")
     entries = conf["watch"]
     if (top, job) in [(os.path.realpath(f), j) for f, j in entries]:
+        unskip(top, conf)
         print(f"{top} is already watched, for {job}.")
         return 0
     write_watch(entries + [(top, job)])
+    unskip(top, conf)
     print(f"Watching {top} for the Jenkins job {job}. The tick event looks at it with the other watched folders, once a day unless {CMD} extensions every jenkins says otherwise.")
     print(f"To look now: {CMD} jenkins check {top}")
+    hint = "" if conf["job_pattern"] else pattern_from(top, job)
+    if hint:
+        print(f"This job is named after the clone's remote. If your other jobs are too, say so once and none needs naming: "
+              f"{CMD} extensions set jenkins job_pattern '{hint}'. With {CMD} extensions set jenkins job_auto yes as well, "
+              f"such a clone is watched when a session starts in it.")
     return 0
 
 
@@ -703,7 +828,7 @@ def cmd_unwatch(args):
     folder = os.path.abspath(os.path.expanduser(args[0]))
     if not os.path.isdir(folder):
         die_usage(f"{args[0]} isn't a folder. Do: name the clone")
-    top = clone_top(folder) or folder
+    top = clone_top(folder) or os.path.realpath(folder)
     entries = settings()["watch"]
     job = args[1].strip() if len(args) == 2 else None
     keep = [(f, j) for f, j in entries if not (os.path.realpath(f) == top and (job is None or j == job))]
@@ -711,7 +836,29 @@ def cmd_unwatch(args):
         print(f"{top} wasn't watched.")
         return 0
     write_watch(keep)
+    conf = settings()
+    gone = not any(os.path.realpath(f) == top for f, _ in keep)
+    if gone and conf["job_auto"] and derived_job(top, conf) and not skipped(top, conf) and path_fits_file(top):
+        set_conf(CONFIG, "job_skip", ", ".join(conf["job_skip"] + [top]))
+        print(f"No longer watching {top}, and job_auto won't watch it again. {CMD} jenkins watch {top} undoes that.")
+        return 0
     print(f"No longer watching {top}.")
+    return 0
+
+
+def wiki_watches(args):
+    """--wiki-watches <folder>: 0 when the clone is watched, 1 when it isn't. With job_auto on, a clone job_pattern
+    fits is added to the watch list here, so that a session starting in it is enough. It reads the settings file and
+    asks git; nothing goes to Jenkins."""
+    conf = settings()
+    code = cc.watches([f for f, _ in conf["watch"]], args)
+    if code != 1 or not conf["job_auto"]:
+        return code
+    top = clone_top(args[0])
+    job = derived_job(top, conf) if top else ""
+    if not job or skipped(top, conf) or not path_fits_file(top):
+        return 1
+    write_watch(conf["watch"] + [(top, job)])
     return 0
 
 
@@ -732,6 +879,9 @@ def cmd_config(args):
     print(f"user      {conf['user'] or 'not set'}" + (f"  (from {src['user']})" if conf["user"] and src["user"] != "this file" else ""))
     print(f"token     {'set' if has_token(conf) else 'not set'}" + (f"  (from {TOKEN_ENV})" if os.environ.get(TOKEN_ENV) else ("  (from token_cmd)" if conf["token_cmd"] else "")))
     print(f"watch     {', '.join(f'{f}={j}' for f, j in conf['watch']) or 'none'}")
+    if conf["job_pattern"]:
+        print(f"pattern   {conf['job_pattern']}" + (f", for remotes under {conf['job_remote']}" if conf["job_remote"] else "")
+              + (", watched as sessions start (job_auto)" if conf["job_auto"] else ""))
     print(f"remember  {'yes' if conf['remember'] else 'no'}")
     print(f"notice    {'yes' if conf['notice'] else 'no'}")
     print(f"desktop   {'yes' if conf['desktop'] else 'no'}")
@@ -999,14 +1149,26 @@ def setup():
     print("line for the next session in that clone.")
     cwd = clone_top(os.getcwd())
     entries = conf["watch"]
-    if cwd and cwd not in [os.path.realpath(f) for f, _ in entries] and not any(c in cwd for c in ",#="):
+    found = derived_job(cwd, conf) if cwd else ""
+    if found and cwd not in [os.path.realpath(f) for f, _ in entries] and path_fits_file(cwd):
+        if ask_yn(f"job_pattern names {found} for {cwd}. Watch it?", True):
+            write_watch(entries + [(cwd, found)])
+    elif cwd and cwd not in [os.path.realpath(f) for f, _ in entries] and not any(c in cwd for c in ",#="):
         job = ask(f"The Jenkins job that builds {cwd}: its path, such as team/app, or its address in your browser. Enter for none", "")
         if job:
             if job_problem(job) and "://" not in job:
                 print(f"  {clean(job, 60)!r} isn't a job path, so it wasn't saved.")
             else:
                 try:
-                    write_watch(entries + [(cwd, job_from(job, conf))])
+                    named = job_from(job, conf)
+                    write_watch(entries + [(cwd, named)])
+                    hint = "" if conf["job_pattern"] else pattern_from(cwd, named)
+                    if hint:
+                        print(f"  That job is named after the clone's remote: {hint}")
+                        if ask_yn("  Are your other jobs named the same way, so that none of them needs naming?", True):
+                            set_conf(CONFIG, "job_pattern", hint)
+                            if ask_yn("  Watch a clone like this when a session starts in it, without asking each time?", False):
+                                set_conf(CONFIG, "job_auto", "yes")
                 except SystemExit:
                     print("  That isn't a job on your Jenkins, so it wasn't saved.")
     elif cwd:
@@ -1027,6 +1189,8 @@ def setup():
     miss = sign_in_missing(conf)
     print("  Sign-in   " + (f"not set up: {miss}" if miss else f"{conf['url']}, as {conf['user']}"))
     print("  watch     " + (", ".join(f"{f}={j}" for f, j in conf["watch"]) or "nothing yet"))
+    if conf["job_pattern"]:
+        print("  pattern   " + conf["job_pattern"] + (": such a clone is watched when a session starts in it" if conf["job_auto"] else ": such a clone needs no job named"))
     print("  notes     " + ("on: a fixed failure is noted in its wiki" if conf["remember"] else "off"))
     print("  notices   " + ("on: a failing build is handed to the next session on its branch" if conf["notice"] else "off"))
     print("  desktop   " + ("on: and shown as a desktop notification, if this machine can" if conf["desktop"] else "off"))
@@ -1074,6 +1238,13 @@ def setting_rows():
     rows += [
         ("watch", ", ".join(f"{f}={j}" for f, j in conf["watch"]), "file" if "watch" in own else "default",
          "folder=job pairs the tick looks at, separated by commas", "set"),
+        ("job_pattern", conf["job_pattern"], "file" if "job_pattern" in own else "default",
+         "How jobs are named after a clone's remote, such as Platform/{path} ({path}: the path with %2F; {folders}: as folders; "
+         "{name}: its last part). A clone with a Jenkinsfile then needs no job named", "set"),
+        ("job_remote", conf["job_remote"], "file" if "job_remote" in own else "default",
+         "The start of the remotes job_pattern is for, such as gitlab.com/yourgroup. Empty: any", "set"),
+        ("job_auto", "yes" if conf["job_auto"] else "no", "file" if "job_auto" in own else "default",
+         "yes: such a clone is watched when a session starts in it, without asking", "set"),
         ("remember", "yes" if conf["remember"] else "no", "file" if "remember" in own else "default",
          "yes: save a note when a failure is fixed (the error's first line, never the log)", "set"),
         ("notice", "yes" if conf["notice"] else "no", "file" if "notice" in own else "default",
@@ -1147,6 +1318,17 @@ def wiki_set(args):
                 if (full, j.strip()) not in entries:
                     entries.append((full, j.strip()))
             out = ", ".join(f"{f}={j}" for f, j in entries)
+    elif key == "job_pattern":
+        if not clear:
+            why = pattern_problem(value)
+            if why:
+                die_usage(f"{clean(value, 80)!r} {why}. It is a job's path with {{path}}, {{folders}} or {{name}} in it, such as Platform/{{path}}")
+            out = value
+    elif key == "job_remote":
+        if not clear:
+            if not REMOTE_TEXT.match(value) or ".." in value or len(value) > 200:
+                die_usage("job_remote is the start of a remote's address, host first, such as gitlab.com/yourgroup: letters, digits and . _ - / only")
+            out = value
     else:
         if not clear and value.lower() not in ("yes", "no"):
             die_usage(f"{key} takes yes or no")
@@ -1165,7 +1347,7 @@ def main(argv):
     if argv and argv[0] == "--wiki-event":
         return on_event(argv[1:])
     if argv and argv[0] == "--wiki-watches":
-        return cc.watches([f for f, _ in watch_entries()], argv[1:])
+        return wiki_watches(argv[1:])
     if argv and argv[0] == "--wiki-ready":
         conf = settings()
         msg = sign_in_missing(conf)
