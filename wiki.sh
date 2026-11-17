@@ -5654,15 +5654,14 @@ feedback_draft() {
 }
 
 cmd_feedback() {
-  local sub="${1:-list}"
+  local sub="${1:-list}" f
   [ $# -eq 0 ] || shift
   case "$sub" in
     list) feedback_list ;;
     add) feedback_add "$@" ;;
-    show) feedback_draft "$(feedback_find "${1:-}")" ;;
+    show) f="$(feedback_find "${1:-}")" || exit 1; feedback_draft "$f" ;;
     send) feedback_send "${1:-}" ;;
     dismiss)
-      local f
       f="$(feedback_find "${1:-}")"
       feedback_status "$f" "dismissed $(date -u +%Y-%m-%d)"
       ui_item ok "dismissed: ${f##*/}"
