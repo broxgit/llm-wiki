@@ -4,6 +4,12 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2027-01-06: wiki uninstall covers Codex, Antigravity, Cursor and the Claude app
+
+- `wiki uninstall` now takes out what setup put into Codex, Antigravity, Cursor and the Claude app, where before it only listed them.
+- Each file it changes there is copied first, and only llm-wiki's entries go. A plugin's folder is moved aside, not deleted.
+- It leaves, and says so: a settings file that is a link, a folder setup didn't make, and Antigravity's grants to read your wikis.
+
 ## 2027-01-05: type a note yourself, in an inbox
 
 - Put a markdown note in a folder called `inbox`, in a wiki or at the top of your collection, and the next session takes it into the wiki's notes.

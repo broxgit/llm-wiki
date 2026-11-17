@@ -10270,6 +10270,118 @@ else
   [ "$code" = 1 ] && case "$out" in *"the old set-up is only partly undone, so setup wasn't started."*) true ;; *) false ;; esac && ok "setup --fresh stops there, and doesn't start setup on half-undone settings" || bad "setup --fresh stops there, and doesn't start setup on half-undone settings" "exit $code: $(printf '%s' "$out" | tail -4)"
   case "$out" in *"Setup for "*) bad "so setup's first line is never printed" "$out" ;; *) ok "so setup's first line is never printed" ;; esac
 fi
+# What setup put into other agents: Codex, Antigravity, Cursor and the Claude app. Each has
+# something of the user's own beside what is llm-wiki's, and a stand-in codex that edits its own list.
+UNMARK="$(sed -n 's/^COMMAND_SKILL_MARK="\(.*\)"$/\1/p' "$W")"
+UNDESK="$UNH/Library/Application Support/Claude"
+unagents() {
+  rm -rf "$UNH/.codex" "$UNH/.gemini" "$UNH/.cursor" "$UNDESK" "$UN/codex.calls"
+  mkdir -p "$UNH/.codex/llm-wiki/plugins/llm-wiki" "$UNH/.codex/skills/wiki-status" "$UNH/.codex/skills/wiki-mine" "$UNH/.codex/skills/own" \
+    "$UNH/.gemini/config/plugins/llm-wiki/rules" "$UNH/.gemini/config/plugins/other" "$UNH/.cursor/skills" "$UNDESK"
+  printf '# H\n' > "$UNW/global/AGENTS.md"; printf '# I\n' > "$UNW/global/index.md"
+  mkdir -p "$UNH/.codex/llm-wiki/.agents/plugins" "$UNH/.codex/llm-wiki/plugins/llm-wiki/.codex-plugin"
+  printf '{}\n' > "$UNH/.codex/llm-wiki/.agents/plugins/marketplace.json"; printf '{}\n' > "$UNH/.codex/llm-wiki/plugins/llm-wiki/.codex-plugin/plugin.json"
+  printf '{}\n' > "$UNH/.gemini/config/plugins/llm-wiki/plugin.json"; printf '{}\n' > "$UNH/.gemini/config/plugins/llm-wiki/hooks.json"
+  : > "$UNH/.codex/skills/wiki-status/.DS_Store"
+  printf '%s\nbody\n' "$UNMARK" > "$UNH/.codex/skills/wiki-status/SKILL.md"
+  printf 'my own skill, with a name like ours\n' > "$UNH/.codex/skills/wiki-mine/SKILL.md"
+  printf 'own\n' > "$UNH/.codex/skills/own/SKILL.md"
+  ln -sfn "$REPO/skills/llm-wiki" "$UNH/.codex/skills/llm-wiki"
+  ln -sfn "$UNW/global/skills/team-skill" "$UNH/.cursor/skills/team-skill"
+  ln -sfn "$UN/outside/skill" "$UNH/.cursor/skills/own-skill"
+  printf 'model = "x"\n\n[marketplaces.llm-wiki]\nsource = "p"\n\n[plugins."llm-wiki@llm-wiki"]\nenabled = true\n\n[other]\na = 1\n' > "$UNH/.codex/config.toml"
+  printf '# Mine\n\nMy knowledge wikis live in ~/wikis. Wherever their handbooks say `wiki.sh`, run it.\n\nKeep this line.\n' > "$UNH/.codex/AGENTS.md"
+  printf '{"version":1,"hooks":{"sessionStart":[{"command":"\\"/x/wiki.sh\\" __cursor-start","timeout":30},{"command":"mine"}],"other":[1]}}\n' > "$UNH/.cursor/hooks.json"
+  printf '{"mcpServers":{"llm-wiki":{"command":"/x/bin/wiki","args":["mcp"]},"other":{"command":"y"}},"theme":"dark"}\n' > "$UNDESK/claude_desktop_config.json"
+  printf '{"userSettings":{"globalPermissionGrants":{"allow":["read_file(%s)","write_file(%s)","command(%s/wiki.sh)","command(ls)"]}},"x":1}\n' "$UNW" "$UNW" "$REPO" > "$UNH/.gemini/config/config.json"
+}
+cat > "$UN/bin/codex" <<'FAKE'
+#!/bin/sh
+D="$(dirname "$0")/.."
+echo "$*" >> "$D/codex.calls"
+[ ! -f "$D/codex-stuck" ] || exit 0
+f="$HOME/.codex/config.toml"
+case "$*" in
+  "plugin remove llm-wiki@llm-wiki") awk '/^\[plugins\."llm-wiki@llm-wiki"\]/{skip=1;next} /^\[/{skip=0} !skip' "$f" > "$f.t" && mv "$f.t" "$f" ;;
+  "plugin marketplace remove llm-wiki") awk '/^\[marketplaces\.llm-wiki\]/{skip=1;next} /^\[/{skip=0} !skip' "$f" > "$f.t" && mv "$f.t" "$f" ;;
+esac
+FAKE
+chmod +x "$UN/bin/codex"
+unwa() { env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u CODEX_SANDBOX -u CODEX_CI -u GEMINI_CLI -u CURSOR_AGENT -u CODEX_HOME -u LLM_WIKI_AGY_HOME -u LLM_WIKI_DESKTOP_DIR PATH="$UN/bin:$PATH" "$W" "$@"; }
+unmake; unagents
+out="$(unwa uninstall --dry-run 2>&1)"
+case "$out" in *"the Codex plugin: its folder ~/.codex/llm-wiki, moved aside"*"the llm-wiki plugin and marketplace in Codex's own list, by asking Codex to remove them"*"the wiki line in ~/.codex/AGENTS.md"*"2 wiki skill(s) in ~/.codex/skills"*"the Antigravity plugin: its folder ~/.gemini/config/plugins/llm-wiki, moved aside"*"1 grant(s) for wiki commands in ~/.gemini/config/config.json"*"the Cursor hook in ~/.cursor/hooks.json"*"1 wiki skill(s) in ~/.cursor/skills"*"the connector for the Claude app in "*) ok "--dry-run lists what setup put into Codex, Antigravity, Cursor and the Claude app" ;; *) bad "--dry-run lists what setup put into Codex, Antigravity, Cursor and the Claude app" "$out" ;; esac
+check "and asks Codex nothing, and changes nothing" bash -c "[ ! -e '$UN/codex.calls' ] && grep -q 'marketplaces.llm-wiki' '$UNH/.codex/config.toml' && [ -d '$UNH/.codex/llm-wiki' ]"
+out="$(printf 'y\n' | LLM_WIKI_TEST_TTY=1 unwa uninstall 2>&1)"; code=$?
+[ "$code" = 0 ] && case "$out" in *"Codex was asked to remove the llm-wiki plugin and marketplace, and has"*"Codex plugin's folder moved to ~/llm-wiki-removed-"*"wiki line taken out of ~/.codex/AGENTS.md"*"2 wiki skill(s) removed from ~/.codex/skills"*"1 wiki skill(s) removed from ~/.cursor/skills"*"grants for wiki commands taken out of ~/.gemini/config/config.json"*"Antigravity plugin's folder moved to "*"Cursor hook taken out of ~/.cursor/hooks.json"*"connector for the Claude app taken out of "*"DONE  "*) true ;; *) false ;; esac && ok "a yes undoes each of them and says so" || bad "a yes undoes each of them and says so" "exit $code: $out"
+check "Codex was asked, with its own two commands" bash -c "[ \"\$(cat '$UN/codex.calls')\" = \"\$(printf 'plugin remove llm-wiki@llm-wiki\nplugin marketplace remove llm-wiki')\" ]"
+check "Codex's list lost ours and kept the rest" bash -c "[ \"\$(cat '$UNH/.codex/config.toml')\" = \"\$(printf 'model = \"x\"\n\n[other]\na = 1')\" ]"
+aside="$(ls -d "$UNH"/llm-wiki-removed-* 2>/dev/null | head -n 1)"
+check "the two plugin folders are moved aside, not deleted" bash -c "[ -d '$aside/codex-plugin/plugins/llm-wiki' ] && [ -d '$aside/antigravity-plugin/rules' ] && [ ! -e '$UNH/.codex/llm-wiki' ] && [ ! -e '$UNH/.gemini/config/plugins/llm-wiki' ]"
+check "another Antigravity plugin beside ours is untouched" test -d "$UNH/.gemini/config/plugins/other"
+check "Codex's instructions lost the wiki line and kept the rest, with a copy" bash -c "! grep -q 'knowledge wikis' '$UNH/.codex/AGENTS.md' && grep -q 'Keep this line' '$UNH/.codex/AGENTS.md' && grep -q 'knowledge wikis' '$UNH'/.codex/AGENTS.md.llm-wiki-*.bak"
+check "in Codex's skills, the llm-wiki link and the skill wiki.sh made are gone, the Finder's file with it" bash -c "[ ! -L '$UNH/.codex/skills/llm-wiki' ] && [ ! -e '$UNH/.codex/skills/wiki-status' ]"
+check "a skill of your own stays, even one named wiki-something" bash -c "[ -f '$UNH/.codex/skills/own/SKILL.md' ] && grep -q 'my own skill' '$UNH/.codex/skills/wiki-mine/SKILL.md'"
+check "the skill llm-wiki links to is not deleted with its link" test -d "$REPO/skills/llm-wiki"
+check "in Cursor's skills, the link into a wiki is gone and one of your own stays" bash -c "[ ! -L '$UNH/.cursor/skills/team-skill' ] && [ -L '$UNH/.cursor/skills/own-skill' ] && [ -d '$UNW/global/skills/team-skill' ]"
+check "Cursor's hooks lost ours and kept every other hook and key" python3 -c "
+import json, sys
+sys.exit(0 if json.load(open(sys.argv[1])) == {'version': 1, 'hooks': {'sessionStart': [{'command': 'mine'}], 'other': [1]}} else 1)" "$UNH/.cursor/hooks.json"
+check "the Claude app's settings lost the llm-wiki server and kept the rest" python3 -c "
+import json, sys
+sys.exit(0 if json.load(open(sys.argv[1])) == {'mcpServers': {'other': {'command': 'y'}}, 'theme': 'dark'} else 1)" "$UNDESK/claude_desktop_config.json"
+check "Antigravity's grants lost the one for the wiki command, and kept the user's own and the ones for the wikis' folder" python3 -c "
+import json, sys
+a = json.load(open(sys.argv[1]))
+sys.exit(0 if a == {'userSettings': {'globalPermissionGrants': {'allow': ['read_file(' + sys.argv[2] + ')', 'write_file(' + sys.argv[2] + ')', 'command(ls)']}}, 'x': 1} else 1)" "$UNH/.gemini/config/config.json" "$UNW"
+case "$out" in *"Antigravity's grants to read and write your wikis' folder, in ~/.gemini/config/config.json. Your wikis stay, so these do too."*) ok "and it says the grants for the wikis' folder are left, and why" ;; *) bad "and it says the grants for the wikis' folder are left, and why" "$out" ;; esac
+check "each of the three files has a copy of how it was" bash -c "ls '$UNH'/.cursor/hooks.json.llm-wiki-*.bak '$UNH'/.gemini/config/config.json.llm-wiki-*.bak '$UNDESK'/claude_desktop_config.json.llm-wiki-*.bak >/dev/null 2>&1"
+out="$(unwa uninstall --dry-run 2>&1)"
+case "$out" in *"UNINSTALL  Nothing of llm-wiki's is set up on this machine"*) ok "run again, nothing of the other agents is left to undo" ;; *) bad "run again, nothing of the other agents is left to undo" "$out" ;; esac
+# What isn't plainly ours stays.
+unmake; unagents
+printf 'extra\n' > "$UNH/.codex/skills/wiki-status/notes.txt"
+printf '{"mcpServers":{"llm-wiki":{"command":"/usr/bin/python3","args":["server.py"]}}}\n' > "$UNDESK/claude_desktop_config.json"
+printf 'not json' > "$UNH/.cursor/hooks.json"
+rm -f "$UNH/.codex/skills/llm-wiki"; ln -s "$UN/outside/skill" "$UNH/.codex/skills/llm-wiki"
+printf 'y\n' | LLM_WIKI_TEST_TTY=1 unwa uninstall >/dev/null 2>&1
+check "a wiki-<command> skill folder with a file of your own in it is left whole" bash -c "[ -f '$UNH/.codex/skills/wiki-status/SKILL.md' ] && [ -f '$UNH/.codex/skills/wiki-status/notes.txt' ]"
+check "a server called llm-wiki that doesn't run a wiki command is left in the Claude app's settings" grep -q 'server.py' "$UNDESK/claude_desktop_config.json"
+check "a hooks file that isn't JSON is left as it is" bash -c "[ \"\$(cat '$UNH/.cursor/hooks.json')\" = 'not json' ]"
+check "a skill called llm-wiki that links somewhere else is left" test -L "$UNH/.codex/skills/llm-wiki"
+# A folder of that name that setup didn't make, and a settings file that is a link, are left and said.
+unmake; unagents
+rm -rf "$UNH/.codex/llm-wiki" "$UNH/.gemini/config/plugins/llm-wiki"
+mkdir -p "$UNH/.codex/llm-wiki" "$UNH/.gemini/config/plugins/llm-wiki" "$UNH/dotfiles"
+printf 'my notes\n' > "$UNH/.codex/llm-wiki/notes.txt"; printf 'mine\n' > "$UNH/.gemini/config/plugins/llm-wiki/readme.txt"
+mv "$UNH/.cursor/hooks.json" "$UNH/dotfiles/hooks.json"; ln -s "$UNH/dotfiles/hooks.json" "$UNH/.cursor/hooks.json"
+out="$(printf 'y\n' | LLM_WIKI_TEST_TTY=1 unwa uninstall 2>&1)"
+check "a folder at ~/.codex/llm-wiki that setup didn't make is not moved" bash -c "[ \"\$(cat '$UNH/.codex/llm-wiki/notes.txt')\" = 'my notes' ]"
+check "nor one where the Antigravity plugin would be" bash -c "[ \"\$(cat '$UNH/.gemini/config/plugins/llm-wiki/readme.txt')\" = 'mine' ]"
+case "$out" in *"~/.codex/llm-wiki: it is not the folder setup makes, or it holds a wiki, so it is left."*"~/.gemini/config/plugins/llm-wiki: it is not the folder setup makes"*) ok "and both are named among what is left, with why" ;; *) bad "and both are named among what is left, with why" "$out" ;; esac
+check "a hooks file that is a link is not written through: the file it leads to is as it was" grep -q '__cursor-start' "$UNH/dotfiles/hooks.json"
+case "$out" in *"~/.cursor/hooks.json is a link to a file kept somewhere else, so it is not changed."*) ok "and that is said, with what to do" ;; *) bad "and that is said, with what to do" "$out" ;; esac
+# Codex's list, as TOML can spell it.
+unmake; unagents
+printf "model = 'x'\n\n# [marketplaces.llm-wiki]\n[other]\na = 1\n" > "$UNH/.codex/config.toml"
+out="$(unwa uninstall --dry-run 2>&1)"
+case "$out" in *"Codex's own list"*) bad "a commented line in Codex's settings is not the plugin being listed" "$out" ;; *) ok "a commented line in Codex's settings is not the plugin being listed" ;; esac
+printf "[ plugins.'llm-wiki@llm-wiki' ]\nenabled = true\n" > "$UNH/.codex/config.toml"
+expect "the plugin's table in single quotes, with spaces, is seen" "the llm-wiki plugin and marketplace in Codex's own list" unwa uninstall --dry-run
+# Codex keeps its own list: when it won't let go, or isn't there to ask, that is said.
+unmake; unagents; : > "$UN/codex-stuck"
+out="$(printf 'y\n' | LLM_WIKI_TEST_TTY=1 unwa uninstall 2>&1)"; code=$?
+rm -f "$UN/codex-stuck"
+[ "$code" = 1 ] && case "$out" in *"Codex still lists the llm-wiki plugin or its marketplace. Do: remove them in Codex: codex plugin remove llm-wiki@llm-wiki, then codex plugin marketplace remove llm-wiki"*"UNFINISHED"*) true ;; *) false ;; esac && ok "when Codex still lists the plugin after being asked, it says so, with the commands, and ends unfinished" || bad "when Codex still lists the plugin after being asked, it says so, with the commands, and ends unfinished" "exit $code: $out"
+unmake; unagents
+# Codex is also looked for inside its desktop app, so on a machine that has the app this can't be shown.
+if [ -x /Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex ] || [ -x /Applications/Codex.app/Contents/Resources/codex ]; then
+  ok "with no codex command, Codex's list is named among what is left (not checked: the Codex app is on this machine)"
+else
+  out="$(env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u CODEX_SANDBOX -u CODEX_CI -u GEMINI_CLI -u CURSOR_AGENT PATH="/usr/bin:/bin" "$W" uninstall --dry-run 2>&1)"
+  case "$out" in *"by asking Codex to remove them"*) bad "with no codex command, Codex's list is named among what is left, with what to do" "$out" ;; *"The llm-wiki plugin in Codex's own list: there is no codex command here to remove it with."*) ok "with no codex command, Codex's list is named among what is left, with what to do" ;; *) bad "with no codex command, Codex's list is named among what is left, with what to do" "$out" ;; esac
+fi
+rm -rf "$UNH/.codex" "$UNH/.gemini" "$UNH/.cursor" "$UNDESK"
 # setup --fresh: the same, then setup from the start.
 unmake
 check "--fresh takes no section" bash -c "LLM_WIKI_TEST_TTY=1 '$W' setup --fresh journal </dev/null >/dev/null 2>&1; [ \$? = 2 ]"

@@ -108,6 +108,8 @@ claude plugin uninstall llm-wiki@llm-wiki
 
 `wiki uninstall` asks before it changes anything, and `wiki uninstall --dry-run` only says what it would do. It takes away the background job, the `wiki` command's link, the tab completion line in your shell's startup file, the allow rules for wiki commands in `~/.claude/settings.json`, and the links to your wikis' skills. It moves llm-wiki's own settings to `~/llm-wiki-removed-<time>`, so nothing you set is lost: delete that folder when you are sure.
 
-Your wikis stay as they are. It lists what else it leaves and what to do about each: a plugin for Codex, Antigravity or Cursor, a token in your keychain, a line about the wiki in a project's own instructions.
+It also takes out what setup put into other agents: the Codex plugin (by asking Codex to remove it, then moving its folder aside), the Antigravity plugin and the grants for the wiki command, the Cursor hook, the wiki skills in their skills folders, and the connector in the Claude app's settings. Each file it changes there is copied first, and only llm-wiki's entries are taken out.
+
+Your wikis stay as they are. It lists what else it leaves and what to do about each: a token in your keychain, a line about the wiki in a project's own instructions, Antigravity's grants to read your wikis' folder, a settings file that is a link to one kept somewhere else, and a folder with the plugin's name that setup didn't make.
 
 To start again from nothing and keep your wikis, run `wiki setup --fresh`: it does the same, then walks through setup as if for the first time.
