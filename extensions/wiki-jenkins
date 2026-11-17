@@ -425,7 +425,7 @@ BRANCH_OK = re.compile(r"^[A-Za-z0-9._/-]+$")
 
 def branch_ok(b):
     """A branch name that can go into an address and be passed as an argument: no .., no leading -."""
-    return isinstance(b, str) and bool(b) and bool(BRANCH_OK.match(b)) and ".." not in b and not b.startswith("-") and b != "."
+    return isinstance(b, str) and bool(b) and bool(BRANCH_OK.fullmatch(b)) and ".." not in b and not b.startswith("-") and b != "."
 
 
 def git(folder, *args):
@@ -499,7 +499,7 @@ def remote_of(folder):
     if path.endswith(".git"):
         path = path[:-4]
     parts = path.strip("/").split("/")
-    if not REMOTE_PART.match(host) or not parts or len(parts) > 8 or any(not REMOTE_PART.match(p) or ".." in p for p in parts):
+    if not REMOTE_PART.fullmatch(host) or not parts or len(parts) > 8 or any(not REMOTE_PART.fullmatch(p) or ".." in p for p in parts):
         return None
     return host, parts
 
@@ -1326,7 +1326,7 @@ def wiki_set(args):
             out = value
     elif key == "job_remote":
         if not clear:
-            if not REMOTE_TEXT.match(value) or ".." in value or len(value) > 200:
+            if not REMOTE_TEXT.fullmatch(value) or ".." in value or len(value) > 200:
                 die_usage("job_remote is the start of a remote's address, host first, such as gitlab.com/yourgroup: letters, digits and . _ - / only")
             out = value
     else:
