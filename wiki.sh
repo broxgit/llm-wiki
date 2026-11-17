@@ -219,7 +219,7 @@ Usage: $WIKI_CMD <command> [options]
   obsidian [--no-open] Browse the wikis in Obsidian: write the vault's starter settings and open it.
   inbox                Take the notes you typed into an inbox folder, in Obsidian or any editor,
                        into the wikis. A session does it when it starts.
-  extensions [path | add <name> | remove <name> | setup <name> | settings <name> | set <name> <key> <value> | log <name> | tick | every ... | offer <name> no|never|again]
+  extensions [path | add <name> | remove <name> | setup <name> | settings <name> | set <name> <key> <value> | log <name> | tick | every ... | offer <name> yes|no|never|again]
                        Commands of your own: $WIKI_CMD <name> runs an executable named
                        wiki-<name> in the extensions folder. Lists them, or prints the folder.
                        add turns on one that ships with llm-wiki, such as jira. remove turns it off.
@@ -8596,15 +8596,28 @@ offer_lines() {
   return 0
 }
 
-# extensions offer <name> no|never|again [<folder>]: the user's answer, for the folder's repository or, with never, for all.
+# extensions offer <name> yes|no|never|again [<folder>]: the user's answer, for the folder's repository or, with never, for all.
 offer_answer() {
-  local n="$1" what="$2" dir="${3:-$PWD}" key
+  local n="$1" what="$2" dir="${3:-$PWD}" key d
   ext_name_ok "$n" || die_usage "$n isn't an extension's name"
   ext_file "$n" >/dev/null || ext_shipped "$n" >/dev/null || die "no extension called $n. $WIKI_CMD extensions lists them."
   [ -d "$dir" ] || die_usage "$dir isn't a folder"
   git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || die "$(tilde "$dir") isn't in a repository. Do: run it inside the repository, or name its folder: $WIKI_CMD extensions offer $n $what <folder>"
   key="$(offer_key "$dir")" && [ -n "$key" ] || die "can't tell which repository $dir is in"
   case "$what" in
+    yes)
+      # The user's yes: turn it on, as `extensions add` does, and say what comes next. Nothing
+      # is recorded, so the offer to watch this clone can still follow.
+      if ext_shipped "$n" >/dev/null && ! ext_on "$n" && [ ! -f "$EXT_DIR/wiki-$n" ]; then
+        ext_set "$n" on
+        setup_mark "extension.$n"
+        ui_item ok "on: $n."
+      else
+        ui_item ok "$n is already on."
+      fi
+      d="$(ext_ready "$n")" || ui_item warn "$n isn't set up yet: $d"
+      ui_next "walk the user through $WIKI_CMD setup --guide $n"
+      ;;
     no)
       ( umask 077; mkdir -p "$OFFER_DIR" && echo no > "$OFFER_DIR/$n.$key" ) 2>/dev/null || die "can't write $OFFER_DIR. Do: make it writable"
       ui_item ok "$n won't be offered for this repository again. To undo: $WIKI_CMD extensions offer $n again"
@@ -9061,8 +9074,8 @@ cmd_extensions() {
       return 0
       ;;
     offer)
-      { [ $# -eq 3 ] || [ $# -eq 4 ]; } || die_usage "usage: $WIKI_CMD extensions offer <name> no|never|again [<folder>]"
-      case "$3" in no | never | again) ;; *) die_usage "usage: $WIKI_CMD extensions offer <name> no|never|again [<folder>]" ;; esac
+      { [ $# -eq 3 ] || [ $# -eq 4 ]; } || die_usage "usage: $WIKI_CMD extensions offer <name> yes|no|never|again [<folder>]"
+      case "$3" in yes | no | never | again) ;; *) die_usage "usage: $WIKI_CMD extensions offer <name> yes|no|never|again [<folder>]" ;; esac
       offer_answer "$2" "$3" "${4:-}"
       return 0
       ;;

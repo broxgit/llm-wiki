@@ -4600,7 +4600,7 @@ expect "extensions lists it with its description" "Says hello, for the smoke tes
 expect "the first word completes to it" "hello" "$W" __complete 1 he
 expect "and to extensions" "extensions" "$W" __complete 1 ex
 expect "extensions completes to path" "path" "$W" __complete 2 extensions ""
-expect "the usage names the command" "extensions [path | add <name> | remove <name> | setup <name> | settings <name> | set <name> <key> <value> | log <name> | tick | every ... | offer <name> no|never|again]" "$W" --help
+expect "the usage names the command" "extensions [path | add <name> | remove <name> | setup <name> | settings <name> | set <name> <key> <value> | log <name> | tick | every ... | offer <name> yes|no|never|again]" "$W" --help
 # A command of llm-wiki's own always wins.
 printf '#!/bin/sh\necho HIJACK\n' > "$XD/wiki-news"
 printf '#!/bin/sh\necho HIJACK\n' > "$XD/wiki-relay"
@@ -9751,6 +9751,16 @@ expect "a no is for one repository: another one with a Jenkinsfile still gets th
 "$W" extensions offer jenkins again "$OX/other" >/dev/null 2>&1
 "$W" extensions offer jenkins never "$OX/other" >/dev/null 2>&1
 [ -z "$("$W" __offer "$OX/other" 2>&1)" ] && ok "never stops it for every repository" || bad "never stops it for every repository" "$("$W" __offer "$OX/other" 2>&1)"
+# A yes: agents reach for it beside no, so it is an answer too.
+"$W" extensions remove jenkins >/dev/null 2>&1
+yesbefore="$(for f in "$OXO"/jenkins.*; do [ -e "$f" ] && printf '%s %s\n' "${f##*/}" "$(cat "$f")"; done)"
+out="$("$W" extensions offer jenkins yes "$OX/other" 2>&1)"; code=$?
+[ "$code" = 0 ] && case "$out" in *"on: jenkins."*"jenkins isn't set up yet: "*"Next: walk the user through wiki setup --guide jenkins"*) true ;; *) false ;; esac && ok "extensions offer <name> yes turns it on, says it isn't set up yet, and what comes next" || bad "extensions offer <name> yes turns it on, says it isn't set up yet, and what comes next" "exit $code: $out"
+expect "and it is on, as extensions add would leave it" "jenkins        Say what failed" "$W" extensions
+[ "$(for f in "$OXO"/jenkins.*; do [ -e "$f" ] && printf '%s %s\n' "${f##*/}" "$(cat "$f")"; done)" = "$yesbefore" ] && ok "a yes records no answer, so watching the clone can still be offered" || bad "a yes records no answer, so watching the clone can still be offered"
+expect "a second yes says it is already on" "jenkins is already on." "$W" extensions offer jenkins yes "$OX/other"
+check "a yes for an extension there isn't is refused" bash -c "! '$W' extensions offer nothere yes '$OX/other' >/dev/null 2>&1"
+"$W" extensions remove jenkins >/dev/null 2>&1
 check "a word that is no answer is refused with exit 2" bash -c "'$W' extensions offer jenkins maybe '$OX/other' >/dev/null 2>&1; [ \$? = 2 ]"
 check "so is an extension there isn't" bash -c "! '$W' extensions offer nothere no '$OX/other' >/dev/null 2>&1"
 # On, and not watching this clone.
