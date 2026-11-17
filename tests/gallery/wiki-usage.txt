@@ -80,7 +80,7 @@
   obsidian [--no-open] Browse the wikis in Obsidian: write the vault's starter settings and open it.
   inbox                Take the notes you typed into an inbox folder, in Obsidian or any editor,
                        into the wikis. A session does it when it starts.
-  extensions [path | add <name> | remove <name> | setup <name> | settings <name> | set <name> <key> <value> | log <name> | tick | every ... | offer <name> no|never|again]
+  extensions [path | add <name> | remove <name> | setup <name> | settings <name> | set <name> <key> <value> | log <name> | tick | every ... | offer <name> yes|no|never|again]
                        Commands of your own: wiki <name> runs an executable named
                        wiki-<name> in the extensions folder. Lists them, or prints the folder.
                        add turns on one that ships with llm-wiki, such as jira. remove turns it off.

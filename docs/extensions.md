@@ -412,7 +412,7 @@ Each word is a path from the top of the clone that has to exist, or `remote:<tex
 - **Off:** the session is told what was found, the extension's own description, and what to run on a yes (`wiki extensions add <name>`, then `wiki setup --guide <name>`) and on a no.
 - **On:** llm-wiki asks the extension `--wiki-watches <folder>`. Exit 0 means it already looks after that clone, and nothing is offered again. Exit 1 means it doesn't, and the session is told to offer watching it. Any other exit, or no answer in five seconds, and nothing is said.
 
-The session hook and `wiki start` hand the line over, once between them in a session and in two sessions at most for a repository. `wiki extensions offer <name> no` records the user's no for the repository the session is in, `never` for every repository, and `again` forgets either. The GitHub, GitLab and Jenkins extensions are offered this way.
+The session hook and `wiki start` hand the line over, once between them in a session and in two sessions at most for a repository. `wiki extensions offer <name> yes` turns the extension on, as `wiki extensions add <name>` does, and says what comes next. `no` records the user's no for the repository the session is in, `never` for every repository, and `again` forgets either. The GitHub, GitLab and Jenkins extensions are offered this way.
 
 ## Settings a session can change
 

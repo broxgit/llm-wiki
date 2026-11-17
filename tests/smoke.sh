@@ -3948,6 +3948,56 @@ and a third" ] && ok "a page's line ends reach a client as line feeds" || bad "a
   csame "a slug with no letters or digits" helper "$T" "$T/cap/note.md" alpha "!!!"
   csame "an empty note" helper "$T" /dev/null alpha empty
   csame "an empty file" helper "$T" /dev/null alpha empty --file "$T/cap/empty.md"
+  # Two sessions, the same second, the same slug: every note is kept, by the helper and by the Bash.
+  # crace <helper or nothing> <how many>: that many captures at once, then how many notes and
+  # how many different ones raw/ holds.
+  crace() {
+    local go="$1" many="$2" no=1 i f pids=""
+    [ -z "$go" ] || no=""
+    rm -rf "$FD/alpha/raw"; mkdir -p "$FD/alpha/raw"
+    i=0
+    while [ "$i" -lt "$many" ]; do
+      (cd "$T" && printf 'note %s\n' "$i" | env -u WIKIS_DIR LLM_WIKI_NO_GO="$no" LLM_WIKI_GO="$go" "$W" capture alpha raced >/dev/null 2>&1) &
+      pids="$pids $!"
+      i=$((i + 1))
+    done
+    # shellcheck disable=SC2086
+    wait $pids
+    for f in "$FD/alpha/raw"/*-raced*.md; do [ -e "$f" ] && sed -n 3p "$f"; done | sort -u | wc -l | tr -d ' '
+    rm -rf "$FD/alpha/raw"; mkdir -p "$FD/alpha/raw"
+  }
+  n="$(crace "" 20)"
+  [ "$n" = 20 ] && ok "twenty captures at once with one slug are twenty different notes, from the Bash" || bad "twenty captures at once with one slug are twenty different notes, from the Bash" "$n different notes"
+  n="$(crace "$T/bin/capture-spy" 20)"
+  [ "$n" = 20 ] && ok "and from the helper" || bad "and from the helper" "$n different notes"
+  check "no hidden file of a capture is left in raw/" bash -c "[ -z \"\$(ls -A '$FD/alpha/raw')\" ]"
+  # The step that gives a note its name, on its own: a name that is there, as a file or as a link
+  # to nowhere, is never written to, and the next name is taken.
+  check "a name that is taken, by a file or by a link, is left alone and the next is used" bash -c "
+    set -euo pipefail
+    eval \"\$(sed -n '/^capture_place()/,/^}/p' '$W')\"
+    r='$T/cap/place'; rm -rf \"\$r\"; mkdir -p \"\$r/raw\" \"\$r/hold\"
+    printf 'new note\n' > \"\$r/hold/note\"
+    printf 'first\n' > \"\$r/raw/s-x.md\"
+    ln -s \"\$r/nowhere.md\" \"\$r/raw/s-x-2.md\"
+    got=\"\$(capture_place \"\$r/hold/note\" \"\$r/raw\" s-x md s-x.md 2)\"
+    [ \"\$got\" = s-x-3.md ] && [ \"\$(cat \"\$r/raw/s-x.md\")\" = first ] && [ \"\$(cat \"\$r/raw/s-x-3.md\")\" = 'new note' ] && [ ! -e \"\$r/nowhere.md\" ] && [ -L \"\$r/raw/s-x-2.md\" ]"
+  rm -rf "$FD/alpha/raw"; mkdir -p "$FD/alpha/raw"
+  (cd "$T" && env -u WIKIS_DIR LLM_WIKI_NO_GO=1 "$W" capture alpha nothing < /dev/null >/dev/null 2>&1) || true
+  check "an empty note leaves nothing behind in raw/, not even a hidden folder" bash -c "[ -z \"\$(ls -A '$FD/alpha/raw')\" ]"
+  python3 -c "import sys; sys.stdout.write('Captured: 2020-01-02 ' + 'x' * 200000 + '\n\nbody\n')" > "$T/cap/longline.md"
+  csame "a note whose own Captured line is very long is not given a second one" helper "$T" "$T/cap/longline.md" alpha longline
+  out="$(cd "$T" && env -u WIKIS_DIR LLM_WIKI_NO_GO=1 "$W" capture alpha longline < "$T/cap/longline.md" >/dev/null 2>&1; grep -c '^Captured: ' "$FD"/alpha/raw/*-longline.md)"
+  [ "$out" = 1 ] && ok "the Bash keeps it at one Captured line" || bad "the Bash keeps it at one Captured line" "$out"
+  rm -rf "$FD/alpha/raw"; mkdir -p "$FD/alpha/raw"
+  check "it fails, and makes nothing, when raw/ can't be written" bash -c "
+    set -euo pipefail
+    [ \"\$(id -u)\" != 0 ] || exit 0
+    eval \"\$(sed -n '/^capture_place()/,/^}/p' '$W')\"
+    r='$T/cap/place2'; rm -rf \"\$r\"; mkdir -p \"\$r/raw\" \"\$r/hold\"
+    printf 'new note\n' > \"\$r/hold/note\"; chmod 555 \"\$r/raw\"
+    if capture_place \"\$r/hold/note\" \"\$r/raw\" s-x md s-x.md 2 >/dev/null; then chmod 755 \"\$r/raw\"; exit 1; fi
+    chmod 755 \"\$r/raw\"; [ -z \"\$(ls -A \"\$r/raw\")\" ]"
   csame "a file that isn't there" helper "$T" /dev/null alpha gone --file "$T/cap/gone.md"
   csame "a copy of one that isn't there" helper "$T" /dev/null alpha --copy "$T/cap/gone.md"
   csame "--file and --copy together" helper "$T" /dev/null alpha both --file "$T/cap/note.md" --copy "$T/cap/noext"
@@ -4600,7 +4650,7 @@ expect "extensions lists it with its description" "Says hello, for the smoke tes
 expect "the first word completes to it" "hello" "$W" __complete 1 he
 expect "and to extensions" "extensions" "$W" __complete 1 ex
 expect "extensions completes to path" "path" "$W" __complete 2 extensions ""
-expect "the usage names the command" "extensions [path | add <name> | remove <name> | setup <name> | settings <name> | set <name> <key> <value> | log <name> | tick | every ... | offer <name> no|never|again]" "$W" --help
+expect "the usage names the command" "extensions [path | add <name> | remove <name> | setup <name> | settings <name> | set <name> <key> <value> | log <name> | tick | every ... | offer <name> yes|no|never|again]" "$W" --help
 # A command of llm-wiki's own always wins.
 printf '#!/bin/sh\necho HIJACK\n' > "$XD/wiki-news"
 printf '#!/bin/sh\necho HIJACK\n' > "$XD/wiki-relay"
@@ -9751,6 +9801,16 @@ expect "a no is for one repository: another one with a Jenkinsfile still gets th
 "$W" extensions offer jenkins again "$OX/other" >/dev/null 2>&1
 "$W" extensions offer jenkins never "$OX/other" >/dev/null 2>&1
 [ -z "$("$W" __offer "$OX/other" 2>&1)" ] && ok "never stops it for every repository" || bad "never stops it for every repository" "$("$W" __offer "$OX/other" 2>&1)"
+# A yes: agents reach for it beside no, so it is an answer too.
+"$W" extensions remove jenkins >/dev/null 2>&1
+yesbefore="$(for f in "$OXO"/jenkins.*; do [ -e "$f" ] && printf '%s %s\n' "${f##*/}" "$(cat "$f")"; done)"
+out="$("$W" extensions offer jenkins yes "$OX/other" 2>&1)"; code=$?
+[ "$code" = 0 ] && case "$out" in *"on: jenkins."*"jenkins isn't set up yet: "*"Next: walk the user through wiki setup --guide jenkins"*) true ;; *) false ;; esac && ok "extensions offer <name> yes turns it on, says it isn't set up yet, and what comes next" || bad "extensions offer <name> yes turns it on, says it isn't set up yet, and what comes next" "exit $code: $out"
+expect "and it is on, as extensions add would leave it" "jenkins        Say what failed" "$W" extensions
+[ "$(for f in "$OXO"/jenkins.*; do [ -e "$f" ] && printf '%s %s\n' "${f##*/}" "$(cat "$f")"; done)" = "$yesbefore" ] && ok "a yes records no answer, so watching the clone can still be offered" || bad "a yes records no answer, so watching the clone can still be offered"
+expect "a second yes says it is already on" "jenkins is already on." "$W" extensions offer jenkins yes "$OX/other"
+check "a yes for an extension there isn't is refused" bash -c "! '$W' extensions offer nothere yes '$OX/other' >/dev/null 2>&1"
+"$W" extensions remove jenkins >/dev/null 2>&1
 check "a word that is no answer is refused with exit 2" bash -c "'$W' extensions offer jenkins maybe '$OX/other' >/dev/null 2>&1; [ \$? = 2 ]"
 check "so is an extension there isn't" bash -c "! '$W' extensions offer nothere no '$OX/other' >/dev/null 2>&1"
 # On, and not watching this clone.

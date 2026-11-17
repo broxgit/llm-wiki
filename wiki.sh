@@ -219,7 +219,7 @@ Usage: $WIKI_CMD <command> [options]
   obsidian [--no-open] Browse the wikis in Obsidian: write the vault's starter settings and open it.
   inbox                Take the notes you typed into an inbox folder, in Obsidian or any editor,
                        into the wikis. A session does it when it starts.
-  extensions [path | add <name> | remove <name> | setup <name> | settings <name> | set <name> <key> <value> | log <name> | tick | every ... | offer <name> no|never|again]
+  extensions [path | add <name> | remove <name> | setup <name> | settings <name> | set <name> <key> <value> | log <name> | tick | every ... | offer <name> yes|no|never|again]
                        Commands of your own: $WIKI_CMD <name> runs an executable named
                        wiki-<name> in the extensions folder. Lists them, or prints the folder.
                        add turns on one that ships with llm-wiki, such as jira. remove turns it off.
@@ -296,7 +296,7 @@ need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 # Raise GO_PROTOCOL, with the constant in cmd/llm-wiki/main.go, whenever a ported
 # command's arguments or output change. scripts/helper.sh builds releases and writes
 # helper.lock.
-GO_PROTOCOL=20
+GO_PROTOCOL=21
 HELPER_LOCK="$REPO/helper.lock"
 HELPER_DIR="${LLM_WIKI_HELPER_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/llm-wiki/helper}"
 
@@ -2043,10 +2043,57 @@ capture_run() {
   capture_note "$@"
 }
 
+# capture_drop <folder>: take away a capture's hidden folder and the copy in it. Never a failure.
+capture_drop() {
+  rm -f "$1/note" 2>/dev/null || true
+  rmdir "$1" 2>/dev/null || true
+}
+
+# capture_place <held file> <raw folder> <stamp-slug> <ext> <first name> <next number>: give the
+# held file a name in raw/ that nothing has, and print it. The name is taken by a link, which
+# fails when the name is there, so two captures in the same second, with the same slug, from
+# two sessions, are two notes: looking first and writing after let one write over the other.
+# Where a folder has no links (some network and cloud folders), the name is claimed by
+# making the file, which fails the same way, and the copy keeps the note's permissions when
+# the folder lets it. Fails only when raw/ can't be written. The held file is the caller's
+# to take away.
+capture_place() {
+  local held="$1" raw="$2" stem="$3" ext="$4" name="$5" n="$6" tries=0 again=0
+  while [ "$tries" -lt 1000 ]; do
+    tries=$((tries + 1))
+    if ln "$held" "$raw/$name" 2>/dev/null; then
+      printf '%s\n' "$name"
+      return 0
+    fi
+    if [ ! -e "$raw/$name" ] && [ ! -L "$raw/$name" ]; then
+      if ( set -o noclobber; : > "$raw/$name" ) 2>/dev/null; then
+        if cp -p "$held" "$raw/$name" 2>/dev/null || cp "$held" "$raw/$name" 2>/dev/null; then
+          printf '%s\n' "$name"
+          return 0
+        fi
+        rm -f "$raw/$name" 2>/dev/null || true
+        return 1
+      fi
+      # Neither linked nor made. If the name is there now, another capture took it: try the
+      # next. If it isn't, try this one again: the other may have given it up.
+      # Three times at most: a name that can't be made at all (too long, no room) is no race.
+      if [ ! -e "$raw/$name" ] && [ ! -L "$raw/$name" ]; then
+        again=$((again + 1))
+        [ "$again" -lt 3 ] && [ -w "$raw" ] || return 1
+        continue
+      fi
+    fi
+    again=0
+    name="$stem-$n.$ext"
+    n=$((n + 1))
+  done
+  return 1
+}
+
 # capture_note: what capture does, in Bash. The slug is made under LC_ALL=C, so it
 # doesn't depend on the locale and the compiled helper can make the same one.
 capture_note() {
-  local wiki="" slug="" copy="" file="" root stamp name ext stem n=2 tmp
+  local wiki="" slug="" copy="" file="" root stamp name ext stem n=2 tmp="" held hold placed
   while [ $# -gt 0 ]; do
     case "$1" in
       --copy) need_value "$@"; copy="${2:-}"; shift 2 ;;
@@ -2084,21 +2131,45 @@ capture_note() {
   # that was never written. So the note is built in a temp file and copied in one
   # checked step.
   mkdir -p "$root/raw" 2>/dev/null || die "$(cant_write "$root/raw")"
-  if [ -n "$copy" ]; then
-    cp "$copy" "$root/raw/$name" 2>/dev/null || die "$(cant_write "$root/raw/$name")"
-  else
+  # A note on stdin or in a file is read, and refused when empty, before anything is made in raw/.
+  if [ -z "$copy" ]; then
     tmp="$(mktemp)"
     if [ -n "$file" ]; then cat "$file" > "$tmp"; else cat > "$tmp"; fi
     if [ ! -s "$tmp" ]; then rm -f "$tmp"; die "capture got an empty note"; fi
-    if ! head -n 1 "$tmp" | grep -q '^Captured: '; then
-      { printf 'Captured: %s\n\n' "$(date -u +%Y-%m-%d)"; cat "$tmp"; } > "$tmp.note"
-      mv "$tmp.note" "$tmp"
-    fi
-    if ! cp "$tmp" "$root/raw/$name" 2>/dev/null; then
+    # The first ten bytes, not a pipe into grep: on a first line longer than a pipe holds,
+    # grep's early exit made the test fail and the line was added a second time.
+    case "$(head -c 10 "$tmp")" in
+      "Captured: ") ;;
+      *)
+        { printf 'Captured: %s\n\n' "$(date -u +%Y-%m-%d)"; cat "$tmp"; } > "$tmp.note"
+        mv "$tmp.note" "$tmp"
+        ;;
+    esac
+  fi
+  # The note is copied into a hidden folder of this capture's own in raw/ first, and then
+  # given its name. The folder is made by mktemp, so no two captures share one, whatever
+  # their process ids, and nothing that was there before is ever written to.
+  if ! hold="$(mktemp -d "$root/raw/.capture-XXXXXX" 2>/dev/null)"; then
+    [ -z "$tmp" ] || rm -f "$tmp"
+    die "$(cant_write "$root/raw/$name")"
+  fi
+  held="$hold/note"
+  if [ -n "$copy" ]; then
+    if ! cp "$copy" "$held" 2>/dev/null; then capture_drop "$hold"; die "$(cant_write "$root/raw/$name")"; fi
+  else
+    if ! cp "$tmp" "$held" 2>/dev/null; then
       rm -f "$tmp"
+      capture_drop "$hold"
       die "$(cant_write "$root/raw/$name")"
     fi
     rm -f "$tmp"
+  fi
+  if placed="$(capture_place "$held" "$root/raw" "$stamp-$slug" "$ext" "$name" "$n")" && [ -n "$placed" ]; then
+    name="$placed"
+    capture_drop "$hold"
+  else
+    capture_drop "$hold"
+    die "$(cant_write "$root/raw/$name")"
   fi
   echo "captured: raw/$name in $(tilde "$root")"
 }
@@ -8596,15 +8667,28 @@ offer_lines() {
   return 0
 }
 
-# extensions offer <name> no|never|again [<folder>]: the user's answer, for the folder's repository or, with never, for all.
+# extensions offer <name> yes|no|never|again [<folder>]: the user's answer, for the folder's repository or, with never, for all.
 offer_answer() {
-  local n="$1" what="$2" dir="${3:-$PWD}" key
+  local n="$1" what="$2" dir="${3:-$PWD}" key d
   ext_name_ok "$n" || die_usage "$n isn't an extension's name"
   ext_file "$n" >/dev/null || ext_shipped "$n" >/dev/null || die "no extension called $n. $WIKI_CMD extensions lists them."
   [ -d "$dir" ] || die_usage "$dir isn't a folder"
   git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || die "$(tilde "$dir") isn't in a repository. Do: run it inside the repository, or name its folder: $WIKI_CMD extensions offer $n $what <folder>"
   key="$(offer_key "$dir")" && [ -n "$key" ] || die "can't tell which repository $dir is in"
   case "$what" in
+    yes)
+      # The user's yes: turn it on, as `extensions add` does, and say what comes next. Nothing
+      # is recorded, so the offer to watch this clone can still follow.
+      if ext_shipped "$n" >/dev/null && ! ext_on "$n" && [ ! -f "$EXT_DIR/wiki-$n" ]; then
+        ext_set "$n" on
+        setup_mark "extension.$n"
+        ui_item ok "on: $n."
+      else
+        ui_item ok "$n is already on."
+      fi
+      d="$(ext_ready "$n")" || ui_item warn "$n isn't set up yet: $d"
+      ui_next "walk the user through $WIKI_CMD setup --guide $n"
+      ;;
     no)
       ( umask 077; mkdir -p "$OFFER_DIR" && echo no > "$OFFER_DIR/$n.$key" ) 2>/dev/null || die "can't write $OFFER_DIR. Do: make it writable"
       ui_item ok "$n won't be offered for this repository again. To undo: $WIKI_CMD extensions offer $n again"
@@ -9061,8 +9145,8 @@ cmd_extensions() {
       return 0
       ;;
     offer)
-      { [ $# -eq 3 ] || [ $# -eq 4 ]; } || die_usage "usage: $WIKI_CMD extensions offer <name> no|never|again [<folder>]"
-      case "$3" in no | never | again) ;; *) die_usage "usage: $WIKI_CMD extensions offer <name> no|never|again [<folder>]" ;; esac
+      { [ $# -eq 3 ] || [ $# -eq 4 ]; } || die_usage "usage: $WIKI_CMD extensions offer <name> yes|no|never|again [<folder>]"
+      case "$3" in yes | no | never | again) ;; *) die_usage "usage: $WIKI_CMD extensions offer <name> yes|no|never|again [<folder>]" ;; esac
       offer_answer "$2" "$3" "${4:-}"
       return 0
       ;;

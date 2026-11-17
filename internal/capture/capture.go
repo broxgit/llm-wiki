@@ -117,12 +117,33 @@ func Run(o Options) (string, error) {
 	// The clock, to the second, in UTC. The name sets ingest order, so never round it.
 	stamp := now().UTC().Format("2006-01-02-150405")
 	name := stamp + "-" + slug + "." + ext
-	for n := 2; exists(root + "/raw/" + name); n++ {
+	n := 2
+	for ; exists(root + "/raw/" + name); n++ {
 		name = stamp + "-" + slug + "-" + strconv.Itoa(n) + "." + ext
 	}
 	dest := root + "/raw/" + name
 	if err := os.MkdirAll(root+"/raw", 0o777); err != nil {
 		return "", refuse(o.cantWrite(root + "/raw"))
+	}
+	// place writes the note under a name nothing has. The name above was free when it was
+	// looked at, and another capture may take it before this one writes: two sessions, the
+	// same second, the same slug. So the file is made only if it isn't there, and when it
+	// is, the next name is tried. Looking first and writing after let one note write over
+	// another.
+	place := func(data []byte, perm os.FileMode) error {
+		for tries := 0; tries < 1000; tries++ {
+			err := write(dest, data, perm)
+			if err == nil {
+				return nil
+			}
+			if !errors.Is(err, os.ErrExist) {
+				return err
+			}
+			name = stamp + "-" + slug + "-" + strconv.Itoa(n) + "." + ext
+			dest = root + "/raw/" + name
+			n++
+		}
+		return os.ErrExist
 	}
 	if copyFrom != "" {
 		// cp gives the copy the file's own permissions, less the umask.
@@ -131,7 +152,7 @@ func Run(o Options) (string, error) {
 			return "", refuse(o.cantWrite(dest))
 		}
 		data, err := os.ReadFile(copyFrom)
-		if err != nil || write(dest, data, info.Mode().Perm()) != nil {
+		if err != nil || place(data, info.Mode().Perm()) != nil {
 			return "", refuse(o.cantWrite(dest))
 		}
 	} else {
@@ -157,7 +178,7 @@ func Run(o Options) (string, error) {
 			note = append([]byte("Captured: "+now().UTC().Format("2006-01-02")+"\n\n"), note...)
 			perm = 0o666
 		}
-		if write(dest, note, perm) != nil {
+		if place(note, perm) != nil {
 			return "", refuse(o.cantWrite(dest))
 		}
 	}
@@ -192,17 +213,24 @@ func Slug(s string) string {
 	return strings.TrimSuffix(strings.TrimPrefix(out, "-"), "-")
 }
 
-// write is cp onto a path: the file is made or emptied, a link followed.
+// write makes the file and fills it. It fails, with os.ErrExist, when the path is there
+// already, a link included: nothing is ever emptied or written over.
 func write(path string, data []byte, perm os.FileMode) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
 	if err != nil {
 		return err
 	}
 	if _, err := f.Write(data); err != nil {
 		_ = f.Close()
+		// The file was made here, a moment ago, and holds part of a note at most.
+		_ = os.Remove(path)
 		return err
 	}
-	return f.Close()
+	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
+		return err
+	}
+	return nil
 }
 
 func isFile(path string) bool {
