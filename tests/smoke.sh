@@ -2433,6 +2433,10 @@ out="$("$W" feedback show "$n" 2>&1)"
 case "$out" in "[bug] sync without a name only says name a wiki"*) ok "show drafts the issue, title first" ;; *) bad "show drafts the issue, title first" "$out" ;; esac
 case "$out" in *"$HOME"*|*"demo:wiki"*|*" demo wiki"*|*acme*|*someone@example.com*|*ghp_*) bad "the draft has home paths, project names, remotes, emails and tokens scrubbed" "$out" ;; *) ok "the draft has home paths, project names, remotes, emails and tokens scrubbed" ;; esac
 case "$out" in *"https://github.com/broxgit/llm-wiki/issues"*) ok "but keeps llm-wiki's own repository" ;; *) bad "but keeps llm-wiki's own repository" "$out" ;; esac
+out="$("$W" feedback show 2>&1)"; rc=$?
+case "$rc:$out" in 1:"error: name a note: "*) case "$out" in *sed:*|*"**Agent:**"*) bad "show with no note named says so and stops" "$out" ;; *) ok "show with no note named says so and stops" ;; esac ;; *) bad "show with no note named says so and stops" "$rc $out" ;; esac
+out="$("$W" feedback show no-such-note 2>&1)"
+case "$out" in *"**Agent:**"*|*sed:*) bad "and so does show with a name no note has" "$out" ;; *"no feedback note"*) ok "and so does show with a name no note has" ;; *) bad "and so does show with a name no note has" "$out" ;; esac
 expect "send needs a terminal, so an agent can't file one" "needs a terminal" bash -c "'$W' feedback send '$n' </dev/null"
 cat > "$T/bin/gh" <<EOF
 #!/bin/sh
