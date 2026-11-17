@@ -4,6 +4,12 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-12-31: an extension is offered where it fits
+
+- A session that starts in a repository with a `Jenkinsfile`, a GitLab remote or GitHub workflows offers you the extension for it, if you don't use it there.
+- It asks in two sessions at most. A no is kept for that repository: `wiki extensions offer <name> no`, or `never` for every repository.
+- An extension of your own can be offered the same way, with a `wiki-detect:` comment. `docs/extensions.md` has it.
+
 ## 2026-12-30: wiki jenkins takes a job in an organization folder
 
 - A job named after its GitLab or GitHub path, such as `group%2Fapp`, was refused. It is accepted now, as a path or as its address.

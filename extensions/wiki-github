@@ -3,6 +3,7 @@
 # wiki-events: tick
 # wiki-setup: yes
 # wiki-settings: yes
+# wiki-detect: .github/workflows+remote:github
 """wiki github: an llm-wiki extension. Standard library only.
 
 For agents that have no CI watching of their own. It asks GitHub, through the gh program, which
@@ -2405,6 +2406,8 @@ def main(argv):
         return wiki_set(argv[1:])
     if argv and argv[0] == "--wiki-event":
         return on_event(argv[1:])
+    if argv and argv[0] == "--wiki-watches":
+        return cc.watches(watched(), argv[1:])
     if argv and argv[0] == "--wiki-ready":
         msg = ready()
         if msg:
