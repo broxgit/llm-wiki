@@ -10523,6 +10523,26 @@ check "so does another" grep -qx 'journal.depth' "$GCFG/setup"
 gw helper auto off >/dev/null 2>&1
 check "helper auto counts as answering the helper step" grep -qx 'helper' "$GCFG/setup"
 expect "status now counts only what is left, and names the guide" 'new setting(s). Run: wiki setup --new. Or ask an agent: "run wiki setup --guide and walk me through it"' gw status
+# From a real setup (2026-11-17): depth is hard to answer in the abstract, and the default
+# would have missed a repository six folders down. journal depth says what it reaches here.
+JD="$T/jdepth"; mkdir -p "$JD/home/dev/near/.git" "$JD/home/dev/a/b/c/d/e/far/.git" "$JD/home/dev/node_modules/pkg/.git"
+jd() { env HOME="$JD/home" WIKIS_DIR="$JD/home/wikis" LLM_WIKI_CMD=wiki "$W" "$@"; }
+jd init >/dev/null 2>&1
+mkdir -p "$JD/home/dev/near/worktrees/w1/x/y/z/q/r/s/.git"
+out="$(jd journal depth 2>&1)"
+case "$out" in *"depth 4 misses 1 of 2 repositories found. The deepest needs 7: ~/dev/a/b/c/d/e/far"*"To reach them all: wiki journal set depth 7"*) ok "journal depth says what the setting misses, the deepest repository, and the value that reaches it" ;; *) bad "journal depth says what the setting misses, the deepest repository, and the value that reaches it" "$out" ;; esac
+lacks "a folder of other people's code isn't counted" "node_modules" jd journal depth
+lacks "nor is a repository inside another, which would push the answer to the limit" "worktrees" jd journal depth
+check "it changes nothing" test "$(jd journal | grep -c 'depth.*4')" -ge 1
+jd journal set depth 7 >/dev/null 2>&1
+expect "at the value it gave, nothing is missed" "depth 7 reaches all 2 repositories found. The deepest needs 7: ~/dev/a/b/c/d/e/far" jd journal depth
+expect "the guide tells the agent not to guess the number" "Don't guess a number: wiki journal depth says what reaches every repository" jd setup --guide journal.depth
+out="$(printf '\n' | env HOME="$JD/home" WIKIS_DIR="$JD/home/wikis" LLM_WIKI_CMD=wiki LLM_WIKI_TEST_TTY=1 "$W" setup journal.depth 2>&1)"
+case "$out" in *"Now, depth 7 reaches all 2 repositories found."*) ok "setup's own question says what the number reaches on this machine" ;; *) bad "setup's own question says what the number reaches on this machine" "$out" ;; esac
+jd journal set code_dirs "$JD/home/nowhere" >/dev/null 2>&1
+expect "with no repository found it says where it looked, and how to say where the code is" "No repository found under" jd journal depth
+check "it takes no other word" test "$(jd journal depth 9 >/dev/null 2>&1; echo $?)" = 2
+expect "the usage names it" "journal depth" jd --help
 
 # Setup from start to finish, for someone new: why, the questions, how they work, then tips
 # and how to help. A fresh machine, and every answer Enter.
