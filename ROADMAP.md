@@ -18,6 +18,14 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 - **Sketch:** everything the first two extensions needed is done (see Done): the command seam, events, a sign-in they share, a wiki's content as data, and settings a session can change. GitHub Actions is the third, with GitLab CI and Jenkins after it (all four stages are done, see Done). Still to do: moving `wiki obsidian` out, and a third extension written by someone else as the real test of the contract. An unattended fix for GitLab CI or Jenkins only if it is asked for, with a review of its own: none exists today, and neither extension writes anywhere.
 - **Open:** how a team shares extensions. They are per machine on purpose, so a pull can't add a command. A shared collection could carry them behind a step that asks each person once, on each machine, whether to trust each one. Where extensions that ship with llm-wiki live, and whether `wiki update` installs them. How an extension adds a handbook rule without `wiki upgrade` dropping it, and what that costs in context. Whether the helper needs to know about extensions at all.
 
+### A release plan, before a whole team gets it
+
+- **Why:** merging to `main` is the release today, and every user gets it at once. That is fine for a few people and not for a team of a hundred: there is no version to name when something breaks, no way back to the one before, and no way to hold a change until it is ready. Asked for on 2026-11-17: release and distribution that are official and follow current practice.
+- **Sketch:** llm-wiki as a whole gets a release version, 1.0 on the day the team gets it, with patch, minor and major meaning fixes, additions, and "read this first". A release is a tag made on purpose, with notes, and `main` may be ahead of it. `wiki update` follows releases, and can go back to one. The handbook keeps its own counter (38 now) as an internal revision that a release carries: setting it back to 1 would put every existing wiki ahead of the template. The changelog before 1.0 folds into one section. What is shipped is signed or checksummed, as the helper already is, and a release is tried on a few machines before everyone gets it.
+- **What Claude Code gives us (read in its documentation on 2026-11-17, not tried):** a plugin with no `version` in its manifest has its commit as its version, which is why every merge reaches everyone. With a `version`, a plugin updates only when that string changes. A marketplace can be added at a branch or tag (`owner/repo@ref`), and then follows that ref. There is no command to install an earlier version or to go back: holding people on one is done by the ref they follow. An organization can name the marketplace, its ref and whether it updates by itself in managed settings. `claude plugin tag` makes a release tag and checks the manifest agrees.
+- **So, in stages:** (1) try it in a throwaway repository: a `version` in the manifest, a `stable` branch, an update, and going back, since the last is not documented; (2) a `version` in the manifest, a `stable` branch that moves only at a release, a release made by CI from a tag (the whole suite, the helper built and checked against its lock, notes from `NEWS.md`, a build attestation), and `wiki update` saying which version it left and reached; (3) moving the people who follow `main` today onto `stable`, and a way to follow `main` on purpose; (4) a page for an organization: the managed settings that name the marketplace and its ref.
+- **Open:** Whether the Codex, Antigravity and Cursor plugins follow the same version. Whether Homebrew becomes a second way to install: it can't run `wiki uninstall`, and two installs can disagree about which version runs, so it waits for the Go port to leave one binary. Whether machine settings get a version of their own with a step that runs when it is behind, which `wiki uninstall` made the inventory for. Who may cut a release, and what has to pass first.
+
 ### Learn where a person works, by asking
 
 - **Why:** llm-wiki assumed a session belongs to one repository. Most of one team starts sessions in a folder for a ticket, which holds clones, and for weeks their project wikis never loaded and nothing said so. Decided on 2026-11-11: never guess silently; ask when unsure; write what is learned into the person's own wiki, so the questions get rarer.
@@ -84,6 +92,21 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### Comments on merge requests and pull requests reach a session (2026-11-17)
+
+- **Why:** asked for on 2026-11-17: an agent with no watching of its own never learns that someone commented on its user's merge request.
+- **What changed:** with `comments = yes`, off by default, `wiki gitlab` and `wiki github` leave one line for the next session on the branch: how many comments, from whom, and the command that prints them, never what was written. `wiki gitlab comments` and `wiki github comments` print them, each line marked as text from outside. A review found a name check in all three CI extensions that let a trailing newline through; names are now tested whole.
+
+### `wiki jenkins` works out a clone's job from its remote (2026-11-17)
+
+- **Why:** where jobs are named after the repository, as in an organization folder, naming the job for every clone is the same sentence a hundred times. Found on the first try against a real Jenkins, which also showed that a job named after a GitLab path (`group%2Fapp`) was refused.
+- **What changed:** `job_pattern`, such as `Platform/{path}`, names the job for a clone with a `Jenkinsfile`; `job_remote` limits it to a host and group; `job_auto` watches such a clone when a session starts in it. A job's name may hold `%XX`.
+
+### A session offers the CI extension that fits the repository (2026-11-17)
+
+- **Why:** an extension nobody turns on does nothing, and the people it would help most don't know it is there.
+- **What changed:** an extension says what it is for in a `wiki-detect:` comment. A session that starts in a matching clone is told to offer it, once in a session and in two sessions at most, and `wiki extensions offer <name> no|never|again` keeps the answer.
 
 ### Extensions: GitLab CI and Jenkins, stage 4 (2026-11-16)
 

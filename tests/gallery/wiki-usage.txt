@@ -3,6 +3,9 @@
   setup                Walk through every setting, step by step. Safe to rerun.
   setup --new          Only what's new since you last ran it, such as after a template update.
   setup --list         Print current settings without asking.
+  setup --fresh        Start again from nothing, keeping your wikis.
+  uninstall [--dry-run]
+                       Undo what setup did on this machine. Your wikis and settings are kept.
   setup --guide [section]
                        Text for your agent to walk you through setup in your session.
   init                 Create the wiki collection at <tmp>/wikis and its shared wiki, global.

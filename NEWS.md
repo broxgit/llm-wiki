@@ -10,6 +10,12 @@ Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title i
 - It works from Obsidian, a phone or any editor. A note is taken once it has been left alone for two minutes.
 - `wiki inbox` takes what is ready now and says why anything was left. `wiki obsidian` makes the collection's inbox.
 
+## 2027-01-04: wiki uninstall, and setup from nothing
+
+- `wiki uninstall` undoes what setup did on this machine and keeps your wikis. It asks first, and `--dry-run` only says what it would do.
+- Your settings are moved to `~/llm-wiki-removed-<time>`, never deleted. It lists what it leaves, such as the plugin, and how to remove that.
+- `wiki setup --fresh` does the same, then walks through setup as if for the first time.
+
 ## 2027-01-03: wiki github tells a session about new comments
 
 - With `comments = yes`, a new comment or review from someone else on your open pull request is handed to the next session on that branch.
