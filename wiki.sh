@@ -296,7 +296,7 @@ need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 # Raise GO_PROTOCOL, with the constant in cmd/llm-wiki/main.go, whenever a ported
 # command's arguments or output change. scripts/helper.sh builds releases and writes
 # helper.lock.
-GO_PROTOCOL=20
+GO_PROTOCOL=21
 HELPER_LOCK="$REPO/helper.lock"
 HELPER_DIR="${LLM_WIKI_HELPER_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/llm-wiki/helper}"
 
@@ -2043,10 +2043,57 @@ capture_run() {
   capture_note "$@"
 }
 
+# capture_drop <folder>: take away a capture's hidden folder and the copy in it. Never a failure.
+capture_drop() {
+  rm -f "$1/note" 2>/dev/null || true
+  rmdir "$1" 2>/dev/null || true
+}
+
+# capture_place <held file> <raw folder> <stamp-slug> <ext> <first name> <next number>: give the
+# held file a name in raw/ that nothing has, and print it. The name is taken by a link, which
+# fails when the name is there, so two captures in the same second, with the same slug, from
+# two sessions, are two notes: looking first and writing after let one write over the other.
+# Where a folder has no links (some network and cloud folders), the name is claimed by
+# making the file, which fails the same way, and the copy keeps the note's permissions when
+# the folder lets it. Fails only when raw/ can't be written. The held file is the caller's
+# to take away.
+capture_place() {
+  local held="$1" raw="$2" stem="$3" ext="$4" name="$5" n="$6" tries=0 again=0
+  while [ "$tries" -lt 1000 ]; do
+    tries=$((tries + 1))
+    if ln "$held" "$raw/$name" 2>/dev/null; then
+      printf '%s\n' "$name"
+      return 0
+    fi
+    if [ ! -e "$raw/$name" ] && [ ! -L "$raw/$name" ]; then
+      if ( set -o noclobber; : > "$raw/$name" ) 2>/dev/null; then
+        if cp -p "$held" "$raw/$name" 2>/dev/null || cp "$held" "$raw/$name" 2>/dev/null; then
+          printf '%s\n' "$name"
+          return 0
+        fi
+        rm -f "$raw/$name" 2>/dev/null || true
+        return 1
+      fi
+      # Neither linked nor made. If the name is there now, another capture took it: try the
+      # next. If it isn't, try this one again: the other may have given it up.
+      # Three times at most: a name that can't be made at all (too long, no room) is no race.
+      if [ ! -e "$raw/$name" ] && [ ! -L "$raw/$name" ]; then
+        again=$((again + 1))
+        [ "$again" -lt 3 ] && [ -w "$raw" ] || return 1
+        continue
+      fi
+    fi
+    again=0
+    name="$stem-$n.$ext"
+    n=$((n + 1))
+  done
+  return 1
+}
+
 # capture_note: what capture does, in Bash. The slug is made under LC_ALL=C, so it
 # doesn't depend on the locale and the compiled helper can make the same one.
 capture_note() {
-  local wiki="" slug="" copy="" file="" root stamp name ext stem n=2 tmp
+  local wiki="" slug="" copy="" file="" root stamp name ext stem n=2 tmp="" held hold placed
   while [ $# -gt 0 ]; do
     case "$1" in
       --copy) need_value "$@"; copy="${2:-}"; shift 2 ;;
@@ -2084,21 +2131,45 @@ capture_note() {
   # that was never written. So the note is built in a temp file and copied in one
   # checked step.
   mkdir -p "$root/raw" 2>/dev/null || die "$(cant_write "$root/raw")"
-  if [ -n "$copy" ]; then
-    cp "$copy" "$root/raw/$name" 2>/dev/null || die "$(cant_write "$root/raw/$name")"
-  else
+  # A note on stdin or in a file is read, and refused when empty, before anything is made in raw/.
+  if [ -z "$copy" ]; then
     tmp="$(mktemp)"
     if [ -n "$file" ]; then cat "$file" > "$tmp"; else cat > "$tmp"; fi
     if [ ! -s "$tmp" ]; then rm -f "$tmp"; die "capture got an empty note"; fi
-    if ! head -n 1 "$tmp" | grep -q '^Captured: '; then
-      { printf 'Captured: %s\n\n' "$(date -u +%Y-%m-%d)"; cat "$tmp"; } > "$tmp.note"
-      mv "$tmp.note" "$tmp"
-    fi
-    if ! cp "$tmp" "$root/raw/$name" 2>/dev/null; then
+    # The first ten bytes, not a pipe into grep: on a first line longer than a pipe holds,
+    # grep's early exit made the test fail and the line was added a second time.
+    case "$(head -c 10 "$tmp")" in
+      "Captured: ") ;;
+      *)
+        { printf 'Captured: %s\n\n' "$(date -u +%Y-%m-%d)"; cat "$tmp"; } > "$tmp.note"
+        mv "$tmp.note" "$tmp"
+        ;;
+    esac
+  fi
+  # The note is copied into a hidden folder of this capture's own in raw/ first, and then
+  # given its name. The folder is made by mktemp, so no two captures share one, whatever
+  # their process ids, and nothing that was there before is ever written to.
+  if ! hold="$(mktemp -d "$root/raw/.capture-XXXXXX" 2>/dev/null)"; then
+    [ -z "$tmp" ] || rm -f "$tmp"
+    die "$(cant_write "$root/raw/$name")"
+  fi
+  held="$hold/note"
+  if [ -n "$copy" ]; then
+    if ! cp "$copy" "$held" 2>/dev/null; then capture_drop "$hold"; die "$(cant_write "$root/raw/$name")"; fi
+  else
+    if ! cp "$tmp" "$held" 2>/dev/null; then
       rm -f "$tmp"
+      capture_drop "$hold"
       die "$(cant_write "$root/raw/$name")"
     fi
     rm -f "$tmp"
+  fi
+  if placed="$(capture_place "$held" "$root/raw" "$stamp-$slug" "$ext" "$name" "$n")" && [ -n "$placed" ]; then
+    name="$placed"
+    capture_drop "$hold"
+  else
+    capture_drop "$hold"
+    die "$(cant_write "$root/raw/$name")"
   fi
   echo "captured: raw/$name in $(tilde "$root")"
 }
