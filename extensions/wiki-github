@@ -182,7 +182,7 @@ def allow_list(text):
         if not e:
             continue
         first = os.path.basename(e.split(" ")[0]).lower()
-        if ALLOW_OK.match(e) and first not in ALLOW_NEVER and len(e) <= 120:
+        if ALLOW_OK.fullmatch(e) and first not in ALLOW_NEVER and len(e) <= 120:
             if e not in good:
                 good.append(e)
         else:
@@ -210,7 +210,7 @@ def settings():
         "desktop": is_yes(own.get("desktop", DEFAULTS["desktop"])),
         "fix": [os.path.expanduser(p.strip()) for p in own.get("fix", "").split(",") if p.strip()],
         "fix_agent": agent if not unfit(agent) else FIX_DEFAULTS["fix_agent"],
-        "fix_model": model if MODEL_OK.match(model) else FIX_DEFAULTS["fix_model"],
+        "fix_model": model if MODEL_OK.fullmatch(model) else FIX_DEFAULTS["fix_model"],
         "fix_allow": allow,
         "fix_allow_bad": allow_bad,
         "fix_max_files": bounded(own.get("fix_max_files", ""), FIX_DEFAULTS["fix_max_files"], 1, 100),
@@ -342,7 +342,7 @@ def repo_info(folder):
     """The repository the folder is a clone of: name as owner/repo, default branch and address."""
     d = gh_json(["repo", "view", "--json", "nameWithOwner,defaultBranchRef,url"], "look up the repository", cwd=folder)
     name = d.get("nameWithOwner") if isinstance(d, dict) else ""
-    if not isinstance(name, str) or not REPO_NAME.match(name):
+    if not isinstance(name, str) or not REPO_NAME.fullmatch(name):
         raise NotGitHub("gh didn't name a repository")
     default = (d.get("defaultBranchRef") or {}).get("name") or ""
     return {"name": name, "default": clean(default, 250), "url": clean(d.get("url") or "", 300)}
@@ -814,7 +814,7 @@ def now_iso():
 
 
 def branch_ok(b):
-    return (isinstance(b, str) and 0 < len(b) <= 200 and bool(BRANCH_OK.match(b)) and not b.startswith(("-", "/")) and ".." not in b
+    return (isinstance(b, str) and 0 < len(b) <= 200 and bool(BRANCH_OK.fullmatch(b)) and not b.startswith(("-", "/")) and ".." not in b
             and "//" not in b and not b.endswith(("/", ".", ".lock")) and "@{" not in b)
 
 
@@ -847,7 +847,7 @@ def fix_plan(info, o, key, prev, state, stale_run):
     atts = attempts_of(state, info["name"])
     if stale_run:
         return "no", f"that run is more than {NOTICE_DAYS} days old"
-    if not o["sha"] or not SHA_OK.match(o["sha"]):
+    if not o["sha"] or not SHA_OK.fullmatch(o["sha"]):
         return "no", "the run's commit isn't known"
     route, why = fix_route(info, o)
     if not route:
@@ -1474,7 +1474,7 @@ def freeze(wt, admin, sha, conf):
             refuse(f"the change touches {clean(p, 80)}: {why}")
     wg(wt, admin, "--literal-pathspecs", "add", "-A", "--", *paths)
     tree = wg(wt, admin, "write-tree").decode().strip()
-    if not SHA_OK.match(tree):
+    if not SHA_OK.fullmatch(tree):
         raise FixStop("failed: git write-tree didn't give a tree")
     if tree == wg(wt, admin, "rev-parse", f"{sha}^{{tree}}").decode().strip():
         raise FixStop("no fix: the agent changed nothing that git keeps")
@@ -1617,7 +1617,7 @@ def still_mine(repo, rid, token):
 
 def fix_run(fkey):
     """--fix-run <owner/repo/run id>: the fix itself. Not for people."""
-    m = FIXKEY.match(fkey or "")
+    m = FIXKEY.fullmatch(fkey or "")
     if not m:
         die_usage(f"--fix-run takes a state key, and isn't for people. {CMD} starts it itself when fixing is on: {CMD} github fix")
     repo, rid = m.group(1), int(m.group(2))
@@ -1725,7 +1725,7 @@ def fix_steps(repo, a, conf, token):
         raise FixStop("skipped: fixing was turned off for this clone")
     if not os.path.isdir(clone):
         raise FixStop("failed: the clone is gone")
-    if not (branch_ok(branch) and SHA_OK.match(sha or "") and branch_ok(default) and route in ("pr", "default")):
+    if not (branch_ok(branch) and SHA_OK.fullmatch(sha or "") and branch_ok(default) and route in ("pr", "default")):
         refuse("the branch or the commit named for this run isn't one it will push to")
     if route == "pr" and branch == default:
         refuse("that would be a push to the default branch")
@@ -1806,7 +1806,7 @@ def fix_steps(repo, a, conf, token):
         first, message = commit_message(repo, a, conf, said)
         ident = {"GIT_AUTHOR_NAME": name, "GIT_AUTHOR_EMAIL": email, "GIT_COMMITTER_NAME": name, "GIT_COMMITTER_EMAIL": email}
         new = wg(wt, admin, "commit-tree", tree, "-p", sha, input=message.encode("utf-8"), env=ident).decode().strip()
-        if not SHA_OK.match(new):
+        if not SHA_OK.fullmatch(new):
             raise FixStop("failed: git commit-tree didn't give a commit")
         head = wg(wt, admin, "cat-file", "commit", new).split(b"\n\n", 1)[0].split(b"\n")
         parents = [l[7:].decode() for l in head if l.startswith(b"parent ")]
@@ -2213,7 +2213,7 @@ def setup_fix(conf):
     files = ask_text("  Most files a fix may change?", str(conf["fix_max_files"]))
     lines = ask_text("  Most changed lines (added plus removed)?", str(conf["fix_max_lines"]))
     for key, value in (("fix_agent", agent), ("fix_model", model)):
-        if value and not unfit(value) and "#" not in value and (key == "fix_agent" or MODEL_OK.match(value)):
+        if value and not unfit(value) and "#" not in value and (key == "fix_agent" or MODEL_OK.fullmatch(value)):
             set_conf(CONFIG, key, "" if value == FIX_DEFAULTS[key] else value)
         else:
             print(f"  {key} wasn't changed: that isn't something it can hold.")
