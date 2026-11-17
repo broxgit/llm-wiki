@@ -2,17 +2,45 @@
 # to main without these passing. See docs/maintaining.md.
 name: CI
 
+# A pull request's commits run this once, as a pull request. A push runs it only on main,
+# which is what people get. To run it on a branch that has no pull request: Actions, CI,
+# "Run workflow".
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
+  # Whether the change needs the suite. A change to files nothing reads, such as ROADMAP.md,
+  # doesn't: scripts/ci-changes.sh has the list and says why it is short. When it can't
+  # tell what changed, the suite runs.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      suite: ${{ steps.what.outputs.suite }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Does this change need the suite?
+        id: what
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          suite=true
+          if [ -n "$BASE" ] && files="$(git diff --name-only "$BASE...$HEAD" 2>/dev/null)"; then
+            suite="$(printf '%s\n' "$files" | scripts/ci-changes.sh)"
+          fi
+          echo "suite=$suite" | tee -a "$GITHUB_OUTPUT"
+
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: shellcheck
-        run: shellcheck -S warning wiki.sh ui.sh tests/ui-lint.sh scripts/gallery.sh hooks/session-start.sh hooks/pre-tool-use.sh hooks/user-prompt.sh hooks/pre-commit scripts/migrate-to-plugin.sh scripts/helper.sh tests/smoke.sh tests/smoke-parts.sh tests/budget.sh
+        run: shellcheck -S warning wiki.sh ui.sh tests/ui-lint.sh scripts/gallery.sh hooks/session-start.sh hooks/pre-tool-use.sh hooks/user-prompt.sh hooks/pre-commit scripts/migrate-to-plugin.sh scripts/helper.sh scripts/ci-changes.sh tests/smoke.sh tests/smoke-parts.sh tests/budget.sh
       - name: The smoke matrix runs every part of the suite
         run: test "$(tests/smoke.sh --list | cut -f 1 | sort -un | paste -sd ' ' -)" = "1 2 3 4"
       - uses: actions/setup-node@v4
@@ -22,6 +50,8 @@ jobs:
         run: npx --yes @anthropic-ai/claude-code@2.1.170 plugin validate .
 
   go:
+    needs: changes
+    if: needs.changes.outputs.suite == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -39,6 +69,8 @@ jobs:
   # The released helper must be exactly what helper.lock says, on a machine that isn't
   # the one that wrote the lock. The lock names the compiler, and go fetches it.
   helper:
+    needs: changes
+    if: needs.changes.outputs.suite == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -88,6 +120,8 @@ jobs:
   # tests/smoke.sh, which the lint job checks. docs/maintaining.md has how to change it.
   smoke:
     name: smoke part ${{ matrix.part }} (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.suite == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -135,14 +169,23 @@ jobs:
           SMOKE_TIMES=1 tests/smoke.sh --part ${{ matrix.part }}
 
   # Branch protection requires checks named smoke (ubuntu-latest) and smoke (macos-latest),
-  # from before the parts. These pass when every part passed, on both systems.
+  # from before the parts. These pass when every part passed, on both systems, or when the
+  # change needed no suite and so no part ran. Nothing else passes: a suite that was needed
+  # and was skipped, cancelled or failed is a failure here.
   smoke-result:
     name: smoke (${{ matrix.os }})
-    needs: smoke
+    needs: [changes, smoke]
     if: always()
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ubuntu-latest
     steps:
-      - run: test "${{ needs.smoke.result }}" = success
+      - env:
+          SUITE: ${{ needs.changes.outputs.suite }}
+          CHANGES: ${{ needs.changes.result }}
+          SMOKE: ${{ needs.smoke.result }}
+        run: |
+          echo "changes: $CHANGES, suite needed: $SUITE, smoke: $SMOKE"
+          if [ "$SMOKE" = success ]; then exit 0; fi
+          [ "$CHANGES" = success ] && [ "$SUITE" = false ] && [ "$SMOKE" = skipped ]

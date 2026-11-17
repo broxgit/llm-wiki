@@ -74,7 +74,7 @@ That depends on the build being reproducible: the same source, compiler and flag
 - **After changing anything under `cmd/` or `internal/`** (tests aside), run `scripts/helper.sh lock` and commit `helper.lock`. A smoke test fails when the lock is behind the source.
 - **CI's `helper` job** builds every platform on Linux, fails unless the result is what the lock says, and publishes it as the release `helper-<source hash>`. It does this on the pull request, so the release exists before the merge.
 - **To move to a newer compiler,** change the `toolchain` line in `helper.lock` and run `scripts/helper.sh lock`.
-- **A pull request from a fork** can't publish. Push its branch to this repository to release it.
+- **A pull request from a fork** can't publish. Push its branch to this repository and open a pull request from that, or run CI on the branch by hand (Actions, CI, "Run workflow"), to release it.
 
 Session start fetches too, in the background, when the release a checkout names isn't on the machine: the Claude Code hook and `wiki start` both call `helper_auto`. It is quiet, tries once in six hours, and `wiki helper auto off` turns it off. `wiki setup` asks about it once.
 
