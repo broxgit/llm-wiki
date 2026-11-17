@@ -1,0 +1,997 @@
+#!/usr/bin/env python3
+# wiki-extension: Say what failed in GitLab CI and why, and note in the wiki when it is fixed.
+# wiki-events: tick
+# wiki-setup: yes
+# wiki-settings: yes
+"""wiki gitlab: an llm-wiki extension. Standard library only.
+
+For agents that have no CI watching of their own. It asks GitLab, through the glab program, which
+pipelines are failing in a clone's project, and why: the failing job, the first line that looks
+like the error, and a short excerpt of that job's log, kept on this machine. With a folder watched,
+the tick event leaves a line for the next session on that branch when a pipeline starts failing,
+and can save a note in the wiki when the failure is fixed.
+
+It only READS GitLab, and it writes nothing anywhere: every call is `glab api` with the method GET,
+plus `glab auth status`. It never starts, retries or cancels a pipeline, never pushes, and starts no
+agent to fix anything. It never reads, asks for, prints or stores a token: glab holds the sign-in.
+"""
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import datetime
+import hashlib
+import urllib.parse
+
+CMD = os.environ.get("LLM_WIKI_CMD", "wiki")
+
+# What is not about GitLab is in ci_common.py, beside this file, which wiki-github and wiki-jenkins use too.
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+try:
+    import ci_common as cc
+except ImportError:
+    print(f"error: wiki-gitlab needs ci_common.py in its own folder, and it isn't there: it was copied without it. "
+          f"Do: turn it on with {CMD} extensions add gitlab instead of copying it", file=sys.stderr)
+    sys.exit(1)
+from ci_common import (KEEP_BYTES, KEEP_DAYS, KEEP_LINES, NOTICE_DAYS, clean, clear_notice, die, die_usage, first_line, is_yes,
+                       known_in_wikis, read_conf, set_conf, signature_of, stale, unfit)
+
+GLAB_BIN = os.environ.get("GLAB_BIN") or "glab"
+CONFIG_DIR = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "llm-wiki")
+CONFIG = os.path.join(CONFIG_DIR, "gitlab")
+STATE_HOME = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+STATE_DIR = os.path.join(STATE_HOME, "llm-wiki", "extensions", "gitlab")
+STATE_FILE = os.path.join(STATE_DIR, "state.json")
+LOG_DIR = os.path.join(STATE_DIR, "logs")
+STATE_LOCK = os.path.join(STATE_DIR, "state.lock")
+GUIDE = f'Or ask an agent: "run {CMD} setup --guide gitlab and walk me through it"'
+
+TOTAL_BYTES = 64 * 1024 * 1024        # and the most of a log that glab is let to send before it is stopped
+ERR_BYTES = 64 * 1024                # the most of glab's own messages that is kept
+FOLDER_SECONDS = min(60, int(os.environ.get("LLM_WIKI_FOLDER_SECONDS") or 60))   # one project's time in a tick; a test can only lower it
+MAX_ROWS = 20                        # pipelines read for a ref, whatever the server returns
+MAX_KINDS = 5                        # kinds of pipeline kept for a ref
+MAX_MRS = 10                         # merge requests looked at for a project
+TRACE_BYTES = 2000000                # the most of a job's log that is read: its end
+JSON_BYTES = 32 * 1024 * 1024        # the most of any other answer that is read
+DEFAULTS = {"remember": "no", "notice": "yes", "desktop": "yes"}
+# A pipeline that failed. canceled, skipped and manual say nothing about whether the code is fine, so they leave the
+# state alone, and so does a pipeline that has not finished.
+FAILING = ("failed",)
+PASSING = ("success",)
+RUNNING = ("running", "pending", "created", "waiting_for_resource", "preparing", "scheduled")
+
+USAGE = f"""Usage: {CMD} gitlab [check] [<folder>]
+       {CMD} gitlab watch [<folder>]
+       {CMD} gitlab watch --list
+       {CMD} gitlab unwatch [<folder>]
+       {CMD} gitlab config
+
+  check    For the GitLab project a folder is a clone of (the current folder unless you name
+           one), say which pipelines are failing and why. It looks at the newest pipeline of
+           each kind (push, merge request, schedule...) on the folder's branch, on the default
+           branch, and on the branch of each open merge request you opened in that project. For each
+           failing pipeline it prints the pipeline, the branch, the failing job, the first line that
+           looks like the error, whether your wikis already know that error, and where a short
+           excerpt of the job's log is saved. A job that is allowed to fail doesn't count: how many
+           of those failed is said. The default. It reads GitLab and changes nothing there.
+  watch    Add the folder's clone to the ones the tick event looks at. --list prints them.
+  unwatch  Take it off again.
+  config   What is set, whether glab is installed and signed in, and which folders are watched.
+
+It talks to GitLab only through glab, run in the clone so that glab picks the host and the project
+from the clone's remote (gitlab.com or your own server). It READS ONLY: a GET each time, and glab auth
+status. It starts no agent, fixes nothing, and never starts, retries or cancels a pipeline, never
+pushes, never merges. The sign-in is glab's own: {CMD} gitlab never sees a token. Sign in with: glab auth login
+
+The excerpt is the failing job's last {KEEP_LINES} lines or the lines around its first errors, at most
+{KEEP_BYTES:,} bytes, kept {KEEP_DAYS} days in
+{LOG_DIR}/<project>/<pipeline>-<job>.txt
+and never in a wiki.
+
+Settings go in {CONFIG}, one `name = value` a line:
+  watch     folders whose project the tick looks at, separated by commas
+  remember  yes: when a failure the tick saw is fixed, save a note in the wiki that covers the
+            project, through capture. It holds the error's first line, never the log.
+            Off unless you turn it on.
+  notice    yes (the default): when a pipeline starts failing, hand one line to the next session in
+            that repository, on that branch.
+  desktop   yes (the default): with a notice, also show a desktop notification when the tick
+            finds a pipeline that has started failing, if this machine can show one. The tick can run
+            with no session open: {CMD} extensions schedule on.
+"""
+
+# True while llm-wiki runs this for an event, in the background, with nobody watching.
+EVENT = False
+
+
+def not_now(msg):
+    """During an event, no glab or no sign-in or no network is for later: 75 asks llm-wiki to try again."""
+    print(f"not now: {msg}")
+    sys.exit(75)
+
+
+def unreachable(msg):
+    if EVENT:
+        not_now(msg)
+    die(f"{msg}. Do: check the network, then run: {CMD} gitlab check")
+
+
+def watched(conf=None):
+    return cc.watched(CONFIG, conf)
+
+
+def settings():
+    own = read_conf(CONFIG)
+    return {
+        "watch": watched(own),
+        "remember": is_yes(own.get("remember", DEFAULTS["remember"])),
+        "notice": is_yes(own.get("notice", DEFAULTS["notice"])),
+        "desktop": is_yes(own.get("desktop", DEFAULTS["desktop"])),
+    }
+
+
+# ---- glab: the one way to GitLab -------------------------------------------------------------
+
+class GlabMissing(Exception):
+    pass
+
+
+class GlabTimeout(Exception):
+    pass
+
+
+class GlabTooBig(Exception):
+    pass
+
+
+class NotGitLab(Exception):
+    """The folder isn't a clone of a project GitLab knows, or the project can't be seen."""
+
+
+def run_glab(args, timeout=30, cwd=None, tail=None):
+    """(exit code, stdout, stderr) of one glab call, as bytes for stdout. Never asks a question, never waits for ever.
+    With tail, only the last `tail` bytes of the answer are kept as it is read, so a huge log is never held whole, and
+    glab is stopped after TOTAL_BYTES of it. Without it, an answer of more than JSON_BYTES is refused. At most 64 KB of
+    what glab says on stderr is kept, and the rest is read and thrown away."""
+    env = cc.git_env()   # the environment, without the variables that would point git at another repository
+    env["NO_PROMPT"] = "1"
+    env["NO_COLOR"] = "1"
+    env["GLAB_CHECK_UPDATE"] = "false"
+    env["GLAB_SEND_TELEMETRY"] = "false"
+    timed_out = []
+    try:
+        p = subprocess.Popen([GLAB_BIN] + args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd, env=env)
+    except (FileNotFoundError, PermissionError):
+        raise GlabMissing()
+    errors = bytearray()
+
+    def drain():
+        while True:
+            chunk = p.stderr.read(65536)
+            if not chunk:
+                break
+            if len(errors) < ERR_BYTES:
+                errors.extend(chunk[:ERR_BYTES - len(errors)])
+
+    def stop():
+        timed_out.append(1)
+        try:
+            p.kill()
+        except OSError:
+            pass
+
+    reader = threading.Thread(target=drain, daemon=True)
+    reader.start()
+    timer = threading.Timer(timeout, stop)
+    timer.start()
+    buf = bytearray()
+    cut = False
+    big = False
+    total = 0
+    try:
+        while True:
+            chunk = p.stdout.read(65536)
+            if not chunk:
+                break
+            total += len(chunk)
+            buf += chunk
+            if tail and len(buf) > tail:
+                del buf[:len(buf) - tail]
+                cut = True
+            elif not tail and len(buf) > JSON_BYTES:
+                big = True
+            if tail and total > TOTAL_BYTES:
+                big = True
+            if big:
+                p.kill()
+                break
+        code = p.wait()
+    finally:
+        timer.cancel()
+        p.stdout.close()
+        if p.poll() is None:
+            p.kill()
+            p.wait()
+    reader.join(5)
+    p.stderr.close()
+    if timed_out:
+        raise GlabTimeout()
+    if big:
+        raise GlabTooBig()
+    out = bytes(buf)
+    if cut and b"\n" in out:
+        out = out.split(b"\n", 1)[1]
+    return code, out, bytes(errors).decode("utf-8", "replace")
+
+
+def glab_missing():
+    if EVENT:
+        not_now("glab isn't installed")
+    die("glab isn't installed, so GitLab can't be read. Do: install the GitLab CLI from https://gitlab.com/gitlab-org/cli, then run: glab auth login")
+
+
+def need_sign_in():
+    if EVENT:
+        not_now("glab isn't signed in to GitLab")
+    die("glab isn't signed in to GitLab. Run: glab auth login")
+
+
+NETWORK = ("error connecting", "dial tcp", "no such host", "could not resolve", "timeout", "timed out", "network is unreachable",
+           "connection refused", "connection reset", "tls handshake", "i/o timeout", "unexpected eof", "proxyconnect", "service unavailable",
+           "bad gateway", "gateway timeout", "502", "503", "504")
+SIGNED_OUT = ("401", "unauthorized", "not logged in", "no token", "glab auth login", "authentication", "invalid token", "token expired")
+
+
+def looks_offline(err):
+    low = err.lower()
+    return any(p in low for p in NETWORK)
+
+
+def looks_signed_out(err):
+    low = err.lower()
+    return any(p in low for p in SIGNED_OUT)
+
+
+def signed_in(cwd=None):
+    """Whether glab holds a sign-in that works. Offline is no answer: it is for later."""
+    try:
+        code, _, err = run_glab(["auth", "status"], timeout=20, cwd=cwd)
+    except GlabMissing:
+        glab_missing()
+    except GlabTimeout:
+        unreachable("glab took more than 20 seconds to check the sign-in")
+    except GlabTooBig:
+        return True
+    if code != 0 and looks_offline(err):
+        unreachable(f"glab couldn't check the sign-in: {first_line(err)}")
+    return code == 0
+
+
+def glab_failed(what, err, soft, cwd, first=False):
+    if looks_offline(err):
+        unreachable(f"glab couldn't {what}: {first_line(err)}")
+    if looks_signed_out(err) or not signed_in(cwd):
+        need_sign_in()
+    if first:
+        raise NotGitLab(first_line(err))
+    if soft:
+        return None
+    unreachable(f"glab couldn't {what}: {first_line(err) or 'no reason given'}")
+
+
+def glab_get(endpoint, what, timeout=30, cwd=None, soft=False, tail=None, first=False):
+    """The answer to one GET of `glab api`, as bytes. When it didn't work: NotGitLab for a folder GitLab doesn't know
+    (only when first), an exit for no glab, no sign-in or no network, or None when soft and that is all. The
+    endpoint is built here from numbers and from names that have been checked, and goes to glab as one argument."""
+    try:
+        code, out, err = run_glab(["api", "--method", "GET", endpoint], timeout, cwd, tail=tail)
+    except GlabMissing:
+        glab_missing()
+    except GlabTimeout:
+        unreachable(f"glab took more than {timeout} seconds to {what}")
+    except GlabTooBig:
+        if soft:
+            return None
+        unreachable(f"glab answered with more than {JSON_BYTES // 1024 // 1024} MB when asked to {what}")
+    if code != 0:
+        return glab_failed(what, err, soft, cwd, first)
+    return out
+
+
+def glab_json(endpoint, what, **kw):
+    out = glab_get(endpoint, what, **kw)
+    if out is None:
+        return None
+    try:
+        return json.loads(out.decode("utf-8", "replace"))
+    except (ValueError, RecursionError):
+        unreachable(f"glab didn't answer with JSON when asked to {what}")
+
+
+# ---- the project, its branches and its newest pipelines -----------------------------------------------
+
+PROJECT_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*(?:/[A-Za-z0-9_][A-Za-z0-9._-]*)+$")
+BRANCH_OK = re.compile(r"^[A-Za-z0-9._/-]+$")
+
+
+def branch_ok(b):
+    """A branch name that can go into an address and be passed as an argument: no .., no leading -."""
+    return isinstance(b, str) and bool(b) and bool(BRANCH_OK.match(b)) and ".." not in b and not b.startswith("-")
+
+
+def git(folder, *args):
+    return cc.git(folder, *args)
+
+
+def int_or_none(v):
+    """A positive integer, which is what every id from GitLab is, or nothing."""
+    return v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else None
+
+
+class OutOfTime(Exception):
+    """One project has used the time a tick gives it."""
+
+
+DEADLINE = [0.0]
+
+
+def budget():
+    if DEADLINE[0] and time.time() > DEADLINE[0]:
+        raise OutOfTime()
+
+
+def local_name(folder):
+    """<namespace>/<project> from the clone's own origin address, which is the clone's word and not the server's: the
+    path after the host, without .git. Nothing if there is no origin, or it isn't a name GitLab could have."""
+    url = git(folder, "config", "--get", "remote.origin.url").strip()
+    path = ""
+    if "://" in url:
+        path = urllib.parse.urlsplit(url).path
+    elif re.match(r"^[^/@\s]+@[^:/\s]+:", url) or re.match(r"^[^/@\s:]+:[^/]", url):
+        path = url.split(":", 1)[1]
+    path = path.strip("/")
+    if path.endswith(".git"):
+        path = path[:-4]
+    return path if PROJECT_NAME.match(path) else ""
+
+
+def repo_info(folder):
+    """The project the folder is a clone of: its path as the clone's origin says it, which the server must agree with,
+    its default branch and address."""
+    mine = local_name(folder)
+    if not mine:
+        raise NotGitLab("the clone has no origin address that names a GitLab project")
+    d = glab_json("projects/:fullpath", "look up the project", cwd=folder, first=True)
+    name = d.get("path_with_namespace") if isinstance(d, dict) else ""
+    if not isinstance(name, str) or not PROJECT_NAME.match(name):
+        raise NotGitLab("glab didn't name a project")
+    if name.lower() != mine.lower():
+        raise NotGitLab("glab found another project than the clone's origin names")
+    default = d.get("default_branch") if isinstance(d.get("default_branch"), str) else ""
+    return {"name": mine, "default": clean(default, 250), "url": clean(d.get("web_url") or "", 300)}
+
+
+def iso_z(text):
+    """A GitLab time as the form stale() reads, or nothing."""
+    m = re.match(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.\d+)?(Z|[+-]\d\d:?\d\d)?$", text or "")
+    if not m:
+        return ""
+    base, zone = m.group(1), m.group(2)
+    try:
+        when = datetime.datetime.strptime(base, "%Y-%m-%dT%H:%M:%S")
+        if zone and zone != "Z":
+            sign = 1 if zone[0] == "+" else -1
+            digits = zone[1:].replace(":", "")
+            when = when - sign * datetime.timedelta(hours=int(digits[:2]), minutes=int(digits[2:]))
+        return when.strftime("%Y-%m-%dT%H:%M:%SZ")
+    except (ValueError, OverflowError):
+        return ""
+
+
+def fetch(folder, info):
+    """(branches, [newest pipeline of each kind on each branch], {branch: merge request number}). A merge request
+    from a fork is left out: its branch is not this project's. Every item the server sends is checked before it is used."""
+    prs = {}
+    budget()
+    listed = glab_json(f"projects/:id/merge_requests?scope=created_by_me&state=opened&per_page={MAX_MRS}",
+                       "list your open merge requests", cwd=folder, soft=True)
+    for m in (listed if isinstance(listed, list) else [])[:MAX_MRS]:
+        if not isinstance(m, dict):
+            continue
+        n, b = int_or_none(m.get("iid")), m.get("source_branch")
+        if n is None or not branch_ok(b):
+            continue
+        src, dst = m.get("source_project_id"), m.get("target_project_id")
+        if src is None or src != dst:
+            continue
+        prs[b] = n
+    branches = []
+    for b in [clean(git(folder, "branch", "--show-current"), 250), info["default"]] + list(prs):
+        if branch_ok(b) and b not in branches:
+            branches.append(b)
+    runs = []
+    for b in branches:
+        # A merge request's own pipelines are on refs/merge-requests/<number>/head, not on its branch.
+        refs = [b] + ([f"refs/merge-requests/{prs[b]}/head"] if b in prs else [])
+        by_kind = {}
+        for ref in refs:
+            budget()
+            rows = glab_json(f"projects/:id/pipelines?ref={urllib.parse.quote(ref, safe='')}&per_page=20", f"list the pipelines on {b}", cwd=folder)
+            for r in (rows if isinstance(rows, list) else [])[:MAX_ROWS]:
+                if not isinstance(r, dict):
+                    continue
+                rid = int_or_none(r.get("id"))
+                if rid is None:
+                    continue
+                kind = clean(r.get("source") or "unknown", 40)
+                sha = clean(r.get("sha") or "", 64)
+                o = {"id": rid, "wfid": kind, "source": kind, "workflow": f"pipeline ({kind})", "branch": b,
+                     "status": clean(r.get("status") or "", 30), "conclusion": clean(r.get("status") or "", 30),
+                     "sha": sha if re.fullmatch(r"[0-9a-fA-F]{7,64}", sha) else "",
+                     "url": clean(r.get("web_url") or "", 300), "pr": prs.get(b), "created": iso_z(clean(r.get("created_at") or "", 40))}
+                if kind not in by_kind or rid > by_kind[kind]["id"]:
+                    by_kind[kind] = o
+        newest = sorted(by_kind, key=lambda k: by_kind[k]["id"], reverse=True)[:MAX_KINDS]
+        runs.extend(by_kind[k] for k in sorted(newest))
+    return branches, runs, prs
+
+
+def failing(o):
+    return o["status"] in FAILING
+
+
+def passing(o):
+    return o["status"] in PASSING
+
+
+# ---- the failing job, its log, its signature ---------------------------------------------------------
+
+SECTION = re.compile(r"section_(?:start|end):\d+:[A-Za-z0-9_.-]+(?:\[[^\]\r\n]*\])?\r?")
+
+
+def failure_detail(info, o, folder):
+    """Why a pipeline failed: its first failing job, the signature of the error and the saved excerpt. Reads GitLab only."""
+    repo = info["name"]
+    budget()
+    rows = glab_json(f"projects/:id/pipelines/{int(o['id'])}/jobs?scope%5B%5D=failed&per_page=100", "read the pipeline's jobs", cwd=folder)
+    jobs = [j for j in rows if isinstance(j, dict)] if isinstance(rows, list) else []
+    failed = [j for j in jobs if j.get("status") == "failed"]
+    bad = sorted((j for j in failed if not j.get("allow_failure")), key=lambda j: int_or_none(j.get("id")) or 0)
+    job = bad[0] if bad else {}
+    job_name = clean(job.get("name") or "-", 100)
+    stage = clean(job.get("stage") or "-", 100)
+    job_id = int_or_none(job.get("id")) or 0
+    lines = []
+    if job_id:
+        raw = glab_get(f"projects/:id/jobs/{job_id}/trace", "read the failing job's log", timeout=60, cwd=folder, soft=True, tail=TRACE_BYTES)
+        lines = cc.excerpt_lines(cc.log_lines(raw, SECTION)) if raw else []
+    path = cc.save_excerpt(STATE_DIR, LOG_DIR, repo.replace("/", "__"), f"{int(o['id'])}-{job_id}.txt", lines) if lines else ""
+    sig = signature_of(lines, job_name, "job") if job_id else "the pipeline failed, with no failing job to read"
+    return {"job": job_name, "stage": stage, "signature": sig, "excerpt": path, "more": max(0, len(bad) - 1),
+            "allowed": len(failed) - len(bad)}
+
+
+# ---- check ---------------------------------------------------------------------------------------
+
+def check_project(info, folder):
+    branches, runs, prs = fetch(folder, info)
+    repo = info["name"]
+    bad = [o for o in runs if failing(o)]
+    running = [o for o in runs if o["status"] in RUNNING]
+    print(f"== {repo}  (looked at: {', '.join(branches) or 'no branch'})")
+    for o in bad:
+        d = failure_detail(info, o, folder)
+        where = known_in_wikis(d["signature"])
+        print(f"FAILING  {o['workflow']} on {o['branch']}" + (f" (merge request !{o['pr']})" if o["pr"] else ""))
+        print(f"  pipeline: {o['url'] or o['id']}")
+        print(f"  job:      {d['job']}" + (f"  (and {d['more']} more failing job(s))" if d["more"] else ""))
+        print(f"  stage:    {d['stage']}")
+        print(f"  error:    {d['signature']}")
+        if where is None:
+            print("  known:    not looked up (no wiki command to ask)")
+        elif where:
+            print(f"  known:    yes, in {where}")
+        else:
+            print("  known:    no wiki or note holds it yet")
+        print(f"  log:      {d['excerpt'] or 'none kept: GitLab has no log for this job'}")
+        if d["allowed"]:
+            print(f"  allowed:  {d['allowed']} job(s) that are allowed to fail also failed, and are not counted")
+    if not bad:
+        print(f"Nothing is failing in CI for {repo}." if runs else f"No pipelines were found for {repo} on those branches.")
+    if running:
+        print("Still running: " + "; ".join(f"{o['workflow']} on {o['branch']}" for o in running) + ".")
+    return 0
+
+
+def cmd_check(args):
+    rest = [a for a in args]
+    if any(a.startswith("-") for a in rest) or len(rest) > 1:
+        die_usage(f"check takes one folder, and no option. Run: {CMD} gitlab --help")
+    folder = os.path.abspath(os.path.expanduser(rest[0])) if rest else os.getcwd()
+    if not os.path.isdir(folder):
+        die_usage(f"{rest[0] if rest else folder} isn't a command or a folder. Run: {CMD} gitlab --help")
+    try:
+        info = repo_info(folder)
+    except NotGitLab as e:
+        die(f"{folder} isn't a clone of a GitLab project" + (f" (glab says: {e})" if str(e) else "")
+            + f". Do: run this in a clone, or name one: {CMD} gitlab check <folder>")
+    DEADLINE[0] = time.time() + FOLDER_SECONDS
+    try:
+        return check_project(info, folder)
+    except OutOfTime:
+        die(f"{info['name']} took more than {FOLDER_SECONDS} seconds to read. Do: run it again, or later: {CMD} gitlab check {folder}")
+    finally:
+        DEADLINE[0] = 0.0
+
+
+# ---- watch ---------------------------------------------------------------------------------------
+
+def folder_arg(args, what):
+    return cc.folder_arg(args, what, "gitlab")
+
+
+def write_watch(paths):
+    cc.write_watch(CONFIG, paths)
+
+
+def clone_top(folder):
+    return cc.clone_top(folder)
+
+
+def cmd_watch(args):
+    if args == ["--list"]:
+        paths = watched()
+        if not paths:
+            print(f"No folders are watched. Run: {CMD} gitlab watch <folder>")
+        for p in paths:
+            print(p + ("" if os.path.isdir(p) else "  (gone)"))
+        return 0
+    folder = folder_arg(args, "watch")
+    top = clone_top(folder)
+    if not top:
+        die(f"{folder} isn't in a git clone. Do: run this in a clone of a GitLab project, or name one")
+    if "," in top or "#" in top:
+        die(f"{top} has a comma or a # in its path, which the settings file can't hold. Do: watch a clone whose path has neither")
+    paths = watched()
+    if top in [os.path.realpath(p) for p in paths]:
+        print(f"{top} is already watched.")
+        return 0
+    write_watch(paths + [top])
+    print(f"Watching {top}. The tick event looks at it with the other watched folders, once a day unless {CMD} extensions every gitlab says otherwise.")
+    print(f"To look now: {CMD} gitlab check {top}")
+    return 0
+
+
+def cmd_unwatch(args):
+    folder = folder_arg(args, "unwatch")
+    top = clone_top(folder) or folder
+    paths = watched()
+    keep = [p for p in paths if os.path.realpath(p) != top and p != top and p != folder]
+    if len(keep) == len(paths):
+        print(f"{top} wasn't watched.")
+        return 0
+    write_watch(keep)
+    print(f"No longer watching {top}.")
+    return 0
+
+
+def cmd_config(args):
+    if args:
+        die_usage("config takes no arguments")
+    conf = settings()
+    exe = shutil.which(GLAB_BIN)
+    print(f"file      {CONFIG}{'' if os.path.isfile(CONFIG) else ' (not there yet)'}")
+    print(f"glab      {exe or 'not installed'}")
+    ok = False
+    if exe:
+        try:
+            ok = run_glab(["auth", "status"], timeout=20, cwd=next((p for p in conf["watch"] if os.path.isdir(p)), None))[0] == 0
+        except (GlabMissing, GlabTimeout, GlabTooBig):
+            ok = False
+    print(f"signed in {'yes' if ok else 'no'}")
+    print(f"watch     {', '.join(conf['watch']) or 'none'}")
+    print(f"remember  {'yes' if conf['remember'] else 'no'}")
+    print(f"notice    {'yes' if conf['notice'] else 'no'}")
+    print(f"desktop   {'yes' if conf['desktop'] else 'no'}")
+    print(f"state     {STATE_DIR}")
+    if not exe:
+        print("\nNot set up: glab isn't installed. Do: install the GitLab CLI from https://gitlab.com/gitlab-org/cli, then run: glab auth login")
+        return 1
+    if not ok:
+        print("\nNot set up: glab isn't signed in. Run: glab auth login")
+        return 1
+    return 0
+
+
+# ---- the tick event ----------------------------------------------------------------------------
+
+def load_state():
+    return cc.load_state(STATE_FILE)
+
+
+def record(repo, key, entry):
+    """Keep what a tick saw: under the state lock, on the file as it is now. False, and a line, when it can't be."""
+    return cc.record_workflow(STATE_DIR, STATE_FILE, STATE_LOCK, repo, key, entry)
+
+
+def notice_id(repo, key):
+    return "gl-" + cc.safe_part(repo.replace("/", "__"))[:60] + "-" + hashlib.sha1(f"{repo}|{key}".encode("utf-8")).hexdigest()[:12]
+
+
+def commit_subject(folder, sha, fallback):
+    s = git(folder, "log", "-1", "--format=%s", sha) if re.fullmatch(r"[0-9a-fA-F]{7,64}", sha or "") else ""
+    return clean(s or fallback, 200)
+
+
+def put_notice(nid, folder, o, d):
+    log = f" The failing job's log, cut down: {d['excerpt']}." if d["excerpt"] else ""
+    tail = f".{log} More: {CMD} gitlab check"
+    text = cc.notice_text(f"CI failed on {cc.cap(o['branch'])}: ", f"{o['workflow']} / {d['job']}: {d['signature']}", tail)
+    return cc.put_notice(nid, folder, o["branch"], text)
+
+
+def notify_desktop(repo, o, d):
+    cc.notify_desktop(f"CI failed: {repo}", f"{o['branch']}: {o['workflow']} / {d['job']}: {d['signature']}")
+
+
+def save_note(folder, info, o, prev, flaky):
+    repo = info["name"]
+    pr = o.get("pr") or prev.get("pr")
+    sha = o["sha"][:7]
+    body = []
+    if flaky:
+        body += ["It failed, then passed on a retry of the same commit, so nothing changed in between: it may be flaky.", ""]
+    body += [f"Pipeline kind: {prev.get('source') or '?'}", f"Job: {prev['job']}", f"Stage: {prev.get('stage') or '-'}",
+             f"Signature: {prev['signature']}", "",
+             f"Failed pipeline: {prev['run_id']} {prev.get('url', '')}".rstrip(),
+             f"Passing pipeline: {o['id']} {o['url']}".rstrip(),
+             f"Commit of the passing pipeline: {sha} {commit_subject(folder, o['sha'], '')}".rstrip()]
+    if pr:
+        body.append(f"Merge request: !{pr}")
+    return cc.save_note(folder, repo, repo.split("/")[-1], "gitlab", f"{prev['workflow']} on {prev['branch']}", body, flaky)
+
+
+def tick_folder(folder, conf):
+    """One watched folder. Returns False when something should be tried again. A project that can't be read is for the
+    caller, which goes on to the next folder."""
+    try:
+        info = repo_info(folder)
+    except NotGitLab as e:
+        print(f"{folder} isn't a clone of the GitLab project glab found, so it was skipped" + (f" ({e})." if str(e) else "."))
+        return True
+    repo = info["name"]
+    DEADLINE[0] = time.time() + FOLDER_SECONDS
+    try:
+        _, runs, _ = fetch(folder, info)
+        repos = load_state().get("repos")
+        book = repos.get(repo, {}) if isinstance(repos, dict) else {}
+        book = book.get("workflows", {}) if isinstance(book, dict) else {}
+        ok = True
+        for o in runs:
+            budget()
+            key = f"{o['wfid']}|{o['branch']}"
+            prev = book.get(key) if isinstance(book, dict) else None
+            prev = prev if isinstance(prev, dict) else None
+            was_failing = bool(prev) and prev.get("conclusion") in FAILING
+            if failing(o):
+                if was_failing and prev.get("run_id") == o["id"]:
+                    continue
+                d = failure_detail(info, o, folder)
+                entry = {"workflow": o["workflow"], "source": o["source"], "branch": o["branch"], "run_id": o["id"],
+                         "conclusion": o["conclusion"], "sha": o["sha"], "url": o["url"], "job": d["job"], "stage": d["stage"],
+                         "signature": d["signature"], "excerpt": d["excerpt"], "pr": o["pr"]}
+                print(f"{repo}: CI failed on {o['branch']}: {o['workflow']} / {d['job']}: {d['signature']}")
+                old = stale(o.get("created"))
+                if not record(repo, key, entry):
+                    ok = False
+                    continue
+                if conf["notice"] and old:
+                    print(f"{repo}: that pipeline is more than {NOTICE_DAYS} days old, so no notice was left.")
+                elif conf["notice"]:
+                    put_notice(notice_id(repo, key), folder, o, d)
+                    if conf["desktop"]:
+                        notify_desktop(repo, o, d)
+            elif passing(o):
+                if was_failing:
+                    clear_notice(notice_id(repo, key))
+                    if conf["remember"] and not save_note(folder, info, o, prev, bool(o["sha"]) and o["sha"] == prev.get("sha")):
+                        ok = False
+                        continue
+                    if not conf["remember"]:
+                        print(f"{repo}: {o['workflow']} on {o['branch']} passes again.")
+                if not record(repo, key, {"workflow": o["workflow"], "source": o["source"], "branch": o["branch"], "run_id": o["id"],
+                                          "conclusion": "success", "sha": o["sha"], "url": o["url"]}):
+                    ok = False
+        return ok
+    except OutOfTime:
+        print(f"{repo}: out of time ({FOLDER_SECONDS} seconds) for this project. The rest waits for the next tick.")
+        return True
+    finally:
+        DEADLINE[0] = 0.0
+
+
+def on_event(args):
+    """Run by llm-wiki for an event. A project that can't be read is logged and skipped, and the others go on: the
+    event ends 75 only if every folder was out of reach."""
+    global EVENT
+    EVENT = True
+    if args[:1] != ["tick"]:
+        return 0
+    conf = settings()
+    if not conf["watch"]:
+        print(f"No folder is watched, so nothing was checked. Run: {CMD} gitlab watch <folder>")
+        return 0
+    begun = time.time()
+    all_ok = True
+    read = out_of_reach = 0
+    for folder in conf["watch"]:
+        if not os.path.isdir(folder):
+            print(f"{folder} is gone, so it was skipped.")
+            continue
+        if time.time() - begun > 240:
+            print(f"Out of time before {folder}. The rest wait for the next tick.")
+            break
+        try:
+            all_ok = tick_folder(folder, conf) and all_ok
+            read += 1
+        except SystemExit as e:
+            if e.code not in (1, 75):
+                raise
+            out_of_reach += 1
+            print(f"{folder} couldn't be read just now, so it was skipped. The rest go on.")
+    if out_of_reach and not read:
+        return 75
+    return 0 if all_ok else 1
+
+
+# ---- setup, and what a session can change ----------------------------------------------------------
+
+def read_line():
+    """One line from standard input, a byte at a time, so nothing meant for whoever
+    reads next is taken. None when the input has ended."""
+    buf = b""
+    while True:
+        c = os.read(0, 1)
+        if not c:
+            return buf.decode(errors="replace") if buf else None
+        if c == b"\n":
+            return buf.decode(errors="replace")
+        buf += c
+
+
+def ask_yn(prompt, default=False):
+    sys.stdout.write(f"{prompt} [{'Y/n' if default else 'y/N'}]: ")
+    sys.stdout.flush()
+    line = read_line()
+    if line is None:
+        print()
+        return default
+    line = line.strip().lower()
+    return default if line == "" else line.startswith("y")
+
+
+def glab_config_file():
+    """Where glab keeps its settings. GLAB_CONFIG_DIR wins. Otherwise the first of these that is
+    there: the XDG folder, ~/.config, and on a Mac ~/Library/Application Support, which is
+    where glab 1.120 was seen to keep them (2026-11-16)."""
+    named = os.environ.get("GLAB_CONFIG_DIR")
+    if named:
+        return os.path.join(named, "config.yml")
+    places = []
+    if os.environ.get("XDG_CONFIG_HOME"):
+        places.append(os.path.join(os.environ["XDG_CONFIG_HOME"], "glab-cli"))
+    places.append(os.path.expanduser("~/.config/glab-cli"))
+    places.append(os.path.expanduser("~/Library/Application Support/glab-cli"))
+    for d in places:
+        if os.path.isfile(os.path.join(d, "config.yml")):
+            return os.path.join(d, "config.yml")
+    return os.path.join(places[0], "config.yml")
+
+
+def has_host_entry(path):
+    """Whether glab's config file has a host under `hosts:`. It is read a line at a time, and nothing of it is kept or
+    printed: only whether the structure is there."""
+    seen_hosts = False
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for n, line in enumerate(f):
+                if n > 2000:
+                    break
+                if re.match(r"^hosts:\s*(#.*)?$", line):
+                    seen_hosts = True
+                elif seen_hosts:
+                    if re.match(r"^\s+[A-Za-z0-9][A-Za-z0-9.:-]*:\s*(#.*)?$", line):
+                        return True
+                    if line.strip() and not line.startswith((" ", "\t", "#")):
+                        return False
+    except OSError:
+        return False
+    return False
+
+
+def ready():
+    """Whether glab is there and has been signed in. Files only: no network, no questions, and glab isn't run."""
+    if not shutil.which(GLAB_BIN):
+        return "glab isn't installed"
+    if has_host_entry(glab_config_file()):
+        return ""
+    return "glab isn't signed in yet"
+
+
+def setup():
+    """Run by `wiki setup` and `wiki extensions setup gitlab`, at a terminal."""
+    print("GitLab CI, for your wikis")
+    print("When a pipeline fails, it can tell you which job failed, and the first line that looks like the")
+    print("error, and keep a short excerpt of the failing log on this machine, in place of megabytes of it. It")
+    print("reads GitLab through glab, and it never sees your sign-in. It only reads: it never starts, retries or")
+    print("cancels a pipeline, never pushes, and starts no agent to fix anything.")
+    print()
+    print("Enter keeps the answer in brackets. You can run this again at any time:")
+    print(f"  {CMD} extensions setup gitlab")
+    print()
+    print("== Step 1 of 3: sign in")
+    exe = shutil.which(GLAB_BIN)
+    if not exe:
+        print("  glab, the GitLab command line, isn't installed. Install it from https://gitlab.com/gitlab-org/cli,")
+        print("  then run this again.")
+        return 0
+    cwd = cc.clone_top(os.getcwd()) or None
+    try:
+        ok = run_glab(["auth", "status"], timeout=20, cwd=cwd)[0] == 0
+    except (GlabMissing, GlabTimeout, GlabTooBig):
+        ok = False
+    if ok:
+        print("  glab is signed in to GitLab.")
+    else:
+        print("  glab isn't signed in. In your terminal, run:  glab auth login")
+        print("  then run this again. The sign-in stays with glab. For your own GitLab server, give its host name there.")
+    print()
+    print("== Step 2 of 3: which clones to watch")
+    print("A watched clone is looked at in the background, by the tick event, once a day: a pipeline that")
+    print("starts failing on its branch, the default branch or one of your merge requests leaves one line for")
+    print("the next session in that clone.")
+    paths = watched()
+    if cwd and cwd not in [os.path.realpath(p) for p in paths] and "," not in cwd and "#" not in cwd:
+        if ask_yn(f"Watch {cwd}?", True):
+            write_watch(paths + [cwd])
+    elif cwd:
+        print(f"  {cwd} is already watched.")
+    else:
+        print(f"  This folder isn't in a clone. To watch one later: {CMD} gitlab watch <folder>")
+    print()
+    print("== Step 3 of 3: notes in the wiki")
+    print("When a failure the tick saw is fixed, it can save a note in the wiki that covers the project:")
+    print("what failed, the first line of the error, and which commit passed, never the log itself. A")
+    print("later session that meets the same error finds it. This writes into a wiki, so it is off until")
+    print("you say yes.")
+    conf = settings()
+    remember = ask_yn("Save a note when a failure is fixed?", conf["remember"])
+    set_conf(CONFIG, "remember", "yes" if remember else "")
+    conf = settings()
+    print()
+    print("What is set")
+    print("  glab      " + ("signed in" if ok else "not signed in"))
+    print("  watch     " + (", ".join(conf["watch"]) or "nothing yet"))
+    print("  notes     " + ("on: a fixed failure is noted in its wiki" if conf["remember"] else "off"))
+    print("  notices   " + ("on: a failing pipeline is handed to the next session on its branch" if conf["notice"] else "off"))
+    print("  desktop   " + ("on: and shown as a desktop notification, if this machine can" if conf["desktop"] else "off"))
+    print()
+    print("What happens now")
+    print(f"  To look now: {CMD} gitlab check")
+    print(f"  The tick runs about once a day, when a session starts; {CMD} extensions every gitlab 1h makes it hourly.")
+    print(f"  To have it run with no session open, and show a desktop notification: {CMD} extensions schedule on")
+    print(f"  Every setting is in {CONFIG}, and {CMD} gitlab --help lists them.")
+    return 0
+
+
+def source(own, key):
+    return "file" if key in own else "default"
+
+
+def setting_rows():
+    own = read_conf(CONFIG)
+    conf = settings()
+    return [
+        ("watch", ", ".join(conf["watch"]), source(own, "watch"),
+         "Clones whose project the tick looks at: absolute paths separated by commas", "set"),
+        ("remember", "yes" if conf["remember"] else "no", source(own, "remember"),
+         "yes: save a note when a failure is fixed (the error's first line, never the log)", "set"),
+        ("notice", "yes" if conf["notice"] else "no", source(own, "notice"),
+         "yes: a pipeline that starts failing is handed to the next session in that clone", "set"),
+        ("desktop", "yes" if conf["desktop"] else "no", source(own, "desktop"),
+         "yes: a failing pipeline also shows a desktop notification, if this machine can", "set"),
+    ]
+
+
+def wiki_settings():
+    for row in setting_rows():
+        print("\t".join(" ".join(str(f).split()) for f in row))
+    return 0
+
+
+def secret_key(key):
+    k = key.lower()
+    return any(w in k for w in ("token", "password", "passwd", "secret", "api_key", "apikey"))
+
+
+def wiki_set(args):
+    """--wiki-set <key> <value>: check the key and the shape of the value, then write it where
+    the interactive setup would. A - clears it. Exit 2, and one line why, for what it refuses."""
+    if len(args) != 2:
+        die_usage("usage: --wiki-set <key> <value>")
+    for what, text in (("key", args[0]), ("value", args[1])):
+        if unfit(text):
+            die_usage(f"the {what} {unfit(text)}, so nothing was written")
+    key, value = args[0].strip(), args[1].strip()
+    names = [r[0] for r in setting_rows()]
+    if secret_key(key):
+        die_usage(f"{key} is a secret, and a session never sets one. {CMD} gitlab never sees a token: glab holds the sign-in. The user runs: glab auth login")
+    if key not in names:
+        die_usage(f"no setting called {key}. Settings: {', '.join(names)}")
+    if not value:
+        die_usage(f"give {key} a value, or - to clear it")
+    if "#" in value:
+        die_usage(f"{key} can't hold a #, which starts a comment in the settings file")
+    clear = value == "-"
+    if key == "watch":
+        out = ""
+        if not clear:
+            parts = [p.strip() for p in value.split(",") if p.strip()]
+            if not parts:
+                die_usage("watch takes folders separated by commas, such as ~/dev/app, ~/dev/api")
+            paths = []
+            for p in parts:
+                full = os.path.expanduser(p)
+                if not os.path.isabs(full):
+                    die_usage(f"{p} isn't an absolute path. Give a path from / or ~/")
+                if not os.path.isdir(full):
+                    die_usage(f"{p} isn't a folder that exists")
+                if full not in paths:
+                    paths.append(full)
+            out = ", ".join(paths)
+    else:
+        if not clear and value.lower() not in ("yes", "no"):
+            die_usage(f"{key} takes yes or no")
+        out = "" if clear else value.lower()
+    set_conf(CONFIG, key, out)
+    print(f"{key} {'cleared' if not out else 'set'} in {CONFIG}")
+    return 0
+
+
+def main(argv):
+    if argv and argv[0] == "--wiki-settings":
+        return wiki_settings()
+    if argv and argv[0] == "--wiki-set":
+        return wiki_set(argv[1:])
+    if argv and argv[0] == "--wiki-event":
+        return on_event(argv[1:])
+    if argv and argv[0] == "--wiki-ready":
+        msg = ready()
+        if msg:
+            print(msg)
+        return 1 if msg else 0
+    if argv and argv[0] == "--wiki-setup":
+        return setup()
+    if argv and argv[0] in ("-h", "--help", "help"):
+        print(USAGE, end="")
+        return 0
+    if argv and argv[0] == "watch":
+        return cmd_watch(argv[1:])
+    if argv and argv[0] == "unwatch":
+        return cmd_unwatch(argv[1:])
+    if argv and argv[0] == "config":
+        return cmd_config(argv[1:])
+    if argv and argv[0] == "check":
+        argv = argv[1:]
+    return cmd_check(argv)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

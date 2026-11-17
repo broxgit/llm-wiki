@@ -69,6 +69,8 @@ read -r -d '' PARTS <<'TABLE' || true
 4 | Jira extension | Collection
 4 | Confluence extension | Collection
 2 | GitHub extension | Collection
+1 | GitLab extension | Collection
+1 | Jenkins extension | Collection
 4 | Extension events | Collection
 4 | Extension schedule | Collection
 1 | Guided setup | Collection
@@ -131,6 +133,10 @@ printf '#!/bin/sh\nexit 1\n' > "$T/bin/inert"
 chmod +x "$T/bin/inert"
 export LLM_WIKI_LAUNCHCTL="$T/bin/inert" LLM_WIKI_SYSTEMCTL="$T/bin/inert" LLM_WIKI_CRONTAB="$T/bin/inert" LLM_WIKI_OSASCRIPT="$T/bin/inert" LLM_WIKI_NOTIFY_SEND="$T/bin/inert"
 export LLM_WIKI_NO_NOTIFY=1
+# And no test may run a real glab, which writes its settings under HOME: the extension that asks it is run by setup.
+# The same for gh: outside the GitHub section, which names its own stand-in, nothing here
+# may reach the real one.
+export GLAB_BIN="$T/bin/inert" GH_BIN="$T/bin/inert"
 git config --global user.email smoke@example.com
 git config --global user.name "Smoke Test"
 git config --global init.defaultBranch main
@@ -4673,7 +4679,7 @@ refuse "and doesn't run while it is off" "$W" jira --help
 expect "the error says how to turn it on" "extensions add jira" "$W" jira check
 lacks "completion leaves it out while it is off" "jira" "$W" __complete 1 ""
 expect "setup --list marks it as new" "on: none  <- new" bash -c "'$W' setup --list | grep '^extensions'"
-expect "setup --new would ask about it" "Turn on" bash -c "printf 'n\nn\nn\n' | LLM_WIKI_TEST_TTY=1 '$W' setup extensions"
+expect "setup --new would ask about it" "Turn on" bash -c "printf 'n\nn\nn\nn\nn\n' | LLM_WIKI_TEST_TTY=1 '$W' setup extensions"
 lacks "a no is remembered" "<- new" bash -c "'$W' setup --list | grep '^extensions'"
 refuse "it is still off" "$W" jira --help
 refuse "extensions add refuses a name that doesn't ship" "$W" extensions add nosuch
@@ -4998,7 +5004,7 @@ check "and Enter keeps every answer" grep -qx "projects = PROJ, OPS" "$JH/.confi
 printf 'y\n\n\n-\nn\n' | jsetup >/dev/null 2>&1
 lacks "a dash clears a value, and a no turns the setting off" "projects\|auto_close" cat "$JH/.config/llm-wiki/jira"
 out="$(printf 'y\nnot-an-address\n\n' | jsetup 2>&1)"
-case "$out" in *"not-an-address isn't an address, so it wasn't saved"*) ok "an answer that isn't an address is refused, and the old one kept" ;; *) bad "an answer that isn't an address is refused, and the old one kept" "$out" ;; esac
+case "$out" in *"That address isn't an address: it starts with https:// and names a host, so it wasn't saved."*) ok "an answer that isn't an address is refused, and the old one kept" ;; *) bad "an answer that isn't an address is refused, and the old one kept" "$out" ;; esac
 check "which it was" grep -q "^site = http://127.0.0.1:" "$JH/.config/llm-wiki/atlassian"
 out="$(printf 'http://127.0.0.1:%s\nme@example.com\n' "$(cat "$J/port")" | env HOME="$T/jhome2" WIKIS_DIR="$JW" "$W" extensions setup jira 2>&1 || true)"
 case "$out" in *"jira is off. Turn it on: "*"extensions add jira"*) ok "setup of an extension that is off says how to turn it on" ;; *) bad "setup of an extension that is off says how to turn it on" "$out" ;; esac
@@ -5020,7 +5026,7 @@ lacks "setup cut short before the token leaves no token command behind" "token_c
 expect "so the extension still says it has no token" "no API token yet" env HOME="$T/jhome5" WIKIS_DIR="$JW" "$W" status
 # Through wiki setup: a yes goes straight on to the extension's own questions, then the offer of a schedule (n).
 mkdir -p "$T/jhome4"
-out="$(printf 'n\nn\ny\nhttp://127.0.0.1:%s\nme@example.com\n\nn\n\nn\n6h\n' "$(cat "$J/port")" | env HOME="$T/jhome4" WIKIS_DIR="$JW" ATLASSIAN_API_TOKEN=smoke-token LLM_WIKI_TEST_TTY=1 "$W" setup extensions 2>&1)"
+out="$(printf 'n\nn\nn\nn\ny\nhttp://127.0.0.1:%s\nme@example.com\n\nn\n\nn\n6h\n' "$(cat "$J/port")" | env HOME="$T/jhome4" WIKIS_DIR="$JW" ATLASSIAN_API_TOKEN=smoke-token LLM_WIKI_TEST_TTY=1 "$W" setup extensions 2>&1)"
 case "$out" in *"Turn on"*"jira?"*"share one Atlassian sign-in"*"Signed in to Jira as Smoke Tester."*"jira is set up."*"To go through this again:"*"extensions setup jira"*"tick: every 6h"*) ok "wiki setup turns it on, asks its questions, and carries on with its own" ;; *) bad "wiki setup turns it on, asks its questions, and carries on with its own" "$out" ;; esac
 # With auto_close, the tick event does the same with nobody asking.
 expect "jira asks for the tick event" "(runs on: tick)" "$W" extensions
@@ -6991,7 +6997,8 @@ t = m.notice_text("llm-wiki: ", "é" * 400, ". tail")
 assert len(t.encode()) <= 590 and t.startswith('llm-wiki: "') and t.endswith('". tail') and t.count('"') == 2, t
 sent = []
 class R: returncode = 0; stderr = ""
-m.llm_wiki = lambda *a, **k: (sent.append(a), R())[1]
+import ci_common
+ci_common.llm_wiki = lambda *a, **k: (sent.append(a), R())[1]
 o = {"branch": "main", "workflow": "W" * 90 + "é" * 100, "id": 1}
 d = {"job": "jé" * 50, "step": "sé" * 50, "signature": "Error é" * 100, "excerpt": "/x/" + "p" * 150}
 m.put_notice("id", "/f", o, d, "gave up")
@@ -7029,7 +7036,8 @@ ld = importlib.machinery.SourceFileLoader("wg", sys.argv[1])
 m = importlib.util.module_from_spec(importlib.util.spec_from_loader("wg", ld)); ld.exec_module(m)
 calls = []
 class R: returncode = 0; stdout = "no mentions\n"; stderr = ""
-m.llm_wiki = lambda *a, **k: (calls.append(a), R())[1]
+import ci_common
+ci_common.llm_wiki = lambda *a, **k: (calls.append(a), R())[1]
 a = m.known_in_wikis("-----")
 b = m.known_in_wikis("-- - --")
 c = m.known_in_wikis("--- error here")
@@ -7053,9 +7061,1727 @@ rm -rf "$GX/fclone" "$GX/fother" "$GX/fseed" "$FB"
 "$W" extensions remove github >/dev/null 2>&1
 export LLM_WIKI_NO_NOTIFY=1 LLM_WIKI_OSASCRIPT="$T/bin/inert"
 if [ -n "$SAVED_TMPDIR" ]; then export TMPDIR="$SAVED_TMPDIR"; else unset TMPDIR; fi
-unset LLM_WIKI_TEST_PUSH_LOCAL LLM_WIKI_TEST_OS XDG_CONFIG_HOME XDG_STATE_HOME XDG_DATA_HOME GH_BIN
+unset LLM_WIKI_TEST_PUSH_LOCAL LLM_WIKI_TEST_OS XDG_CONFIG_HOME XDG_STATE_HOME XDG_DATA_HOME
+export GH_BIN="$T/bin/inert"
 export WIKIS_DIR="$SAVED_WIKIS_DIR"
 rm -rf "$GX"
+fi
+
+if section "GitLab extension"; then
+# Everything here is a stand-in: a glab that answers from fixture files and records every call, a
+# clone with a remote that is only a name, and a collection, home and state folder of its own.
+GL="$T/glx"
+GLW="$GL/wikis"
+GLEXT="$REPO/extensions/wiki-gitlab"
+mkdir -p "$GL/fx" "$GL/config/glab-cli"
+GL_SAVED_WIKIS_DIR="$WIKIS_DIR"
+export XDG_CONFIG_HOME="$GL/config" XDG_STATE_HOME="$GL/state" XDG_DATA_HOME="$GL/data" WIKIS_DIR="$GLW" GLAB_BIN="$GL/glab" LLM_WIKI_CMD=wiki
+GLST="$XDG_STATE_HOME/llm-wiki"
+GLLOGS="$GLST/extensions/gitlab/logs/acme__gldemo"
+GLSTATE="$GLST/extensions/gitlab/state.json"
+cat > "$GL/glab" <<'GLFAKE'
+#!/usr/bin/env python3
+import json, os, sys, urllib.parse
+here = os.path.dirname(os.path.abspath(__file__))
+D = os.path.join(here, "fx")
+args = sys.argv[1:]
+with open(os.path.join(D, "calls"), "a") as f:
+    f.write(" ".join(args).replace("\n", " ") + "\n")
+with open(os.path.join(D, "prompt"), "a") as f:
+    f.write(os.environ.get("NO_PROMPT", "unset") + "\n")
+with open(os.path.join(D, "cwds"), "a") as f:
+    f.write(os.getcwd() + "\n")
+with open(os.path.join(D, "gitdir"), "a") as f:
+    f.write(os.environ.get("GIT_DIR", "unset") + "\n")
+def has(n): return os.path.exists(os.path.join(D, n))
+def err(msg, code=1):
+    sys.stderr.write(msg + "\n"); sys.exit(code)
+if has("down") or has("down-" + os.path.basename(os.getcwd())): err("error connecting to gitlab.com")
+if has("slow"):
+    import time; time.sleep(1.2)
+if args[:2] == ["auth", "status"]:
+    if has("signedout"): err("x gitlab.com: authentication required. Run glab auth login")
+    print("gitlab.com\n  Logged in"); sys.exit(0)
+if args[:3] != ["api", "--method", "GET"] or len(args) != 4: err("the stand-in glab was asked for: " + " ".join(args))
+if has("signedout"): err("401 Unauthorized")
+if has("notrepo"): err("fatal: not a git repository")
+ep = args[3]
+path, _, query = ep.partition("?")
+q = urllib.parse.parse_qs(query)
+def out_file(name, default=None):
+    p = os.path.join(D, name)
+    if os.path.exists(p):
+        sys.stdout.flush(); sys.stdout.buffer.write(open(p, "rb").read()); sys.exit(0)
+    if default is not None:
+        print(default); sys.exit(0)
+    err("404 Not Found")
+if path == "projects/:fullpath": out_file("repo.json")
+if path == "projects/:id/merge_requests": out_file("mrs.json", "[]")
+if path == "projects/:id/pipelines":
+    ref = q.get("ref", [""])[0]
+    out_file("pipes-" + ref.replace("/", "__") + ".json", "[]")
+parts = path.split("/")
+if len(parts) == 5 and parts[:3] == ["projects", ":id", "pipelines"] and parts[4] == "jobs":
+    out_file("jobs-%d.json" % int(parts[3]), "[]")
+if len(parts) == 5 and parts[:3] == ["projects", ":id", "jobs"] and parts[4] == "trace":
+    out_file("trace-%d.txt" % int(parts[3]))
+err("the stand-in glab has nothing for: " + ep)
+GLFAKE
+chmod +x "$GL/glab"
+cat > "$GL/osascript" <<'OSAFAKE'
+#!/bin/sh
+D="$(dirname "$0")"
+{ echo '--call--'; for a in "$@"; do printf 'ARG:%s\n' "$a"; done; } >> "$D/osa.log"
+OSAFAKE
+chmod +x "$GL/osascript"
+export LLM_WIKI_OSASCRIPT="$GL/osascript" LLM_WIKI_TEST_OS=darwin
+unset LLM_WIKI_NO_NOTIFY
+glcalls() { if [ -f "$GL/osa.log" ]; then grep -c '^--call--$' "$GL/osa.log" || true; else echo 0; fi; }
+printf '{"id":42,"path_with_namespace":"acme/gldemo","default_branch":"main","web_url":"https://gitlab.com/acme/gldemo"}\n' > "$GL/fx/repo.json"
+printf '[{"iid":7,"source_branch":"feat-y","source_project_id":42,"target_project_id":42},{"iid":8,"source_branch":"from-a-fork","source_project_id":99,"target_project_id":42}]\n' > "$GL/fx/mrs.json"
+# plrow <id> <status> <source> <sha> [created_at]: one pipeline of `projects/:id/pipelines`.
+plrow() {
+  printf '{"id":%s,"status":"%s","source":"%s","ref":"x","sha":"%s","web_url":"https://gitlab.com/acme/gldemo/-/pipelines/%s"%s}' "$1" "$2" "$3" "$4" "$1" "${5:+,\"created_at\":\"$5\"}"
+}
+# plruns <ref> <rows...>: what the pipelines of a ref are.
+plruns() { local r="$1" out="" x; shift; for x in "$@"; do out="${out:+$out,}$x"; done; printf '[%s]\n' "$out" > "$GL/fx/pipes-$(printf '%s' "$r" | sed 's#/#__#g').json"; }
+# glfail <pipeline id>: its jobs (one failing, one failing but allowed to, one that passed) and the log of the failing one.
+glfail() {
+  printf '[{"id":7003,"name":"deploy","stage":"deploy","status":"success","allow_failure":false},{"id":7002,"name":"lint","stage":"test","status":"failed","allow_failure":true},{"id":7001,"name":"build","stage":"test","status":"failed","allow_failure":false}]\n' > "$GL/fx/jobs-$1.json"
+  {
+    printf 'section_start:1700000000:prepare_executor\r\033[0K\033[0KPreparing the "docker" executor\n'
+    printf 'noise from the setup\n'
+    printf 'section_end:1700000001:prepare_executor\r\033[0K\n'
+    printf 'section_start:1700000002:step_script\r\033[0K\033[36;1m$ npm test\033[0;m\n'
+    printf 'running 3 tests in 1234ms\n'
+    printf '\033[31;1mError: expected 3 got 4 at /tmp/tmp.AbC123/spec.js:77\033[0;m\n'
+    printf 'section_end:1700000003:step_script\r\033[0K\033[31;1mERROR: Job failed: exit code 1\033[0;m\n'
+  } > "$GL/fx/trace-7001.txt"
+}
+glw() { WIKIS_DIR="$GLW" "$W" gitlab "$@"; }
+gltick() { env LLM_WIKI_EVENTS=wait "$W" extensions tick; }
+glncount() { find "$GLST/notices" -maxdepth 1 -name '*.notice' 2>/dev/null | wc -l | tr -d ' '; }
+glexits() { local want="$1"; shift; "$@" >/dev/null 2>&1; [ "$?" -eq "$want" ]; }
+glmode() { python3 -c 'import os, sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))' "$1"; }
+GSIG='Error: expected 3 got 4 at <tmp>:77'
+git init -q "$GL/clone"
+git -C "$GL/clone" symbolic-ref HEAD refs/heads/feat-x
+git -C "$GL/clone" remote add origin https://gitlab.com/acme/gldemo.git
+git -C "$GL/clone" commit -q --allow-empty -m "Make tests pass"
+GLSHA="$(git -C "$GL/clone" rev-parse HEAD)"
+"$W" init --git >/dev/null 2>&1
+"$W" new gldemo >/dev/null 2>&1
+
+# An extension that ships with llm-wiki is off until turned on.
+expect "the GitLab extension ships turned off" "gitlab         off." "$W" extensions
+refuse "and doesn't run while it is off" "$W" gitlab --help
+expect "the error says how to turn it on" "extensions add gitlab" "$W" gitlab check
+check "its own file says it runs on tick, has a setup and has settings" bash -c "head -n 10 '$GLEXT' | grep -q '^# wiki-events: tick' && head -n 10 '$GLEXT' | grep -q '^# wiki-setup: yes' && head -n 10 '$GLEXT' | grep -q '^# wiki-settings: yes' && head -n 10 '$GLEXT' | grep -q '^# wiki-extension: '"
+check "it is executable, and ci_common.py beside it is not, and has no header" bash -c "test -x '$GLEXT' && test ! -x '$REPO/extensions/ci_common.py' && ! head -n 10 '$REPO/extensions/ci_common.py' | grep -q 'wiki-extension:'"
+# Ready: files only, never the network, and never glab itself.
+out="$("$GLEXT" --wiki-ready 2>&1)"; code=$?
+[ "$code" = 1 ] && [ "$out" = "glab isn't signed in yet" ] && ok "--wiki-ready says in one line, and fails, when glab has no config file" || bad "--wiki-ready says in one line, and fails, when glab has no config file" "exit $code: $out"
+# On a Mac glab keeps its settings under ~/Library/Application Support, not ~/.config:
+# seen with glab 1.120, where a signed-in glab was first reported as not signed in.
+GLMAC="$T/glmac-home"; mkdir -p "$GLMAC/Library/Application Support/glab-cli"
+printf 'git_protocol: ssh\nhosts:\n    gitlab.example.test:\n        api_protocol: https\n        user: someone\n' > "$GLMAC/Library/Application Support/glab-cli/config.yml"
+check "--wiki-ready finds glab's settings where a Mac keeps them" env -u XDG_CONFIG_HOME -u GLAB_CONFIG_DIR HOME="$GLMAC" "$GLEXT" --wiki-ready
+printf 'git_protocol: ssh\nhosts:\n' > "$GLMAC/Library/Application Support/glab-cli/config.yml"
+check "and still says not signed in when that file names no host" bash -c "! env -u XDG_CONFIG_HOME -u GLAB_CONFIG_DIR HOME='$GLMAC' '$GLEXT' --wiki-ready >/dev/null 2>&1"
+rm -rf "$GLMAC"
+out="$(GLAB_BIN="$GL/nope" "$GLEXT" --wiki-ready 2>&1)"; code=$?
+[ "$code" = 1 ] && [ "$out" = "glab isn't installed" ] && ok "and when glab isn't installed" || bad "and when glab isn't installed" "exit $code: $out"
+printf 'last_update_check_timestamp: 1\n' > "$XDG_CONFIG_HOME/glab-cli/config.yml"
+out="$("$GLEXT" --wiki-ready 2>&1)"; code=$?
+[ "$code" = 1 ] && ok "a config file with no host in it is not signed in" || bad "a config file with no host in it is not signed in" "exit $code: $out"
+printf 'hosts:\n    gitlab.example.com:\n        api_protocol: https\n' > "$XDG_CONFIG_HOME/glab-cli/config.yml"
+out="$("$GLEXT" --wiki-ready 2>&1)"; code=$?
+[ "$code" = 0 ] && [ -z "$out" ] && ok "with glab and a host in its config file it is ready" || bad "with glab and a host in its config file it is ready" "exit $code: $out"
+check "--wiki-ready never ran glab" test ! -e "$GL/fx/calls"
+rm -f "$XDG_CONFIG_HOME/glab-cli/config.yml"
+expect "extensions add says at once that it isn't ready" "gitlab isn't set up yet: glab isn't signed in yet. Run: " "$W" extensions add gitlab
+"$W" extensions remove gitlab >/dev/null 2>&1
+printf 'hosts:\n    gitlab.example.com:\n        api_protocol: https\n' > "$XDG_CONFIG_HOME/glab-cli/config.yml"
+expect "extensions add turns it on" "on: gitlab" "$W" extensions add gitlab
+expect "and it runs" "Usage: " "$W" gitlab --help
+expect "extensions lists the event it runs on" "(runs on: tick)" "$W" extensions
+lacks "the list of extensions never names ci_common" "ci_common" "$W" extensions
+lacks "and neither does completion" "ci_common" "$W" __complete 1 ci
+expect "the help says it only reads, and starts no agent" "READS ONLY" "$W" gitlab --help
+
+# check, with nothing failing.
+plruns feat-x "$(plrow 1001 success push abc1234def00)"
+plruns main "$(plrow 990 success push abc1234def00)"
+plruns refs/merge-requests/7/head
+plruns feat-y "$(plrow 1010 running push abc1234def00)"
+out="$(glw check "$GL/clone" 2>&1)"; code=$?
+case "$out" in "== acme/gldemo  (looked at: feat-x, main, feat-y)"$'\n'"Nothing is failing in CI for acme/gldemo."$'\n'"Still running: pipeline (push) on feat-y.") ok "check with nothing failing says so in one line, and names what is still running in another" ;; *) bad "check with nothing failing says so in one line, and names what is still running in another" "$out" ;; esac
+check "and exits 0" test "$code" = 0
+out="$(cd "$GL/clone" && glw 2>&1)"
+case "$out" in *"Nothing is failing in CI for acme/gldemo."*) ok "with no command and no folder it checks the current folder" ;; *) bad "with no command and no folder it checks the current folder" "$out" ;; esac
+check "glab was run in the clone, so it picks the host and the project from its remote" grep -qx "$(cd "$GL/clone" && pwd -P)" "$GL/fx/cwds"
+check "a merge request from a fork is left out: its branch is never asked about" bash -c "! grep -q 'from-a-fork' '$GL/fx/calls'"
+check "while the merge request's own pipelines are asked for" grep -qF 'ref=refs%2Fmerge-requests%2F7%2Fhead' "$GL/fx/calls"
+
+# check, with a failing pipeline.
+plruns feat-x "$(plrow 1002 failed push abc1234def00)" "$(plrow 1003 success schedule abc1234def00)" "$(plrow 1001 success push abc1234def00)"
+glfail 1002
+out="$(glw check "$GL/clone" 2>&1)"; code=$?
+check "check exits 0 whatever it found" test "$code" = 0
+case "$out" in *"FAILING  pipeline (push) on feat-x"*) ok "a failing pipeline names its kind and branch" ;; *) bad "a failing pipeline names its kind and branch" "$out" ;; esac
+case "$out" in *"  pipeline: https://gitlab.com/acme/gldemo/-/pipelines/1002"$'\n'"  job:      build"$'\n'"  stage:    test"$'\n'"  error:    $GSIG"$'\n'*) ok "and the pipeline, the failing job, its stage and the first line that looks like the error" ;; *) bad "and the pipeline, the failing job, its stage and the first line that looks like the error" "$out" ;; esac
+case "$out" in *"  allowed:  1 job(s) that are allowed to fail also failed, and are not counted"*) ok "a job allowed to fail that failed is counted apart" ;; *) bad "a job allowed to fail that failed is counted apart" "$out" ;; esac
+case "$out" in *"  job:      lint"*) bad "and is not the failure" "$out" ;; *) ok "and is not the failure" ;; esac
+case "$out" in *"  known:    no wiki or note holds it yet"*) ok "and says no wiki knows the error yet" ;; *) bad "and says no wiki knows the error yet" "$out" ;; esac
+case "$out" in *"  log:      $GLLOGS/1002-7001.txt"*) ok "and where the excerpt is saved" ;; *) bad "and where the excerpt is saved" "$out" ;; esac
+case "$out" in *"FAILING  pipeline (schedule)"*) bad "only the pipeline that failed is named: the one passing and the one running are not" "$out" ;; *) ok "only the pipeline that failed is named: the one passing and the one running are not" ;; esac
+GEX="$GLLOGS/1002-7001.txt"
+check "the excerpt is saved" test -f "$GEX"
+check "with mode 600" test "$(glmode "$GEX")" = 0o600
+check "in a folder with mode 700" test "$(glmode "$GLLOGS")" = 0o700
+check "that holds the job's lines" grep -q 'npm test' "$GEX"
+check "with no escape codes" bash -c "! grep -q \"\$(printf '\033')\" '$GEX'"
+check "and no carriage return" bash -c "! grep -q \"\$(printf '\r')\" '$GEX'"
+check "and no section marker" bash -c "! grep -q 'section_start' '$GEX' && ! grep -q 'section_end' '$GEX'"
+check "though the text after a marker is there" grep -q 'Preparing the "docker" executor' "$GEX"
+check "at most 8,000 bytes" test "$(wc -c < "$GEX" | tr -d ' ')" -le 8000
+case "$GEX" in "$GLW"/*) bad "the excerpt isn't inside the wikis" "$GEX" ;; *) ok "the excerpt isn't inside the wikis" ;; esac
+check "and nothing of the log is in any wiki folder" bash -c "! grep -rq 'npm test' '$GLW'"
+# A very long log is read at its end, and cut to 120 lines and 8,000 bytes.
+python3 - "$GL/fx/trace-7001.txt" <<'PY'
+import sys
+with open(sys.argv[1], "w") as f:
+    f.write("Error: the start of it all, which is not at the end\n")
+    for i in range(60000):
+        f.write("line %05d " % i + "x" * 90 + "\n")
+    f.write("Error: expected 3 got 4 at /tmp/tmp.AbC123/spec.js:77\n")
+PY
+check "the stand-in log is over 2 MB" test "$(wc -c < "$GL/fx/trace-7001.txt" | tr -d ' ')" -gt 2097152
+glw check "$GL/clone" >/dev/null 2>&1
+check "a long log is kept to 120 lines" test "$(wc -l < "$GEX" | tr -d ' ')" -le 120
+check "and 8,000 bytes" test "$(wc -c < "$GEX" | tr -d ' ')" -le 8000
+check "the end of it, where the error is" grep -q 'Error: expected 3 got 4' "$GEX"
+check "and not the first 2 MB's worth of it, which is never read" bash -c "! grep -q 'the start of it all' '$GEX' && ! grep -q 'line 00000' '$GEX'"
+glfail 1002
+# Excerpts older than a week are deleted when one is saved.
+printf 'old\n' > "$GLLOGS/900-1.txt"
+python3 -c 'import os, sys, time; t = time.time() - 8 * 86400; os.utime(sys.argv[1], (t, t))' "$GLLOGS/900-1.txt"
+printf 'new\n' > "$GLLOGS/901-1.txt"
+glw check "$GL/clone" >/dev/null 2>&1
+check "an excerpt a week old is deleted when another is saved" test ! -e "$GLLOGS/900-1.txt"
+check "a newer one stays" test -f "$GLLOGS/901-1.txt"
+rm -f "$GLLOGS/901-1.txt"
+# A signature a wiki already holds is named, with its page.
+mkdir -p "$GLW/gldemo/wiki/howto"
+printf -- '---\ntitle: CI\nsummary: Known CI failures.\n---\n\nThe tests fail with "%s" when the fixture is stale.\n' "$GSIG" > "$GLW/gldemo/wiki/howto/ci.md"
+out="$(glw check "$GL/clone" 2>&1)"
+case "$out" in *"  known:    yes, in gldemo: wiki/howto/ci.md"*) ok "a signature a wiki already holds is named, with the page" ;; *) bad "a signature a wiki already holds is named, with the page" "$out" ;; esac
+rm -rf "$GLW/gldemo/wiki/howto"
+# A job with no log, and a pipeline whose only failing job is allowed to fail.
+rm -f "$GL/fx/trace-7001.txt"
+out="$(glw check "$GL/clone" 2>&1)"
+case "$out" in *"  error:    job \"build\" failed"*"  log:      none kept: GitLab has no log for this job"*) ok "a job with no log kept still names the job, and says there is no excerpt" ;; *) bad "a job with no log kept still names the job, and says there is no excerpt" "$out" ;; esac
+glfail 1002
+printf '[{"id":7002,"name":"lint","stage":"test","status":"failed","allow_failure":true}]\n' > "$GL/fx/jobs-1002.json"
+out="$(glw check "$GL/clone" 2>&1)"
+case "$out" in *"FAILING  pipeline (push) on feat-x"*"  job:      -"*"the pipeline failed, with no failing job to read"*) ok "a failed pipeline with no failing job that counts says so, with no job named" ;; *) bad "a failed pipeline with no failing job that counts says so, with no job named" "$out" ;; esac
+glfail 1002
+# Text from GitLab is data: control characters never reach the output, and nothing GitLab says picks a path.
+printf '[{"id":1002,"status":"failed","source":"pu\\u001b[31msh\\u0007","sha":"abc1234def00","web_url":"https://gitlab.com/acme/gldemo/-/pipelines/1002"}]\n' > "$GL/fx/pipes-feat-x.json"
+out="$(glw check "$GL/clone" 2>&1)"
+case "$out" in *"FAILING  pipeline (pu[31msh) on feat-x"*) ok "a pipeline kind with control characters is printed without them" ;; *) bad "a pipeline kind with control characters is printed without them" "$out" ;; esac
+check "and none of them is in what was printed" bash -c "! printf '%s' \"\$1\" | LC_ALL=C grep -q \"[[:cntrl:]]\"" _ "$(printf '%s' "$out" | tr '\n' ' ')"
+plruns feat-x "$(plrow 1002 failed push abc1234def00)" "$(plrow 1003 success schedule abc1234def00)" "$(plrow 1001 success push abc1234def00)"
+# A canceled, skipped or manual pipeline is not a failure, and leaves the state alone.
+plruns main "$(plrow 991 canceled push abc1234def00)"
+out="$(glw check "$GL/clone" 2>&1)"
+case "$out" in *"FAILING  pipeline (push) on main"*) bad "a canceled pipeline isn't a failure" "$out" ;; *) ok "a canceled pipeline isn't a failure" ;; esac
+plruns main "$(plrow 990 success push abc1234def00)"
+
+# Not signed in, not installed, not a clone, and wrong usage.
+touch "$GL/fx/signedout"
+out="$(glw check "$GL/clone" 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"glab isn't signed in to GitLab. Run: glab auth login"*) true ;; *) false ;; esac && ok "glab not signed in exits 1, with the command that fixes it" || bad "glab not signed in exits 1, with the command that fixes it" "exit $code: $out"
+rm -f "$GL/fx/signedout"
+out="$(GLAB_BIN="$GL/nope" glw check "$GL/clone" 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"glab isn't installed"*"Do: install the GitLab CLI from https://gitlab.com/gitlab-org/cli, then run: glab auth login"*) true ;; *) false ;; esac && ok "glab missing exits 1, with how to install it" || bad "glab missing exits 1, with how to install it" "exit $code: $out"
+touch "$GL/fx/notrepo"
+out="$(glw check "$GL/clone" 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"isn't a clone of a GitLab project"*"Do: run this in a clone"*) true ;; *) false ;; esac && ok "a folder that isn't a GitLab clone exits 1, with what to do" || bad "a folder that isn't a GitLab clone exits 1, with what to do" "exit $code: $out"
+rm -f "$GL/fx/notrepo"
+touch "$GL/fx/down"
+out="$(glw check "$GL/clone" 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"glab couldn't look up the project"*"Do: check the network"*) true ;; *) false ;; esac && ok "GitLab out of reach, outside an event, exits 1, with what to do" || bad "GitLab out of reach, outside an event, exits 1, with what to do" "exit $code: $out"
+rm -f "$GL/fx/down"
+check "check with an option it doesn't know exits 2" glexits 2 glw check --bogus
+check "with two folders exits 2" glexits 2 glw check "$GL/clone" "$GL"
+check "with a folder that isn't there exits 2" glexits 2 glw check "$GL/nowhere"
+expect "and says what it was given isn't a command or a folder" "nowhere isn't a command or a folder" glw check "$GL/nowhere"
+check "a word that is no command exits 2" glexits 2 glw frobnicate
+check "watch with an option it doesn't know exits 2" glexits 2 glw watch --bogus
+check "config with an argument exits 2" glexits 2 glw config extra
+check "and a call that wasn't a call of the contract's exits 2" glexits 2 "$GLEXT" --wiki-set watch
+check "there is no fix command: it is a word that is no command" glexits 2 glw fix on
+
+# watch and unwatch.
+expect "watch with no folder says how to look at a clone" "No folders are watched. Run: " glw watch --list
+out="$(cd "$GL/clone" && glw watch 2>&1)"
+case "$out" in "Watching $GL/clone."*"To look now: "*" gitlab check $GL/clone") ok "watch adds the current folder's clone, and says what that means" ;; *) bad "watch adds the current folder's clone, and says what that means" "$out" ;; esac
+check "and it is kept in the settings file" grep -qx "watch = $GL/clone" "$XDG_CONFIG_HOME/llm-wiki/gitlab"
+expect "watch --list prints it" "$GL/clone" glw watch --list
+expect "watching it again says so" "is already watched" glw watch "$GL/clone"
+check "and adds nothing" test "$(grep -c '^watch' "$XDG_CONFIG_HOME/llm-wiki/gitlab")" = 1
+mkdir -p "$GL/clone/sub" "$GL/plain"
+expect "a folder inside a clone watches the clone" "is already watched" glw watch "$GL/clone/sub"
+refuse "a folder that isn't in a clone can't be watched" glw watch "$GL/plain"
+expect "and the error says what to do" "Do: run this in a clone of a GitLab project" glw watch "$GL/plain"
+expect "config says what is set" "watch     $GL/clone" glw config
+expect "and that glab is signed in" "signed in yes" glw config
+lacks "config never prints a token" "token" glw config
+expect "unwatch takes it off" "No longer watching $GL/clone." glw unwatch "$GL/clone"
+expect "and the list is empty again" "No folders are watched" glw watch --list
+expect "unwatching what isn't watched says so" "$GL/clone wasn't watched." glw unwatch "$GL/clone"
+check "and the setting is gone from the file" bash -c "! grep -q '^watch' '$XDG_CONFIG_HOME/llm-wiki/gitlab'"
+
+# The tick event: with nothing watched it says so, and checks nothing.
+: > "$GL/fx/calls"
+expect "a tick with no folder watched says so" "gitlab: ok" gltick
+check "and said so in its log" grep -q "No folder is watched" "$GLST/extensions/gitlab/tick.log"
+check "and asked GitLab nothing" test ! -s "$GL/fx/calls"
+glw watch "$GL/clone" >/dev/null
+# A new failure: the tick leaves a notice, and the session hooks hand it over once.
+expect "a tick with a failing pipeline in a watched clone runs fine" "gitlab: ok" gltick
+check "and writes one notice" test "$(glncount)" = 1
+check "and shows one desktop notification" test "$(glcalls)" = 1
+check "with the title and text as the two arguments after --" test "$(grep -x -A2 -e 'ARG:--' "$GL/osa.log" | sed -n 1,3p | tr '\n' '|')" = "ARG:--|ARG:CI failed: acme/gldemo|ARG:feat-x: pipeline (push) / build: $GSIG|"
+GLN="$(ls "$GLST/notices"/*.notice | head -n 1)"
+check "the notice's id is its own: gl- and the project" bash -c "basename '$GLN' | grep -q '^gl-acme__gldemo-[0-9a-f]\{12\}\.notice\$'"
+check "for that clone, named by the git folder its work trees share" test "$(sed -n 1p "$GLN")" = "$(cd "$GL/clone/.git" && pwd -P)"
+check "and that branch" test "$(sed -n 2p "$GLN")" = feat-x
+case "$(sed -n 3p "$GLN")" in "CI failed on feat-x: \"pipeline (push) / build: $GSIG\". The failing job's log, cut down: $GLLOGS/1002-7001.txt. More: "*" gitlab check") ok "its line is the failure, quoted, and where the cut-down log is" ;; *) bad "its line is the failure, quoted, and where the cut-down log is" "$(sed -n 3p "$GLN")" ;; esac
+check "the excerpt was saved by the tick too" test -f "$GLLOGS/1002-7001.txt"
+check "the notice's text is one line" test "$(wc -l < "$GLN" | tr -d ' ')" = 3
+check "the state file keeps the pipeline" python3 -c 'import json, sys; w = json.load(open(sys.argv[1]))["repos"]["acme/gldemo"]["workflows"]["push|feat-x"]; assert w["run_id"] == 1002 and w["conclusion"] == "failed" and w["signature"] == sys.argv[2] and w["job"] == "build"' "$GLSTATE" "$GSIG"
+check "and nothing of the log" bash -c "! grep -q 'npm test' '$GLSTATE'"
+check "the state file is mode 600" test "$(glmode "$GLSTATE")" = 0o600
+gluphook() { printf '{"prompt":"%s","session_id":"%s","cwd":"%s"}' "$1" "$2" "$3" | CLAUDE_PLUGIN_ROOT="$REPO" bash "$REPO/hooks/user-prompt.sh"; }
+out="$(gluphook "what next" gl-s1 "$GL/clone")"
+case "$out" in *"From an llm-wiki extension, about this repository."*"CI failed on feat-x: \\\"pipeline (push) / build: $GSIG\\\""*) ok "the message hook hands the notice over, under a line saying where it is from" ;; *) bad "the message hook hands the notice over, under a line saying where it is from" "$out" ;; esac
+out="$(gluphook "what next again" gl-s2 "$GL/clone")"
+check "and doesn't hand it over twice" test -z "$out"
+# The same failing pipeline, seen again, leaves nothing.
+gltick >/dev/null
+check "a tick that sees the same failing pipeline again leaves no second notice" test "$(glncount)" = 1
+check "and shows no second desktop notification" test "$(glcalls)" = 1
+# A new failing pipeline is a new failure, and leaves a new notice, handed over by the session start.
+plruns feat-x "$(plrow 1004 failed push abc1234def00)" "$(plrow 1003 success schedule abc1234def00)"
+glfail 1004
+gltick >/dev/null
+out="$(hook "$GL/clone" '{"source":"startup","session_id":"gl-s4"}' | context)"
+case "$out" in *"CI failed on feat-x: \"pipeline (push) / build: $GSIG\". The failing job's log, cut down: $GLLOGS/1004-7001.txt."*) ok "a failing pipeline with a new id leaves a new notice, and the session start hands it over" ;; *) bad "a failing pipeline with a new id leaves a new notice, and the session start hands it over" "$out" ;; esac
+out="$(hook "$GL/clone" '{"source":"startup","session_id":"gl-s5"}' | context)"
+case "$out" in *"CI failed on feat-x"*) bad "and only once" "$out" ;; *) ok "and only once" ;; esac
+check "the desktop shows one more, for the new pipeline" test "$(glcalls)" = 2
+# A merge request's branch: a notice for that branch, and a session on another isn't told.
+plruns feat-y "$(plrow 1020 failed push abc1234def00)"
+glfail 1020
+gltick >/dev/null
+check "a failure on a merge request's branch leaves a notice for that branch" test "$(glncount)" = 2
+out="$(hook "$GL/clone" '{"source":"startup","session_id":"gl-s7"}' | context)"
+case "$out" in *"CI failed on feat-y"*) bad "a session on another branch isn't told" "$out" ;; *) ok "a session on another branch isn't told" ;; esac
+check "the merge request is named in check" bash -c "'$W' gitlab check '$GL/clone' | grep -q 'FAILING  pipeline (push) on feat-y (merge request !7)'"
+# A pipeline from long ago leaves no notice and no notification; desktop = no leaves no notification; check never shows one.
+rm -f "$GLST/notices"/*
+plruns feat-y "$(plrow 1021 running push abc1234def00)"
+before="$(glcalls)"
+plruns main "$(plrow 800 failed push abc1234def00 2020-01-01T00:00:00.000Z)"
+glfail 800
+gltick >/dev/null
+check "a failing pipeline more than three days old leaves no notice" test "$(glncount)" = 0
+check "and shows no desktop notification" test "$(glcalls)" = "$before"
+"$W" extensions set gitlab desktop no >/dev/null 2>&1
+expect "desktop is a setting a session can set" "desktop	no	file" "$GLEXT" --wiki-settings
+plruns main "$(plrow 801 failed push abc1234def00)"
+glfail 801
+gltick >/dev/null
+check "with desktop = no a new failure still leaves its notice" test "$(glncount)" = 1
+check "and shows no desktop notification" test "$(glcalls)" = "$before"
+"$W" extensions set gitlab desktop yes >/dev/null 2>&1
+expect "desktop defaults to yes" "desktop	yes	file" "$GLEXT" --wiki-settings
+refuse "desktop takes yes or no" "$W" extensions set gitlab desktop maybe
+plruns main "$(plrow 802 failed push abc1234def00)"
+glfail 802
+glw check "$GL/clone" >/dev/null 2>&1 || true
+check "wiki gitlab check never shows a desktop notification" test "$(glcalls)" = "$before"
+rm -f "$GLST/notices"/*
+plruns main "$(plrow 990 success push abc1234def00)"
+"$W" extensions set gitlab notice no >/dev/null 2>&1
+plruns main "$(plrow 995 failed push abc1234def00)"
+glfail 995
+gltick >/dev/null
+check "with notice = no a new failure leaves no notice" test "$(glncount)" = 0
+check "but is in the state" grep -q '"run_id": 995' "$GLSTATE"
+"$W" extensions set gitlab notice yes >/dev/null 2>&1
+plruns main "$(plrow 990 success push abc1234def00)"
+rm -f "$GLST/notices"/*
+# A canceled pipeline leaves the state alone: a failure stays a failure, and its notice stays.
+rm -f "$GLSTATE"
+plruns feat-x "$(plrow 1050 failed push abc1234def00)"
+glfail 1050
+gltick >/dev/null
+check "a failing pipeline leaves a notice" test "$(glncount)" = 1
+plruns feat-x "$(plrow 1051 canceled push abc1234def00)" "$(plrow 1050 failed push abc1234def00)"
+gltick >/dev/null
+check "a canceled pipeline leaves the notice, as it was" test "$(glncount)" = 1
+check "and the state still says the last was a failure of pipeline 1050" python3 -c 'import json, sys; w = json.load(open(sys.argv[1]))["repos"]["acme/gldemo"]["workflows"]["push|feat-x"]; sys.exit(0 if w["run_id"] == 1050 and w["conclusion"] == "failed" else 1)' "$GLSTATE"
+
+# A failure fixed: a note in the wiki, only when remember is yes.
+rm -f "$GLSTATE"
+rm -f "$GLST/notices"/*
+plruns feat-x "$(plrow 1005 failed push abc1234def00)"
+glfail 1005
+gltick >/dev/null
+check "a failing pipeline leaves a notice" test "$(glncount)" = 1
+plruns feat-x "$(plrow 1006 success push "$GLSHA")" "$(plrow 1005 failed push abc1234def00)"
+gltick >/dev/null
+check "a failing pipeline that passes clears its notice" test "$(glncount)" = 0
+check "with remember off (the default) no note is saved" test "$(find "$GLW/gldemo/raw" -name '*ci-*' | wc -l | tr -d ' ')" = 0
+expect "remember is off unless turned on" "remember	no	default" "$GLEXT" --wiki-settings
+"$W" extensions set gitlab remember yes >/dev/null 2>&1
+plruns feat-x "$(plrow 1007 failed push abc1234def00)"
+glfail 1007
+gltick >/dev/null
+plruns feat-x "$(plrow 1008 success push "$GLSHA")" "$(plrow 1007 failed push abc1234def00)"
+printf '[{"iid":7,"source_branch":"feat-x","source_project_id":42,"target_project_id":42}]\n' > "$GL/fx/mrs.json"
+expect "a failure that passes, with remember on, is noted" "gitlab: ok" gltick
+GNOTE="$(ls "$GLW/gldemo/raw"/*-ci-fixed.md 2>/dev/null | head -n 1)"
+check "as a ci-fixed note in the wiki that covers the project" test -f "$GNOTE"
+check "ending with the line that says it is tied to no ticket" test "$(tail -n 1 "$GNOTE")" = "Ticket: none"
+check "with a title" grep -qx '# CI fixed: pipeline (push) on feat-x (acme/gldemo)' "$GNOTE"
+check "the pipeline kind, job and stage" bash -c "grep -qx 'Pipeline kind: push' '$GNOTE' && grep -qx 'Job: build' '$GNOTE' && grep -qx 'Stage: test' '$GNOTE'"
+check "the signature" grep -qxF "Signature: $GSIG" "$GNOTE"
+check "the pipeline that failed and the one that passed, with their addresses" bash -c "grep -qx 'Failed pipeline: 1007 https://gitlab.com/acme/gldemo/-/pipelines/1007' '$GNOTE' && grep -qx 'Passing pipeline: 1008 https://gitlab.com/acme/gldemo/-/pipelines/1008' '$GNOTE'"
+check "the commit that passed, from the clone, with its subject" grep -qx "Commit of the passing pipeline: ${GLSHA:0:7} Make tests pass" "$GNOTE"
+check "and the merge request" grep -qx 'Merge request: !7' "$GNOTE"
+check "never the log" bash -c "! grep -q 'npm test' '$GNOTE' && ! grep -q 'running 3 tests' '$GNOTE'"
+check "the sync's commit says what happened" bash -c "git -C '$GLW' log --format=%s | grep -qx 'gldemo: CI failure fixed'"
+check "and the note is committed, so the wiki has nothing left uncommitted" test -z "$(git -C "$GLW" status --short)"
+# A failure that passes on a retry of the same commit is flaky, not fixed.
+rm -f "$GLST/notices"/*
+plruns feat-x "$(plrow 1009 failed push "$GLSHA")"
+glfail 1009
+gltick >/dev/null
+plruns feat-x "$(plrow 1009 success push "$GLSHA")"
+gltick >/dev/null
+GNOTE="$(ls "$GLW/gldemo/raw"/*-ci-flaky.md 2>/dev/null | head -n 1)"
+check "a failure that passes on a retry of the same commit is noted as flaky" test -f "$GNOTE"
+check "saying so, and not that it was fixed" bash -c "grep -qx '# CI flaky: pipeline (push) on feat-x (acme/gldemo)' '$GNOTE' && ! grep -q 'fixed' '$GNOTE'"
+check "and still ends with the ticket line" test "$(tail -n 1 "$GNOTE")" = "Ticket: none"
+check "and its sync says flaky" bash -c "git -C '$GLW' log --format=%s | grep -qx 'gldemo: CI failure was flaky'"
+# With remember off, a fixed failure saves nothing, and says it passes again.
+"$W" extensions set gitlab remember no >/dev/null 2>&1
+before="$(ls "$GLW"/gldemo/raw | wc -l | tr -d ' ')"
+plruns feat-x "$(plrow 1060 failed push abc1234def00)"
+glfail 1060
+gltick >/dev/null
+plruns feat-x "$(plrow 1061 success push "$GLSHA")"
+gltick >/dev/null
+check "with remember = no a fixed failure leaves no note" test "$(ls "$GLW"/gldemo/raw | wc -l | tr -d ' ')" = "$before"
+check "and the log says it passes again" grep -q "pipeline (push) on feat-x passes again" "$GLST/extensions/gitlab/tick.log"
+"$W" extensions set gitlab remember yes >/dev/null 2>&1
+# With no wiki that covers the project, the note is skipped, and the log says so.
+rm -f "$GLSTATE"
+printf '{"id":43,"path_with_namespace":"acme/nowiki","default_branch":"main","web_url":"https://gitlab.com/acme/nowiki"}\n' > "$GL/fx/repo.json"
+git -C "$GL/clone" remote set-url origin https://gitlab.com/acme/nowiki.git
+plruns feat-x "$(plrow 1030 failed push abc1234def00)"
+glfail 1030
+gltick >/dev/null
+plruns feat-x "$(plrow 1031 success push abc9999abc99)"
+before="$(ls "$GLW"/*/raw | wc -l | tr -d ' ')"
+gltick >/dev/null
+check "a project no wiki covers gets no note" test "$(ls "$GLW"/*/raw | wc -l | tr -d ' ')" = "$before"
+check "and the log says why" grep -q "no wiki covers nowiki, so no note was saved" "$GLST/extensions/gitlab/tick.log"
+printf '{"id":42,"path_with_namespace":"acme/gldemo","default_branch":"main","web_url":"https://gitlab.com/acme/gldemo"}\n' > "$GL/fx/repo.json"
+git -C "$GL/clone" remote set-url origin https://gitlab.com/acme/gldemo.git
+plruns feat-x "$(plrow 1001 success push abc1234def00)"
+rm -f "$GLST/notices"/*
+
+# GitLab out of reach, or not signed in, during an event is for later.
+touch "$GL/fx/down"
+out="$(env LLM_WIKI="$W" WIKIS_DIR="$GLW" "$GLEXT" --wiki-event tick 2>&1)"; code=$?
+[ "$code" = 75 ] && case "$out" in "not now: glab couldn't look up the project"*) true ;; *) false ;; esac && ok "glab out of reach during an event exits 75, with one line" || bad "glab out of reach during an event exits 75, with one line" "exit $code: $out"
+expect "so a tick calls it later, not a failure" "gitlab: later" gltick
+rm -f "$GL/fx/down"
+touch "$GL/fx/signedout"
+out="$(env LLM_WIKI="$W" WIKIS_DIR="$GLW" "$GLEXT" --wiki-event tick 2>&1)"; code=$?
+[ "$code" = 75 ] && case "$out" in "not now: glab isn't signed in to GitLab"*) true ;; *) false ;; esac && ok "and so does glab not signed in" || bad "and so does glab not signed in" "exit $code: $out"
+rm -f "$GL/fx/signedout"
+out="$(GLAB_BIN="$GL/nope" env LLM_WIKI="$W" WIKIS_DIR="$GLW" "$GLEXT" --wiki-event tick 2>&1)"; code=$?
+[ "$code" = 75 ] && case "$out" in "not now: glab isn't installed"*) true ;; *) false ;; esac && ok "and so does glab not installed" || bad "and so does glab not installed" "exit $code: $out"
+# A watched folder that is gone is skipped.
+mkdir -p "$GL/gone/.git"
+printf 'watch = %s, %s\n' "$GL/gone" "$GL/clone" > "$XDG_CONFIG_HOME/llm-wiki/gitlab"
+rm -rf "$GL/gone"
+out="$(env LLM_WIKI="$W" WIKIS_DIR="$GLW" "$GLEXT" --wiki-event tick 2>&1)"; code=$?
+[ "$code" = 0 ] && case "$out" in *"$GL/gone is gone, so it was skipped."*) true ;; *) false ;; esac && ok "a watched folder that is gone is skipped, with one line, and the rest are looked at" || bad "a watched folder that is gone is skipped, with one line, and the rest are looked at" "exit $code: $out"
+printf 'watch = %s\n' "$GL/clone" > "$XDG_CONFIG_HOME/llm-wiki/gitlab"
+
+# Settings, as a session sees and changes them.
+out="$("$GLEXT" --wiki-settings 2>&1)"
+check "--wiki-settings lists four settings, all of them set by a session" test "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 4
+check "each with five tab-separated fields" bash -c "printf '%s\n' \"\$1\" | awk -F '\t' 'NF != 5 || \$5 != \"set\" { exit 1 }'" _ "$out"
+case "$out" in "watch	$GL/clone	file	"*"	set"$'\n'"remember	"*"	set"$'\n'"notice	yes	"*"	set"$'\n'"desktop	yes	"*"	set") ok "the settings are watch, remember, notice and desktop, with what they are and where from" ;; *) bad "the settings are watch, remember, notice and desktop, with what they are and where from" "$out" ;; esac
+GCF="$XDG_CONFIG_HOME/llm-wiki/gitlab"
+cp "$GCF" "$GL/gitlab.keep"
+check "--wiki-set sets remember" bash -c "'$GLEXT' --wiki-set remember yes >/dev/null && grep -qx 'remember = yes' '$GCF'"
+check "and says so in a line" test "$("$GLEXT" --wiki-set remember no)" = "remember set in $GCF"
+check "a - clears a setting" bash -c "'$GLEXT' --wiki-set remember - >/dev/null && ! grep -q '^remember' '$GCF'"
+check "watch takes folders that exist, with ~ for home" bash -c "mkdir -p '$HOME/glw-folder' && '$GLEXT' --wiki-set watch '~/glw-folder, $GL/clone' >/dev/null && grep -qx 'watch = $HOME/glw-folder, $GL/clone' '$GCF'"
+rm -rf "$HOME/glw-folder"
+cp "$GL/gitlab.keep" "$GCF"
+check "an unknown key exits 2" glexits 2 "$GLEXT" --wiki-set colour red
+expect "naming the settings there are" "Settings: watch, remember, notice, desktop" "$GLEXT" --wiki-set colour red
+check "and a key about fixing is unknown" glexits 2 "$GLEXT" --wiki-set fix "$GL/clone"
+check "a value that isn't yes or no exits 2" glexits 2 "$GLEXT" --wiki-set remember maybe
+check "a folder that isn't there exits 2" glexits 2 "$GLEXT" --wiki-set watch "$GL/nowhere"
+check "a relative path exits 2" glexits 2 "$GLEXT" --wiki-set watch "some/folder"
+check "a secret's key exits 2" glexits 2 "$GLEXT" --wiki-set token abc
+check "a # in a value exits 2" glexits 2 "$GLEXT" --wiki-set watch "$GL/clone # x"
+check "no value exits 2" glexits 2 "$GLEXT" --wiki-set remember
+gbefore="$(cat "$GCF")"
+check "a control character in a value exits 2" glexits 2 "$GLEXT" --wiki-set remember "$(printf 'yes\001')"
+check "and so does a line separator" glexits 2 "$GLEXT" --wiki-set watch "$(printf '%s\xe2\x80\xa8remember = yes' "$GL/clone")"
+check "a newline too" glexits 2 "$GLEXT" --wiki-set watch "$(printf '%s\nremember = yes' "$GL/clone")"
+check "and the file is as it was after each refusal" test "$(cat "$GCF")" = "$gbefore"
+expect "extensions set goes through it" "remember set in" "$W" extensions set gitlab remember yes
+expect "extensions settings lists them" "notice" "$W" extensions settings gitlab
+"$W" extensions set gitlab remember - >/dev/null 2>&1
+
+# Setup, at a terminal, and the guide.
+glw unwatch "$GL/clone" >/dev/null
+out="$(cd "$GL/clone" && printf 'y\ny\n' | "$W" extensions setup gitlab 2>&1)"
+case "$out" in *"glab is signed in to GitLab."*"Watch $GL/clone?"*"Save a note when a failure is fixed?"*"gitlab is set up."*) ok "setup checks glab's sign-in, offers the current folder, and asks about notes" ;; *) bad "setup checks glab's sign-in, offers the current folder, and asks about notes" "$out" ;; esac
+case "$out" in *"never starts, retries or"*"cancels a pipeline"*) ok "and says it only reads" ;; *) bad "and says it only reads" "$out" ;; esac
+check "yes to both is kept" bash -c "grep -qx 'remember = yes' '$GCF' && grep -qx 'watch = $GL/clone' '$GCF'"
+touch "$GL/fx/signedout"
+expect "setup says how to sign in when glab isn't" "glab auth login" bash -c "printf '\n\n' | '$W' extensions setup gitlab"
+rm -f "$GL/fx/signedout"
+"$W" extensions set gitlab remember - >/dev/null 2>&1
+out="$("$W" setup --guide gitlab)"
+case "$out" in *"- gitlab: on, ready."*"wiki extensions set gitlab <key> <value>"*) ok "the guide has a section for it, with how to change a setting" ;; *) bad "the guide has a section for it, with how to change a setting" "$out" ;; esac
+check "and it says no token is ever asked for" bash -c "'$W' setup --guide | grep -q 'Never ask for, accept or write a token or password'"
+
+# It only ever reads GitLab.
+check "the stand-in glab was asked only to GET an API path, and to check the sign-in" test -z "$(grep -vE '^(api --method GET (projects/:fullpath|projects/:id/(merge_requests\?|pipelines\?|pipelines/[0-9]+/jobs\?|jobs/[0-9]+/trace))|auth status)' "$GL/fx/calls")"
+check "and never with a method that writes, or a field" bash -c "! grep -qE '(POST|PUT|PATCH|DELETE|--field|--raw-field|--input|-X |-f |-F )' '$GL/fx/calls'"
+check "with prompts turned off on every call" test -z "$(grep -vx 1 "$GL/fx/prompt")"
+check "and a timeout on each call, so no run of it waits for ever" grep -q 'timeout' "$GLEXT"
+check "the extension never reads a token" bash -c "! grep -qE 'GITLAB_TOKEN|GITLAB_ACCESS_TOKEN|GLAB_TOKEN|--show-token|auth token' '$GLEXT'"
+check "and has no fix command, no agent and no push" bash -c "! grep -qE '^def (fix|cmd_fix|start_fix|run_agent)|\"push\"|\"commit\"' '$GLEXT'"
+check "nothing it saved is a token or holds one" bash -c "! grep -rqiE 'glpat-|private-token' '$GLST' '$XDG_CONFIG_HOME/llm-wiki' 2>/dev/null"
+
+# What the server says is data that may be wrong in any way: nothing in it is trusted to have the shape it should.
+mkdir -p "$GL/sloppy"
+python3 -c 'print("[" * 2000000)' > "$GL/fx/repo.json.deep"
+cp "$GL/fx/repo.json" "$GL/fx/repo.json.keep"
+cp "$GL/fx/repo.json.deep" "$GL/fx/repo.json"
+out="$(glw check "$GL/clone" 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"glab didn't answer with JSON when asked to look up the project"*) true ;; *) false ;; esac && case "$out" in *Traceback*) false ;; *) true ;; esac && ok "JSON nested too deep to read is an answer that can't be read, with exit 1 and no traceback" || bad "JSON nested too deep to read is an answer that can't be read, with exit 1 and no traceback" "exit $code: ${out:0:300}"
+cp "$GL/fx/repo.json.keep" "$GL/fx/repo.json"
+cp "$GL/fx/pipes-feat-x.json" "$GL/fx/pipes-feat-x.keep" 2>/dev/null || true
+cp "$GL/fx/mrs.json" "$GL/fx/mrs.keep"
+printf '[null, 1, "x", {"iid":"7","source_branch":"a","source_project_id":42,"target_project_id":42}, {"iid":9,"source_branch":"..","source_project_id":42,"target_project_id":42}, {"iid":10,"source_branch":"-x","source_project_id":42,"target_project_id":42}, {"iid":7,"source_branch":"feat-y","source_project_id":42,"target_project_id":42}]\n' > "$GL/fx/mrs.json"
+printf '[null, 1, "s", {"id":1002,"status":"failed","source":"push","sha":"abc1234def00","web_url":"u","created_at":"2026-13-45T25:61:61Z"}]\n' > "$GL/fx/pipes-feat-x.json"
+printf '{"not":"a list"}\n' > "$GL/fx/pipes-main.json"
+printf '[null, 1]\n' > "$GL/fx/jobs-1002.json"
+out="$(glw check "$GL/clone" 2>&1)"; code=$?
+[ "$code" = 0 ] && case "$out" in *Traceback*) false ;; *"FAILING  pipeline (push) on feat-x"*) true ;; *) false ;; esac && ok "items that aren't what they should be, a date that can't be, and answers that aren't lists are skipped: the one good pipeline is still reported" || bad "items that aren't what they should be, a date that can't be, and answers that aren't lists are skipped: the one good pipeline is still reported" "exit $code: ${out:0:400}"
+check "and a merge request whose branch is .. or starts with - is never asked about" bash -c "! grep -qE 'ref=(\.\.|-x)' '$GL/fx/calls' && ! grep -q 'merge-requests%2F9' '$GL/fx/calls'"
+cp "$GL/fx/mrs.keep" "$GL/fx/mrs.json"
+plruns main "$(plrow 990 success push abc1234def00)"
+plruns feat-x "$(plrow 1002 failed push abc1234def00)" "$(plrow 1003 success schedule abc1234def00)" "$(plrow 1001 success push abc1234def00)"
+glfail 1002
+check "the jobs of a pipeline are asked for as the failed ones, 100 to a page, with the brackets encoded" grep -qF 'jobs?scope%5B%5D=failed&per_page=100' "$GL/fx/calls"
+# What a server can make it do is capped: 20 pipelines read for a ref, 5 kinds kept, and a project's time.
+python3 - "$GL/fx/pipes-feat-x.json" <<'PY'
+import json, sys
+json.dump([{"id": i, "status": "failed", "source": "kind%03d" % i, "sha": "abc1234def00", "web_url": "u"} for i in range(1, 501)], open(sys.argv[1], "w"))
+PY
+plruns main "$(plrow 990 success push abc1234def00)"
+: > "$GL/fx/calls"
+out="$(glw check "$GL/clone" 2>&1)"
+check "500 pipelines of 500 kinds are at most 5 looked at" test "$(printf '%s\n' "$out" | grep -c 'FAILING  pipeline (kind')" = 5
+check "and each was asked about, no more" test "$(grep -c 'pipelines/[0-9]*/jobs?' "$GL/fx/calls")" = 5
+case "$out" in *"pipeline (kind016)"*"pipeline (kind020)"*) ok "the 20 first rows were read, and of them the 5 newest kinds kept" ;; *) bad "the 20 first rows were read, and of them the 5 newest kinds kept" "$out" ;; esac
+case "$out" in *"kind021"* | *"kind001)"*) bad "and no row after the 20th, nor an older kind" "$out" ;; *) ok "and no row after the 20th, nor an older kind" ;; esac
+touch "$GL/fx/slow"
+out="$(env LLM_WIKI_FOLDER_SECONDS=1 WIKIS_DIR="$GLW" "$GLEXT" check "$GL/clone" 2>&1)"; code=$?
+rm -f "$GL/fx/slow"
+[ "$code" = 1 ] && case "$out" in *"acme/gldemo took more than 1 seconds to read. Do: run it again, or later: "*) true ;; *) false ;; esac && ok "check has the same time for a project as the tick, and says what to do" || bad "check has the same time for a project as the tick, and says what to do" "exit $code: $out"
+plruns feat-x "$(plrow 1002 failed push abc1234def00)" "$(plrow 1003 success schedule abc1234def00)" "$(plrow 1001 success push abc1234def00)"
+# An id that isn't a positive whole number is skipped.
+printf '[{"id":-1,"status":"failed","source":"push"},{"id":0,"status":"failed","source":"schedule"}]\n' > "$GL/fx/pipes-feat-x.json"
+printf '[{"iid":0,"source_branch":"zero","source_project_id":42,"target_project_id":42},{"iid":-1,"source_branch":"minus","source_project_id":42,"target_project_id":42}]\n' > "$GL/fx/mrs.json"
+: > "$GL/fx/calls"
+out="$(glw check "$GL/clone" 2>&1)"; code=$?
+[ "$code" = 0 ] && case "$out" in *FAILING*) false ;; *) true ;; esac && ok "pipelines with the ids -1 and 0 are skipped" || bad "pipelines with the ids -1 and 0 are skipped" "exit $code: $out"
+check "and a merge request with such an iid is never asked about" bash -c "! grep -qE 'ref=(zero|minus)|merge-requests%2F(0|-1)%2F' '$GL/fx/calls' && ! grep -qE 'pipelines/(-1|0)/' '$GL/fx/calls'"
+cp "$GL/fx/mrs.keep" "$GL/fx/mrs.json"
+plruns feat-x "$(plrow 1002 failed push abc1234def00)" "$(plrow 1003 success schedule abc1234def00)" "$(plrow 1001 success push abc1234def00)"
+printf '[{"id":-1,"name":"x","stage":"t","status":"failed","allow_failure":false},{"id":0,"name":"y","stage":"t","status":"failed","allow_failure":false}]\n' > "$GL/fx/jobs-1002.json"
+: > "$GL/fx/calls"
+glw check "$GL/clone" >/dev/null 2>&1
+check "a job with the id -1 or 0 has no log asked for" bash -c "! grep -qE 'jobs/(-1|0)/trace' '$GL/fx/calls'"
+glfail 1002
+# What glab runs in has none of git's own variables, which would point it at another repository.
+rm -f "$GL/fx/gitdir"
+env GIT_DIR=/nonexistent GIT_WORK_TREE=/nonexistent GIT_CONFIG_COUNT=1 WIKIS_DIR="$GLW" "$GLEXT" check "$GL/clone" >/dev/null 2>&1
+check "GIT_DIR set in the caller never reached glab" bash -c "test -s '$GL/fx/gitdir' && test -z \"\$(grep -vx unset '$GL/fx/gitdir')\""
+# At most ten merge requests of a project are looked at.
+python3 - "$GL/fx/mrs.json" <<'PY'
+import json, sys
+json.dump([{"iid": i + 20, "source_branch": "mr-%02d" % i, "source_project_id": 42, "target_project_id": 42} for i in range(15)], open(sys.argv[1], "w"))
+PY
+: > "$GL/fx/calls"
+glw check "$GL/clone" >/dev/null 2>&1
+check "only ten of fifteen merge requests are looked at" test "$(grep -c 'pipelines?ref=mr-' "$GL/fx/calls")" = 10
+check "and the call asks for ten" grep -q 'merge_requests?scope=created_by_me&state=opened&per_page=10' "$GL/fx/calls"
+cp "$GL/fx/mrs.keep" "$GL/fx/mrs.json"
+# The project's name is the clone's word, and the server has to agree with it.
+printf '{"id":42,"path_with_namespace":"acme/other","default_branch":"main","web_url":"https://gitlab.com/acme/other"}\n' > "$GL/fx/repo.json"
+out="$(glw check "$GL/clone" 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"isn't a clone of a GitLab project (glab says: glab found another project than the clone's origin names)"*) true ;; *) false ;; esac && ok "a server that names another project than the clone's origin is not believed: exit 1, and which" || bad "a server that names another project than the clone's origin is not believed: exit 1, and which" "exit $code: $out"
+printf '{"id":42,"path_with_namespace":"ACME/GlDemo","default_branch":"main","web_url":"https://gitlab.com/acme/gldemo"}\n' > "$GL/fx/repo.json"
+out="$(glw check "$GL/clone" 2>&1)"
+case "$out" in "== acme/gldemo  "*) ok "while the same name in other letters is the same project, and is shown as the clone says it" ;; *) bad "while the same name in other letters is the same project, and is shown as the clone says it" "$out" ;; esac
+cp "$GL/fx/repo.json.keep" "$GL/fx/repo.json"
+printf '{"id":42,"path_with_namespace":"acme/other","default_branch":"main","web_url":"x"}\n' > "$GL/fx/repo.json"
+out="$(env LLM_WIKI="$W" WIKIS_DIR="$GLW" "$GLEXT" --wiki-event tick 2>&1)"
+case "$out" in *"isn't a clone of the GitLab project glab found, so it was skipped"*) ok "and a tick skips such a folder, with a line" ;; *) bad "and a tick skips such a folder, with a line" "$out" ;; esac
+cp "$GL/fx/repo.json.keep" "$GL/fx/repo.json"
+# What the clone's origin names, in each form an address has.
+cat > "$GL/core2.py" <<'PYX'
+import importlib.machinery, importlib.util, os, sys
+sys.dont_write_bytecode = True
+ld = importlib.machinery.SourceFileLoader("wl", sys.argv[1])
+m = importlib.util.module_from_spec(importlib.util.spec_from_loader("wl", ld)); ld.exec_module(m)
+what = sys.argv[2]
+if what == "name":
+    print(m.local_name(sys.argv[3])); sys.exit(0)
+if what == "branch": sys.exit(0 if not any(m.branch_ok(b) for b in ("a..b", "-x", "..", "", None, "a b", "a;b")) and m.branch_ok("feat/x-1.2") else 1)
+if what == "project": sys.exit(0 if not any(m.PROJECT_NAME.match(n) for n in ("-x/y", ".x/y", "a/-y", "a/.y", "a", "a//b")) and m.PROJECT_NAME.match("a/b.c/d_e-f") else 1)
+if what == "iso": sys.exit(0 if m.iso_z("2026-13-45T25:61:61Z") == "" and m.iso_z("2026-11-15T10:00:00.123+02:00") == "2026-11-15T08:00:00Z" and m.iso_z(None) == "" else 1)
+if what == "notice":
+    import ci_common
+    sent = []
+    class R: returncode = 0; stderr = ""
+    ci_common.llm_wiki = lambda *a, **k: (sent.append(a), R())[1]
+    o = {"branch": "b" * 250, "workflow": "pipeline (push)"}
+    d = {"job": "j" * 100, "signature": "s" * 200, "excerpt": "/x/" + "p" * 400}
+    m.put_notice("id", "/f", o, d)
+    t = sent[0][-1]
+    ok = len(t.encode()) <= 600 and t.endswith("More: " + m.CMD + " gitlab check") and t.count('"') == 2 and "b" * 78 not in t and "b" * 77 + "..." in t
+    print(len(t.encode()), t[-40:]); sys.exit(0 if ok else 1)
+if what == "flood":
+    os.environ["x"] = "1"
+    if sys.argv[3] == "out":
+        try:
+            m.run_glab(["api", "x"], timeout=60, tail=m.TRACE_BYTES)
+        except m.GlabTooBig:
+            sys.exit(0)
+        sys.exit(1)
+    code, out, err = m.run_glab(["api", "x"], timeout=60)
+    sys.exit(0 if code == 1 and len(err) <= 65536 else 1)
+if what == "budget": sys.exit(0 if m.FOLDER_SECONDS == 60 else 1)
+sys.exit(2)
+PYX
+glcore() { python3 -I "$GL/core2.py" "$GLEXT" "$@"; }
+for pair in "https://gitlab.com/acme/gldemo.git=acme/gldemo" "git@gitlab.com:acme/sub/gldemo.git=acme/sub/gldemo" "ssh://git@host.example:2222/acme/gldemo=acme/gldemo" "https://me:pw@host.example/acme/gldemo/=acme/gldemo" "https://gitlab.com/-x/y=" "https://gitlab.com/.x/y=" "/some/local/path.git=" "https://gitlab.com/solo=" ; do
+  git -C "$GL/clone" remote set-url origin "${pair%=*}"
+  want="${pair##*=}"
+  check "the clone's origin ${pair%=*} names ${want:-no project}" test "$(glcore name "$GL/clone")" = "$want"
+done
+git -C "$GL/clone" remote set-url origin https://gitlab.com/acme/gldemo.git
+check "a branch name with .. in it, or a leading -, or a space is no branch" glcore branch
+check "a project name part that starts with a - or a . is no name" glcore project
+check "an impossible date is no date, and an offset is applied" glcore iso
+check "the time a project gets in a tick can be lowered by the environment, and never raised" env LLM_WIKI_FOLDER_SECONDS=999 python3 -I "$GL/core2.py" "$GLEXT" budget
+check "a notice for a 250-character branch and a long path is under 600 bytes, and still ends with where to look" glcore notice
+# A log glab keeps sending is stopped, and what it says on stderr is capped.
+cat > "$GL/flood" <<'FL'
+#!/usr/bin/env python3
+import os, sys
+if os.environ.get("FLOOD") == "out":
+    chunk = b"x" * 1048576
+    try:
+        for _ in range(300): sys.stdout.buffer.write(chunk)
+    except BrokenPipeError:
+        pass
+else:
+    sys.stderr.buffer.write(b"e" * 5000000)
+    sys.exit(1)
+FL
+chmod +x "$GL/flood"
+check "glab sending 300 MB of a log is stopped after 64 MB, not read to its end" env GLAB_BIN="$GL/flood" FLOOD=out python3 -I "$GL/core2.py" "$GLEXT" flood out
+check "and 5 MB of its messages are read and thrown away, 64 KB kept" env GLAB_BIN="$GL/flood" FLOOD=err python3 -I "$GL/core2.py" "$GLEXT" flood err
+# One project that can't be read doesn't stop the others; the event is 75 only when none could be read.
+git init -q "$GL/clone2"
+git -C "$GL/clone2" remote add origin https://gitlab.com/acme/gldemo.git
+git -C "$GL/clone2" commit -q --allow-empty -m "Second clone"
+printf 'watch = %s, %s\n' "$GL/clone" "$GL/clone2" > "$XDG_CONFIG_HOME/llm-wiki/gitlab"
+rm -f "$GLSTATE" "$GLST/notices"/*
+touch "$GL/fx/down-clone"
+out="$(env LLM_WIKI="$W" WIKIS_DIR="$GLW" "$GLEXT" --wiki-event tick 2>&1)"; code=$?
+[ "$code" = 0 ] && case "$out" in *"$GL/clone couldn't be read just now, so it was skipped. The rest go on."*) true ;; *) false ;; esac && ok "a folder that can't be read is logged and skipped, the next is read, and the event is 0" || bad "a folder that can't be read is logged and skipped, the next is read, and the event is 0" "exit $code: $out"
+check "and the failure the second one showed left its notice" test "$(glncount)" = 1
+touch "$GL/fx/down-clone2"
+out="$(env LLM_WIKI="$W" WIKIS_DIR="$GLW" "$GLEXT" --wiki-event tick 2>&1)"; code=$?
+[ "$code" = 75 ] && ok "with every folder out of reach the event is 75" || bad "with every folder out of reach the event is 75" "exit $code: $out"
+rm -f "$GL/fx/down-clone" "$GL/fx/down-clone2"
+# A project gets 60 seconds in a tick, and the folders left wait for the next.
+printf 'watch = %s\n' "$GL/clone" > "$XDG_CONFIG_HOME/llm-wiki/gitlab"
+touch "$GL/fx/slow"
+out="$(env LLM_WIKI_FOLDER_SECONDS=1 LLM_WIKI="$W" WIKIS_DIR="$GLW" "$GLEXT" --wiki-event tick 2>&1)"; code=$?
+rm -f "$GL/fx/slow"
+[ "$code" = 0 ] && case "$out" in *"acme/gldemo: out of time (1 seconds) for this project. The rest waits for the next tick."*) true ;; *) false ;; esac && ok "a project that takes more than its time is left for the next tick, with a line" || bad "a project that takes more than its time is left for the next tick, with a line" "exit $code: $out"
+# The state is written under its lock, and with no lock nothing is written.
+rm -f "$GLSTATE" "$GLST/notices"/*
+rm -f "$GLST/extensions/gitlab/state.lock"
+mkdir -p "$GLST/extensions/gitlab/state.lock"
+plruns feat-x "$(plrow 2001 failed push abc1234def00)"
+glfail 2001
+out="$(env LLM_WIKI="$W" WIKIS_DIR="$GLW" "$GLEXT" --wiki-event tick 2>&1)"
+rmdir "$GLST/extensions/gitlab/state.lock"
+case "$out" in *"couldn't lock $GLSTATE, so nothing was written for acme/gldemo."*) ok "when the state can't be locked nothing is written, and the log says so" ;; *) bad "when the state can't be locked nothing is written, and the log says so" "$out" ;; esac
+check "no state file, and no notice for what couldn't be recorded" bash -c "test ! -e '$GLSTATE' && test \$(find '$GLST/notices' -name '*.notice' 2>/dev/null | wc -l) = 0"
+plruns feat-x "$(plrow 1001 success push abc1234def00)"
+rm -f "$GLST/notices"/* "$GLSTATE"
+printf 'watch = %s\n' "$GL/clone" > "$XDG_CONFIG_HOME/llm-wiki/gitlab"
+# The shared core, ci_common.py: what the three CI extensions have in common, on its own.
+cat > "$GL/core.py" <<'PYX'
+import importlib.machinery, importlib.util, re, sys
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+import ci_common as c
+what = sys.argv[2]
+log = ["ok    check %d" % i for i in range(400)]
+log[50] = "FAIL  the widget turns"
+log[51] = "        expected 3, got 4"
+log += ["400 passed, 1 failed", "##[error]Process completed with exit code 1."]
+raw = ["2026-11-15T10:00:00.0000000Z " + l for l in log]
+lines = c.excerpt_lines(raw)
+if what == "has-fail": sys.exit(0 if "FAIL  the widget turns" in lines and "        expected 3, got 4" in lines else 1)
+if what == "has-end": sys.exit(0 if lines[-1] == "##[error]Process completed with exit code 1." and "400 passed, 1 failed" in lines else 1)
+if what == "gap": sys.exit(0 if "[...]" in lines and len(lines) <= 120 else 1)
+if what == "bytes": sys.exit(0 if len("\n".join(c.excerpt_lines(["x" * 7000, "y" * 7000])).encode()) <= c.KEEP_BYTES else 1)
+if what == "selected": sys.exit(0 if c.excerpt_lines(["\033[31mone\033[0m", "\ttwo", "", ""]) == ["one", "    two"] else 1)
+if what == "short": sys.exit(0 if c.excerpt_lines(["one", "two"]) == ["one", "two"] else 1)
+if what == "signature": sys.exit(0 if c.signature_of(lines, "Run tests") == "FAIL the widget turns" else 1)
+if what == "generic": sys.exit(0 if c.signature_of(["all fine", "##[error]Process completed with exit code 1."], "s") == "all fine" else 1)
+if what == "own-generic":
+    g = re.compile(r"^ERROR: script returned exit code \d+$")
+    sys.exit(0 if c.signature_of(["ERROR: script returned exit code 1", "boom at /tmp/x/y:12:34"], "s", "build", g) == "boom at <tmp>:12:34" and c.signature_of([], "b", "build") == 'build "b" failed' else 1)
+if what == "noise": sys.exit(0 if c.signature_of(['  {"text": "sync failed"}', "FAIL  real one"], "s") == "FAIL real one" else 1)
+if what == "fold": sys.exit(0 if c.signature_of(["Error at 12:30:45 in /tmp/tmp.Ab/x 0xdeadbeef took 1234ms (build 98765)"], "s") == "Error at <time> in <tmp> <hex> took <dur> (build <n>)" else 1)
+if what == "log-lines":
+    n = re.compile(r"section_(?:start|end):\d+:\w+\r?")
+    got = c.log_lines(b"section_start:1:a\r\033[0Kone\nprogress 10%\rprogress 100%\n\ntwo\r\n", n)
+    sys.exit(0 if [c.tidy(l) for l in got] == ["one", "progress 100%", "", "two", ""] else 1)
+if what == "clean": sys.exit(0 if c.clean("a\x1b[31m\x07b \nc\td") == "a[31mb c d" and c.clean("x" * 500, 20) == "x" * 20 else 1)
+if what == "bytes-cut": sys.exit(0 if c.cut_bytes("é" * 100, 11) == "é" * 5 else 1)
+if what == "stale": sys.exit(0 if c.stale("2020-01-01T00:00:00Z") and not c.stale("") and not c.stale("not a time") else 1)
+if what == "known": sys.exit(0 if c.known_in_wikis("-----") is None else 1)
+if what == "no-bytecode": sys.exit(0 if sys.dont_write_bytecode else 1)
+if what == "trim":
+    big = ["ok %03d " % i + "x" * 250 for i in range(300)]
+    big[100] = "FAIL boom"
+    got = c.excerpt_lines(big)
+    ok = ("FAIL boom" in got and big[114] in got and got[-1] == big[-1] and len("\n".join(got).encode()) <= c.KEEP_BYTES and big[299 - 29] not in got
+          and big[299 - 3] in got)
+    sys.exit(0 if ok else 1)
+if what == "trim-snippet-too-big":
+    big = ["ok %03d " % i + "x" * 250 for i in range(300)]
+    big[100] = "FAIL boom " + "y" * 600
+    for i in range(101, 115): big[i] = "z%03d " % i + "w" * 600
+    got = c.excerpt_lines(big)
+    sys.exit(0 if len("\n".join(got).encode()) <= c.KEEP_BYTES and got[-1] == big[114] else 1)
+if what == "trim-no-failure":
+    got = c.excerpt_lines(["ok %03d " % i + "x" * 250 for i in range(300)])
+    sys.exit(0 if len(got) == len(set(got)) and got[-1].startswith("ok 299") and len("\n".join(got).encode()) <= c.KEEP_BYTES else 1)
+if what == "notice-limit":
+    t = c.notice_text("P" * 700 + ": ", "in" * 500, ". log: " + "q" * 300 + ". More: wiki x check")
+    t2 = c.notice_text("CI failed on main: ", "in" * 500, ". More: wiki x check")
+    sys.exit(0 if len(t.encode()) <= 590 and t.endswith("More: wiki x check") and t.count('"') == 2 and len(t2.encode()) <= 590 and t2.endswith("More: wiki x check") else 1)
+if what == "record":
+    import tempfile, os, json
+    d = tempfile.mkdtemp(); sf = os.path.join(d, "state.json"); lf = os.path.join(d, "lock")
+    a = c.record_workflow(d, sf, lf, "repo/a", "k", {"run_id": 1})
+    stale_view = c.load_state(sf)
+    b = c.record_workflow(d, sf, lf, "repo/b", "k", {"run_id": 2})
+    got = c.load_state(sf)
+    sys.exit(0 if a and b and "repo/a" in got["repos"] and "repo/b" in got["repos"] and "repo/b" not in stale_view["repos"] else 1)
+if what == "record-bad":
+    import tempfile, os, json
+    for bad_state in ({"repos": None}, {"repos": []}, {"repos": {"repo/a": []}}, {"repos": {"repo/a": {"workflows": None}}}, {"repos": {"repo/a": {"workflows": []}}}, [], None):
+        d = tempfile.mkdtemp(); sf = os.path.join(d, "state.json"); lf = os.path.join(d, "lock")
+        json.dump(bad_state, open(sf, "w"))
+        if not c.record_workflow(d, sf, lf, "repo/a", "k", {"run_id": 1}) or c.load_state(sf)["repos"]["repo/a"]["workflows"]["k"] != {"run_id": 1}:
+            sys.exit(1)
+    sys.exit(0)
+if what == "record-nolock":
+    import tempfile, os
+    d = tempfile.mkdtemp(); sf = os.path.join(d, "state.json"); lf = os.path.join(d, "lock")
+    os.mkdir(lf)
+    sys.exit(0 if c.record_workflow(d, sf, lf, "repo/a", "k", {"run_id": 1}) is False and not os.path.exists(sf) else 1)
+if what == "dash":
+    calls = []
+    class R: returncode = 0; stderr = ""; stdout = ""
+    c.llm_wiki = lambda *a, **k: (calls.append(a), R())[1]
+    r = c.save_note("/f", "acme/-x", "-x", "gitlab", "w", ["b"], False)
+    c.notify_desktop("CI failed: acme/x", "-rf /: broke")
+    c.notify_desktop("CI failed: acme/x", "fine")
+    ok = r is True and not any(a[:1] == ("which",) for a in calls) and all(not str(x).startswith("-") for a in calls if a[:1] == ("__notify",) for x in a[1:])
+    sys.exit(0 if ok else 1)
+if what == "deep-json":
+    ld = importlib.machinery.SourceFileLoader("wg", sys.argv[3])
+    m = importlib.util.module_from_spec(importlib.util.spec_from_loader("wg", ld)); ld.exec_module(m)
+    m.gh_ok = lambda *a, **k: "[" * 2000000
+    try:
+        m.gh_json(["x"], "x")
+    except SystemExit as e:
+        sys.exit(0 if e.code == 1 else 1)
+    sys.exit(1)
+sys.exit(2)
+PYX
+gcore() { python3 -I "$GL/core.py" "$REPO/extensions" "$1"; }
+check "ci_common's excerpt of a long log holds the failure and the lines after it" gcore has-fail
+check "and how the log ended" gcore has-end
+check "with a mark where lines were left out, and no more than 120 lines" gcore gap
+check "and never more than 8,000 bytes, even of two lines that are each most of it" gcore bytes
+check "it takes lines that are already chosen: the codes and a stamp are gone, a tab is spaces, trailing blanks are dropped" gcore selected
+check "a short log is kept whole" gcore short
+check "the signature is the failure's own first line" gcore signature
+check "never the runner's exit-code line when anything else is there" gcore generic
+check "a system's own exit-code line can be named too, and a log with no line says what failed" gcore own-generic
+check "and not a line that only has the word in it, when a real failure follows" gcore noise
+check "what changes from run to run is folded away: times, temporary paths, hex, durations, big numbers" gcore fold
+check "a log's own markers go, a carriage return keeps what was drawn last, and the codes go" gcore log-lines
+check "text from outside has no control character and is cut" gcore clean
+check "bytes are cut at a character" gcore bytes-cut
+check "a run with no readable time is fresh, an old one is stale" gcore stale
+check "a signature of only dashes searches for nothing" gcore known
+check "when the kept lines are too many bytes the lines around the failure stay and the tail of the log gives way first, oldest line first" gcore trim
+check "and when those alone are too many, the oldest of them go" gcore trim-snippet-too-big
+check "and a log with no failure in it keeps its end" gcore trim-no-failure
+check "a notice's fixed words never use up its limit, and its ending, where to look, is never cut" gcore notice-limit
+check "what a tick saw is recorded on the file as it is now, so another writer's entries are kept" gcore record
+check "and with no lock nothing is written and it says so" gcore record-nolock
+check "a state file whose repos, project or workflows is null, a list or the like is replaced, not crashed on" gcore record-bad
+check "a name or a notification text from a server that starts with a - is never an argument: the wiki isn't asked for such a name, and the text is led by a word" gcore dash
+check "JSON nested too deep to read is an unreadable answer from gh too" env LLM_WIKI_CMD=wiki python3 -I "$GL/core.py" "$REPO/extensions" deep-json "$REPO/extensions/wiki-github"
+check "ci_common leaves no bytecode in the folder the extensions are in" bash -c "python3 -I '$GL/core.py' '$REPO/extensions' no-bytecode && test ! -d '$REPO/extensions/__pycache__'"
+check "and no extension did either, though each was run above" test ! -d "$REPO/extensions/__pycache__"
+# An extension copied away from ci_common.py says so in one line, and how to fix it.
+mkdir -p "$GL/alone"
+for x in github gitlab jenkins; do
+  cp "$REPO/extensions/wiki-$x" "$GL/alone/wiki-$x"
+  out="$("$GL/alone/wiki-$x" --help 2>&1)"; code=$?
+  [ "$code" = 1 ] && [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 1 ] && case "$out" in "error: wiki-$x needs ci_common.py in its own folder, and it isn't there: it was copied without it. Do: turn it on with wiki extensions add $x instead of copying it") true ;; *) false ;; esac && ok "wiki-$x copied without ci_common.py exits 1 with one line, and the fix" || bad "wiki-$x copied without ci_common.py exits 1 with one line, and the fix" "exit $code: $out"
+done
+check "and a link to it from another folder still finds ci_common.py beside the real file" bash -c "ln -s '$REPO/extensions/wiki-gitlab' '$GL/alone/linked' && '$GL/alone/linked' --help | grep -q 'READS ONLY'"
+rm -rf "$GL/alone"
+
+"$W" extensions remove gitlab >/dev/null 2>&1
+export LLM_WIKI_NO_NOTIFY=1 LLM_WIKI_OSASCRIPT="$T/bin/inert"
+unset LLM_WIKI_TEST_OS LLM_WIKI_CMD XDG_CONFIG_HOME XDG_STATE_HOME XDG_DATA_HOME
+export GLAB_BIN="$T/bin/inert"
+export WIKIS_DIR="$GL_SAVED_WIKIS_DIR"
+rm -rf "$GL"
+fi
+
+if section "Jenkins extension"; then
+# Everything here is a stand-in: a Jenkins that serves fixture files on localhost and records every request
+# (its method, its path and whether it was signed in, never the token), a second server that stands for
+# another host, a clone with a remote that is only a name, and a collection, home and state folder of its own.
+JK="$T/jkx"
+JKW="$JK/wikis"
+JKEXT="$REPO/extensions/wiki-jenkins"
+mkdir -p "$JK/fx" "$JK/other/fx" "$JK/config/llm-wiki"
+JK_SAVED_WIKIS_DIR="$WIKIS_DIR"
+export XDG_CONFIG_HOME="$JK/config" XDG_STATE_HOME="$JK/state" XDG_DATA_HOME="$JK/data" WIKIS_DIR="$JKW"
+unset JENKINS_URL JENKINS_USER JENKINS_API_TOKEN
+export LLM_WIKI_CMD=wiki
+JKST="$XDG_STATE_HOME/llm-wiki"
+JKLOGS="$JKST/extensions/jenkins/logs/team__app"
+JKSTATE="$JKST/extensions/jenkins/state.json"
+JKCF="$XDG_CONFIG_HOME/llm-wiki/jenkins"
+JKFAKE="jktok-5d0c1e77a9b2f4"
+printf '%s' "$JKFAKE" > "$JK/token"
+cat > "$JK/server.py" <<'PY'
+import base64, os, sys, time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+D, USER, TOKEN = sys.argv[1], sys.argv[2], sys.argv[3]
+def has(n): return os.path.exists(os.path.join(D, "fx", n))
+def log(name, line):
+    with open(os.path.join(D, name), "a") as f: f.write(line + "\n")
+def huge():
+    out = [b"Error: the start of it all, which is not at the end\n"]
+    for i in range(100000): out.append(b"line %06d " % i + b"x" * 90 + b"\n")
+    out.append(b"Error: expected 3 got 4 at /tmp/tmp.AbC123/spec.js:77\nFinished: FAILURE\n")
+    return b"".join(out)
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def refuse(self):
+        log("requests.log", "%s %s" % (self.command, self.path))
+        self.send_response(405); self.end_headers()
+    do_POST = do_PUT = do_DELETE = do_HEAD = do_PATCH = do_OPTIONS = refuse
+    def send(self, code, body=b"", ctype="application/json", extra=()):
+        self.send_response(code); self.send_header("Content-Type", ctype); self.send_header("Content-Length", str(len(body)))
+        for k, v in extra: self.send_header(k, v)
+        self.end_headers()
+        try: self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError): pass
+    def do_GET(self):
+        log("requests.log", "GET " + self.path)
+        if self.headers.get("Range"): log("range.log", self.headers["Range"])
+        auth = self.headers.get("Authorization", "")
+        want = "Basic " + base64.b64encode(("%s:%s" % (USER, TOKEN)).encode()).decode()
+        log("auth.log", "absent" if not auth else ("ok" if auth == want else "bad"))
+        if TOKEN != "-" and (auth != want or has("force401")): return self.send(401, b"{}")
+        p = self.path.split("?")[0]
+        if has("redirect"): return self.send(302, b"", extra=[("Location", open(os.path.join(D, "fx", "redirect")).read().strip())])
+        if TOKEN == "-": return self.send(200, b"{}")
+        if p == "/whoAmI/api/json" and has("whoami"): return self.send(200, open(os.path.join(D, "fx", "whoami"), "rb").read())
+        if p == "/whoAmI/api/json": return self.send(200, b'{"name":"%s","authenticated":true}' % USER.encode())
+        key = p.strip("/").replace("/", "__")
+        if has("slow"): time.sleep(1.2)
+        kk = key[:-len("__api__json")] if p.endswith("/api/json") else key
+        stf = os.path.join(D, "fx", kk + ".status")
+        if os.path.exists(stf): return self.send(int(open(stf).read().strip()), b"{}")
+        if p.endswith("/consoleText"):
+            if has(key + ".huge"):
+                body = huge()
+                r = self.headers.get("Range", "")
+                if r.startswith("bytes=-") and not has("ignorerange"):
+                    n = int(r[7:]); part = body[-n:]
+                    return self.send(206, part, "text/plain", [("Content-Range", "bytes %d-%d/%d" % (len(body) - len(part), len(body) - 1, len(body)))])
+                return self.send(200, body, "text/plain")
+            f = os.path.join(D, "fx", key + ".txt")
+            if os.path.exists(f) and has(key + ".range206") and self.headers.get("Range"):
+                body = open(f, "rb").read(); at = int(open(os.path.join(D, "fx", key + ".range206")).read().strip() or 0)
+                return self.send(206, body, "text/plain", [("Content-Range", "bytes %d-%d/%d" % (at, at + len(body) - 1, at + len(body)))])
+            return self.send(200, open(f, "rb").read(), "text/plain") if os.path.exists(f) else self.send(404, b"")
+        if p.endswith("/api/json"): key = key[:-len("__api__json")]
+        f = os.path.join(D, "fx", key + ".json")
+        return self.send(200, open(f, "rb").read()) if os.path.exists(f) else self.send(404, b"{}")
+import socketserver
+class S(ThreadingHTTPServer):
+    daemon_threads = True
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = "localhost", self.server_address[1]
+s = S(("127.0.0.1", 0), H)
+open(os.path.join(D, "port"), "w").write(str(s.server_address[1]))
+s.serve_forever()
+PY
+python3 "$JK/server.py" "$JK" smoke-user "$JKFAKE" &
+JKPID=$!
+python3 "$JK/server.py" "$JK/other" - - &
+JKOPID=$!
+i=0; while { [ ! -s "$JK/port" ] || [ ! -s "$JK/other/port" ]; } && [ "$i" -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
+check "the stand-in Jenkins servers started" test -s "$JK/port" -a -s "$JK/other/port"
+JKURL="http://127.0.0.1:$(cat "$JK/port")"
+JKOTHER="http://127.0.0.1:$(cat "$JK/other/port")"
+cat > "$JK/osascript" <<'OSAFAKE'
+#!/bin/sh
+D="$(dirname "$0")"
+{ echo '--call--'; for a in "$@"; do printf 'ARG:%s\n' "$a"; done; } >> "$D/osa.log"
+OSAFAKE
+chmod +x "$JK/osascript"
+export LLM_WIKI_OSASCRIPT="$JK/osascript" LLM_WIKI_TEST_OS=darwin
+unset LLM_WIKI_NO_NOTIFY
+jkcalls() { if [ -f "$JK/osa.log" ]; then grep -c '^--call--$' "$JK/osa.log" || true; else echo 0; fi; }
+# jkbuild <number> <result|none> <sha> [timestamp in ms]: one build, as the API tells it.
+jkbuild() {
+  local res="\"$2\"" building=false
+  [ "$2" != none ] || { res=null; building=true; }
+  printf '{"number":%s,"result":%s,"building":%s,"url":"https://evil.example/job/x/%s/","displayName":"#%s","actions":[{"_class":"hudson.model.CauseAction","causes":[{"shortDescription":"Started by user smoke"}]},{"lastBuiltRevision":{"SHA1":"%s"}}]%s}' "$1" "$res" "$building" "$1" "$1" "$3" "${4:+,\"timestamp\":$4}"
+}
+# jkplain <number> <result|none> <sha> [timestamp]: the job team/app, a plain one, whose latest build this is.
+jkplain() { printf '{"_class":"hudson.model.FreeStyleProject","jobs":[],"lastBuild":%s}\n' "$(jkbuild "$@")" > "$JK/fx/job__team__job__app.json"; }
+# jkfail <number>: the log of a failing build, with console notes and escape codes, and its stages.
+jkfail() {
+  {
+    printf 'Started by user smoke\n'
+    printf '\033[8mha:////4A8AAAAdh+AAAAA=\033[0m[Pipeline] Start of Pipeline\n'
+    printf '[Pipeline] sh\n'
+    printf '\033[8mha:////4Bc9AAAA+hAAAAA=\033[0m+ npm test\n'
+    printf 'running 3 tests in 1234ms\n'
+    printf '\033[31mError: expected 3 got 4 at /tmp/tmp.AbC123/spec.js:77\033[0m\n'
+    printf 'ERROR: script returned exit code 1\n'
+    printf 'Finished: FAILURE\n'
+  } > "$JK/fx/job__team__job__app__$1__consoleText.txt"
+  printf '{"stages":[{"name":"Build","status":"SUCCESS"},{"name":"Test","status":"FAILED"},{"name":"Deploy","status":"NOT_EXECUTED"}]}\n' > "$JK/fx/job__team__job__app__$1__wfapi__describe.json"
+}
+printf 'url = %s\nuser = smoke-user\ntoken_cmd = cat %s\n' "$JKURL" "$JK/token" > "$JKCF"
+jkw() { WIKIS_DIR="$JKW" "$W" jenkins "$@"; }
+jktick() { env LLM_WIKI_EVENTS=wait "$W" extensions tick; }
+jkncount() { find "$JKST/notices" -maxdepth 1 -name '*.notice' 2>/dev/null | wc -l | tr -d ' '; }
+jkexits() { local want="$1"; shift; "$@" >/dev/null 2>&1; [ "$?" -eq "$want" ]; }
+jkmode() { python3 -c 'import os, sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))' "$1"; }
+JSIG='Error: expected 3 got 4 at <tmp>:77'
+git init -q "$JK/jkdemo"
+git -C "$JK/jkdemo" symbolic-ref HEAD refs/heads/feat-x
+git -C "$JK/jkdemo" remote add origin https://example.com/acme/jkdemo.git
+git -C "$JK/jkdemo" commit -q --allow-empty -m "Make tests pass"
+JKSHA="$(git -C "$JK/jkdemo" rev-parse HEAD)"
+git -C "$JK/jkdemo" update-ref refs/remotes/origin/main "$JKSHA"
+"$W" init --git >/dev/null 2>&1
+"$W" new jkdemo >/dev/null 2>&1
+
+# An extension that ships with llm-wiki is off until turned on.
+expect "the Jenkins extension ships turned off" "jenkins        off." "$W" extensions
+refuse "and doesn't run while it is off" "$W" jenkins --help
+expect "the error says how to turn it on" "extensions add jenkins" "$W" jenkins check
+check "its own file says it runs on tick, has a setup and has settings" bash -c "head -n 10 '$JKEXT' | grep -q '^# wiki-events: tick' && head -n 10 '$JKEXT' | grep -q '^# wiki-setup: yes' && head -n 10 '$JKEXT' | grep -q '^# wiki-settings: yes' && head -n 10 '$JKEXT' | grep -q '^# wiki-extension: '"
+# Ready: the address, the user and a way to get the token. Files only, and the command is never run.
+MARK="$JK/token-cmd-ran"
+printf 'url = %s\nuser = smoke-user\ntoken_cmd = touch %s; cat %s\n' "$JKURL" "$MARK" "$JK/token" > "$JKCF"
+out="$("$JKEXT" --wiki-ready 2>&1)"; code=$?
+[ "$code" = 0 ] && [ -z "$out" ] && ok "--wiki-ready is ready with an address, a user and a token_cmd" || bad "--wiki-ready is ready with an address, a user and a token_cmd" "exit $code: $out"
+check "and never ran token_cmd" test ! -e "$MARK"
+printf 'url = %s\nuser = smoke-user\n' "$JKURL" > "$JKCF"
+out="$("$JKEXT" --wiki-ready 2>&1)"; code=$?
+[ "$code" = 1 ] && [ "$out" = "no API token yet" ] && ok "with no way to get the token it says so in one line, and fails" || bad "with no way to get the token it says so in one line, and fails" "exit $code: $out"
+out="$(JENKINS_API_TOKEN=x "$JKEXT" --wiki-ready 2>&1)"; code=$?
+[ "$code" = 0 ] && ok "a token in the environment is a way to get it" || bad "a token in the environment is a way to get it" "exit $code: $out"
+printf 'url = %s\ntoken_cmd = cat %s\n' "$JKURL" "$JK/token" > "$JKCF"
+out="$("$JKEXT" --wiki-ready 2>&1)"
+[ "$out" = "no Jenkins user yet" ] && ok "and with no user" || bad "and with no user" "$out"
+rm -f "$JKCF"
+out="$("$JKEXT" --wiki-ready 2>&1)"
+[ "$out" = "no Jenkins address yet" ] && ok "and with nothing set it names the address first" || bad "and with nothing set it names the address first" "$out"
+expect "extensions add says at once that it isn't ready" "jenkins isn't set up yet: no Jenkins address yet. Run: " "$W" extensions add jenkins
+"$W" extensions remove jenkins >/dev/null 2>&1
+printf 'url = %s\nuser = smoke-user\ntoken_cmd = cat %s\n' "$JKURL" "$JK/token" > "$JKCF"
+expect "extensions add turns it on" "on: jenkins" "$W" extensions add jenkins
+expect "and it runs" "Usage: " "$W" jenkins --help
+expect "the help says it only reads, and starts no agent" "READS ONLY" "$W" jenkins --help
+expect "extensions lists the event it runs on" "(runs on: tick)" "$W" extensions
+lacks "the list of extensions never names ci_common" "ci_common" "$W" extensions
+
+# check, with nothing failing.
+jkplain 11 SUCCESS abc1234def00
+out="$(jkw check "$JK/jkdemo" team/app 2>&1)"; code=$?
+case "$out" in "== team/app  (Jenkins)"$'\n'"Nothing is failing in CI for team/app.") ok "check with nothing failing says so in one line" ;; *) bad "check with nothing failing says so in one line" "$out" ;; esac
+check "and exits 0" test "$code" = 0
+expect "with no job named and none watched it says which command to run" "Do: say which: wiki jenkins watch" jkw check "$JK/jkdemo"
+refuse "and that is exit 1, not a usage error" jkexits 2 jkw check "$JK/jkdemo"
+jkplain 12 none abc1234def00
+out="$(jkw check "$JK/jkdemo" team/app 2>&1)"
+case "$out" in *"Still running: team/app #12."*) ok "a build that is running is named, and is no failure" ;; *) bad "a build that is running is named, and is no failure" "$out" ;; esac
+jkplain 12 ABORTED abc1234def00
+out="$(jkw check "$JK/jkdemo" team/app 2>&1)"
+case "$out" in *"FAILING"*) bad "an aborted build is no failure" "$out" ;; *) ok "an aborted build is no failure" ;; esac
+jkplain 12 NOT_BUILT abc1234def00
+out="$(jkw check "$JK/jkdemo" team/app 2>&1)"
+case "$out" in *"FAILING"*) bad "and neither is one not built" "$out" ;; *) ok "and neither is one not built" ;; esac
+
+# check, with a failing build.
+jkplain 12 FAILURE abc1234def00
+jkfail 12
+out="$(jkw check "$JK/jkdemo" team/app 2>&1)"; code=$?
+check "check exits 0 whatever it found" test "$code" = 0
+case "$out" in *"FAILING  build #12 of team/app (failure)"*) ok "a failing build names its job, its number and the result" ;; *) bad "a failing build names its job, its number and the result" "$out" ;; esac
+case "$out" in *"  build:   $JKURL/job/team/job/app/12/"$'\n'"  stage:   Test"$'\n'"  cause:   Started by user smoke"$'\n'"  error:   $JSIG"$'\n'*) ok "and the build's address, the stage, the cause and the first line that looks like the error" ;; *) bad "and the build's address, the stage, the cause and the first line that looks like the error" "$out" ;; esac
+case "$out" in *"evil.example"*) bad "the address is made from the one that was set, never from what Jenkins says" "$out" ;; *) ok "the address is made from the one that was set, never from what Jenkins says" ;; esac
+case "$out" in *"  known:   no wiki or note holds it yet"*) ok "and says no wiki knows the error yet" ;; *) bad "and says no wiki knows the error yet" "$out" ;; esac
+case "$out" in *"  log:     $JKLOGS/12-"*".txt"*) ok "and where the excerpt is saved" ;; *) bad "and where the excerpt is saved" "$out" ;; esac
+JEX="$(ls "$JKLOGS"/12-*.txt 2>/dev/null | head -n 1)"
+check "the excerpt is saved" test -f "$JEX"
+check "with mode 600" test "$(jkmode "$JEX")" = 0o600
+check "in a folder with mode 700" test "$(jkmode "$JKLOGS")" = 0o700
+check "that holds the build's lines" grep -q 'npm test' "$JEX"
+check "with no escape codes" bash -c "! grep -q \"\$(printf '\033')\" '$JEX'"
+check "and no console note" bash -c "! grep -q 'ha:////' '$JEX'"
+check "though the text after a note is there" grep -q 'Start of Pipeline' "$JEX"
+check "at most 8,000 bytes" test "$(wc -c < "$JEX" | tr -d ' ')" -le 8000
+case "$JEX" in "$JKW"/*) bad "the excerpt isn't inside the wikis" "$JEX" ;; *) ok "the excerpt isn't inside the wikis" ;; esac
+check "and nothing of the log is in any wiki folder" bash -c "! grep -rq 'npm test' '$JKW'"
+# UNSTABLE is a failure, and is said to be one.
+jkplain 12 UNSTABLE abc1234def00
+out="$(jkw check "$JK/jkdemo" team/app 2>&1)"
+case "$out" in *"FAILING  build #12 of team/app (unstable)"*) ok "an UNSTABLE build is reported as unstable" ;; *) bad "an UNSTABLE build is reported as unstable" "$out" ;; esac
+jkplain 12 FAILURE abc1234def00
+# A job with no stages API (wfapi answers 404) goes on without a stage.
+rm -f "$JK/fx/job__team__job__app__12__wfapi__describe.json"
+out="$(jkw check "$JK/jkdemo" team/app 2>&1)"
+case "$out" in *"  stage:   not known"*"  error:   $JSIG"*) ok "with no stages API the stage is not known, and the rest is as it was" ;; *) bad "with no stages API the stage is not known, and the rest is as it was" "$out" ;; esac
+jkfail 12
+# A signature a wiki already holds is named, with its page.
+mkdir -p "$JKW/jkdemo/wiki/howto"
+printf -- '---\ntitle: CI\nsummary: Known CI failures.\n---\n\nThe tests fail with "%s" when the fixture is stale.\n' "$JSIG" > "$JKW/jkdemo/wiki/howto/ci.md"
+out="$(jkw check "$JK/jkdemo" team/app 2>&1)"
+case "$out" in *"  known:   yes, in jkdemo: wiki/howto/ci.md"*) ok "a signature a wiki already holds is named, with the page" ;; *) bad "a signature a wiki already holds is named, with the page" "$out" ;; esac
+rm -rf "$JKW/jkdemo/wiki/howto"
+# A build with no log.
+rm -f "$JK/fx/job__team__job__app__12__consoleText.txt"
+out="$(jkw check "$JK/jkdemo" team/app 2>&1)"
+case "$out" in *"  error:   build \"team/app #12\" failed"*"  log:     none kept: Jenkins has no log for this build"*) ok "a build with no log kept still names the build, and says there is no excerpt" ;; *) bad "a build with no log kept still names the build, and says there is no excerpt" "$out" ;; esac
+jkfail 12
+# A job that Jenkins doesn't have.
+out="$(jkw check "$JK/jkdemo" team/nothing 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"Jenkins has no job team/nothing"*"Do: check the path"*) true ;; *) false ;; esac && ok "a job Jenkins doesn't have exits 1, with what to do" || bad "a job Jenkins doesn't have exits 1, with what to do" "exit $code: $out"
+# Text from Jenkins is data: control characters never reach the output.
+printf '{"_class":"hudson.model.FreeStyleProject","lastBuild":{"number":12,"result":"FAILURE","building":false,"actions":[{"causes":[{"shortDescription":"Started by \\u001b[31mevil\\u0007 user"}]}]}}\n' > "$JK/fx/job__team__job__app.json"
+out="$(jkw check "$JK/jkdemo" team/app 2>&1)"
+case "$out" in *"cause:   Started by [31mevil user"*) ok "a cause with control characters is printed without them" ;; *) bad "a cause with control characters is printed without them" "$out" ;; esac
+check "and none of them is in what was printed" bash -c "! printf '%s' \"\$1\" | LC_ALL=C grep -q \"[[:cntrl:]]\"" _ "$(printf '%s' "$out" | tr '\n' ' ')"
+jkplain 12 FAILURE abc1234def00
+
+# A multibranch job: the job of the clone's branch and the job of the default branch.
+printf '{"_class":"org.jenkinsci.plugins.workflow.multibranch.WorkflowMultiBranchProject","jobs":[{"name":"main"},{"name":"feat-x"},{"name":"feature%%2Fy"}]}\n' > "$JK/fx/job__shop__job__web.json"
+printf '{"lastBuild":%s}\n' "$(jkbuild 5 SUCCESS abc1234def00)" > "$JK/fx/job__shop__job__web__job__main.json"
+printf '{"lastBuild":%s}\n' "$(jkbuild 8 FAILURE abc1234def00)" > "$JK/fx/job__shop__job__web__job__feat-x.json"
+printf '{"lastBuild":%s}\n' "$(jkbuild 3 FAILURE abc1234def00)" > "$JK/fx/job__shop__job__web__job__feature%252Fy.json"
+{
+  printf 'Error: expected 3 got 4 at /tmp/tmp.AbC123/spec.js:77\n'
+} > "$JK/fx/job__shop__job__web__job__feat-x__8__consoleText.txt"
+cp "$JK/fx/job__shop__job__web__job__feat-x__8__consoleText.txt" "$JK/fx/job__shop__job__web__job__feature%252Fy__3__consoleText.txt"
+: > "$JK/requests.log"
+out="$(jkw check "$JK/jkdemo" shop/web 2>&1)"
+case "$out" in "== shop/web  (Jenkins; multibranch, looked at: feat-x, main)"$'\n'*"FAILING  build #8 of shop/web on feat-x (failure)"*) ok "a multibranch job is looked at for the clone's branch and the default branch, and says so" ;; *) bad "a multibranch job is looked at for the clone's branch and the default branch, and says so" "$out" ;; esac
+check "the child jobs were asked for by name, one part each" bash -c "grep -q '^GET /job/shop/job/web/job/feat-x/api/json' '$JK/requests.log' && grep -q '^GET /job/shop/job/web/job/main/api/json' '$JK/requests.log'"
+case "$out" in *"FAILING  build #5"*) bad "the default branch's passing build isn't named" "$out" ;; *) ok "the default branch's passing build isn't named" ;; esac
+git -C "$JK/jkdemo" checkout -q -b feature/y
+: > "$JK/requests.log"
+out="$(jkw check "$JK/jkdemo" shop/web 2>&1)"
+case "$out" in *"FAILING  build #3 of shop/web on feature/y (failure)"*) ok "a branch with a slash in its name is found: the slash is encoded in the job's name, and the name again in the address" ;; *) bad "a branch with a slash in its name is found: the slash is encoded in the job's name, and the name again in the address" "$out" ;; esac
+check "as feature%252Fy" grep -q '^GET /job/shop/job/web/job/feature%252Fy/api/json' "$JK/requests.log"
+git -C "$JK/jkdemo" checkout -q feat-x
+git -C "$JK/jkdemo" branch -q -D feature/y
+# What a job's path may be.
+check "a job path with .. is refused with exit 2" jkexits 2 jkw check "$JK/jkdemo" "team/../app"
+check "so is one with a part that is empty" jkexits 2 jkw check "$JK/jkdemo" "team//app"
+check "one with a character that isn't a letter, a digit, a space or ._-" jkexits 2 jkw check "$JK/jkdemo" 'team/app;rm'
+check "a query" jkexits 2 jkw check "$JK/jkdemo" 'team/app?x=1'
+check "a percent sign, which would be decoded again" jkexits 2 jkw check "$JK/jkdemo" 'team/%2e%2e'
+check "a part that is only a dot" jkexits 2 jkw check "$JK/jkdemo" 'team/.'
+check "and one whose part starts with a space" jkexits 2 jkw check "$JK/jkdemo" 'team/ app'
+: > "$JK/requests.log"
+jkw check "$JK/jkdemo" 'team/..%2f..' >/dev/null 2>&1
+check "and none of them reached Jenkins" test ! -s "$JK/requests.log"
+cp "$JK/fx/job__team__job__app.json" "$JK/fx/job__my%20team__job__app.json"
+: > "$JK/requests.log"
+jkw check "$JK/jkdemo" "my team/app" >/dev/null 2>&1
+check "a space in a part is encoded in the address: /job/my%20team/job/app" grep -q '^GET /job/my%20team/job/app/api/json' "$JK/requests.log"
+
+# Not set up, not signed in, not reachable, and wrong usage.
+mv "$JKCF" "$JK/jenkins.keep"
+out="$(jkw check "$JK/jkdemo" team/app 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"Jenkins isn't set up: no Jenkins address yet. Run: "*" extensions setup jenkins"*) true ;; *) false ;; esac && ok "no address exits 1, with the command that fixes it" || bad "no address exits 1, with the command that fixes it" "exit $code: $out"
+mv "$JK/jenkins.keep" "$JKCF"
+touch "$JK/fx/force401"
+out="$(jkw check "$JK/jkdemo" team/app 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"Jenkins refused the sign-in (401)"*"Do: check the user and the token"*) true ;; *) false ;; esac && ok "a sign-in Jenkins refuses exits 1, with what to do" || bad "a sign-in Jenkins refuses exits 1, with what to do" "exit $code: $out"
+rm -f "$JK/fx/force401"
+printf 'watch = %s=team/app\n' "$JK/jkdemo" >> "$JKCF"
+touch "$JK/fx/force401"
+out="$(env LLM_WIKI="$W" WIKIS_DIR="$JKW" "$JKEXT" --wiki-event tick 2>&1)"; code=$?
+[ "$code" = 75 ] && case "$out" in "not now: Jenkins refused the sign-in (401)"*) true ;; *) false ;; esac && ok "and during an event it exits 75, with one line" || bad "and during an event it exits 75, with one line" "exit $code: $out"
+rm -f "$JK/fx/force401"
+printf 'url = %s\nuser = smoke-user\ntoken_cmd = cat %s\nwatch = %s=team/app\n' "$JKURL" "$JK/token" "$JK/jkdemo" > "$JKCF"
+check "with the wrong token Jenkins refuses it, and the token isn't in what was said" bash -c "! env JENKINS_API_TOKEN='${JKFAKE}-wrong' WIKIS_DIR='$JKW' '$W' jenkins check '$JK/jkdemo' team/app 2>&1 | grep -q '${JKFAKE}'"
+check "the wrong token was refused, not accepted" test "$(env JENKINS_API_TOKEN="${JKFAKE}-wrong" WIKIS_DIR="$JKW" "$W" jenkins check "$JK/jkdemo" team/app >/dev/null 2>&1; echo $?)" = 1
+# Another address at the same place: nothing answers.
+out="$(env JENKINS_URL="http://127.0.0.1:9" WIKIS_DIR="$JKW" "$W" jenkins check "$JK/jkdemo" team/app 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"can't reach http://127.0.0.1:9"*"Do: check the network"*) true ;; *) false ;; esac && ok "Jenkins out of reach, outside an event, exits 1, with what to do" || bad "Jenkins out of reach, outside an event, exits 1, with what to do" "exit $code: $out"
+out="$(env JENKINS_URL="http://127.0.0.1:9" LLM_WIKI="$W" WIKIS_DIR="$JKW" "$JKEXT" --wiki-event tick 2>&1)"; code=$?
+[ "$code" = 75 ] && case "$out" in "not now: can't reach http://127.0.0.1:9"*) true ;; *) false ;; esac && ok "and during an event it exits 75, with one line" || bad "and during an event it exits 75, with one line" "exit $code: $out"
+# A plain http:// address to another machine would send the token in the clear: refused before anything is sent.
+out="$(env JENKINS_URL="http://ci.example.com" WIKIS_DIR="$JKW" "$W" jenkins check "$JK/jkdemo" team/app 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"plain http:// to another machine, where the token would cross the network in the clear: use https://"*"Do: fix it, in a terminal"*) true ;; *) false ;; esac && ok "a plain http:// address on another host exits 1, with why and what to do" || bad "a plain http:// address on another host exits 1, with why and what to do" "exit $code: $out"
+cat > "$JK/nonet.py" <<'PY'
+import http.client, runpy, socket, ssl, sys, urllib.request
+real = socket.socket
+def refuse(*a, **k):
+    raise RuntimeError("the network was used")
+socket.socket = refuse
+socket.create_connection = refuse
+socket.getaddrinfo = refuse
+sys.argv = [sys.argv[1]] + sys.argv[2:]
+runpy.run_path(sys.argv[0], run_name="__main__")
+PY
+check "and nothing was sent: it fails with the network refused to it, in the same way" bash -c "out=\$(env JENKINS_URL='http://ci.example.com' WIKIS_DIR='$JKW' python3 '$JK/nonet.py' '$JKEXT' check '$JK/jkdemo' team/app 2>&1); echo \"\$out\" | grep -q 'plain http://' && ! echo \"\$out\" | grep -q 'the network was used'"
+check "https:// to another machine is allowed (it only fails here for want of a network)" bash -c "out=\$(env JENKINS_URL='https://ci.example.com' WIKIS_DIR='$JKW' python3 '$JK/nonet.py' '$JKEXT' check '$JK/jkdemo' team/app 2>&1); echo \"\$out\" | grep -q 'the network was used\|can.t reach'"
+out="$(env JENKINS_URL="https://user:secret@ci.example.com" WIKIS_DIR="$JKW" "$W" jenkins check "$JK/jkdemo" team/app 2>&1)"
+case "$out" in *"has a login in it, which is never sent"*) ok "an address with a login in it is refused" ;; *) bad "an address with a login in it is refused" "$out" ;; esac
+case "$out" in *secret*) bad "and the login isn't repeated" "$out" ;; *) ok "and the login isn't repeated" ;; esac
+check "check with an option it doesn't know exits 2" jkexits 2 jkw check --bogus
+check "with three arguments exits 2" jkexits 2 jkw check "$JK/jkdemo" team/app extra
+check "with a folder that isn't there exits 2" jkexits 2 jkw check "$JK/nowhere" team/app
+expect "and says what it was given isn't a command or a folder" "nowhere isn't a command or a folder" jkw check "$JK/nowhere" team/app
+check "a word that is no command exits 2" jkexits 2 jkw frobnicate
+check "watch with an option it doesn't know exits 2" jkexits 2 jkw watch --bogus
+check "watch with no job exits 2" jkexits 2 jkw watch "$JK/jkdemo"
+expect "and says what it takes" "wiki jenkins watch ~/dev/app team/app" jkw watch "$JK/jkdemo"
+check "config with an argument exits 2" jkexits 2 jkw config extra
+check "and a call that wasn't a call of the contract's exits 2" jkexits 2 "$JKEXT" --wiki-set watch
+check "there is no fix command: it is a word that is no command" jkexits 2 jkw fix on
+
+# watch and unwatch.
+printf 'url = %s\nuser = smoke-user\ntoken_cmd = cat %s\n' "$JKURL" "$JK/token" > "$JKCF"
+expect "watch --list with nothing says how to watch one" "No folders are watched. Run: " jkw watch --list
+out="$(jkw watch "$JK/jkdemo" team/app 2>&1)"
+case "$out" in "Watching $JK/jkdemo for the Jenkins job team/app."*"To look now: "*" jenkins check $JK/jkdemo") ok "watch names the clone and the job, and says what that means" ;; *) bad "watch names the clone and the job, and says what that means" "$out" ;; esac
+check "and keeps them as folder=job in the settings file" grep -qx "watch = $JK/jkdemo=team/app" "$JKCF"
+expect "watch --list prints both" "$JK/jkdemo  team/app" jkw watch --list
+expect "watching it again says so" "is already watched, for team/app" jkw watch "$JK/jkdemo" team/app
+check "and adds nothing" test "$(grep -c '^watch' "$JKCF")" = 1
+mkdir -p "$JK/jkdemo/sub" "$JK/plain"
+expect "a folder inside a clone watches the clone" "is already watched" jkw watch "$JK/jkdemo/sub" team/app
+refuse "a folder that isn't in a clone can't be watched" jkw watch "$JK/plain" team/app
+expect "and the error says what to do" "Do: run this in a clone, or name one" jkw watch "$JK/plain" team/app
+expect "the job's own address on the Jenkins that is set is turned into its path" "for the Jenkins job my team/app" jkw watch "$JK/jkdemo" "$JKURL/job/my%20team/job/app/"
+check "stored as the path" grep -q "$JK/jkdemo=my team/app" "$JKCF"
+expect "a second job for a clone is kept as well" "$JK/jkdemo  my team/app" jkw watch --list
+check "an address on another Jenkins is refused with exit 2" jkexits 2 jkw watch "$JK/jkdemo" "$JKOTHER/job/x/"
+check "so is an address that isn't a job's" jkexits 2 jkw watch "$JK/jkdemo" "$JKURL/job/team/job/app/12/console"
+check "and a job path with .. in it" jkexits 2 jkw watch "$JK/jkdemo" "../etc"
+expect "unwatch with a job takes that one off" "No longer watching $JK/jkdemo." jkw unwatch "$JK/jkdemo" "my team/app"
+check "and only that one" bash -c "grep -qx 'watch = $JK/jkdemo=team/app' '$JKCF'"
+expect "config says what is set" "watch     $JK/jkdemo=team/app" jkw config
+expect "and who it is signed in as" "signed in as smoke-user" jkw config
+expect "and that the token is set, never what it is" "token     set  (from token_cmd)" jkw config
+lacks "config never prints the token" "$JKFAKE" jkw config
+expect "unwatch takes it off" "No longer watching $JK/jkdemo." jkw unwatch "$JK/jkdemo"
+expect "and the list is empty again" "No folders are watched" jkw watch --list
+expect "unwatching what isn't watched says so" "$JK/jkdemo wasn't watched." jkw unwatch "$JK/jkdemo"
+check "and the setting is gone from the file" bash -c "! grep -q '^watch' '$JKCF'"
+
+# The tick event: with nothing watched it says so, and checks nothing.
+: > "$JK/requests.log"
+expect "a tick with no folder watched says so" "jenkins: ok" jktick
+check "and said so in its log" grep -q "No folder is watched" "$JKST/extensions/jenkins/tick.log"
+check "and asked Jenkins nothing" test ! -s "$JK/requests.log"
+jkw watch "$JK/jkdemo" team/app >/dev/null
+jkplain 12 FAILURE abc1234def00
+jkfail 12
+# A new failure: the tick leaves a notice, and the session hooks hand it over once.
+expect "a tick with a failing build in a watched clone runs fine" "jenkins: ok" jktick
+check "and writes one notice" test "$(jkncount)" = 1
+check "and shows one desktop notification" test "$(jkcalls)" = 1
+check "with the title and text as the two arguments after --" test "$(grep -x -A2 -e 'ARG:--' "$JK/osa.log" | sed -n 1,3p | tr '\n' '|')" = "ARG:--|ARG:CI failed: team/app|ARG:team/app #12 (failure): $JSIG|"
+JKN="$(ls "$JKST/notices"/*.notice | head -n 1)"
+check "the notice's id is its own: jk- and the job" bash -c "basename '$JKN' | grep -q '^jk-team__app-[0-9a-f]\{12\}\.notice\$'"
+check "for that clone, named by the git folder its work trees share" test "$(sed -n 1p "$JKN")" = "$(cd "$JK/jkdemo/.git" && pwd -P)"
+check "and any branch, since a plain job has none" test "$(sed -n 2p "$JKN")" = -
+case "$(sed -n 3p "$JKN")" in "CI failed: \"team/app #12 (failure) / Test: $JSIG\". The build's log, cut down: $JKLOGS/12-"*".txt. More: "*" jenkins check") ok "its line is the job, the build, the stage and the error, quoted, and where the cut-down log is" ;; *) bad "its line is the job, the build, the stage and the error, quoted, and where the cut-down log is" "$(sed -n 3p "$JKN")" ;; esac
+check "the notice's text is one line" test "$(wc -l < "$JKN" | tr -d ' ')" = 3
+check "the state file keeps the build" python3 -c 'import json, sys; w = json.load(open(sys.argv[1]))["repos"]["team/app"]["workflows"]["-"]; assert w["run_id"] == 12 and w["conclusion"] == "failure" and w["signature"] == sys.argv[2] and w["stage"] == "Test"' "$JKSTATE" "$JSIG"
+check "and nothing of the log" bash -c "! grep -q 'npm test' '$JKSTATE'"
+check "the state file is mode 600" test "$(jkmode "$JKSTATE")" = 0o600
+jkuphook() { printf '{"prompt":"%s","session_id":"%s","cwd":"%s"}' "$1" "$2" "$3" | CLAUDE_PLUGIN_ROOT="$REPO" bash "$REPO/hooks/user-prompt.sh"; }
+out="$(jkuphook "what next" jk-s1 "$JK/jkdemo")"
+case "$out" in *"From an llm-wiki extension, about this repository."*"CI failed: \\\"team/app #12 (failure) / Test: $JSIG\\\""*) ok "the message hook hands the notice over, under a line saying where it is from" ;; *) bad "the message hook hands the notice over, under a line saying where it is from" "$out" ;; esac
+out="$(jkuphook "what next again" jk-s2 "$JK/jkdemo")"
+check "and doesn't hand it over twice" test -z "$out"
+# The same failing build, seen again, leaves nothing.
+jktick >/dev/null
+check "a tick that sees the same failing build again leaves no second notice" test "$(jkncount)" = 1
+check "and shows no second desktop notification" test "$(jkcalls)" = 1
+out="$(hook "$JK/jkdemo" '{"source":"startup","session_id":"jk-s3"}' | context)"
+case "$out" in *"CI failed"*) bad "and the session start has nothing to say" "$out" ;; *) ok "and the session start has nothing to say" ;; esac
+# A new failing build is a new failure, and leaves a new notice, handed over by the session start.
+jkplain 13 UNSTABLE abc1234def00
+jkfail 13
+jktick >/dev/null
+out="$(hook "$JK/jkdemo" '{"source":"startup","session_id":"jk-s4"}' | context)"
+case "$out" in *"CI failed: \"team/app #13 (unstable) / Test: $JSIG\". The build's log, cut down: $JKLOGS/13-"*) ok "a new build that fails leaves a new notice, saying it is unstable, and the session start hands it over" ;; *) bad "a new build that fails leaves a new notice, saying it is unstable, and the session start hands it over" "$out" ;; esac
+out="$(hook "$JK/jkdemo" '{"source":"startup","session_id":"jk-s5"}' | context)"
+case "$out" in *"CI failed"*) bad "and only once" "$out" ;; *) ok "and only once" ;; esac
+check "the desktop shows one more, for the new build" test "$(jkcalls)" = 2
+# A build from long ago leaves no notice and no notification; desktop = no leaves no notification; check never shows one.
+rm -f "$JKST/notices"/* "$JKSTATE"
+before="$(jkcalls)"
+jkplain 14 FAILURE abc1234def00 1577836800000
+jkfail 14
+jktick >/dev/null
+check "a failing build more than three days old leaves no notice" test "$(jkncount)" = 0
+check "and shows no desktop notification" test "$(jkcalls)" = "$before"
+"$W" extensions set jenkins desktop no >/dev/null 2>&1
+expect "desktop is a setting a session can set" "desktop	no	file" "$JKEXT" --wiki-settings
+jkplain 15 FAILURE abc1234def00
+jkfail 15
+jktick >/dev/null
+check "with desktop = no a new failure still leaves its notice" test "$(jkncount)" = 1
+check "and shows no desktop notification" test "$(jkcalls)" = "$before"
+"$W" extensions set jenkins desktop yes >/dev/null 2>&1
+expect "desktop defaults to yes" "desktop	yes	file" "$JKEXT" --wiki-settings
+refuse "desktop takes yes or no" "$W" extensions set jenkins desktop maybe
+jkplain 16 FAILURE abc1234def00
+jkfail 16
+jkw check "$JK/jkdemo" >/dev/null 2>&1 || true
+check "wiki jenkins check never shows a desktop notification" test "$(jkcalls)" = "$before"
+rm -f "$JKST/notices"/*
+"$W" extensions set jenkins notice no >/dev/null 2>&1
+jkplain 17 FAILURE abc1234def00
+jkfail 17
+jktick >/dev/null
+check "with notice = no a new failure leaves no notice" test "$(jkncount)" = 0
+check "but is in the state" grep -q '"run_id": 17' "$JKSTATE"
+"$W" extensions set jenkins notice yes >/dev/null 2>&1
+# An aborted build leaves the state alone: a failure stays a failure, and its notice stays.
+rm -f "$JKSTATE" "$JKST/notices"/*
+jkplain 20 FAILURE abc1234def00
+jkfail 20
+jktick >/dev/null
+check "a failing build leaves a notice" test "$(jkncount)" = 1
+jkplain 21 ABORTED abc1234def00
+jktick >/dev/null
+check "an aborted build leaves the notice, as it was" test "$(jkncount)" = 1
+jkplain 22 none abc1234def00
+jktick >/dev/null
+check "and so does one that is running" test "$(jkncount)" = 1
+check "the state still says the last was a failure of build 20" python3 -c 'import json, sys; w = json.load(open(sys.argv[1]))["repos"]["team/app"]["workflows"]["-"]; sys.exit(0 if w["run_id"] == 20 and w["conclusion"] == "failure" else 1)' "$JKSTATE"
+
+# A failure fixed: a note in the wiki, only when remember is yes.
+rm -f "$JKSTATE" "$JKST/notices"/*
+jkplain 30 FAILURE abc1234def00
+jkfail 30
+jktick >/dev/null
+check "a failing build leaves a notice" test "$(jkncount)" = 1
+jkplain 31 SUCCESS "$JKSHA"
+jktick >/dev/null
+check "a failing build that passes clears its notice" test "$(jkncount)" = 0
+check "with remember off (the default) no note is saved" test "$(find "$JKW/jkdemo/raw" -name '*ci-*' | wc -l | tr -d ' ')" = 0
+expect "remember is off unless turned on" "remember	no	default" "$JKEXT" --wiki-settings
+"$W" extensions set jenkins remember yes >/dev/null 2>&1
+jkplain 32 FAILURE abc1234def00
+jkfail 32
+jktick >/dev/null
+jkplain 33 SUCCESS "$JKSHA"
+expect "a failure that passes, with remember on, is noted" "jenkins: ok" jktick
+JNOTE="$(ls "$JKW/jkdemo/raw"/*-ci-fixed.md 2>/dev/null | head -n 1)"
+check "as a ci-fixed note in the wiki that covers the clone" test -f "$JNOTE"
+check "ending with the line that says it is tied to no ticket" test "$(tail -n 1 "$JNOTE")" = "Ticket: none"
+check "with a title" grep -qx '# CI fixed: team/app (team/app)' "$JNOTE"
+check "the job, the stage and the result" bash -c "grep -qx 'Job: team/app' '$JNOTE' && grep -qx 'Stage: Test' '$JNOTE' && grep -qx 'Result: failure' '$JNOTE'"
+check "the signature" grep -qxF "Signature: $JSIG" "$JNOTE"
+check "the build that failed and the build that passed, with their addresses" bash -c "grep -qx 'Failed build: #32 $JKURL/job/team/job/app/32/' '$JNOTE' && grep -qx 'Passing build: #33 $JKURL/job/team/job/app/33/' '$JNOTE'"
+check "the commit that passed, from the clone, with its subject" grep -qx "Commit of the passing build: ${JKSHA:0:7} Make tests pass" "$JNOTE"
+check "never the log" bash -c "! grep -q 'npm test' '$JNOTE' && ! grep -q 'running 3 tests' '$JNOTE'"
+check "the sync's commit says what happened" bash -c "git -C '$JKW' log --format=%s | grep -qx 'jkdemo: CI failure fixed'"
+check "and the note is committed, so the wiki has nothing left uncommitted" test -z "$(git -C "$JKW" status --short)"
+# A failure that passes on a re-run of the same commit is flaky, not fixed.
+rm -f "$JKST/notices"/*
+jkplain 34 FAILURE "$JKSHA"
+jkfail 34
+jktick >/dev/null
+jkplain 35 SUCCESS "$JKSHA"
+jktick >/dev/null
+JNOTE="$(ls "$JKW/jkdemo/raw"/*-ci-flaky.md 2>/dev/null | head -n 1)"
+check "a failure that passes on a re-run of the same commit is noted as flaky" test -f "$JNOTE"
+check "saying so, and not that it was fixed" bash -c "grep -qx '# CI flaky: team/app (team/app)' '$JNOTE' && ! grep -q 'fixed' '$JNOTE'"
+check "and still ends with the ticket line" test "$(tail -n 1 "$JNOTE")" = "Ticket: none"
+check "and its sync says flaky" bash -c "git -C '$JKW' log --format=%s | grep -qx 'jkdemo: CI failure was flaky'"
+# With remember off, a fixed failure saves nothing, and says it passes again.
+"$W" extensions set jenkins remember no >/dev/null 2>&1
+before="$(ls "$JKW"/jkdemo/raw | wc -l | tr -d ' ')"
+jkplain 36 FAILURE abc1234def00
+jkfail 36
+jktick >/dev/null
+jkplain 37 SUCCESS "$JKSHA"
+jktick >/dev/null
+check "with remember = no a fixed failure leaves no note" test "$(ls "$JKW"/jkdemo/raw | wc -l | tr -d ' ')" = "$before"
+check "and the log says it passes again" grep -q "team/app #37 passes again" "$JKST/extensions/jenkins/tick.log"
+rm -f "$JKST/notices"/*
+
+# A job on a multibranch project is watched too, and a notice is for the branch.
+jkw unwatch "$JK/jkdemo" >/dev/null
+jkw watch "$JK/jkdemo" shop/web >/dev/null
+rm -f "$JKSTATE"
+jktick >/dev/null
+GN2="$(ls "$JKST/notices"/*.notice | head -n 1)"
+check "a failure of the clone's branch on a multibranch job leaves a notice for that branch" test "$(sed -n 2p "$GN2")" = feat-x
+case "$(sed -n 3p "$GN2")" in "CI failed on feat-x: \"shop/web #8 (failure) / "*) ok "and its line names the branch and the build" ;; *) bad "and its line names the branch and the build" "$(sed -n 3p "$GN2")" ;; esac
+jkw unwatch "$JK/jkdemo" >/dev/null
+jkw watch "$JK/jkdemo" team/app >/dev/null
+rm -f "$JKST/notices"/* "$JKSTATE"
+
+# Jenkins out of reach during an event is for later: stopped for real.
+printf 'url = %s\nuser = smoke-user\ntoken_cmd = cat %s\nwatch = %s=team/app\n' "$JKURL" "$JK/token" "$JK/jkdemo" > "$JKCF"
+# A watched folder that is gone is skipped.
+mkdir -p "$JK/gone/.git"
+printf 'watch = %s=team/app, %s=team/app\n' "$JK/gone" "$JK/jkdemo" >> "$JKCF"
+rm -rf "$JK/gone"
+out="$(env LLM_WIKI="$W" WIKIS_DIR="$JKW" "$JKEXT" --wiki-event tick 2>&1)"; code=$?
+[ "$code" = 0 ] && case "$out" in *"$JK/gone is gone, so it was skipped."*) true ;; *) false ;; esac && ok "a watched folder that is gone is skipped, with one line, and the rest are looked at" || bad "a watched folder that is gone is skipped, with one line, and the rest are looked at" "exit $code: $out"
+printf 'url = %s\nuser = smoke-user\ntoken_cmd = cat %s\nwatch = %s=team/app\n' "$JKURL" "$JK/token" "$JK/jkdemo" > "$JKCF"
+
+# A redirect to another host isn't followed, and the sign-in doesn't go with it.
+printf '%s/job/team/job/app/api/json' "$JKOTHER" > "$JK/fx/redirect"
+: > "$JK/other/requests.log"
+out="$(jkw check "$JK/jkdemo" team/app 2>&1)"; code=$?
+rm -f "$JK/fx/redirect"
+[ "$code" = 1 ] && case "$out" in *"redirected to another address, which wasn't followed"*"Do: set url to the address Jenkins really answers at"*) true ;; *) false ;; esac && ok "a redirect to another host exits 1, says it wasn't followed, and what to do" || bad "a redirect to another host exits 1, says it wasn't followed, and what to do" "exit $code: $out"
+check "the other host was never asked, so it never saw the sign-in" test ! -s "$JK/other/requests.log"
+check "and no sign-in reached it" test ! -s "$JK/other/auth.log"
+# Only GET, ever.
+check "the stand-in Jenkins saw only GET requests" test -z "$(grep -v '^GET ' "$JK/requests.log")"
+check "and the other one too" test -z "$(grep -v '^GET ' "$JK/other/requests.log" 2>/dev/null)"
+check "and only under /job/, or whoAmI" test -z "$(grep -vE '^GET (/job/|/whoAmI/)' "$JK/requests.log")"
+check "every request was signed in" test -z "$(grep -v '^ok$' "$JK/auth.log" | grep -v '^bad$' | grep -v '^absent$')"
+check "and a timeout on each request, and a cap on what is read" bash -c "grep -q 'timeout=TIMEOUT' '$JKEXT' && grep -q 'JSON_BYTES' '$JKEXT' && grep -q 'TAIL_BYTES' '$JKEXT'"
+check "a body is never sent: no POST, no data in a request" bash -c "! grep -qE 'data=|method=\"(POST|PUT|DELETE|PATCH)\"' '$JKEXT'"
+
+# A console of 10 MB is read at its tail.
+: > "$JK/fx/job__team__job__app__12__consoleText.huge"
+jkplain 12 FAILURE abc1234def00
+: > "$JK/range.log"
+out="$(jkw check "$JK/jkdemo" team/app 2>&1)"
+check "the request for it carried a Range header for the last 2,000,000 bytes" grep -qx 'bytes=-2000000' "$JK/range.log"
+case "$out" in *"  error:   Error: expected 3 got 4 at <tmp>:77"*) ok "and the error at its end is what check found" ;; *) bad "and the error at its end is what check found" "$out" ;; esac
+JEX="$(ls "$JKLOGS"/12-*.txt | head -n 1)"
+check "the excerpt is cut to 120 lines and 8,000 bytes" bash -c "test \$(wc -l < '$JEX') -le 120 && test \$(wc -c < '$JEX') -le 8000"
+check "holds the end, and not the start" bash -c "grep -q 'Error: expected 3 got 4' '$JEX' && ! grep -q 'the start of it all' '$JEX'"
+touch "$JK/fx/ignorerange"
+out="$(jkw check "$JK/jkdemo" team/app 2>&1)"
+rm -f "$JK/fx/ignorerange"
+case "$out" in *"  error:   Error: expected 3 got 4 at <tmp>:77"*) ok "a server that ignores Range and sends all of it gives the same excerpt" ;; *) bad "a server that ignores Range and sends all of it gives the same excerpt" "$out" ;; esac
+check "and not the start of it" bash -c "! grep -q 'the start of it all' '$JEX' && ! grep -q 'line 000000' '$JEX'"
+cat > "$JK/tail.py" <<'PY'
+import importlib.machinery, importlib.util, resource, sys
+sys.dont_write_bytecode = True
+ld = importlib.machinery.SourceFileLoader("wj", sys.argv[1])
+m = importlib.util.module_from_spec(importlib.util.spec_from_loader("wj", ld)); ld.exec_module(m)
+class R:
+    status = 200
+    def __init__(self, n): self.left, self.i = n, 0
+    def read(self, k):
+        if self.left <= 0: return b""
+        k = min(k, self.left); self.left -= k
+        self.i += 1
+        return (b"x" * (k - 1) + b"\n")
+    def close(self): pass
+jk = m.Jenkins.__new__(m.Jenkins)
+jk.url = "http://127.0.0.1:1"
+jk.open = lambda path, headers=None: R(300 * 1024 * 1024)
+data = jk.get_tail("/job/x/1/consoleText")
+peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+peak = peak if sys.platform == "darwin" else peak * 1024
+ok = data is not None and len(data) <= m.TAIL_BYTES and peak < 150 * 1024 * 1024
+print(len(data or b""), peak)
+sys.exit(0 if ok else 1)
+PY
+check "300 MB sent whole is streamed, and only its last 2 MB are ever kept: the process stays small" python3 -I "$JK/tail.py" "$JKEXT"
+rm -f "$JK/fx/job__team__job__app__12__consoleText.huge"
+jkfail 12
+
+# The token: never printed, logged, stored or put in an error.
+jkw watch "$JK/jkdemo" team/app >/dev/null 2>&1
+: > "$JK/all.out"
+{
+  jkw check "$JK/jkdemo" team/app
+  jkw config
+  jkw watch --list
+  jkw --help
+  "$JKEXT" --wiki-settings
+  "$W" extensions settings jenkins
+  "$W" setup --guide
+  env JENKINS_API_TOKEN="$JKFAKE" WIKIS_DIR="$JKW" "$W" jenkins check "$JK/jkdemo" team/app
+  env JENKINS_API_TOKEN="$JKFAKE" WIKIS_DIR="$JKW" "$W" jenkins config
+  env JENKINS_API_TOKEN="$JKFAKE" WIKIS_DIR="$JKW" "$JKEXT" --wiki-settings
+  env JENKINS_API_TOKEN="${JKFAKE}-wrong" WIKIS_DIR="$JKW" "$W" jenkins check "$JK/jkdemo" team/app
+  env JENKINS_URL="http://127.0.0.1:9" WIKIS_DIR="$JKW" "$W" jenkins check "$JK/jkdemo" team/app
+  env JENKINS_URL="http://ci.example.com" WIKIS_DIR="$JKW" "$W" jenkins check "$JK/jkdemo" team/app
+  env JENKINS_API_TOKEN="$JKFAKE" WIKIS_DIR="$JKW" "$JKEXT" --wiki-set token "$JKFAKE"
+  env JENKINS_API_TOKEN="$JKFAKE" WIKIS_DIR="$JKW" "$JKEXT" --wiki-set url "http://ci.example.com"
+  printf '\n\n\n\n\n\n' | env JENKINS_API_TOKEN="$JKFAKE" WIKIS_DIR="$JKW" LLM_WIKI_TEST_TTY=1 "$W" extensions setup jenkins
+  jktick
+} > "$JK/all.out" 2>&1
+check "no output of any of those holds the token" bash -c "! grep -aq '$JKFAKE' '$JK/all.out'"
+check "and nothing the stand-in Jenkins logged" bash -c "! grep -raq '$JKFAKE' '$JK/requests.log' '$JK/auth.log' '$JK/range.log' '$JK/other'"
+check "and nothing in the state, the logs, the notices, the settings or any wiki" bash -c "! grep -raq '$JKFAKE' '$JKST' '$XDG_CONFIG_HOME' '$JKW'"
+check "and not in the tick's own log" bash -c "! grep -raq '$JKFAKE' '$JKST/extensions/jenkins/'"
+check "the file token_cmd reads is where the token is, and that is the user's own" test "$(cat "$JK/token")" = "$JKFAKE"
+check "the extension never prints or stores what get_token reads: the token's variable is in no print, write, error or setting" bash -c "! grep -nE '(print|write|die|unreachable|set_conf|not_now)\\(.*[ (,{]tok[ ),}]' '$JKEXT'"
+# --wiki-settings and --wiki-set never run token_cmd, and show only set or not set.
+printf 'url = %s\nuser = smoke-user\ntoken_cmd = touch %s; cat %s\n' "$JKURL" "$MARK" "$JK/token" > "$JKCF"
+rm -f "$MARK"
+raw_out="$(env JENKINS_API_TOKEN="$JKFAKE" WIKIS_DIR="$JKW" "$JKEXT" --wiki-settings 2>&1)"
+settings_out="$("$W" extensions settings jenkins 2>&1)"
+guide_out="$(env JENKINS_API_TOKEN="$JKFAKE" "$W" setup --guide 2>&1)"
+"$JKEXT" --wiki-set remember yes >/dev/null 2>&1
+"$JKEXT" --wiki-ready >/dev/null 2>&1
+[ ! -e "$MARK" ] && ok "settings, the guide, --wiki-set and --wiki-ready never run token_cmd" || bad "settings, the guide, --wiki-set and --wiki-ready never run token_cmd"
+case "$raw_out$settings_out$guide_out" in *"$JKFAKE"*) bad "and print no token value, even with JENKINS_API_TOKEN set" "$raw_out" ;; *) ok "and print no token value, even with JENKINS_API_TOKEN set" ;; esac
+TB="$(printf '\t')"
+case "$raw_out" in *"token${TB}set${TB}environment (JENKINS_API_TOKEN)${TB}"*) ok "the token row says set, and where from" ;; *) bad "the token row says set, and where from" "$raw_out" ;; esac
+case "$(env WIKIS_DIR="$JKW" "$JKEXT" --wiki-settings)" in *"token${TB}not checked (token_cmd is set)${TB}file${TB}"*) ok "and with token_cmd it says it wasn't checked" ;; *) bad "and with token_cmd it says it wasn't checked" "$(env WIKIS_DIR="$JKW" "$JKEXT" --wiki-settings)" ;; esac
+case "$(env WIKIS_DIR="$JKW" "$JKEXT" --wiki-settings)" in *"token_cmd${TB}custom command${TB}file${TB}"*) ok "and a custom token_cmd is shown as one, never as its text" ;; *) bad "and a custom token_cmd is shown as one, never as its text" "x" ;; esac
+check "--wiki-settings works with the network refused" bash -c "env WIKIS_DIR='$JKW' python3 '$JK/nonet.py' '$JKEXT' --wiki-settings >/dev/null 2>&1"
+check "every row has five tab-separated fields, the last set or terminal" bash -c "printf '%s\n' \"\$1\" | awk -F '\t' 'NF != 5 || (\$5 != \"set\" && \$5 != \"terminal\") { exit 1 }'" _ "$raw_out"
+check "--wiki-settings lists eight settings" test "$(printf '%s\n' "$raw_out" | wc -l | tr -d ' ')" = 8
+printf 'url = %s\nuser = smoke-user\ntoken_cmd = cat %s\n' "$JKURL" "$JK/token" > "$JKCF"
+# --wiki-set.
+jkset() { env WIKIS_DIR="$JKW" LLM_WIKI_TEST_OS=darwin "$JKEXT" --wiki-set "$@"; }
+for k in token api_token password Token JENKINS_API_TOKEN secret credential; do
+  check "--wiki-set refuses $k with exit 2" test "$(jkset "$k" abc >/dev/null 2>&1; echo $?)" = 2
+done
+expect "and says why in one line" "is a secret" jkset token abc
+for k in token api_token; do
+  check "and a value that would be taken for a setting (yes) doesn't get $k written either" bash -c "env WIKIS_DIR='$JKW' LLM_WIKI_TEST_OS=darwin '$JKEXT' --wiki-set $k yes >/dev/null 2>&1; test \$? = 2 && ! grep -q '^$k =' '$JKCF'"
+done
+check "an unknown key exits 2" jkexits 2 jkset nosuch abc
+printf 'url = %s\nuser = smoke-user\ntoken_cmd = cat %s\n' "$JKURL" "$JK/token" > "$JKCF"
+TCBEFORE="$(cat "$JKCF")"
+for v in 'echo hi' keychain 'cat /tmp/x' -; do
+  check "token_cmd is never set or cleared from a session, not even to $v: exit 2" test "$(env WIKIS_DIR="$JKW" LLM_WIKI_TEST_OS=darwin "$JKEXT" --wiki-set token_cmd "$v" >/dev/null 2>&1; echo $?)" = 2
+done
+expect "and says why, and the fix" "token_cmd is part of the sign-in, and a session never sets it: a session that was misled could have the token sent somewhere else. The user sets up sign-in in a terminal: wiki extensions setup jenkins" jkset token_cmd -
+check "and nothing changed in the file" test "$(cat "$JKCF")" = "$TCBEFORE"
+check "also where there is no macOS keychain" test "$(env WIKIS_DIR="$JKW" LLM_WIKI_TEST_OS=linux "$JKEXT" --wiki-set token_cmd keychain >/dev/null 2>&1; echo $?)" = 2
+check "through extensions set too" jkexits 2 "$W" extensions set jenkins token_cmd -
+check "--wiki-settings marks token_cmd as terminal, and says the setup offers the keychain command" bash -c "'$JKEXT' --wiki-settings | awk -F '\t' '\$1 == \"token_cmd\" { exit !(\$5 == \"terminal\" && \$4 ~ /keychain command the setup offers/) }'"
+printf 'url = %s\nuser = smoke-user\ntoken_cmd = cat %s\n' "$JKURL" "$JK/token" > "$JKCF"
+check "a yes/no key takes only yes or no" jkexits 2 jkset remember maybe
+check "a value that would start a comment is refused" jkexits 2 jkset user 'me # x'
+check "a watch entry needs folder=job" jkexits 2 jkset watch "$JK/jkdemo"
+check "a watch entry with a job path that isn't one is refused" jkexits 2 jkset watch "$JK/jkdemo=../x"
+check "and one for a folder that isn't there" jkexits 2 jkset watch "$JK/nowhere=team/app"
+check "a valid watch entry is written" bash -c "'$JKEXT' --wiki-set watch '$JK/jkdemo=team/app' >/dev/null && grep -qx 'watch = $JK/jkdemo=team/app' '$JKCF'"
+jkbefore="$(cat "$JKCF")"
+check "a control character in a value exits 2" jkexits 2 jkset user "$(printf 'me\001')"
+check "and so does a line separator" jkexits 2 jkset user "$(printf 'me\xe2\x80\xa8x')"
+check "and a newline" jkexits 2 jkset user "$(printf 'me\nx')"
+check "and the file is as it was after each refusal" test "$(cat "$JKCF")" = "$jkbefore"
+expect "extensions set goes through it" "remember set in" "$W" extensions set jenkins remember yes
+"$W" extensions set jenkins remember - >/dev/null 2>&1
+
+# Sign-in settings are never a session's, whatever they hold: set, change or clear is refused, with nothing written.
+JK_TAIL="is part of the sign-in, and a session never sets it: a session that was misled could have the token sent somewhere else. The user sets up sign-in in a terminal: wiki extensions setup jenkins"
+for state in empty filled; do
+  : > "$JKCF"
+  [ "$state" = empty ] || printf 'url = %s\nuser = smoke-user\ntoken_cmd = cat %s\n' "$JKURL" "$JK/token" > "$JKCF"
+  JKBEFORE="$(cat "$JKCF")"
+  for k in url user token_cmd; do
+    for route in direct wiki; do
+      bads=""
+      for v in https://elsewhere.example - plain; do
+        if [ "$route" = direct ]; then out="$(jkset "$k" "$v" 2>&1)"; code=$?; else out="$("$W" extensions set jenkins "$k" "$v" 2>&1)"; code=$?; fi
+        case "$out" in *"$k $JK_TAIL"*) [ "$code" = 2 ] || bads="$bads [$v: exit $code]" ;; *) bads="$bads [$v: $out]" ;; esac
+      done
+      [ -z "$bads" ] && [ "$(cat "$JKCF")" = "$JKBEFORE" ] && ok "jenkins $k with the sign-in $state: set, change and clear are refused (exit 2, $route), and nothing is written" || bad "jenkins $k with the sign-in $state: set, change and clear are refused (exit 2, $route), and nothing is written" "$bads"
+    done
+  done
+  rows="$("$JKEXT" --wiki-settings | awk -F '\t' '$1 == "url" || $1 == "user" || $1 == "token_cmd" { printf "%s=%s ", $1, $5 }')"
+  [ "$rows" = "url=terminal user=terminal token_cmd=terminal " ] && ok "jenkins shows url, user and token_cmd as terminal with the sign-in $state" || bad "jenkins shows url, user and token_cmd as terminal with the sign-in $state" "$rows"
+done
+check "a key that isn't sign-in is still set from a session" bash -c "'$JKEXT' --wiki-set notice no >/dev/null && '$JKEXT' --wiki-set notice yes >/dev/null"
+# What the address may be, wherever it comes from; and the token command is never run for one that is refused.
+JKBADS=('https://real.example@evil.example' 'http://evil.example?@localhost' 'https://evil.example?.atlassian.net' 'https://ci.example.com/x#frag' 'https://ci example.com' 'http://evil.example' 'https://' 'ftp://ci.example.com' 'ci.example.com')
+for route in file env; do
+  bads=""
+  for v in "${JKBADS[@]}"; do
+    rm -f "$MARK"
+    [ "$route" = env ] || case "$v" in *"#"*) continue ;; esac
+    if [ "$route" = file ]; then
+      printf 'url = %s\nuser = smoke-user\ntoken_cmd = touch %s; echo %s\n' "$v" "$MARK" "$JKFAKE" > "$JKCF"
+      out="$(jkw config 2>&1)"; code=$?
+    else
+      printf 'user = smoke-user\ntoken_cmd = touch %s; echo %s\n' "$MARK" "$JKFAKE" > "$JKCF"
+      out="$(JENKINS_URL="$v" jkw config 2>&1)"; code=$?
+    fi
+    [ "$code" = 1 ] && [ ! -e "$MARK" ] && case "$out" in *"$JKFAKE"*) false ;; *"fix it, in a terminal: wiki extensions setup jenkins"*) true ;; *) false ;; esac || bads="$bads [$v: exit $code ${out:0:90}]"
+  done
+  [ -z "$bads" ] && ok "jenkins refuses each bad address read from the $route: exit 1, which setting to fix, and the token command never ran" || bad "jenkins refuses each bad address read from the $route: exit 1, which setting to fix, and the token command never ran" "$bads"
+done
+printf 'url = https://real.example@evil.example\nuser = smoke-user\ntoken_cmd = cat %s\n' "$JK/token" > "$JKCF"
+case "$(jkw config 2>&1)" in *"url in $JKCF has a login in it, which is never sent"*) ok "and it names the setting, the file and why" ;; *) bad "and it names the setting, the file and why" "$(jkw config 2>&1)" ;; esac
+case "$(JENKINS_URL='http://evil.example' jkw config 2>&1)" in *"JENKINS_URL is plain http:// to another machine"*) ok "and the environment variable when it is that" ;; *) bad "and the environment variable when it is that" "$(JENKINS_URL='http://evil.example' jkw config 2>&1)" ;; esac
+check "in a tick too: not now, exit 75, and no request is made" bash -c ": > '$JK/requests.log'; printf 'url = https://real.example@evil.example\nuser = smoke-user\ntoken_cmd = cat $JK/token\nwatch = $JK/jkdemo=team/app\n' > '$JKCF'; env LLM_WIKI='$W' WIKIS_DIR='$JKW' '$JKEXT' --wiki-event tick >/dev/null 2>&1; test \$? = 75 && test ! -s '$JK/requests.log'"
+for v in 'https://ci.example.com/prefix' 'http://127.0.0.1:8080' 'http://localhost:9' "$JKURL/jenkins"; do
+  printf 'url = %s\nuser = smoke-user\ntoken_cmd = cat %s\n' "$v" "$JK/token" > "$JKCF"
+  check "jenkins takes $v" bash -c "'$JKEXT' --wiki-ready"
+done
+# Typed at the interactive setup: the same check, and the address is not saved.
+bads=""
+for v in "${JKBADS[@]}"; do
+  : > "$JKCF"
+  out="$(printf '%s\nsmoke-user\n' "$v" | env LLM_WIKI_TEST_TTY=1 "$JKEXT" --wiki-setup 2>&1)"
+  case "$out" in *"so it wasn't saved."*) ;; *) bads="$bads [$v: not refused]" ;; esac
+  ! grep -q '^url' "$JKCF" || bads="$bads [$v: saved]"
+done
+[ -z "$bads" ] && ok "jenkins' setup refuses each bad address a person types, and doesn't save it" || bad "jenkins' setup refuses each bad address a person types, and doesn't save it" "$bads"
+: > "$JKCF"
+printf 'https://ci.example.com/prefix\nsmoke-user\n' | env LLM_WIKI_TEST_TTY=1 "$JKEXT" --wiki-setup >/dev/null 2>&1
+check "and takes an https address with a path" grep -qx 'url = https://ci.example.com/prefix' "$JKCF"
+printf 'url = %s\nuser = smoke-user\ntoken_cmd = cat %s\n' "$JKURL" "$JK/token" > "$JKCF"
+# A console note that never ends costs no more than the line it is on.
+cat > "$JK/notes.py" <<'PYX'
+import importlib.machinery, importlib.util, os, sys, time
+sys.dont_write_bytecode = True
+ld = importlib.machinery.SourceFileLoader("wj", sys.argv[1])
+m = importlib.util.module_from_spec(importlib.util.spec_from_loader("wj", ld)); ld.exec_module(m)
+S, E = "\x1b[8mha:", "\x1b[0m"
+what = sys.argv[2]
+if what == "closed": sys.exit(0 if m.strip_notes("a" + S + "AAAA" + E + "b" + S + "BB" + E + "c\n") == "abc\n" else 1)
+if what == "unclosed": sys.exit(0 if m.strip_notes("x" + S + "never ends\nnext line\n") == "x\nnext line\n" else 1)
+if what == "across": sys.exit(0 if m.strip_notes("x" + S + "AA\nBB" + E + "y\n") == "x\nBB" + E + "y\n" else 1)
+if what == "budget": sys.exit(0 if m.FOLDER_SECONDS == 60 else 1)
+if what == "branch":
+    bad = False
+    for b in (".", "..", "a..b"):
+        try:
+            m.branch_part(b); bad = True
+        except ValueError:
+            pass
+    sys.exit(0 if not bad and not any(m.branch_ok(b) for b in ("a..b", "-x", "..", ".", "", None, "a b")) and m.branch_part("feature/y") == "feature%252Fy" and m.job_problem("team/.") and m.job_problem("team/..") and m.job_problem("../a") and not m.job_problem("team/app") else 1)
+if what == "notice":
+    import ci_common
+    sent = []
+    class R: returncode = 0; stderr = ""
+    ci_common.llm_wiki = lambda *a, **k: (sent.append(a), R())[1]
+    o = {"branch": "b" * 250, "job": "j" * 250, "workflow": "j" * 250 + " #1", "id": 1, "conclusion": "failure"}
+    d = {"stage": "s" * 100, "signature": "g" * 200, "excerpt": "/x/" + "p" * 400}
+    m.put_notice("id", "/f", o, d)
+    t = sent[0][-1]
+    print(len(t.encode()), t[-40:])
+    sys.exit(0 if len(t.encode()) <= 600 and t.endswith("More: " + m.CMD + " jenkins check") and t.count('"') == 2 and "b" * 78 not in t and "j" * 78 not in t else 1)
+text = {"one-line": S * 260000, "many-lines": (S * 100 + "\n") * 3000, "far-end": (S + "x" * 50 + "\n") * 40000 + E}[what]
+t = time.time()
+out = m.strip_notes(text)
+sys.exit(0 if time.time() - t < 2 and "ha:" not in out else 1)
+PYX
+jkcore() { python3 -I "$JK/notes.py" "$JKEXT" "$1"; }
+check "console notes are taken out, and what is between them stays" jkcore closed
+check "a note that never ends is dropped to the end of its line, and no further" jkcore unclosed
+check "and one whose end is on another line is too" jkcore across
+for w in one-line many-lines far-end; do
+  check "2 MB of console notes that never end ($w) is handled in under two seconds" jkcore $w
+done
+check "a branch of . or .. is no part of an address, nor is one with .. in it or a leading -, and a job path with a . or .. part is refused" jkcore branch
+check "the time a job gets in a tick can be lowered by the environment, and never raised" env LLM_WIKI_FOLDER_SECONDS=999 python3 -I "$JK/notes.py" "$JKEXT" budget
+check "a notice for a 250-character branch and job path, and a long excerpt path, is under 600 bytes and still ends with where to look" jkcore notice
+# JSON nested too deep to read, and answers that aren't what they should be.
+python3 -c 'print("[" * 2000000)' > "$JK/fx/job__team__job__app.json"
+out="$(jkw check "$JK/jkdemo" team/app 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *Traceback*) false ;; *"didn't answer with JSON"*) true ;; *) false ;; esac && ok "JSON nested too deep to read is an answer that can't be read: exit 1, no traceback" || bad "JSON nested too deep to read is an answer that can't be read: exit 1, no traceback" "exit $code: ${out:0:300}"
+printf 'watch = %s=team/app\n' "$JK/jkdemo" >> "$JKCF"
+out="$(env LLM_WIKI="$W" WIKIS_DIR="$JKW" "$JKEXT" --wiki-event tick 2>&1)"; code=$?
+[ "$code" = 75 ] && case "$out" in *Traceback*) false ;; *) true ;; esac && ok "and in a tick the folder is skipped, and with no other folder the event is 75" || bad "and in a tick the folder is skipped, and with no other folder the event is 75" "exit $code: ${out:0:300}"
+printf 'url = %s\nuser = smoke-user\ntoken_cmd = cat %s\n' "$JKURL" "$JK/token" > "$JKCF"
+printf '{"_class":"x","lastBuild":{"number":12,"result":"FAILURE","building":false,"actions":1,"timestamp":99999999999999999999999}}\n' > "$JK/fx/job__team__job__app.json"
+jkfail 12
+out="$(jkw check "$JK/jkdemo" team/app 2>&1)"; code=$?
+[ "$code" = 0 ] && case "$out" in *Traceback*) false ;; *"FAILING  build #12 of team/app (failure)"*) true ;; *) false ;; esac && ok "actions that isn't a list, and a time that can't be one, are skipped: the failure is still reported" || bad "actions that isn't a list, and a time that can't be one, are skipped: the failure is still reported" "exit $code: ${out:0:300}"
+printf '{"stages":[null,1,{"name":"Test","status":"FAILED"}]}\n' > "$JK/fx/job__team__job__app__12__wfapi__describe.json"
+out="$(jkw check "$JK/jkdemo" team/app 2>&1)"
+case "$out" in *"  stage:   Test"*) ok "stages with items that aren't stages are skipped" ;; *) bad "stages with items that aren't stages are skipped" "$out" ;; esac
+printf '{"stages":1}\n' > "$JK/fx/job__team__job__app__12__wfapi__describe.json"
+out="$(jkw check "$JK/jkdemo" team/app 2>&1)"
+case "$out" in *"  stage:   not known"*) ok "and stages that isn't a list is no stage" ;; *) bad "and stages that isn't a list is no stage" "$out" ;; esac
+for body in '[null]' '1' '{"lastBuild":1}' '{"lastBuild":[null],"jobs":1}'; do
+  printf '%s\n' "$body" > "$JK/fx/job__team__job__app.json"
+  out="$(jkw check "$JK/jkdemo" team/app 2>&1)"; code=$?
+  case "$out" in *Traceback*) bad "an answer of $body doesn't crash it" "$out" ;; *) [ "$code" -le 1 ] && ok "an answer of $body doesn't crash it" || bad "an answer of $body doesn't crash it" "exit $code: $out" ;; esac
+done
+jkplain 12 FAILURE abc1234def00
+jkfail 12
+# A 206 whose range starts at byte 0 is the whole log: its first line is kept. One that starts later has a cut first line.
+printf 'Error: first line is the error\nsecond line\n' > "$JK/fx/job__team__job__app__12__consoleText.txt"
+printf '0' > "$JK/fx/job__team__job__app__12__consoleText.range206"
+rm -f "$JK/fx/job__team__job__app__12__wfapi__describe.json"
+out="$(jkw check "$JK/jkdemo" team/app 2>&1)"
+JEX="$(ls -t "$JKLOGS"/12-*.txt | head -n 1)"
+case "$out" in *"  error:   Error: first line is the error"*) ok "a 206 that starts at byte 0 is the whole log: its first line, the error, is kept" ;; *) bad "a 206 that starts at byte 0 is the whole log: its first line, the error, is kept" "$out" ;; esac
+check "and is in the excerpt" grep -q 'first line is the error' "$JEX"
+printf 'cut line\nError: boom at the end\n' > "$JK/fx/job__team__job__app__12__consoleText.txt"
+printf '5' > "$JK/fx/job__team__job__app__12__consoleText.range206"
+out="$(jkw check "$JK/jkdemo" team/app 2>&1)"
+case "$out" in *"  error:   Error: boom at the end"*) ok "one that starts after byte 0 has a partial first line, which is dropped" ;; *) bad "one that starts after byte 0 has a partial first line, which is dropped" "$out" ;; esac
+check "and is not in the excerpt" bash -c "! grep -q 'cut line' '$JEX'"
+rm -f "$JK/fx/job__team__job__app__12__consoleText.range206"
+jkfail 12
+# Signed in means Jenkins says so: authenticated, and a name.
+for body in '{}' '{"name":"x","authenticated":false}' '{"authenticated":true}' '{"name":"","authenticated":true}' '[]'; do
+  printf '%s' "$body" > "$JK/fx/whoami"
+  out="$(jkw config 2>&1)"; code=$?
+  [ "$code" = 1 ] && case "$out" in *"This address doesn't answer as Jenkins, or Jenkins sees no signed-in user. Do: check that url is the address of Jenkins itself"*) true ;; *) false ;; esac && ok "config with whoAmI answering $body is not signed in: exit 1, with a fix" || bad "config with whoAmI answering $body is not signed in: exit 1, with a fix" "exit $code: $out"
+done
+out="$(cd "$JK/jkdemo" && printf '\n\nn\n' | env LLM_WIKI_TEST_TTY=1 "$W" extensions setup jenkins 2>&1)"
+case "$out" in *"doesn't answer as Jenkins, or sees no signed-in user"*) ok "setup says so too, and not that it signed in" ;; *) bad "setup says so too, and not that it signed in" "$out" ;; esac
+case "$out" in *"Signed in to Jenkins"*) bad "and never claims a sign-in" "$out" ;; *) ok "and never claims a sign-in" ;; esac
+rm -f "$JK/fx/whoami"
+expect "with a real answer it is signed in" "signed in as smoke-user" jkw config
+# One job that can't be read doesn't stop the others; the event is 75 only when none could be read.
+git init -q "$JK/jkdemo2"
+git -C "$JK/jkdemo2" commit -q --allow-empty -m "Second clone"
+printf '{"_class":"hudson.model.FreeStyleProject","lastBuild":%s}\n' "$(jkbuild 3 FAILURE abc1234def00)" > "$JK/fx/job__team__job__other.json"
+printf 'url = %s\nuser = smoke-user\ntoken_cmd = cat %s\nwatch = %s=team/app, %s=team/other\n' "$JKURL" "$JK/token" "$JK/jkdemo" "$JK/jkdemo2" > "$JKCF"
+rm -f "$JKSTATE" "$JKST/notices"/*
+printf '500' > "$JK/fx/job__team__job__app.status"
+out="$(env LLM_WIKI="$W" WIKIS_DIR="$JKW" "$JKEXT" --wiki-event tick 2>&1)"; code=$?
+[ "$code" = 0 ] && case "$out" in *"$JK/jkdemo: Jenkins couldn't be read for team/app just now, so it was skipped. The rest go on."*) true ;; *) false ;; esac && ok "a job that can't be read is logged and skipped, the next is read, and the event is 0" || bad "a job that can't be read is logged and skipped, the next is read, and the event is 0" "exit $code: $out"
+check "and the failure the second one showed left its notice" test "$(jkncount)" = 1
+printf '500' > "$JK/fx/job__team__job__other.status"
+out="$(env LLM_WIKI="$W" WIKIS_DIR="$JKW" "$JKEXT" --wiki-event tick 2>&1)"; code=$?
+[ "$code" = 75 ] && ok "with every job out of reach the event is 75" || bad "with every job out of reach the event is 75" "exit $code: $out"
+rm -f "$JK/fx/job__team__job__app.status" "$JK/fx/job__team__job__other.status"
+# A job gets 60 seconds in a tick.
+printf 'url = %s\nuser = smoke-user\ntoken_cmd = cat %s\nwatch = %s=team/app\n' "$JKURL" "$JK/token" "$JK/jkdemo" > "$JKCF"
+touch "$JK/fx/slow"
+out="$(env LLM_WIKI_FOLDER_SECONDS=1 LLM_WIKI="$W" WIKIS_DIR="$JKW" "$JKEXT" --wiki-event tick 2>&1)"; code=$?
+rm -f "$JK/fx/slow"
+[ "$code" = 0 ] && case "$out" in *"team/app: out of time (1 seconds) for this job. The rest waits for the next tick."*) true ;; *) false ;; esac && ok "a job that takes more than its time is left for the next tick, with a line" || bad "a job that takes more than its time is left for the next tick, with a line" "exit $code: $out"
+# The state is written under its lock, and with no lock nothing is written.
+rm -f "$JKSTATE" "$JKST/notices"/*
+rm -f "$JKST/extensions/jenkins/state.lock"
+mkdir -p "$JKST/extensions/jenkins/state.lock"
+jkplain 40 FAILURE abc1234def00
+out="$(env LLM_WIKI="$W" WIKIS_DIR="$JKW" "$JKEXT" --wiki-event tick 2>&1)"
+rmdir "$JKST/extensions/jenkins/state.lock"
+case "$out" in *"couldn't lock $JKSTATE, so nothing was written for team/app."*) ok "when the state can't be locked nothing is written, and the log says so" ;; *) bad "when the state can't be locked nothing is written, and the log says so" "$out" ;; esac
+check "no state file, and no notice for what couldn't be recorded" bash -c "test ! -e '$JKSTATE' && test \$(find '$JKST/notices' -name '*.notice' 2>/dev/null | wc -l) = 0"
+# A job named in the settings file is checked like one named on the command line.
+printf 'url = %s\nuser = smoke-user\ntoken_cmd = cat %s\nwatch = %s=team/../app\n' "$JKURL" "$JK/token" "$JK/jkdemo" > "$JKCF"
+: > "$JK/requests.log"
+out="$(jkw check "$JK/jkdemo" 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"isn't a job path. Do: say which job builds it again"*) true ;; *) false ;; esac && ok "a job in the settings file with .. in it is refused by check, with a fix" || bad "a job in the settings file with .. in it is refused by check, with a fix" "exit $code: $out"
+check "and was never asked for" test ! -s "$JK/requests.log"
+printf 'url = %s\nuser = smoke-user\ntoken_cmd = cat %s\n' "$JKURL" "$JK/token" > "$JKCF"
+jkplain 12 FAILURE abc1234def00
+rm -f "$JKSTATE" "$JKST/notices"/*
+# Setup, at a terminal, and the guide.
+jkw unwatch "$JK/jkdemo" >/dev/null
+out="$(cd "$JK/jkdemo" && printf '\n\nteam/app\ny\n' | env JENKINS_API_TOKEN="$JKFAKE" LLM_WIKI_TEST_TTY=1 "$W" extensions setup jenkins 2>&1)"
+case "$out" in *"Signed in to Jenkins as smoke-user."*"The Jenkins job that builds $JK/jkdemo"*"Save a note when a failure is fixed?"*"jenkins is set up."*) ok "setup asks for the address and the user, tests the sign-in, asks which job builds this clone, and about notes" ;; *) bad "setup asks for the address and the user, tests the sign-in, asks which job builds this clone, and about notes" "$out" ;; esac
+case "$out" in *"never starts, aborts or rebuilds anything"*) ok "and says it only reads" ;; *) bad "and says it only reads" "$out" ;; esac
+case "$out" in *"$JKFAKE"*) bad "and never the token" "$out" ;; *) ok "and never the token" ;; esac
+check "the job is kept for the clone, and the notes answer too" bash -c "grep -qx 'watch = $JK/jkdemo=team/app' '$JKCF' && grep -qx 'remember = yes' '$JKCF'"
+"$W" extensions set jenkins remember - >/dev/null 2>&1
+out="$(LLM_WIKI_CMD=wiki "$W" setup --guide jenkins)"
+case "$out" in *"- jenkins: on, ready."*"wiki extensions set jenkins <key> <value>"*) ok "the guide has a section for it, with how to change a setting" ;; *) bad "the guide has a section for it, with how to change a setting" "$out" ;; esac
+for k in url user token token_cmd watch remember notice desktop; do
+  case "$out" in *"    $k = "*) ;; *) bad "the jenkins section lists $k" "$out" ;; esac
+done
+ok "and every setting there is"
+case "$out" in *"Jenkins (user, Configure, API Token)"*'security add-generic-password -a "$USER" -s jenkins -U -w "$(pbpaste)"'*"Terminal only."*) ok "the token step names where to make one and the command for the user's own terminal" ;; *) bad "the token step names where to make one and the command for the user's own terminal" "$out" ;; esac
+out="$(LLM_WIKI_CMD=wiki LLM_WIKI_TEST_OS=linux "$W" setup --guide jenkins)"
+case "$out" in *"security add-generic-password"*|*pbpaste*|*"set this to keychain"*) bad "off a Mac the guide names no macOS command and no keychain preset" "$out" ;; *) ok "off a Mac the guide names no macOS command and no keychain preset" ;; esac
+check "the guide says no token is ever asked for" bash -c "'$W' setup --guide | grep -q 'Never ask for, accept or write a token or password'"
+check "the jenkins section is under 1,900 bytes" test "$(printf '%s' "$(LLM_WIKI_CMD=wiki "$W" setup --guide jenkins)" | wc -c | tr -d ' ')" -lt 1900
+
+kill "$JKPID" 2>/dev/null
+kill "$JKOPID" 2>/dev/null
+wait "$JKPID" 2>/dev/null
+wait "$JKOPID" 2>/dev/null
+"$W" extensions remove jenkins >/dev/null 2>&1
+export LLM_WIKI_NO_NOTIFY=1 LLM_WIKI_OSASCRIPT="$T/bin/inert"
+unset LLM_WIKI_TEST_OS LLM_WIKI_CMD XDG_CONFIG_HOME XDG_STATE_HOME XDG_DATA_HOME
+export WIKIS_DIR="$JK_SAVED_WIKIS_DIR"
+rm -rf "$JK"
 fi
 
 if section "Extension events"; then
@@ -7160,9 +8886,9 @@ ew start >/dev/null 2>&1
 check "and then a tick 2 hours old isn't due" test "$(grep -c . "$REC/log")" = 4
 refuse "an interval needs an extension that is on" ew extensions every nosuch 4h
 refuse "and a length of time it can read" ew extensions every rec often
-out="$(printf 'n\nn\nn\n6h\n' | WIKIS_DIR="$EW" LLM_WIKI_TEST_TTY=1 "$W" setup extensions 2>&1)"
+out="$(printf 'n\nn\nn\nn\nn\n6h\n' | WIKIS_DIR="$EW" LLM_WIKI_TEST_TTY=1 "$W" setup extensions 2>&1)"
 case "$out" in *"Time between runs"*"tick: every 6h"*) ok "setup asks how often, and keeps the answer" ;; *) bad "setup asks how often, and keeps the answer" "$out" ;; esac
-out="$(printf 'n\nn\nn\nsoon\n' | WIKIS_DIR="$EW" LLM_WIKI_TEST_TTY=1 "$W" setup extensions 2>&1)"
+out="$(printf 'n\nn\nn\nn\nn\nsoon\n' | WIKIS_DIR="$EW" LLM_WIKI_TEST_TTY=1 "$W" setup extensions 2>&1)"
 case "$out" in *"isn't a length of time"*"tick: every 6h"*) ok "an answer that isn't a length of time changes nothing" ;; *) bad "an answer that isn't a length of time changes nothing" "$out" ;; esac
 ew extensions every 24h >/dev/null
 expect "completion offers every" "every" "$W" __complete 2 extensions ""
@@ -7613,7 +9339,7 @@ case "$guide" in *"- git = "*"Terminal only: wiki setup git"*) ok "one with no s
 lacks "the session's command name is used, never a path" "$REPO/wiki.sh" gw setup --guide
 case "$(gw setup --guide | grep -c '^- journal.format = standup')" in 1) ok "a journal setting shows its value" ;; *) bad "a journal setting shows its value" ;; esac
 expect "a journal setting says which values it takes" "Change: wiki journal set format <standup|summary|detailed>" gw setup --guide
-check "the whole guide is under 6,700 bytes here" test "$(gw setup --guide | wc -c | tr -d ' ')" -lt 6700
+check "the whole guide is under 7,000 bytes here" test "$(gw setup --guide | wc -c | tr -d ' ')" -lt 7000
 
 # It is plain: style forced on, or a pipe, gives no colour code.
 esc="$(printf '\033')"
@@ -7774,9 +9500,9 @@ for k in site email token token_cmd projects auto_close done_statuses; do
 done
 ok "and every setting the interactive setup asks for"
 case "$out" in *"https://id.atlassian.com/manage-profile/security/api-tokens"*'security add-generic-password -a "$USER" -s atlassian -U -w "$(pbpaste)"'*"Terminal only."*) ok "the token step names the page, and the command, for the user's own terminal" ;; *) bad "the token step names the page, and the command, for the user's own terminal" "$out" ;; esac
-case "$out" in *"The user runs wiki extensions setup jira and keeps the keychain command it offers. Then wiki jira config, which contacts the site"*) ok "then the terminal setup for where the token comes from, and the test, which says it contacts the site" ;; *) bad "then the terminal setup for where the token comes from, and the test, which says it contacts the site" "$out" ;; esac
+case "$out" in *"The user runs wiki extensions setup jira in a terminal: it asks for the address, the account and where the token comes from. Then wiki jira config tests it"*"the keychain command the setup offers"*) ok "then the terminal setup for the address, the account and the token, and the test" ;; *) bad "then the terminal setup for the address, the account and the token, and the test" "$out" ;; esac
 # The site, once there is a token, and where the token comes from are for a terminal, and their lines say so.
-check "the jira section is under 1,700 bytes" test "$(printf '%s' "$out" | wc -c | tr -d ' ')" -lt 1700
+check "the jira section is under 1,850 bytes" test "$(printf '%s' "$out" | wc -c | tr -d ' ')" -lt 1850
 printf 'site = https://acme.atlassian.net\ntoken_cmd = touch %s; echo %s\n' "$MARK" "$FAKE" > "$GCFG/atlassian"
 rm -f "$MARK"
 settings_out="$(env JIRA_API_TOKEN="$FAKE" HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_CMD=wiki "$W" extensions settings jira 2>&1)"
@@ -7821,38 +9547,103 @@ check "and nothing is written" test ! -e "$GCFG/atlassian"
 check "confluence refuses it the same way" test "$(code_of env HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_TEST_OS=linux "$REPO/extensions/wiki-confluence" --wiki-set token_cmd keychain)" = 2
 out="$(glinux setup --guide jira)"
 case "$out" in *"security add-generic-password"*|*pbpaste*|*"keeps the keychain command"*) bad "off a Mac the guide names no macOS command and no keychain preset" "$out" ;; *) ok "off a Mac the guide names no macOS command and no keychain preset" ;; esac
-case "$out" in *"https://id.atlassian.com/manage-profile/security/api-tokens"*"password manager"*"A command that prints the token"*"wiki extensions setup jira"*) ok "it names the token page, a password manager, and the terminal setup for the command" ;; *) bad "it names the token page, a password manager, and the terminal setup for the command" "$out" ;; esac
-# Where the token comes from is never a session's to set, not even the keychain preset: a
-# session that was misled could set an address of its own and then have the token sent there.
-check "token_cmd keychain is refused from a session, with exit 2" test "$(code_of gw extensions set jira token_cmd keychain)" = 2
-expect "and says the user sets up sign-in in a terminal" "a session never sets it. The user sets up sign-in in a terminal: wiki extensions setup jira" gw extensions set jira token_cmd keychain
-check "nothing was written" test ! -e "$GCFG/atlassian"
-check "confluence refuses it too" test "$(code_of env HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_TEST_OS=darwin "$REPO/extensions/wiki-confluence" --wiki-set token_cmd keychain)" = 2
-check "settings marks token_cmd as for a terminal" bash -c "env HOME='$GH' WIKIS_DIR='$GH/wikis' LLM_WIKI_TEST_OS=darwin '$JX' --wiki-settings | awk -F '\t' '\$1 == \"token_cmd\" && \$5 == \"terminal\"' | grep -q ."
-# The address is the user's to change once there is a token.
-check "an http:// address on another machine is refused, since it would send the sign-in in the clear" test "$(code_of gw extensions set jira site http://jira.example.test)" = 2
-check "one on this machine is taken" gw extensions set jira site http://127.0.0.1:8080
-gw extensions set jira site https://acme.atlassian.net >/dev/null 2>&1
-printf 'token_cmd = security find-generic-password -s atlassian -w\n' >> "$GCFG/atlassian"
-expect "a token command the user set shows as keychain" "keychain" gw extensions settings jira
-out="$(gw extensions set jira site https://evil.example 2>&1)"; code=$?
-check "with a token set up, a session can't change the site: exit 2" test "$code" = 2
-case "$out" in *"site can't be changed from a session once a token is set up (token_cmd is set): the token would go to the new address."*"wiki extensions setup jira"*) ok "and it says why, and that the user changes it in a terminal" ;; *) bad "and it says why, and that the user changes it in a terminal" "$out" ;; esac
-check "the site is what it was" grep -qx 'site = https://acme.atlassian.net' "$GCFG/atlassian"
-check "nor clear it" test "$(code_of gw extensions set jira site -)" = 2
-check "settings marks the site as for a terminal now" bash -c "env HOME='$GH' WIKIS_DIR='$GH/wikis' LLM_WIKI_TEST_OS=darwin '$JX' --wiki-settings | awk -F '\t' '\$1 == \"site\" && \$5 == \"terminal\"' | grep -q ."
-check "confluence refuses its site and its own address the same way" bash -c "test \"\$(env HOME='$GH' WIKIS_DIR='$GH/wikis' LLM_WIKI_TEST_OS=darwin '$REPO/extensions/wiki-confluence' --wiki-set site https://evil.example >/dev/null 2>&1; echo \$?)\" = 2 && test \"\$(env HOME='$GH' WIKIS_DIR='$GH/wikis' LLM_WIKI_TEST_OS=darwin '$REPO/extensions/wiki-confluence' --wiki-set url https://evil.example/wiki >/dev/null 2>&1; echo \$?)\" = 2"
-check "a session may still clear token_cmd, which only takes access away" gw extensions set jira token_cmd -
-lacks "and then it is gone" "token_cmd" cat "$GCFG/atlassian"
-check "a token in the environment locks the site too" bash -c "rm -f '$GCFG/atlassian'; test \"\$(env JIRA_API_TOKEN=smoke-token HOME='$GH' WIKIS_DIR='$GH/wikis' LLM_WIKI_TEST_OS=darwin '$JX' --wiki-set site https://evil.example >/dev/null 2>&1; echo \$?)\" = 2 && test ! -e '$GCFG/atlassian'"
-check "other settings still change with a token set up" gw extensions set jira projects PAY
-rm -f "$GCFG/atlassian" "$GCFG/jira" "$MARK"
-out="$(gw extensions set jira site https://acme.atlassian.net/ 2>&1)"
-case "$out" in "site set in $GCFG/atlassian"*"jira isn't ready yet: no API token yet"*) ok "set says what it set and where, then whether it is ready" ;; *) bad "set says what it set and where, then whether it is ready" "$out" ;; esac
-check "into the shared file the interactive setup writes" grep -qx 'site = https://acme.atlassian.net' "$GCFG/atlassian"
+case "$out" in *"wiki extensions setup jira"*"https://id.atlassian.com/manage-profile/security/api-tokens"*"password manager"*) ok "it names the terminal setup, the token page and a password manager" ;; *) bad "it names the terminal setup, the token page and a password manager" "$out" ;; esac
+# Sign-in settings are never a session's, whatever they hold: set, change or clear is refused, with nothing written.
+CX="$REPO/extensions/wiki-confluence"
+SIGNIN_TAIL="is part of the sign-in, and a session never sets it: a session that was misled could have the token sent somewhere else. The user sets up sign-in in a terminal: wiki extensions setup"
+sx() { env HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_CMD=wiki LLM_WIKI_TEST_OS=darwin "$@"; }
+mkdir -p "$GCFG"; cp "$GCFG/extensions-on" "$GH/extensions-on.keep" 2>/dev/null || : > "$GH/extensions-on.keep"
+printf 'confluence\n' >> "$GCFG/extensions-on"
+for state in empty filled; do
+  rm -f "$GCFG/atlassian" "$GCFG/jira" "$GCFG/confluence"
+  [ "$state" = empty ] || printf 'site = https://acme.atlassian.net\nemail = me@example.com\ntoken_cmd = security find-generic-password -s atlassian -w\n' > "$GCFG/atlassian"
+  before="$(cat "$GCFG/atlassian" 2>/dev/null; ls "$GCFG" | sort | tr '\n' ' ')"
+  for pair in jira:site jira:email jira:token_cmd confluence:site confluence:url confluence:email confluence:token_cmd; do
+    n="${pair%%:*}"; k="${pair##*:}"
+    for route in direct wiki; do
+      bads=""
+      for v in https://elsewhere.example - plain; do
+        if [ "$route" = direct ]; then out="$(sx "$REPO/extensions/wiki-$n" --wiki-set "$k" "$v" 2>&1)"; code=$?; else out="$(sx "$W" extensions set "$n" "$k" "$v" 2>&1)"; code=$?; fi
+        case "$out" in *"$k $SIGNIN_TAIL $n"*) [ "$code" = 2 ] || bads="$bads [$v: exit $code]" ;; *) bads="$bads [$v: $out]" ;; esac
+      done
+      after="$(cat "$GCFG/atlassian" 2>/dev/null; ls "$GCFG" | sort | tr '\n' ' ')"
+      [ -z "$bads" ] && [ "$after" = "$before" ] && ok "$n $k with the sign-in $state: a session's set, change and clear are refused (exit 2, $route), and nothing is written" || bad "$n $k with the sign-in $state: a session's set, change and clear are refused (exit 2, $route), and nothing is written" "$bads"
+    done
+  done
+  for n in jira confluence; do
+    rows="$(sx "$REPO/extensions/wiki-$n" --wiki-settings | awk -F '\t' '$1 == "site" || $1 == "email" || $1 == "token_cmd" || $1 == "url" { printf "%s=%s ", $1, $5 }')"
+    want="site=terminal email=terminal token_cmd=terminal "; [ "$n" = jira ] || want="site=terminal email=terminal token_cmd=terminal url=terminal "
+    [ "$rows" = "$want" ] && ok "$n shows every sign-in setting as terminal, with the sign-in $state" || bad "$n shows every sign-in setting as terminal, with the sign-in $state" "$rows"
+  done
+done
+rm -f "$GCFG/atlassian" "$GCFG/jira" "$GCFG/confluence"
+check "a key that isn't sign-in is still set: jira projects" gw extensions set jira projects PAY
+check "and confluence's done_states" gw extensions set confluence done_states Verified
+cp "$GH/extensions-on.keep" "$GCFG/extensions-on"
+# What the address may be, wherever it comes from: read by a parser, not by how the string ends.
+BADS=('https://real.example@evil.example' 'http://evil.example?@localhost' 'https://evil.example?.atlassian.net' 'https://acme.atlassian.net/x#frag' 'https://acme atlassian.net' 'http://evil.example' 'https://' 'ftp://acme.example' 'acme.atlassian.net')
+for n in jira confluence; do
+  N="$(printf '%s' "$n" | awk '{ print toupper(substr($0, 1, 1)) substr($0, 2) }')"
+  for route in file env; do
+    bads=""
+    for v in "${BADS[@]}"; do
+      [ "$route" = env ] || case "$v" in *"#"*) continue ;; esac
+      rm -f "$GCFG/atlassian" "$GCFG/jira" "$GCFG/confluence" "$MARK"
+      printf 'token_cmd = touch %s; echo %s\n' "$MARK" "$FAKE" > "$GCFG/atlassian"
+      if [ "$route" = file ]; then printf 'site = %s\n' "$v" >> "$GCFG/atlassian"; out="$(sx "$REPO/extensions/wiki-$n" check 2>&1)"; code=$?
+      else out="$(sx env ATLASSIAN_SITE="$v" "$REPO/extensions/wiki-$n" check 2>&1)"; code=$?; fi
+      [ "$code" = 1 ] && [ ! -e "$MARK" ] && case "$out" in *"$FAKE"*) false ;; *"$N isn't set up: site in $GCFG/atlassian "*|*"$N isn't set up: ATLASSIAN_SITE "*) true ;; *) false ;; esac || bads="$bads [$v: exit $code${out:0:80}]"
+    done
+    [ -z "$bads" ] && ok "$n refuses each bad address read from the $route, with exit 1, and never ran the token command" || bad "$n refuses each bad address read from the $route, with exit 1, and never ran the token command" "$bads"
+  done
+done
+rm -f "$GCFG/atlassian" "$GCFG/jira" "$GCFG/confluence" "$MARK"
+printf 'token_cmd = touch %s; echo %s\nurl = https://evil.example?x\nsite = https://acme.atlassian.net\n' "$MARK" "$FAKE" > "$GCFG/atlassian"
+printf 'url = https://evil.example?x\n' > "$GCFG/confluence"
+out="$(sx "$CX" check 2>&1)"; code=$?
+[ "$code" = 1 ] && [ ! -e "$MARK" ] && case "$out" in *"url in $GCFG/confluence has a query or a # in it"*) true ;; *) false ;; esac && ok "confluence names the setting to fix, and the file it is in" || bad "confluence names the setting to fix, and the file it is in" "exit $code: $out"
+rm -f "$GCFG/atlassian" "$GCFG/jira" "$GCFG/confluence" "$MARK"
+printf 'site = https://real.example@evil.example\ntoken_cmd = touch %s; echo x\n' "$MARK" > "$GCFG/atlassian"
+out="$(sx "$JX" check 2>&1)"; code=$?
+[ "$code" = 1 ] && [ ! -e "$MARK" ] && case "$out" in *"site in $GCFG/atlassian has a login in it, which is never sent"*"extensions setup jira"*) true ;; *) false ;; esac && ok "jira names the setting, why, and the fix" || bad "jira names the setting, why, and the fix" "exit $code: $out"
+check "and --wiki-ready fails for it, in one line, without running the command" bash -c "! env HOME='$GH' WIKIS_DIR='$GH/wikis' '$JX' --wiki-ready >/dev/null 2>&1 && test ! -e '$MARK'"
+for ok_addr in 'https://acme.example/jira' 'http://127.0.0.1:8080' 'http://localhost:8080/prefix' 'https://acme.atlassian.net'; do
+  printf 'site = %s\ntoken_cmd = echo x\n' "$ok_addr" > "$GCFG/atlassian"
+  check "jira's --wiki-ready takes $ok_addr" bash -c "env HOME='$GH' WIKIS_DIR='$GH/wikis' '$JX' --wiki-ready"
+done
+check "and a Confluence site that isn't on Cloud has no address of its own yet" bash -c "printf 'site = https://evil.example\\ntoken_cmd = echo x\\n' > '$GCFG/atlassian'; out=\$(env HOME='$GH' WIKIS_DIR='$GH/wikis' '$CX' --wiki-ready); test -n \"\$out\""
+# Typed at the interactive setup: the same check, and the address is not saved.
+for n in jira confluence; do
+  bads=""
+  for v in "${BADS[@]}"; do
+    rm -f "$GCFG/atlassian" "$GCFG/jira" "$GCFG/confluence"
+    out="$(printf '%s\n\n' "$v" | sx env LLM_WIKI_TEST_TTY=1 "$REPO/extensions/wiki-$n" --wiki-setup 2>&1)"
+    case "$out" in *"so it wasn't saved."*) ;; *) bads="$bads [$v: not refused]" ;; esac
+    ! grep -q '^site' "$GCFG/atlassian" 2>/dev/null || bads="$bads [$v: saved]"
+  done
+  [ -z "$bads" ] && ok "$n's setup refuses each bad address a person types, and doesn't save it" || bad "$n's setup refuses each bad address a person types, and doesn't save it" "$bads"
+done
+rm -f "$GCFG/atlassian" "$GCFG/jira" "$GCFG/confluence"
+for v in 'https://acme.example/jira' 'http://127.0.0.1:8080'; do
+  printf '%s\n\n\n' "$v" | sx env LLM_WIKI_TEST_TTY=1 "$JX" --wiki-setup >/dev/null 2>&1
+  check "jira's setup takes $v" grep -qx "site = $v" "$GCFG/atlassian"
+  rm -f "$GCFG/atlassian"
+done
+cat > "$GH/cloud.py" <<'PYX'
+import importlib.machinery, importlib.util, sys
+sys.dont_write_bytecode = True
+ld = importlib.machinery.SourceFileLoader("wc", sys.argv[1])
+m = importlib.util.module_from_spec(importlib.util.spec_from_loader("wc", ld)); ld.exec_module(m)
+ok = (m.wiki_url("https://acme.atlassian.net") == "https://acme.atlassian.net/wiki" and m.wiki_url("https://acme.atlassian.net/") == "https://acme.atlassian.net/wiki"
+      and m.wiki_url("https://evil.example?.atlassian.net") == "" and m.wiki_url("https://acme.atlassian.net.evil.example") == ""
+      and m.wiki_url("https://evil.example/x.atlassian.net") == "" and m.wiki_url("https://real.atlassian.net@evil.example") == ""
+      and m.wiki_url("http://acme.atlassian.net") == "" and m.wiki_url("") == "")
+sys.exit(0 if ok else 1)
+PYX
+check "Atlassian Cloud is told by the parsed host, not by how the string ends" python3 -I "$GH/cloud.py" "$CX"
+rm -f "$GCFG/atlassian" "$GCFG/jira" "$GCFG/confluence" "$MARK"
+printf 'site = https://acme.atlassian.net\n' > "$GCFG/atlassian"
 expect "settings shows the value and its source" "https://acme.atlassian.net  shared file" gw extensions settings jira
-gw extensions set jira email me@example.com >/dev/null 2>&1
-check "email goes in the shared file too" grep -qx 'email = me@example.com' "$GCFG/atlassian"
 gw extensions set jira projects "pay, ops" >/dev/null 2>&1
 check "projects go in jira's own file, as keys" grep -qx 'projects = PAY, OPS' "$GCFG/jira"
 gw extensions set jira auto_close yes >/dev/null 2>&1
@@ -7871,6 +9662,49 @@ rm -f "$GCFG/jira"
 gw extensions remove confluence >/dev/null 2>&1
 check "remove marks it too, so a no is remembered" grep -qx 'extension.confluence' "$GCFG/setup"
 lacks "and the guide stops marking it as not answered" "- confluence: off [not answered yet]" gw setup --guide extensions
+
+# A redirect never carries the sign-in to another address. urllib's own handler would: the
+# Jenkins extension had its own from the start, and these two now have the same.
+cat > "$T/redir.py" <<'PYR'
+import importlib.machinery, importlib.util, sys, urllib.request
+sys.dont_write_bytecode = True
+ld = importlib.machinery.SourceFileLoader("ext", sys.argv[1])
+m = importlib.util.module_from_spec(importlib.util.spec_from_loader("ext", ld)); ld.exec_module(m)
+h = m.SameOrigin()
+req = urllib.request.Request("https://acme.example/rest/api/2/myself", headers={"Authorization": "Basic c2VjcmV0"})
+def to(new):
+    r = h.redirect_request(req, None, 302, "Found", {}, new)
+    return "followed" if r is not None else "refused"
+got = [to("https://evil.example/x"), to("http://acme.example/x"), to("https://acme.example:8443/x"), to("//evil.example/x"),
+       to("https://acme.example/other")]
+want = ["refused", "refused", "refused", "refused", "followed"]
+uses = isinstance(m.OPENER, urllib.request.OpenerDirector) and any(isinstance(x, m.SameOrigin) for x in m.OPENER.handlers)
+sys.exit(0 if got == want and uses else 1)
+PYR
+check "jira follows a redirect only to the same address, so the sign-in goes nowhere else" python3 -I "$T/redir.py" "$JX"
+check "and so does confluence" python3 -I "$T/redir.py" "$REPO/extensions/wiki-confluence"
+check "neither opens a request any other way" bash -c "! grep -n 'urllib.request.urlopen' '$JX' '$REPO/extensions/wiki-confluence'"
+# A space's key goes into a search Confluence runs: only what a key can hold is taken.
+cat > "$T/space.py" <<'PYS'
+import importlib.machinery, importlib.util, sys
+sys.dont_write_bytecode = True
+ld = importlib.machinery.SourceFileLoader("ext", sys.argv[1])
+m = importlib.util.module_from_spec(importlib.util.spec_from_loader("ext", ld)); ld.exec_module(m)
+ok = m.target("space:ENG") == ("space", "ENG") and m.target("space:~jdoe") == ("space", "~jdoe")
+bad = all(m.target(t) == (None, None) for t in ('space:ENG" or type = "page', "space:a b", "space:", "space:a,b"))
+sys.exit(0 if ok and bad else 1)
+PYS
+check "a watched space's key is a key, never text that could change the search" python3 -I "$T/space.py" "$REPO/extensions/wiki-confluence"
+# config checks the address before it fetches the token, as every other command does.
+printf '#!/bin/sh\ntouch "%s"\necho tok\n' "$T/cfg-token-ran" > "$T/cfg-token.sh"; chmod +x "$T/cfg-token.sh"; rm -f "$T/cfg-token-ran"
+printf 'site = https://real.example@evil.example\ntoken_cmd = %s\n' "$T/cfg-token.sh" > "$GCFG/atlassian"
+out="$(env HOME="$GH" WIKIS_DIR="$GH/wikis" "$JX" config 2>&1)"; code=$?
+check "jira config with an address that can't be used stops with exit 1" test "$code" = 1
+check "before the token command is run" test ! -e "$T/cfg-token-ran"
+out="$(env HOME="$GH" WIKIS_DIR="$GH/wikis" "$REPO/extensions/wiki-confluence" config 2>&1)"; code=$?
+check "confluence config does the same" bash -c "test '$code' = 1 && test ! -e '$T/cfg-token-ran'"
+check "an address with a space in front is a fault, not passed over" bash -c "printf 'token_cmd = %s\n' '$T/cfg-token.sh' > '$GCFG/atlassian'; ! env HOME='$GH' WIKIS_DIR='$GH/wikis' JIRA_URL=' https://acme.example' '$JX' config >/dev/null 2>&1 && test ! -e '$T/cfg-token-ran'"
+rm -f "$GCFG/atlassian" "$T/cfg-token.sh" "$T/cfg-token-ran" "$T/redir.py" "$T/space.py"
 
 # Confluence has more settings, and anything that publishes is for a terminal.
 gw extensions add confluence >/dev/null 2>&1
@@ -7979,8 +9813,9 @@ for call in "jset email $STR" "jset site $STR" "jset auto_close $STR" "jset proj
   [ "$code" = 2 ] || seen="$seen [$call: exit $code]"
 done
 [ -z "$seen" ] && ok "no --wiki-set error repeats the value, and each exits 2" || bad "no --wiki-set error repeats the value, and each exits 2" "$seen"
-expect "an email error still names the key" "email isn't an email address" jset email "$STR"
-expect "and a site error" "site isn't an address" jset site "$STR"
+expect "an email error now says it is part of the sign-in, without the value" "email is part of the sign-in" jset email "$STR"
+rm -f "$GCFG/atlassian"
+expect "and so does a site" "site is part of the sign-in" jset site "$STR"
 # The feedback question counts as answered only when the answer was written.
 grep -vx 'feedback' "$GCFG/setup" > "$GCFG/setup.tmp"; mv "$GCFG/setup.tmp" "$GCFG/setup"
 rm -f "$GCFG/feedback"

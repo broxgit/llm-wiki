@@ -4,6 +4,20 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-12-29: sign-in is set at a terminal, never by a session
+
+- For Jira, Confluence and Jenkins, a session can no longer set the address, the account or where the token comes from. It still sets everything else.
+- You set those yourself: `wiki extensions setup jira`, `confluence` or `jenkins`. An agent can still walk you through it and test the sign-in.
+- An address that hides another, such as `https://real.example@evil.example`, is refused wherever it comes from, before any token is fetched.
+- Do: run `wiki update`, then check your addresses are yours: `wiki extensions settings jira` and `wiki extensions settings confluence`.
+
+## 2026-12-28: what failed in GitLab CI and Jenkins, and why
+
+- `wiki extensions add gitlab` or `jenkins` adds `wiki gitlab` or `wiki jenkins`: the failing job, the first error line and a short saved log excerpt.
+- Both only read: they fix nothing, start no agent and write nothing to GitLab or Jenkins. GitLab uses `glab`; Jenkins needs its address, your user and a token.
+- With a clone watched, a pipeline or build that starts failing is handed to your next session in one line, and shown on your desktop, as GitHub's is.
+- Do: only if you use them: `wiki gitlab watch` in a clone, or `wiki jenkins watch <folder> <job>`, after `wiki extensions add`.
+
 ## 2026-12-27: a session can no longer change where your Atlassian token is sent
 
 - Security fix: once a token is set up, a session can't change the Jira or Confluence address. A misled session could have sent your token elsewhere.

@@ -1,0 +1,1171 @@
+#!/usr/bin/env python3
+# wiki-extension: Say what failed in a Jenkins job and why, and note in the wiki when it is fixed.
+# wiki-events: tick
+# wiki-setup: yes
+# wiki-settings: yes
+"""wiki jenkins: an llm-wiki extension. Standard library only.
+
+For agents that have no CI watching of their own. It asks Jenkins, over its JSON API, whether the latest
+build of a job failed, and why: the first line of the log that looks like the error, and a short excerpt of
+the end of the log, kept on this machine. Jenkins doesn't know which repository a job belongs to, so you
+watch a clone together with the job that builds it. With a clone watched, the tick event leaves a line for
+the next session on that branch when a build starts failing, and can save a note in the wiki when the
+failure is fixed.
+
+It only READS Jenkins, and it writes nothing anywhere: every request is a GET. It never starts, aborts or
+rebuilds anything, never pushes, and starts no agent to fix anything. The API token is only ever sent to
+the Jenkins address you set, and is never printed, logged, stored or put in an error.
+"""
+import base64
+import datetime
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+CMD = os.environ.get("LLM_WIKI_CMD", "wiki")
+
+# What is not about Jenkins is in ci_common.py, beside this file, which wiki-github and wiki-gitlab use too.
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+try:
+    import ci_common as cc
+except ImportError:
+    print(f"error: wiki-jenkins needs ci_common.py in its own folder, and it isn't there: it was copied without it. "
+          f"Do: turn it on with {CMD} extensions add jenkins instead of copying it", file=sys.stderr)
+    sys.exit(1)
+from ci_common import (KEEP_BYTES, KEEP_DAYS, KEEP_LINES, NOTICE_DAYS, clean, clear_notice, die, die_usage, first_line, is_yes,
+                       known_in_wikis, read_conf, set_conf, signature_of, stale, unfit)
+
+CONFIG_DIR = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "llm-wiki")
+CONFIG = os.path.join(CONFIG_DIR, "jenkins")
+STATE_HOME = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+STATE_DIR = os.path.join(STATE_HOME, "llm-wiki", "extensions", "jenkins")
+STATE_FILE = os.path.join(STATE_DIR, "state.json")
+LOG_DIR = os.path.join(STATE_DIR, "logs")
+STATE_LOCK = os.path.join(STATE_DIR, "state.lock")
+KEYCHAIN_CMD = "security find-generic-password -s jenkins -w"
+GUIDE = f'Or ask an agent: "run {CMD} setup --guide jenkins and walk me through it"'
+
+TAIL_BYTES = 2000000                 # the most of a console that is kept: its end
+STREAM_BYTES = 512 * 1024 * 1024     # the most that is read looking for the end of a console a server sent whole
+STREAM_SECONDS = 60                  # and how long that may take
+JSON_BYTES = 4 * 1024 * 1024         # the most of any other answer that is read
+TIMEOUT = 15                         # seconds, for every request
+FOLDER_SECONDS = min(60, int(os.environ.get("LLM_WIKI_FOLDER_SECONDS") or 60))   # one job's time in a tick; a test can only lower it
+NOTE_WINDOW = 8192                   # how far from its start a console note's end is looked for
+DEFAULTS = {"remember": "no", "notice": "yes", "desktop": "yes"}
+FAILING = ("FAILURE", "UNSTABLE")
+PASSING = ("SUCCESS",)
+BUILD_TREE = "number,result,building,timestamp,url,displayName,actions[lastBuiltRevision[SHA1],causes[shortDescription]]"
+TOKEN_ENV = "JENKINS_API_TOKEN"
+
+USAGE = f"""Usage: {CMD} jenkins [check] [<folder> [<job>]]
+       {CMD} jenkins watch <folder> <job>
+       {CMD} jenkins watch --list
+       {CMD} jenkins unwatch <folder> [<job>]
+       {CMD} jenkins config
+
+  check    For the Jenkins job that builds a clone (the current folder unless you name one), say
+           whether its latest build failed and why: the job, the build number, the stage when
+           Jenkins says which, the first line that looks like the error, whether your wikis already
+           know that error, and where a short excerpt of the end of the log is saved. A failure is
+           FAILURE or UNSTABLE, and it says which. The job is the one {CMD} jenkins watch gave this
+           folder, or the one you name here. For a multibranch job it looks at the job of the
+           clone's branch and the job of the default branch. The default. It reads Jenkins and changes
+           nothing there.
+  watch    Say which job builds this clone: the job's path as Jenkins shows it, such as team/app, or
+           the job's address on your Jenkins. The tick event then looks at it. --list prints them.
+  unwatch  Take a clone off again (every job of it, unless you name one).
+  config   What is set, and whether Jenkins accepts the sign-in.
+
+It READS ONLY: every request is a GET. It starts, aborts and rebuilds nothing, never pushes, and starts
+no agent to fix anything. The API token is sent only to the address in `url`, and is never printed,
+logged or kept: it is read from {TOKEN_ENV} or from the command in token_cmd, each time it is needed.
+
+Settings go in {CONFIG}, one `name = value` a line:
+  url        your Jenkins, such as https://ci.example.com. A plain http:// address works only on
+             localhost, because the token would cross the network in the clear.
+             A session never sets the url, the user or token_cmd: the token would go to wherever it
+             pointed. The user sets them in a terminal: {CMD} extensions setup jenkins.
+  user       your Jenkins user name
+  token_cmd  a command that prints your API token, such as
+             security find-generic-password -s jenkins -w
+  watch      what the tick looks at: folder=job, separated by commas
+  remember   yes: when a failure the tick saw is fixed, save a note in the wiki that covers the clone,
+             through capture. It holds the error's first line, never the log. Off unless you turn it on.
+  notice     yes (the default): when a build starts failing, hand one line to the next session in
+             that repository, on that branch.
+  desktop    yes (the default): with a notice, also show a desktop notification, if this machine
+             can show one. The tick can run with no session open: {CMD} extensions schedule on.
+The environment wins over the file: JENKINS_URL, JENKINS_USER and {TOKEN_ENV}.
+Keep the token out of the file.
+
+The excerpt is the log's last {KEEP_LINES} lines or the lines around its first errors, at most {KEEP_BYTES:,} bytes, kept
+{KEEP_DAYS} days in {LOG_DIR}/<job>/<build>-<n>.txt and never in a wiki.
+"""
+
+# True while llm-wiki runs this for an event, in the background, with nobody watching.
+EVENT = False
+
+
+def not_now(msg):
+    """During an event, no Jenkins or no sign-in or no network is for later: 75 asks llm-wiki to try again."""
+    print(f"not now: {msg}")
+    sys.exit(75)
+
+
+def unreachable(msg):
+    if EVENT:
+        not_now(msg)
+    die(f"{msg}. Do: check the network, then run: {CMD} jenkins check")
+
+
+# ---- settings, and the sign-in -------------------------------------------------------------------
+
+def settings():
+    own = read_conf(CONFIG)
+    env = os.environ.get
+    src = {}
+    url, src["url"] = (env("JENKINS_URL"), "JENKINS_URL") if env("JENKINS_URL") else (own.get("url", ""), "this file" if own.get("url") else "")
+    user, src["user"] = (env("JENKINS_USER"), "JENKINS_USER") if env("JENKINS_USER") else (own.get("user", ""), "this file" if own.get("user") else "")
+    return {
+        "url": url.strip().rstrip("/"), "user": user.strip(), "token_cmd": own.get("token_cmd", ""), "_from": src,
+        "watch": watch_entries(own),
+        "remember": is_yes(own.get("remember", DEFAULTS["remember"])),
+        "notice": is_yes(own.get("notice", DEFAULTS["notice"])),
+        "desktop": is_yes(own.get("desktop", DEFAULTS["desktop"])),
+    }
+
+
+def has_token(conf):
+    """Whether a token is set to come from somewhere. The command isn't run to find out."""
+    return bool(conf.get("token_cmd")) or bool(os.environ.get(TOKEN_ENV))
+
+
+def get_token(conf):
+    """The API token. Never printed, and never put in a message."""
+    if os.environ.get(TOKEN_ENV):
+        return os.environ[TOKEN_ENV].strip()
+    if conf.get("token_cmd"):
+        try:
+            out = subprocess.run(conf["token_cmd"], shell=True, capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
+        except subprocess.TimeoutExpired:
+            die(f"token_cmd took more than 30 seconds. Do: run the command in {CONFIG} yourself to see why")
+        if out.returncode != 0 or not out.stdout.strip():
+            die(f"token_cmd printed no token (exit {out.returncode}). Do: run the command in {CONFIG} yourself to see why")
+        return out.stdout.strip()
+    return ""
+
+
+def url_problem(url):
+    """Why an address can't be Jenkins', in words that don't repeat it, or nothing: https:// anywhere, http:// only on this
+    machine; a host; no login, query or fragment; no space or control character. It is read by a parser, not by how the
+    string ends. A token sent over plain http to another host would cross the network in the clear."""
+    if not url or unfit(url) or any(c.isspace() or c == "\\" for c in url):
+        return "has a space, a backslash or a control character in it, or is empty"
+    try:
+        u = urllib.parse.urlsplit(url)
+        host = u.hostname or ""
+        u.port  # noqa: B018 (a bad port raises here)
+    except ValueError:
+        return "isn't an address"
+    if u.scheme not in ("http", "https") or not host:
+        return "isn't an address: it starts with https:// and names a host"
+    if "@" in u.netloc or u.username is not None or u.password is not None:
+        return "has a login in it, which is never sent"
+    if u.query or u.fragment or "?" in url or "#" in url:
+        return "has a query or a # in it: give only the address of Jenkins"
+    if u.scheme == "http" and host.lower() not in ("localhost", "127.0.0.1", "::1"):
+        return "is plain http:// to another machine, where the token would cross the network in the clear: use https://"
+    return ""
+
+
+def sign_in_missing(conf):
+    """What the sign-in lacks, in a few words, or nothing."""
+    if not conf["url"]:
+        return "no Jenkins address yet"
+    if not conf["user"]:
+        return "no Jenkins user yet"
+    if not has_token(conf):
+        return "no API token yet"
+    return ""
+
+
+def need_sign_in(conf):
+    msg = sign_in_missing(conf)
+    if msg:
+        if EVENT:
+            not_now(f"Jenkins isn't set up: {msg}")
+        die(f"Jenkins isn't set up: {msg}. Run: {CMD} extensions setup jenkins. {GUIDE}")
+    why = url_problem(conf["url"])
+    if why:
+        where = "JENKINS_URL" if conf["_from"].get("url") == "JENKINS_URL" else f"url in {CONFIG}"
+        if EVENT:
+            not_now(f"{where} {why}")
+        die(f"{where} {why}. Do: fix it, in a terminal: {CMD} extensions setup jenkins")
+
+
+def origin(url):
+    u = urllib.parse.urlsplit(url)
+    port = u.port or (443 if u.scheme == "https" else 80)
+    return (u.scheme, (u.hostname or "").lower(), port)
+
+
+class SameOrigin(urllib.request.HTTPRedirectHandler):
+    """A redirect is followed only to the same address it came from: the sign-in is never sent anywhere else."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        try:
+            if origin(urllib.parse.urljoin(req.full_url, newurl)) != origin(req.full_url):
+                return None
+        except ValueError:
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+class Jenkins:
+    def __init__(self, conf):
+        need_sign_in(conf)
+        self.url = conf["url"]
+        self.user = conf["user"]
+        tok = get_token(conf)
+        if not tok:
+            die(f"no API token. Set token_cmd in {CONFIG}, or {TOKEN_ENV}. {CMD} jenkins --help has the settings.")
+        if ":" in self.user or unfit(self.user):
+            die(f"the Jenkins user can't hold a colon or a control character. Do: set it again, in a terminal: {CMD} extensions setup jenkins")
+        self.headers = {"Authorization": "Basic " + base64.b64encode(f"{self.user}:{tok}".encode()).decode(), "Accept": "application/json"}
+        self.opener = urllib.request.build_opener(SameOrigin())
+
+    def open(self, path, headers=None):
+        """The open response to one GET of an address under the Jenkins address, or the code Jenkins refused it with."""
+        h = dict(self.headers)
+        h.update(headers or {})
+        req = urllib.request.Request(self.url + path, headers=h, method="GET")
+        return self.opener.open(req, timeout=TIMEOUT)
+
+    def fail(self, e, path):
+        """What an HTTP error means: sign-in refused, a redirect that wasn't followed, or a server trouble."""
+        if e.code in (401, 403):
+            if EVENT:
+                not_now(f"Jenkins refused the sign-in ({e.code})")
+            die(f"Jenkins refused the sign-in ({e.code}) at {self.url}. Do: check the user and the token: {CMD} jenkins config")
+        if 300 <= e.code < 400:
+            die(f"{self.url} redirected to another address, which wasn't followed, so the sign-in stays with {self.url}. "
+                f"Do: set url to the address Jenkins really answers at, in a terminal: {CMD} extensions setup jenkins")
+        unreachable(f"Jenkins answered {e.code}")
+
+    def get_json(self, path, soft=False):
+        """The JSON at path, or None where Jenkins says there is no such thing (and, when soft, for any refusal)."""
+        body = bytearray()
+        try:
+            with self.open(path) as r:
+                deadline = time.time() + STREAM_SECONDS
+                while len(body) <= JSON_BYTES:
+                    chunk = r.read(65536)
+                    if not chunk:
+                        break
+                    body += chunk
+                    if time.time() > deadline:
+                        unreachable(f"Jenkins took more than {STREAM_SECONDS} seconds to answer for {clean(path, 80)}")
+        except urllib.error.HTTPError as e:
+            if e.code == 404 or (soft and e.code not in (401, 403) and not 300 <= e.code < 400):
+                return None
+            self.fail(e, path)
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            unreachable(f"can't reach {self.url}: {clean(str(getattr(e, 'reason', e)), 120)}")
+        if len(body) > JSON_BYTES:
+            unreachable(f"Jenkins answered with more than {JSON_BYTES // 1024 // 1024} MB for {clean(path, 80)}")
+        try:
+            return json.loads(body.decode("utf-8", "replace"))
+        except (ValueError, RecursionError):
+            if soft:
+                return None
+            die(f"{self.url} didn't answer with JSON. Do: check that url is the address of Jenkins itself")
+
+    def get_tail(self, path):
+        """The last TAIL_BYTES of a text, or None where there is none. It asks for only that much with a Range header,
+        and a server that sends the whole is read as a stream that keeps only the end, so a console of any size is
+        never held. A server that sent the end has no first line to trust."""
+        try:
+            r = self.open(path, {"Range": f"bytes=-{TAIL_BYTES}", "Accept": "text/plain"})
+        except urllib.error.HTTPError as e:
+            if e.code == 416:
+                return b""
+            if e.code in (401, 403) or 300 <= e.code < 400:
+                self.fail(e, path)
+            return None
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            unreachable(f"can't reach {self.url}: {clean(str(getattr(e, 'reason', e)), 120)}")
+        buf = bytearray()
+        cut = False
+        if getattr(r, "status", 200) == 206:
+            # A range that starts at byte 0 is the whole log, with a first line to trust.
+            m = re.match(r"^\s*bytes\s+(\d+)-", r.headers.get("Content-Range") or "")
+            cut = not (m and int(m.group(1)) == 0)
+        total = 0
+        deadline = time.time() + STREAM_SECONDS
+        try:
+            while True:
+                chunk = r.read(65536)
+                if not chunk:
+                    break
+                total += len(chunk)
+                buf += chunk
+                if len(buf) > TAIL_BYTES:
+                    del buf[:len(buf) - TAIL_BYTES]
+                    cut = True
+                if total > STREAM_BYTES or time.time() > deadline:
+                    return None
+        except (TimeoutError, OSError):
+            return None
+        finally:
+            r.close()
+        out = bytes(buf)
+        if cut and b"\n" in out:
+            out = out.split(b"\n", 1)[1]
+        return out
+
+
+# ---- which job, and its address ----------------------------------------------------------------
+
+PART_CHARS = " ._-"
+
+
+def job_problem(job):
+    """Why a job's path as Jenkins shows it can't be one, or nothing: parts of letters, digits, space and ._- joined by /,
+    none empty or starting or ending with a space, no .. anywhere."""
+    if not job or len(job) > 300:
+        return "is empty or too long"
+    if ".." in job:
+        return "has a .. in it"
+    parts = job.split("/")
+    if len(parts) > 8:
+        return "has more than 8 parts"
+    for p in parts:
+        if not p or p != p.strip() or p in (".", "..") or not all(c.isalnum() or c in PART_CHARS for c in p):
+            return "isn't a job path: each part is letters, digits, spaces and . _ - only, and parts are joined by /"
+    return ""
+
+
+def job_from(text, conf):
+    """The job's path from what a person gave: a path such as team/app, or the job's address on the configured Jenkins."""
+    text = text.strip()
+    if "://" in text:
+        base = conf["url"]
+        if not base or not text.startswith(base + "/job/"):
+            die_usage(f"that address isn't a job on {base or 'your Jenkins (no url is set)'}. Give the job's path, such as team/app")
+        segs = urllib.parse.urlsplit(text).path.split("/")
+        basesegs = urllib.parse.urlsplit(base).path.rstrip("/").split("/") if urllib.parse.urlsplit(base).path.strip("/") else []
+        rest = [s for s in segs[len(basesegs):] if s != ""]
+        if len(rest) < 2 or len(rest) % 2 or any(rest[i] != "job" for i in range(0, len(rest), 2)):
+            die_usage("that address isn't a job's own address (/job/<name>/job/<name>/). Give the job's path, such as team/app")
+        text = "/".join(urllib.parse.unquote(rest[i]) for i in range(1, len(rest), 2))
+    why = job_problem(text)
+    if why:
+        die_usage(f"{clean(text, 60)!r} {why}")
+    return text
+
+
+def job_base(job):
+    """/job/<part>/job/<part>, each part percent-encoded."""
+    return "".join("/job/" + urllib.parse.quote(p, safe="") for p in job.split("/"))
+
+
+def branch_part(branch):
+    """A branch as Jenkins names its job in a multibranch project: the name has / and other characters percent-encoded (feature/x
+    is the job feature%2Fx), and that name is encoded again in the address, so a % becomes %25. A name that is . or .. is
+    no part of an address."""
+    if branch in (".", "..") or ".." in branch:
+        raise ValueError("not a branch name")
+    return urllib.parse.quote(urllib.parse.quote(branch, safe=""), safe="")
+
+
+BRANCH_OK = re.compile(r"^[A-Za-z0-9._/-]+$")
+
+
+def branch_ok(b):
+    """A branch name that can go into an address and be passed as an argument: no .., no leading -."""
+    return isinstance(b, str) and bool(b) and bool(BRANCH_OK.match(b)) and ".." not in b and not b.startswith("-") and b != "."
+
+
+def git(folder, *args):
+    return cc.git(folder, *args)
+
+
+def default_branch(folder):
+    ref = git(folder, "symbolic-ref", "refs/remotes/origin/HEAD")
+    if ref.startswith("refs/remotes/origin/"):
+        b = ref[len("refs/remotes/origin/"):]
+        if branch_ok(b):
+            return b
+    for b in ("main", "master"):
+        if git(folder, "rev-parse", "--verify", "-q", f"refs/remotes/origin/{b}") or git(folder, "rev-parse", "--verify", "-q", f"refs/heads/{b}"):
+            return b
+    return ""
+
+
+# ---- the watch list: folder=job ------------------------------------------------------------------
+
+def watch_entries(conf=None):
+    """[(folder, job)] in the watch setting, as written."""
+    conf = conf if conf is not None else read_conf(CONFIG)
+    out = []
+    for raw in conf.get("watch", "").split(","):
+        if "=" not in raw:
+            continue
+        folder, job = raw.rsplit("=", 1)
+        folder, job = os.path.expanduser(folder.strip()), job.strip()
+        if folder and job:
+            out.append((folder, job))
+    return out
+
+
+def write_watch(entries):
+    set_conf(CONFIG, "watch", ", ".join(f"{f}={j}" for f, j in entries))
+
+
+def int_or_none(v):
+    return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+
+# ---- builds ---------------------------------------------------------------------------------------
+
+class NoJob(Exception):
+    pass
+
+
+class OutOfTime(Exception):
+    """One job has used the time a tick gives it."""
+
+
+DEADLINE = [0.0]
+
+
+def budget():
+    if DEADLINE[0] and time.time() > DEADLINE[0]:
+        raise OutOfTime()
+
+
+def iso_from_ms(ms):
+    n = int_or_none(ms)
+    if n is None or n <= 0:
+        return ""
+    try:
+        return datetime.datetime.fromtimestamp(n / 1000.0, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except (OverflowError, OSError, ValueError):
+        return ""
+
+
+def build_of(jk, b, job, path, branch):
+    """One build as the rest of this reads it, or None. The address shown is made here, from the Jenkins address that was
+    set and the build's number: nothing Jenkins said picks it."""
+    if not isinstance(b, dict):
+        return None
+    n = int_or_none(b.get("number"))
+    if n is None or n < 0:
+        return None
+    result = b.get("result") if isinstance(b.get("result"), str) else ""
+    status = "RUNNING" if b.get("building") or not result else clean(result, 20).upper()
+    sha, cause = "", ""
+    actions = b.get("actions")
+    for a in actions if isinstance(actions, list) else []:
+        if not isinstance(a, dict):
+            continue
+        rev = a.get("lastBuiltRevision")
+        if not sha and isinstance(rev, dict) and isinstance(rev.get("SHA1"), str) and re.fullmatch(r"[0-9a-fA-F]{7,64}", rev["SHA1"]):
+            sha = rev["SHA1"]
+        causes = a.get("causes")
+        if not cause and isinstance(causes, list) and causes and isinstance(causes[0], dict):
+            cause = clean(causes[0].get("shortDescription") or "", 120)
+    return {"id": n, "job": job, "branch": branch, "path": f"{path}/{n}", "status": status, "conclusion": status.lower(),
+            "sha": sha, "cause": cause, "url": f"{jk.url}{path}/{n}/", "title": clean(b.get("displayName") or "", 100),
+            "created": iso_from_ms(b.get("timestamp")), "workflow": f"{job} #{n}", "pr": None}
+
+
+def tree(inner):
+    return "?tree=" + urllib.parse.quote(inner, safe="[],")
+
+
+def fetch(jk, folder, job):
+    """(whether it is a multibranch job, [branch names looked at], [the newest build of the job, or of its job for each branch])."""
+    path = job_base(job)
+    budget()
+    d = jk.get_json(f"{path}/api/json" + tree(f"_class,jobs[name],lastBuild[{BUILD_TREE}]"))
+    if not isinstance(d, dict):
+        raise NoJob()
+    multi = "WorkflowMultiBranchProject" in str(d.get("_class", "")) or bool(d.get("jobs"))
+    if not multi:
+        b = build_of(jk, d.get("lastBuild"), job, path, "")
+        return False, [], [b] if b else []
+    branches = []
+    for b in (clean(git(folder, "branch", "--show-current"), 250), default_branch(folder)):
+        if branch_ok(b) and b not in branches:
+            branches.append(b)
+    builds = []
+    for br in branches:
+        budget()
+        child = f"{path}/job/{branch_part(br)}"
+        c = jk.get_json(f"{child}/api/json" + tree(f"lastBuild[{BUILD_TREE}]"), soft=True)
+        b = build_of(jk, c.get("lastBuild"), job, child, br) if isinstance(c, dict) else None
+        if b:
+            builds.append(b)
+    return True, branches, builds
+
+
+def failing(o):
+    return o["status"] in FAILING
+
+
+def passing(o):
+    return o["status"] in PASSING
+
+
+# ---- the failing build, its log, its signature -------------------------------------------------------
+
+# A console note: Jenkins hides a machine-readable annotation in the log between two escape codes. It is found with
+# str.find, never a pattern that can backtrack: a log full of notes that never end would take a pattern for ever.
+NOTE_START = "\x1b[8mha:"
+NOTE_END = "\x1b[0m"
+
+
+def strip_notes(text):
+    """The text with its console notes taken out, in one pass. A note that has no end within NOTE_WINDOW characters is
+    dropped to the end of its line, and no further."""
+    out, pos, n = [], 0, len(text)
+    while pos < n:
+        i = text.find(NOTE_START, pos)
+        if i < 0:
+            out.append(text[pos:])
+            break
+        out.append(text[pos:i])
+        start = i + len(NOTE_START)
+        e = text.find(NOTE_END, start, min(n, start + NOTE_WINDOW))
+        nl = text.find("\n", start, e) if e >= 0 else -1
+        if e >= 0 and nl < 0:
+            pos = e + len(NOTE_END)
+        else:
+            nl = text.find("\n", start)
+            pos = n if nl < 0 else nl
+    return "".join(out)
+
+
+JGENERIC = re.compile(r"^(?:ERROR: script returned exit code -?\d+|Finished: (?:FAILURE|UNSTABLE|ABORTED)|Build step '.*' marked build as failure|"
+                      r"ERROR: Build step failed.*|Build was aborted|ERROR: Failed to parse.*)\.?$")
+
+
+def failing_stage(jk, o):
+    """The name of the first stage Pipeline's API says failed, or nothing: the API is optional, and a job with no stages has none."""
+    d = jk.get_json(f"{o['path']}/wfapi/describe", soft=True)
+    stages = d.get("stages") if isinstance(d, dict) else None
+    for s in stages if isinstance(stages, list) else []:
+        if isinstance(s, dict) and str(s.get("status", "")).upper() in ("FAILED", "UNSTABLE", "FAILURE"):
+            return clean(s.get("name") or "", 100)
+    return ""
+
+
+def failure_detail(jk, o):
+    """Why a build failed: the stage when Jenkins says, the signature of the error and the saved excerpt. Reads Jenkins only."""
+    stage = failing_stage(jk, o)
+    raw = jk.get_tail(f"{o['path']}/consoleText")
+    lines = cc.excerpt_lines(cc.log_lines(raw, strip_notes)) if raw else []
+    key = hashlib.sha1((o["job"] + "|" + o["branch"]).encode("utf-8")).hexdigest()[:8]
+    path = cc.save_excerpt(STATE_DIR, LOG_DIR, o["job"].replace("/", "__"), f"{int(o['id'])}-{key}.txt", lines) if lines else ""
+    return {"stage": stage, "signature": signature_of(lines, o["workflow"], "build", JGENERIC), "excerpt": path}
+
+
+def label(o):
+    return f"{o['workflow']}" + (f" on {o['branch']}" if o["branch"] else "")
+
+
+# ---- check ---------------------------------------------------------------------------------------
+
+def clone_top(folder):
+    return cc.clone_top(folder)
+
+
+def jobs_for(folder, conf):
+    top = clone_top(folder) or os.path.realpath(folder)
+    return [j for f, j in conf["watch"] if os.path.realpath(f) == top]
+
+
+def cmd_check(args):
+    if any(a.startswith("-") for a in args) or len(args) > 2:
+        die_usage(f"check takes a folder and a job at most, and no option. Run: {CMD} jenkins --help")
+    conf = settings()
+    folder = os.path.abspath(os.path.expanduser(args[0])) if args else os.getcwd()
+    if not os.path.isdir(folder):
+        die_usage(f"{args[0] if args else folder} isn't a command or a folder. Run: {CMD} jenkins --help")
+    if len(args) == 2:
+        jobs = [job_from(args[1], conf)]
+    else:
+        jobs = jobs_for(folder, conf)
+        for j in jobs:
+            if job_problem(j):
+                die(f"the job {clean(j, 60)!r} in {CONFIG} isn't a job path. Do: say which job builds it again: {CMD} jenkins watch {folder} <job>")
+        if not jobs:
+            die(f"no Jenkins job is watched for {folder}, and Jenkins doesn't say which job builds a clone. "
+                f"Do: say which: {CMD} jenkins watch {folder} <job>, or look once: {CMD} jenkins check {folder} <job>")
+    jk = Jenkins(conf)
+    for job in jobs:
+        try:
+            multi, branches, builds = fetch(jk, folder, job)
+        except NoJob:
+            die(f"Jenkins has no job {job} at {jk.url}. Do: check the path, as Jenkins shows it: {CMD} jenkins watch {folder} <job>")
+        print(f"== {job}  (Jenkins" + (f"; multibranch, looked at: {', '.join(branches) or 'no branch'}" if multi else "") + ")")
+        bad = [o for o in builds if failing(o)]
+        running = [o for o in builds if o["status"] == "RUNNING"]
+        for o in bad:
+            d = failure_detail(jk, o)
+            where = known_in_wikis(d["signature"])
+            print(f"FAILING  build #{o['id']} of {job}" + (f" on {o['branch']}" if o["branch"] else "") + f" ({o['conclusion']})")
+            print(f"  build:   {o['url']}")
+            print(f"  stage:   {d['stage'] or 'not known'}")
+            if o["cause"]:
+                print(f"  cause:   {o['cause']}")
+            print(f"  error:   {d['signature']}")
+            if where is None:
+                print("  known:   not looked up (no wiki command to ask)")
+            elif where:
+                print(f"  known:   yes, in {where}")
+            else:
+                print("  known:   no wiki or note holds it yet")
+            print(f"  log:     {d['excerpt'] or 'none kept: Jenkins has no log for this build'}")
+        if not bad:
+            print(f"Nothing is failing in CI for {job}." if builds else f"No builds were found for {job}" + (" on those branches." if branches else "."))
+        if running:
+            print("Still running: " + "; ".join(label(o) for o in running) + ".")
+    return 0
+
+
+# ---- watch ---------------------------------------------------------------------------------------
+
+def cmd_watch(args):
+    if args == ["--list"]:
+        entries = settings()["watch"]
+        if not entries:
+            print(f"No folders are watched. Run: {CMD} jenkins watch <folder> <job>")
+        for f, j in entries:
+            print(f"{f}  {j}" + ("" if os.path.isdir(f) else "  (gone)"))
+        return 0
+    if len(args) != 2 or any(a.startswith("-") for a in args):
+        die_usage(f"watch takes a clone and the Jenkins job that builds it, such as {CMD} jenkins watch ~/dev/app team/app. Run: {CMD} jenkins --help")
+    conf = settings()
+    folder = os.path.abspath(os.path.expanduser(args[0]))
+    if not os.path.isdir(folder):
+        die_usage(f"{args[0]} isn't a folder. Do: name a clone")
+    job = job_from(args[1], conf)
+    top = clone_top(folder)
+    if not top:
+        die(f"{folder} isn't in a git clone. Do: run this in a clone, or name one")
+    if "," in top or "#" in top or "=" in top:
+        die(f"{top} has a comma, a = or a # in its path, which the settings file can't hold. Do: watch a clone whose path has none")
+    entries = conf["watch"]
+    if (top, job) in [(os.path.realpath(f), j) for f, j in entries]:
+        print(f"{top} is already watched, for {job}.")
+        return 0
+    write_watch(entries + [(top, job)])
+    print(f"Watching {top} for the Jenkins job {job}. The tick event looks at it with the other watched folders, once a day unless {CMD} extensions every jenkins says otherwise.")
+    print(f"To look now: {CMD} jenkins check {top}")
+    return 0
+
+
+def cmd_unwatch(args):
+    if not args or len(args) > 2 or any(a.startswith("-") for a in args):
+        die_usage(f"unwatch takes a clone, and a job if it has more than one. Run: {CMD} jenkins --help")
+    folder = os.path.abspath(os.path.expanduser(args[0]))
+    if not os.path.isdir(folder):
+        die_usage(f"{args[0]} isn't a folder. Do: name the clone")
+    top = clone_top(folder) or folder
+    entries = settings()["watch"]
+    job = args[1].strip() if len(args) == 2 else None
+    keep = [(f, j) for f, j in entries if not (os.path.realpath(f) == top and (job is None or j == job))]
+    if len(keep) == len(entries):
+        print(f"{top} wasn't watched.")
+        return 0
+    write_watch(keep)
+    print(f"No longer watching {top}.")
+    return 0
+
+
+def signed_in_as(who):
+    """The user name Jenkins says is signed in, or nothing: only an answer that says authenticated is true, with a name."""
+    if isinstance(who, dict) and who.get("authenticated") is True and isinstance(who.get("name"), str) and who["name"].strip():
+        return clean(who["name"], 60)
+    return ""
+
+
+def cmd_config(args):
+    if args:
+        die_usage("config takes no arguments")
+    conf = settings()
+    src = conf["_from"]
+    print(f"file      {CONFIG}{'' if os.path.isfile(CONFIG) else ' (not there yet)'}")
+    print(f"url       {conf['url'] or 'not set'}" + (f"  (from {src['url']})" if conf["url"] and src["url"] != "this file" else ""))
+    print(f"user      {conf['user'] or 'not set'}" + (f"  (from {src['user']})" if conf["user"] and src["user"] != "this file" else ""))
+    print(f"token     {'set' if has_token(conf) else 'not set'}" + (f"  (from {TOKEN_ENV})" if os.environ.get(TOKEN_ENV) else ("  (from token_cmd)" if conf["token_cmd"] else "")))
+    print(f"watch     {', '.join(f'{f}={j}' for f, j in conf['watch']) or 'none'}")
+    print(f"remember  {'yes' if conf['remember'] else 'no'}")
+    print(f"notice    {'yes' if conf['notice'] else 'no'}")
+    print(f"desktop   {'yes' if conf['desktop'] else 'no'}")
+    print(f"state     {STATE_DIR}")
+    msg = sign_in_missing(conf)
+    if msg:
+        print(f"\nNot set up: {msg}. Run: {CMD} extensions setup jenkins. {GUIDE}")
+        return 1
+    jk = Jenkins(conf)
+    who = jk.get_json("/whoAmI/api/json" + tree("name,authenticated"), soft=True)
+    name = signed_in_as(who)
+    if not name:
+        print(f"signed in no\n\nThis address doesn't answer as Jenkins, or Jenkins sees no signed-in user. Do: check that url is the address of Jenkins itself, and the user and the token: {CMD} extensions setup jenkins")
+        return 1
+    print(f"signed in as {name}")
+    return 0
+
+
+# ---- the tick event ----------------------------------------------------------------------------
+
+def load_state():
+    return cc.load_state(STATE_FILE)
+
+
+def record(job, key, entry):
+    """Keep what a tick saw: under the state lock, on the file as it is now. False, and a line, when it can't be."""
+    return cc.record_workflow(STATE_DIR, STATE_FILE, STATE_LOCK, job, key, entry)
+
+
+def notice_id(folder, job, key):
+    return "jk-" + cc.safe_part(job.replace("/", "__"))[:60] + "-" + hashlib.sha1(f"{folder}|{job}|{key}".encode("utf-8")).hexdigest()[:12]
+
+
+def commit_subject(folder, sha):
+    s = git(folder, "log", "-1", "--format=%s", sha) if re.fullmatch(r"[0-9a-fA-F]{7,64}", sha or "") else ""
+    return clean(s, 200)
+
+
+def put_notice(nid, folder, o, d):
+    log = f" The build's log, cut down: {d['excerpt']}." if d["excerpt"] else ""
+    where = f"{d['stage']}: " if d["stage"] else ""
+    tail = f".{log} More: {CMD} jenkins check"
+    head = f"CI failed on {cc.cap(o['branch'])}: " if o["branch"] else "CI failed: "
+    text = cc.notice_text(head, f"{cc.cap(o['job'])} #{o['id']} ({o['conclusion']}) / {where}{d['signature']}", tail)
+    return cc.put_notice(nid, folder, o["branch"] or "-", text)
+
+
+def notify_desktop(o, d):
+    cc.notify_desktop(f"CI failed: {o['job']}", f"{o['branch'] + ': ' if o['branch'] else ''}{o['workflow']} ({o['conclusion']}): {d['signature']}")
+
+
+def save_note(folder, o, prev, flaky):
+    job = o["job"]
+    sha = o["sha"][:7]
+    body = []
+    if flaky:
+        body += ["It failed, then passed on a re-run of the same commit, so nothing changed in between: it may be flaky.", ""]
+    body += [f"Job: {job}", f"Branch: {prev.get('branch') or '-'}", f"Stage: {prev.get('stage') or 'not known'}", f"Result: {prev.get('conclusion', '')}",
+             f"Signature: {prev['signature']}", "",
+             f"Failed build: #{prev['run_id']} {prev.get('url', '')}".rstrip(),
+             f"Passing build: #{o['id']} {o['url']}".rstrip()]
+    if o["sha"]:
+        body.append(f"Commit of the passing build: {sha} {commit_subject(folder, o['sha'])}".rstrip())
+    return cc.save_note(folder, job, os.path.basename(folder.rstrip("/")) or "jenkins", "jenkins", f"{job} on {prev['branch']}" if prev.get("branch") else job, body, flaky)
+
+
+def tick_folder(jk, folder, job, conf):
+    """One watched folder and its job. Returns False when something should be tried again. A job that can't be read is
+    for the caller, which goes on to the next folder."""
+    DEADLINE[0] = time.time() + FOLDER_SECONDS
+    try:
+        try:
+            _, _, builds = fetch(jk, folder, job)
+        except NoJob:
+            print(f"{folder}: Jenkins has no job {job}, so it was skipped.")
+            return True
+        repos = load_state().get("repos")
+        book = repos.get(job, {}) if isinstance(repos, dict) else {}
+        book = book.get("workflows", {}) if isinstance(book, dict) else {}
+        ok = True
+        for o in builds:
+            budget()
+            key = o["branch"] or "-"
+            prev = book.get(key) if isinstance(book, dict) else None
+            prev = prev if isinstance(prev, dict) else None
+            was_failing = bool(prev) and prev.get("conclusion") in ("failure", "unstable")
+            if failing(o):
+                if was_failing and prev.get("run_id") == o["id"]:
+                    continue
+                d = failure_detail(jk, o)
+                entry = {"workflow": o["workflow"], "branch": o["branch"], "run_id": o["id"], "conclusion": o["conclusion"], "sha": o["sha"],
+                         "url": o["url"], "stage": d["stage"], "signature": d["signature"], "excerpt": d["excerpt"], "folder": folder}
+                print(f"{job}: CI failed{' on ' + o['branch'] if o['branch'] else ''}: {o['workflow']} ({o['conclusion']}){' / ' + d['stage'] if d['stage'] else ''}: {d['signature']}")
+                old = stale(o.get("created"))
+                if not record(job, key, entry):
+                    ok = False
+                    continue
+                if conf["notice"] and old:
+                    print(f"{job}: that build is more than {NOTICE_DAYS} days old, so no notice was left.")
+                elif conf["notice"]:
+                    put_notice(notice_id(folder, job, key), folder, o, d)
+                    if conf["desktop"]:
+                        notify_desktop(o, d)
+            elif passing(o):
+                if was_failing:
+                    clear_notice(notice_id(folder, job, key))
+                    if conf["remember"] and not save_note(folder, o, prev, bool(o["sha"]) and o["sha"] == prev.get("sha")):
+                        ok = False
+                        continue
+                    if not conf["remember"]:
+                        print(f"{job}: {label(o)} passes again.")
+                if not record(job, key, {"workflow": o["workflow"], "branch": o["branch"], "run_id": o["id"], "conclusion": "success",
+                                         "sha": o["sha"], "url": o["url"], "folder": folder}):
+                    ok = False
+        return ok
+    except OutOfTime:
+        print(f"{job}: out of time ({FOLDER_SECONDS} seconds) for this job. The rest waits for the next tick.")
+        return True
+    finally:
+        DEADLINE[0] = 0.0
+
+
+def on_event(args):
+    """Run by llm-wiki for an event. A job that can't be read is logged and skipped, and the others go on: the event ends
+    75 only if every folder was out of reach."""
+    global EVENT
+    EVENT = True
+    if args[:1] != ["tick"]:
+        return 0
+    conf = settings()
+    if not conf["watch"]:
+        print(f"No folder is watched, so nothing was checked. Run: {CMD} jenkins watch <folder> <job>")
+        return 0
+    jk = Jenkins(conf)
+    begun = time.time()
+    all_ok = True
+    read = out_of_reach = 0
+    for folder, job in conf["watch"]:
+        if not os.path.isdir(folder):
+            print(f"{folder} is gone, so it was skipped.")
+            continue
+        if job_problem(job):
+            print(f"{folder}: the job {clean(job, 60)!r} isn't a job path, so it was skipped. Do: {CMD} jenkins watch {folder} <job>")
+            continue
+        if time.time() - begun > 240:
+            print(f"Out of time before {folder}. The rest wait for the next tick.")
+            break
+        try:
+            all_ok = tick_folder(jk, folder, job, conf) and all_ok
+            read += 1
+        except SystemExit as e:
+            if e.code not in (1, 75):
+                raise
+            out_of_reach += 1
+            print(f"{folder}: Jenkins couldn't be read for {job} just now, so it was skipped. The rest go on.")
+    if out_of_reach and not read:
+        return 75
+    return 0 if all_ok else 1
+
+
+# ---- setup, and what a session can change ----------------------------------------------------------
+
+def read_line():
+    """One line from standard input, a byte at a time, so nothing meant for whoever
+    reads next is taken. None when the input has ended."""
+    buf = b""
+    while True:
+        c = os.read(0, 1)
+        if not c:
+            return buf.decode(errors="replace") if buf else None
+        if c == b"\n":
+            return buf.decode(errors="replace")
+        buf += c
+
+
+def ask(prompt, default=""):
+    """Enter keeps the value in brackets, and - clears it."""
+    sys.stdout.write(f"{prompt} [{default or 'none'}]: ")
+    sys.stdout.flush()
+    line = read_line()
+    if line is None:
+        print()
+        return default
+    line = line.strip()
+    return default if line == "" else ("" if line == "-" else line)
+
+
+def ask_yn(prompt, default=False):
+    sys.stdout.write(f"{prompt} [{'Y/n' if default else 'y/N'}]: ")
+    sys.stdout.flush()
+    line = read_line()
+    if line is None:
+        print()
+        return default
+    line = line.strip().lower()
+    return default if line == "" else line.startswith("y")
+
+
+def on_mac():
+    """Whether the keychain preset fits this machine. LLM_WIKI_TEST_OS lets the tests see both answers."""
+    return (os.environ.get("LLM_WIKI_TEST_OS") or sys.platform) == "darwin"
+
+
+def setup():
+    """Run by `wiki setup` and `wiki extensions setup jenkins`, at a terminal."""
+    print("Jenkins, for your wikis")
+    print("When a build fails, it can tell you which job and build, the stage when Jenkins says which, and the")
+    print("first line that looks like the error, and keep a short excerpt of the end of the log on this machine.")
+    print("It reads Jenkins only: it never starts, aborts or rebuilds anything, never pushes, and starts no agent.")
+    print()
+    print("Enter keeps the answer in brackets, and a dash, -, clears it. You can run this again at any time:")
+    print(f"  {CMD} extensions setup jenkins")
+    print()
+    print("== Step 1 of 3: sign in")
+    conf = settings()
+    url = ask("Your Jenkins, such as https://ci.example.com", conf["url"])
+    why = url_problem(url) if url else ""
+    if why:
+        print(f"  {url if len(url) < 80 else url[:80]} {why}, so it wasn't saved.")
+    else:
+        set_conf(CONFIG, "url", url.rstrip("/"))
+    user = ask("Your Jenkins user name", conf["user"])
+    if user and (":" in user or unfit(user) or "#" in user):
+        print("  A user name can't hold a colon, a # or a control character, so it wasn't saved.")
+    else:
+        set_conf(CONFIG, "user", user)
+    conf = settings()
+    if not has_token(conf):
+        print()
+        print("The API token is kept out of this file. In Jenkins, open your user, then Configure, then API Token,")
+        print("and add one. Copy it.")
+        if on_mac():
+            print("Then put it in your keychain from the clipboard. In another terminal, run:")
+            print('  security add-generic-password -a "$USER" -s jenkins -U -w "$(pbpaste)"')
+            sys.stdout.write("Press Enter when that is done, or type skip to do it later: ")
+            sys.stdout.flush()
+            answer = read_line()
+            if answer is None:
+                print()
+            if answer is not None and answer.strip().lower() != "skip":
+                set_conf(CONFIG, "token_cmd", KEYCHAIN_CMD)
+        else:
+            cmd = ask("A command that prints the token, such as: pass show jenkins", "")
+            if "#" in cmd or unfit(cmd):
+                print("  A command can't hold a # or a control character, so it wasn't saved.")
+            else:
+                set_conf(CONFIG, "token_cmd", cmd)
+    conf = settings()
+    miss = sign_in_missing(conf)
+    if miss:
+        print(f"  Jenkins can't sign in yet: {miss}.")
+    else:
+        try:
+            who = Jenkins(conf).get_json("/whoAmI/api/json" + tree("name,authenticated"), soft=True)
+            if signed_in_as(who):
+                print(f"  Signed in to Jenkins as {signed_in_as(who)}.")
+            else:
+                print(f"  {conf['url']} doesn't answer as Jenkins, or sees no signed-in user. Run {CMD} jenkins config to see.")
+        except SystemExit:
+            print("  The sign-in didn't work. The line above says why.")
+    print()
+    print("== Step 2 of 3: which job builds which clone")
+    print("Jenkins doesn't know which repository a job builds, so you say. A watched clone and its job are")
+    print("looked at in the background, by the tick event, once a day: a build that starts failing leaves one")
+    print("line for the next session in that clone.")
+    cwd = clone_top(os.getcwd())
+    entries = conf["watch"]
+    if cwd and cwd not in [os.path.realpath(f) for f, _ in entries] and not any(c in cwd for c in ",#="):
+        job = ask(f"The Jenkins job that builds {cwd}, as Jenkins shows it, such as team/app. Enter for none", "")
+        if job:
+            if job_problem(job) and "://" not in job:
+                print(f"  {clean(job, 60)!r} isn't a job path, so it wasn't saved.")
+            else:
+                try:
+                    write_watch(entries + [(cwd, job_from(job, conf))])
+                except SystemExit:
+                    print("  That isn't a job on your Jenkins, so it wasn't saved.")
+    elif cwd:
+        print(f"  {cwd} is already watched.")
+    else:
+        print(f"  This folder isn't in a clone. To watch one later: {CMD} jenkins watch <folder> <job>")
+    print()
+    print("== Step 3 of 3: notes in the wiki")
+    print("When a failure the tick saw is fixed, it can save a note in the wiki that covers the clone: what")
+    print("failed, the first line of the error, never the log itself. A later session that meets the same")
+    print("error finds it. This writes into a wiki, so it is off until you say yes.")
+    conf = settings()
+    remember = ask_yn("Save a note when a failure is fixed?", conf["remember"])
+    set_conf(CONFIG, "remember", "yes" if remember else "")
+    conf = settings()
+    print()
+    print("What is set")
+    miss = sign_in_missing(conf)
+    print("  Sign-in   " + (f"not set up: {miss}" if miss else f"{conf['url']}, as {conf['user']}"))
+    print("  watch     " + (", ".join(f"{f}={j}" for f, j in conf["watch"]) or "nothing yet"))
+    print("  notes     " + ("on: a fixed failure is noted in its wiki" if conf["remember"] else "off"))
+    print("  notices   " + ("on: a failing build is handed to the next session on its branch" if conf["notice"] else "off"))
+    print("  desktop   " + ("on: and shown as a desktop notification, if this machine can" if conf["desktop"] else "off"))
+    print()
+    print("What happens now")
+    print(f"  To look now: {CMD} jenkins check")
+    print(f"  The tick runs about once a day, when a session starts; {CMD} extensions every jenkins 1h makes it hourly.")
+    print(f"  To have it run with no session open, and show a desktop notification: {CMD} extensions schedule on")
+    print(f"  Every setting is in {CONFIG}, and {CMD} jenkins --help lists them.")
+    return 0
+
+
+def source_name(src):
+    if not src:
+        return "default"
+    if src == "this file":
+        return "file"
+    return f"environment ({src})"
+
+
+def setting_rows():
+    """One row for each setting a session may look at: key, value, where from, meaning, and whether a session can change it.
+    Reads files and the environment only: it never runs token_cmd and never touches the network, and a token's value
+    is never in it."""
+    own = read_conf(CONFIG)
+    conf = settings()
+    src = conf["_from"]
+    mac = on_mac()
+    # Once there is a way to get the token, the address and the user are not for a session: the token would go to
+    # whatever address it set.
+    rows = [
+        ("url", conf["url"], source_name(src["url"]), f"Your Jenkins. The user runs {CMD} extensions setup jenkins in a terminal: it asks for the address, "
+         f"the user and where the token comes from. Then {CMD} jenkins config tests it", "terminal"),
+        ("user", conf["user"], source_name(src["user"]), "Your Jenkins user name. Part of that setup", "terminal"),
+    ]
+    tok_from = "environment (" + TOKEN_ENV + ")" if os.environ.get(TOKEN_ENV) else ("file" if conf["token_cmd"] else "")
+    rows.append(("token", "set" if os.environ.get(TOKEN_ENV) else ("not checked (token_cmd is set)" if conf["token_cmd"] else "not set"), tok_from,
+                 "The user makes one in Jenkins (user, Configure, API Token) and "
+                 + ("runs in their own terminal: security add-generic-password -a \"$USER\" -s jenkins -U -w \"$(pbpaste)\""
+                    if mac else "keeps it in their own password manager, such as pass"), "terminal"))
+    cmd = conf["token_cmd"]
+    shown = "keychain" if cmd == KEYCHAIN_CMD else ("custom command" if cmd else "")
+    what = "Where the token comes from: the keychain command the setup offers, or a command of your own. Part of that setup"
+    rows.append(("token_cmd", shown, "file" if cmd else "default", what, "terminal"))
+    rows += [
+        ("watch", ", ".join(f"{f}={j}" for f, j in conf["watch"]), "file" if "watch" in own else "default",
+         "folder=job pairs the tick looks at, separated by commas", "set"),
+        ("remember", "yes" if conf["remember"] else "no", "file" if "remember" in own else "default",
+         "yes: save a note when a failure is fixed (the error's first line, never the log)", "set"),
+        ("notice", "yes" if conf["notice"] else "no", "file" if "notice" in own else "default",
+         "yes: a build that starts failing is handed to the next session in that clone", "set"),
+        ("desktop", "yes" if conf["desktop"] else "no", "file" if "desktop" in own else "default",
+         "yes: a failing build also shows a desktop notification, if this machine can", "set"),
+    ]
+    return rows
+
+
+def wiki_settings():
+    for row in setting_rows():
+        print("\t".join(" ".join(str(f).split()) for f in row))
+    return 0
+
+
+def secret_key(key):
+    k = key.lower()
+    if k == "token_cmd":
+        return False
+    return any(w in k for w in ("token", "password", "passwd", "secret", "api_key", "apikey", "credential", "auth"))
+
+
+def signin_key(key):
+    """A sign-in setting is never set, changed or cleared from a session, whatever it is now: a session that was misled
+    could otherwise have the token sent somewhere else."""
+    die_usage(f"{key} is part of the sign-in, and a session never sets it: a session that was misled could have the token sent somewhere else. "
+              f"The user sets up sign-in in a terminal: {CMD} extensions setup jenkins")
+
+
+def wiki_set(args):
+    """--wiki-set <key> <value>: check the key and the shape of the value, then write it where
+    the interactive setup would. A - clears it. Exit 2, and one line why, for what it refuses."""
+    if len(args) != 2:
+        die_usage("usage: --wiki-set <key> <value>")
+    for what, text in (("key", args[0]), ("value", args[1])):
+        if unfit(text):
+            die_usage(f"the {what} {unfit(text)}, so nothing was written")
+    key, value = args[0].strip(), args[1].strip()
+    names = [r[0] for r in setting_rows()]
+    if secret_key(key):
+        die_usage(f"{key} is a secret, and a session never sets one. The user sets up sign-in in a terminal: {CMD} extensions setup jenkins")
+    if key in ("url", "user", "token_cmd"):
+        signin_key(key)
+    if key not in names:
+        die_usage(f"no setting called {key}. Settings: {', '.join(n for n in names if n != 'token')}")
+    if not value:
+        die_usage(f"give {key} a value, or - to clear it")
+    if "#" in value:
+        die_usage(f"{key} can't hold a #, which starts a comment in the settings file")
+    clear = value == "-"
+    out = ""
+    if key == "watch":
+        if not clear:
+            parts = [p.strip() for p in value.split(",") if p.strip()]
+            if not parts:
+                die_usage("watch takes folder=job entries separated by commas, such as ~/dev/app=team/app")
+            entries = []
+            for p in parts:
+                if "=" not in p:
+                    die_usage(f"{p} isn't folder=job, such as ~/dev/app=team/app")
+                f, j = p.rsplit("=", 1)
+                full = os.path.expanduser(f.strip())
+                if not os.path.isabs(full):
+                    die_usage(f"{f.strip()} isn't an absolute path. Give a path from / or ~/")
+                if not os.path.isdir(full):
+                    die_usage(f"{f.strip()} isn't a folder that exists")
+                why = job_problem(j.strip())
+                if why:
+                    die_usage(f"the job {clean(j, 60)!r} {why}")
+                if (full, j.strip()) not in entries:
+                    entries.append((full, j.strip()))
+            out = ", ".join(f"{f}={j}" for f, j in entries)
+    else:
+        if not clear and value.lower() not in ("yes", "no"):
+            die_usage(f"{key} takes yes or no")
+        out = "" if clear else value.lower()
+    set_conf(CONFIG, key, out)
+    line = f"{key} {'cleared' if not out else 'set'} in {CONFIG}"
+    print(line)
+    return 0
+
+
+def main(argv):
+    if argv and argv[0] == "--wiki-settings":
+        return wiki_settings()
+    if argv and argv[0] == "--wiki-set":
+        return wiki_set(argv[1:])
+    if argv and argv[0] == "--wiki-event":
+        return on_event(argv[1:])
+    if argv and argv[0] == "--wiki-ready":
+        conf = settings()
+        msg = sign_in_missing(conf)
+        if not msg and url_problem(conf["url"]):
+            msg = f"{'JENKINS_URL' if conf['_from'].get('url') == 'JENKINS_URL' else 'url in ' + CONFIG} {url_problem(conf['url'])}"
+        if msg:
+            print(msg)
+        return 1 if msg else 0
+    if argv and argv[0] == "--wiki-setup":
+        return setup()
+    if argv and argv[0] in ("-h", "--help", "help"):
+        print(USAGE, end="")
+        return 0
+    if argv and argv[0] == "watch":
+        return cmd_watch(argv[1:])
+    if argv and argv[0] == "unwatch":
+        return cmd_unwatch(argv[1:])
+    if argv and argv[0] == "config":
+        return cmd_config(argv[1:])
+    if argv and argv[0] == "check":
+        argv = argv[1:]
+    return cmd_check(argv)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

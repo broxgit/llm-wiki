@@ -51,6 +51,20 @@ except ImportError:  # not on this system: state is then written without a lock
     fcntl = None
 
 CMD = os.environ.get("LLM_WIKI_CMD", "wiki")
+
+# What is not about GitHub is in ci_common.py, beside this file, which wiki-gitlab and wiki-jenkins use too.
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+try:
+    import ci_common as cc
+except ImportError:
+    print(f"error: wiki-github needs ci_common.py in its own folder, and it isn't there: it was copied without it. "
+          f"Do: turn it on with {CMD} extensions add github instead of copying it", file=sys.stderr)
+    sys.exit(1)
+from ci_common import (KEEP_BYTES, KEEP_DAYS, KEEP_LINES, NOTICE_DAYS, SEPARATORS, SIGNATURE_CHARS, around_failures, clean, clean_keep,
+                       clear_notice, conf_lines, cut_bytes, die, die_usage, first_line, is_yes, known_in_wikis, llm_wiki, notice_text,
+                       parse_find, private_dir, prune_logs, read_conf, safe_part, set_conf, signature_of, stale, tidy, under, unfit)
+
 GH_BIN = os.environ.get("GH_BIN") or "gh"
 CONFIG_DIR = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "llm-wiki")
 CONFIG = os.path.join(CONFIG_DIR, "github")
@@ -62,11 +76,7 @@ FIX_DIR = os.path.join(STATE_DIR, "fix")
 STATE_LOCK = os.path.join(STATE_DIR, "state.lock")
 GUIDE = f'Or ask an agent: "run {CMD} setup --guide github and walk me through it"'
 
-KEEP_LINES = 120
 ALT_RUNS = 2   # runs after the newest of a workflow that are looked at when the newest is another repository's
-KEEP_BYTES = 8000
-KEEP_DAYS = 7
-SIGNATURE_CHARS = 160
 FAILING = ("failure", "timed_out", "startup_failure")
 RUNNING = ("queued", "in_progress", "waiting", "requested", "pending")
 DEFAULTS = {"remember": "no", "notice": "yes", "desktop": "yes"}
@@ -134,18 +144,6 @@ Settings go in {CONFIG}, one `name = value` a line:
 
 # True while llm-wiki runs this for an event, in the background, with nobody watching.
 EVENT = False
-SEPARATORS = "\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"
-
-
-def die(msg, code=1):
-    sys.stdout.flush()
-    print(f"error: {msg}", file=sys.stderr)
-    sys.exit(code)
-
-
-def die_usage(msg):
-    """Called wrongly: an unknown command or option, a missing argument. Exits 2."""
-    die(msg, 2)
 
 
 def not_now(msg):
@@ -160,107 +158,11 @@ def unreachable(msg):
     die(f"{msg}. Do: check the network, then run: {CMD} github check")
 
 
-def clean(text, limit=300):
-    """Text from GitHub, safe to print and to save: no control character and no line separator,
-    one line, cut at limit characters."""
-    out = []
-    for c in str(text):
-        cat = unicodedata.category(c)
-        if c in "\t\n\r":
-            out.append(" ")
-        elif c in SEPARATORS or cat[0] == "C" or cat in ("Zl", "Zp"):
-            continue
-        else:
-            out.append(c)
-    return " ".join("".join(out).split())[:limit]
-
-
 # ---- settings, as wiki-jira keeps them ------------------------------------------------------
-
-def conf_lines(path):
-    """The lines of a settings file, by the one rule everything that reads or writes it shares:
-    a line ends at a newline, and a trailing carriage return is dropped. Nothing else splits one."""
-    with open(path, encoding="utf-8", errors="surrogateescape", newline="") as f:
-        text = f.read()
-    lines = [l[:-1] if l.endswith("\r") else l for l in text.split("\n")]
-    if lines and lines[-1] == "":
-        lines.pop()
-    return lines
-
-
-def read_conf(path):
-    conf = {}
-    try:
-        for line in conf_lines(path):
-            line = line.split("#", 1)[0].strip()
-            if "=" in line:
-                k, v = line.split("=", 1)
-                conf[k.strip()] = v.strip()
-    except FileNotFoundError:
-        pass
-    return conf
-
-
-def unfit(text):
-    """Why a key or value can't be written to a settings file, in words that don't repeat it, or nothing."""
-    try:
-        text.encode("utf-8")
-    except UnicodeEncodeError:
-        return "isn't valid UTF-8"
-    for c in text:
-        cat = unicodedata.category(c)
-        if c in SEPARATORS or cat[0] == "C" or cat in ("Zl", "Zp"):
-            return "can't hold a control character or a line separator"
-    return ""
-
-
-def set_conf(path, key, value):
-    """Set one `name = value` line in a settings file, or take it out when value is empty.
-    Every other line stays as it is. The file is written beside itself and moved into place,
-    so a write that fails leaves the old one."""
-    why = unfit(key) or unfit(value) or ("is more than one line" if len(value.splitlines()) > 1 else "")
-    if why:
-        die_usage(f"the value of {key} {why}, so nothing was written")
-    try:
-        lines = conf_lines(path)
-    except FileNotFoundError:
-        lines = []
-    kept = [l for l in lines if l.split("#", 1)[0].split("=", 1)[0].strip() != key or "=" not in l.split("#", 1)[0]]
-    if value:
-        kept.append(f"{key} = {value}")
-    path = os.path.realpath(path)
-    folder = os.path.dirname(path)
-    tmp = None
-    try:
-        os.makedirs(folder, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=folder, prefix=".settings-")
-        with os.fdopen(fd, "w", encoding="utf-8", errors="surrogateescape", newline="") as f:
-            f.write("\n".join(kept) + ("\n" if kept else ""))
-        try:
-            mode = stat.S_IMODE(os.stat(path).st_mode)
-        except FileNotFoundError:
-            mask = os.umask(0)
-            os.umask(mask)
-            mode = 0o666 & ~mask
-        os.chmod(tmp, mode)
-        os.replace(tmp, path)
-    except OSError as e:
-        if tmp:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-        die(f"can't write {path}: {e.strerror or e}. The old file is as it was")
-
-
-def is_yes(value):
-    return str(value).strip().lower() in ("yes", "true", "on", "1")
-
 
 def watched(conf=None):
     """The folders in the watch setting, as written."""
-    conf = conf if conf is not None else read_conf(CONFIG)
-    return [os.path.expanduser(p.strip()) for p in conf.get("watch", "").split(",") if p.strip()]
+    return cc.watched(CONFIG, conf)
 
 
 # A test command an agent may run is a plain command: words, no quote, no wildcard, no shell
@@ -345,13 +247,6 @@ def run_gh(args, timeout=30, cwd=None):
     return r.returncode, r.stdout.decode("utf-8", "replace"), r.stderr.decode("utf-8", "replace")
 
 
-def first_line(text):
-    for line in text.splitlines():
-        if line.strip():
-            return clean(line, 200)
-    return ""
-
-
 def gh_missing():
     if EVENT:
         not_now("gh isn't installed")
@@ -422,7 +317,7 @@ def gh_json(args, what, **kw):
         return None
     try:
         return json.loads(out)
-    except ValueError:
+    except (ValueError, RecursionError):
         unreachable(f"gh didn't answer with JSON when asked to {what}")
 
 
@@ -433,11 +328,7 @@ REPO_NAME = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 
 def git(folder, *args):
     """A line from a local git command, or nothing. Never a failure."""
-    try:
-        r = subprocess.run(["git", "-C", folder] + list(args), capture_output=True, timeout=15, stdin=subprocess.DEVNULL, env=git_env())
-    except (OSError, subprocess.TimeoutExpired):
-        return ""
-    return r.stdout.decode("utf-8", "replace").strip() if r.returncode == 0 else ""
+    return cc.git(folder, *args, env=git_env())
 
 
 def clone_top(folder):
@@ -521,40 +412,6 @@ def passing(o):
 
 # ---- the failing step, its log, its signature ----------------------------------------------------
 
-ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]")
-STAMP = re.compile(r"^\ufeff?\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z ?")
-ERRORISH = re.compile(r"(?i)error|fail|fatal|exception|panic|traceback|not ok|\u2717")
-# A line that is a failure's own first line, as test runners and compilers write one. It
-# leads the excerpt and the signature, ahead of a line that only has "fail" somewhere in it.
-STRONG = re.compile(r"^\s*(?:FAIL(?:ED|URE)?\b|not ok\b|\u2717|(?:[\w./-]+:)?\s?(?:fatal |syntax )?[Ee]rror\b[: ]|ERROR\b|E   |panic:|fatal:|Traceback \(most recent call last\)|--- FAIL|AssertionError|Exception\b)")
-# What a runner says after any failure at all: true, and no help in telling one from another.
-GENERIC = re.compile(r"^##\[error\]Process completed with exit code \d+\.?$")
-AROUND_BEFORE, AROUND_AFTER, TAIL_LINES, STRONG_MAX = 3, 14, 30, 6
-TIME = re.compile(r"\b\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:?\d\d)?|\b\d{1,2}:\d\d:\d\d(?:\.\d+)?\b")
-TMPPATH = re.compile(r"(?:/private)?/(?:tmp|var/folders|var/tmp)/[^\s:'\"),]*|/[^\s:'\"),]*/_temp/[^\s:'\"),]*")
-HEX = re.compile(r"\b0x[0-9a-fA-F]+\b|\b(?=[0-9a-fA-F]*\d)[0-9a-fA-F]{7,}\b")
-DURATION = re.compile(r"\b\d+(?:\.\d+)?\s?(?:ms|\u00b5s|us|ns|sec|secs|seconds|min|s|m|h)\b")
-BIGNUM = re.compile(r"\b\d{4,}\b")
-
-
-def tidy(line):
-    """One line of a log with the escape codes, the timestamp and other control characters gone."""
-    line = STAMP.sub("", ANSI.sub("", line))
-    return clean_keep(line).rstrip()
-
-
-def clean_keep(text):
-    """Like clean, but keeps the spaces inside the line, which a log's indentation needs."""
-    out = []
-    for c in text:
-        cat = unicodedata.category(c)
-        if c == "\t":
-            out.append("    ")
-        elif c in SEPARATORS or cat[0] == "C" or cat in ("Zl", "Zp"):
-            continue
-        else:
-            out.append(c)
-    return "".join(out)
 
 
 def excerpt_lines(log, job, step):
@@ -565,108 +422,12 @@ def excerpt_lines(log, job, step):
         parts = line.split("\t", 2)
         rows.append((parts[0].strip(), parts[1].strip(), parts[2]) if len(parts) == 3 else ("", "", line))
     pick = [r for r in rows if r[0] == job and r[1] == step] or [r for r in rows if r[0] == job] or rows
-    lines = [tidy(r[2]) for r in pick]
-    while lines and not lines[-1]:
-        lines.pop()
-    lines = around_failures(lines)
-    while len(lines) > 1 and sum(len(l.encode("utf-8")) + 1 for l in lines) > KEEP_BYTES:
-        lines.pop(0)
-    if lines and sum(len(l.encode("utf-8")) + 1 for l in lines) > KEEP_BYTES:
-        lines = [lines[-1].encode("utf-8")[-(KEEP_BYTES - 1):].decode("utf-8", "ignore")]
-    return lines
-
-
-def around_failures(lines):
-    """The lines worth keeping of a long log: a few around each of the first failures, and
-    the end. A log's last lines alone often hold the summary and miss what failed."""
-    if len(lines) <= KEEP_LINES:
-        return lines
-    keep = set(range(max(0, len(lines) - TAIL_LINES), len(lines)))
-    strong = [i for i, l in enumerate(lines) if STRONG.search(l) and not GENERIC.search(l.strip())][:STRONG_MAX]
-    for i in strong:
-        keep.update(range(max(0, i - AROUND_BEFORE), min(len(lines), i + AROUND_AFTER + 1)))
-    if not strong:
-        return lines[-KEEP_LINES:]
-    out, last = [], None
-    for i in sorted(keep)[:KEEP_LINES]:
-        if last is not None and i != last + 1:
-            out.append("[...]")
-        out.append(lines[i])
-        last = i
-    return out
-
-
-def signature_of(lines, step):
-    """The first line that looks like the error, with the noise that changes from run to run
-    folded away, or the last line that isn't empty, cut to a length."""
-    chosen = next((l for l in lines if STRONG.search(l) and not GENERIC.search(l.strip())), "")
-    if not chosen:
-        chosen = next((l for l in lines if ERRORISH.search(l) and not GENERIC.search(l.strip())), "")
-    if not chosen:
-        chosen = next((l for l in reversed(lines) if l.strip() and not GENERIC.search(l.strip())), "")
-    if not chosen:
-        chosen = next((l for l in reversed(lines) if l.strip()), "")
-    s = TIME.sub("<time>", chosen.strip())
-    s = TMPPATH.sub("<tmp>", s)
-    s = HEX.sub("<hex>", s)
-    s = DURATION.sub("<dur>", s)
-    s = BIGNUM.sub("<n>", s)
-    s = " ".join(s.split())[:SIGNATURE_CHARS].rstrip()
-    return s or clean(f'step "{step}" failed', SIGNATURE_CHARS)
-
-
-def safe_part(text):
-    s = re.sub(r"[^A-Za-z0-9._-]", "_", text)
-    return ("_" + s) if s.startswith(".") else s
-
-
-def under(path, folder):
-    path, folder = os.path.realpath(path), os.path.realpath(folder)
-    return path == folder or path.startswith(folder.rstrip(os.sep) + os.sep)
-
-
-def private_dir(path):
-    os.makedirs(path, mode=0o700, exist_ok=True)
-    os.chmod(path, 0o700)
-
-
-def prune_logs():
-    """Excerpts older than a week go."""
-    cutoff = time.time() - KEEP_DAYS * 86400
-    for root, dirs, files in os.walk(LOG_DIR, topdown=False):
-        for f in files:
-            p = os.path.join(root, f)
-            try:
-                if f.endswith(".txt") and os.lstat(p).st_mtime < cutoff:
-                    os.unlink(p)
-            except OSError:
-                pass
-        if root != LOG_DIR:
-            try:
-                os.rmdir(root)
-            except OSError:
-                pass
+    return cc.excerpt_lines([r[2] for r in pick])
 
 
 def save_excerpt(repo, run_id, job_id, lines):
     """Write the excerpt where only this user reads it, and say where. Never in a wiki."""
-    wikis = os.environ.get("WIKIS_DIR")
-    if wikis and under(LOG_DIR, wikis):
-        die(f"the log folder {LOG_DIR} is inside the wikis at {wikis}, and a log never goes in a wiki. Do: set XDG_STATE_HOME to a folder outside it")
-    folder = os.path.join(LOG_DIR, safe_part(repo.replace("/", "__")))
-    try:
-        for d in (STATE_DIR, LOG_DIR, folder):
-            private_dir(d)
-        path = os.path.join(folder, f"{int(run_id)}-{int(job_id)}.txt")
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines) + ("\n" if lines else ""))
-        os.chmod(path, 0o600)
-        prune_logs()
-    except OSError as e:
-        print(f"couldn't save the log excerpt in {folder}: {e.strerror or e}", file=sys.stderr)
-        return ""
-    return path
+    return cc.save_excerpt(STATE_DIR, LOG_DIR, repo.replace("/", "__"), f"{int(run_id)}-{int(job_id)}.txt", lines)
 
 
 def failure_detail(info, o):
@@ -686,45 +447,6 @@ def failure_detail(info, o):
     path = save_excerpt(repo, o["id"], job_id, lines) if lines else ""
     return {"job": job_name, "step": step_name, "signature": signature_of(lines, step_name), "excerpt": path,
             "more": max(0, len(bad) - 1)}
-
-
-def llm_wiki(*args, **kw):
-    """Run llm-wiki's own command, as the contract says: through $LLM_WIKI."""
-    exe = os.environ.get("LLM_WIKI")
-    if not exe:
-        return None
-    try:
-        return subprocess.run([exe] + list(args), capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL, **kw)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-
-
-def parse_find(out, mark="no mentions"):
-    """The first page or note `wiki find` names, as "<wiki>: <path>", or nothing."""
-    wiki = ""
-    for line in out.splitlines():
-        if line.startswith(mark):
-            return ""
-        if line and not line[0].isspace() and line.endswith(":"):
-            wiki = line[:-1]
-            continue
-        m = re.match(r"^ {4}(\S+\.md):", line) or re.search(r"\]\(([^)\s]+)\)", line)
-        if wiki and m:
-            return f"{wiki}: {clean(m.group(1), 200)}"
-        if wiki and line.startswith("  ") and not line.strip().endswith(":") and not line.strip().startswith("also in"):
-            return f"{wiki}: index.md"
-    return ""
-
-
-def known_in_wikis(signature):
-    """Whether any wiki already holds this signature: "<wiki>: <page>", "" for none, None for not asked."""
-    query = signature.lstrip("- ").strip()
-    if not query:
-        return None
-    r = llm_wiki("find", query)
-    if r is None or r.returncode != 0:
-        return None
-    return parse_find(r.stdout)
 
 
 # ---- check -------------------------------------------------------------------------------------
@@ -864,54 +586,18 @@ def cmd_config(args):
 # ---- the tick event ----------------------------------------------------------------------------
 
 def load_state():
-    try:
-        with open(STATE_FILE, encoding="utf-8") as f:
-            d = json.load(f)
-        return d if isinstance(d, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    return cc.load_state(STATE_FILE)
 
 
-@contextlib.contextmanager
 def state_lock():
     """One writer of the state file at a time: the tick and a fix running on its own both write it. Yields whether
     the lock is held: it isn't when the lock file can't be opened or locked within ten seconds. A caller that
     decides something from the state (starting a fix, sweeping) does nothing when it isn't held."""
-    fd = None
-    held = False
-    try:
-        private_dir(STATE_DIR)
-        fd = os.open(STATE_LOCK, os.O_WRONLY | os.O_CREAT, 0o600)
-        if fcntl:
-            deadline = time.time() + 10
-            while True:
-                try:
-                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    held = True
-                    break
-                except OSError:
-                    if time.time() > deadline:
-                        break
-                    time.sleep(0.05)
-    except OSError:
-        pass
-    try:
-        yield held
-    finally:
-        if fd is not None:
-            os.close(fd)
+    return cc.state_lock(STATE_DIR, STATE_LOCK)
 
 
 def write_state(state):
-    try:
-        private_dir(STATE_DIR)
-        fd, tmp = tempfile.mkstemp(dir=STATE_DIR, prefix=".state-")
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(state, f, indent=1, sort_keys=True)
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, STATE_FILE)
-    except OSError as e:
-        print(f"couldn't save {STATE_FILE}: {e.strerror or e}")
+    cc.write_state(STATE_DIR, STATE_FILE, state)
 
 
 def attempts_of(state, repo, make=False):
@@ -999,47 +685,18 @@ def notice_id(repo, key):
     return "gh-" + safe_part(repo.replace("/", "__")) + "-" + hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
 
 
-def cut_bytes(text, limit):
-    b = text.encode("utf-8")
-    return text if len(b) <= limit else b[:limit].decode("utf-8", "ignore").rstrip()
-
-
-def notice_text(prefix, inner, suffix, limit=590):
-    """A notice's words around text that came from GitHub or from an agent: that text sits inside double quotes (a double
-    quote in it becomes a single one), so the next session can tell the program's words from quoted ones. It is cut by
-    bytes, with the quotes kept, so the whole is at most `limit` bytes."""
-    inner = clean(inner, 2000).replace('"', "'")
-    room = limit - len((prefix + suffix).encode("utf-8")) - 2
-    if len(inner.encode("utf-8")) > room:
-        inner = (cut_bytes(inner, room - 3) + "...") if room >= 3 else ""
-    return clean(prefix + '"' + inner + '"' + suffix, limit)
-
-
 def put_notice(nid, folder, o, d, note=""):
     """Leave one line for the next session in this repository on this branch."""
     log = f" The failing step's log, cut down: {d['excerpt']}." if d["excerpt"] else ""
     tail = f".{log}{(' ' + note) if note else ''} More: {CMD} github check"
     text = notice_text(f"CI failed on {o['branch']}: ", f"{o['workflow']} / {d['job']} / {d['step']}: {d['signature']}", tail)
-    r = llm_wiki("__notice", "put", nid, folder, o["branch"], text)
-    if r is None or r.returncode != 0:
-        print(f"couldn't leave a notice for {folder}: {first_line((r.stderr if r else '') or 'no wiki command to ask')}")
-        return False
-    print(f"left a notice for {folder} on {o['branch']}")
-    return True
+    return cc.put_notice(nid, folder, o["branch"], text)
 
 
 def notify_desktop(repo, o, d):
     """A desktop notification for a run that started failing. Everything in it is from GitHub, so
     it is cleaned, cut, and handed to llm-wiki as two arguments, never joined into a command."""
-    title = cut_bytes(clean(f"CI failed: {repo}", 80), 80)
-    text = cut_bytes(clean(f"{o['branch']}: {o['workflow']} / {d['job']}: {d['signature']}", 240), 240)
-    r = llm_wiki("__notify", title, text)
-    if r is None or r.returncode != 0:
-        print(f"couldn't show a desktop notification: {first_line((r.stderr if r else '') or 'no wiki command to ask')}")
-
-
-def clear_notice(nid):
-    llm_wiki("__notice", "clear", nid)
+    cc.notify_desktop(f"CI failed: {repo}", f"{o['branch']}: {o['workflow']} / {d['job']}: {d['signature']}")
 
 
 def commit_subject(folder, sha, fallback):
@@ -1051,63 +708,24 @@ def save_note(folder, info, o, prev, flaky, fixes=()):
     """The note about a failure that ended: saved with capture, then synced. True when it is
     saved or when there is nothing to save it in, False when a save failed and should be tried again."""
     repo = info["name"]
-    r = llm_wiki("which", repo.split("/")[1])
-    wiki = os.path.basename(r.stdout.strip().rstrip("/")) if r and r.returncode == 0 and r.stdout.strip() else ""
-    if not wiki:
-        print(f"{repo}: no wiki covers {repo.split('/')[1]}, so no note was saved. Run: {CMD} cover <wiki> {repo.split('/')[1]}")
-        return True
     pr = o.get("pr") or prev.get("pr")
     sha = o["sha"][:7]
-    word = "flaky" if flaky else "fixed"
-    lines = [f"# CI {word}: {prev['workflow']} on {prev['branch']} ({repo})", ""]
+    body = []
     if flaky:
-        lines += ["It failed, then passed on a re-run of the same commit, so nothing changed in between: it may be flaky.", ""]
-    lines += [f"Workflow: {prev['workflow']}", f"Job: {prev['job']}", f"Step: {prev['step']}",
-              f"Signature: {prev['signature']}", "",
-              f"Failed run: {prev['run_id']} {prev.get('url', '')}".rstrip(),
-              f"Passing run: {o['id']} {o['url']}".rstrip(),
-              f"Commit of the passing run: {sha} {commit_subject(folder, o['sha'], o['title'])}".rstrip()]
+        body += ["It failed, then passed on a re-run of the same commit, so nothing changed in between: it may be flaky.", ""]
+    body += [f"Workflow: {prev['workflow']}", f"Job: {prev['job']}", f"Step: {prev['step']}",
+             f"Signature: {prev['signature']}", "",
+             f"Failed run: {prev['run_id']} {prev.get('url', '')}".rstrip(),
+             f"Passing run: {o['id']} {o['url']}".rstrip(),
+             f"Commit of the passing run: {sha} {commit_subject(folder, o['sha'], o['title'])}".rstrip()]
     if pr:
-        lines.append(f"Pull request: #{pr}")
+        body.append(f"Pull request: #{pr}")
     for f in fixes:
-        lines.append(f"Fixed unattended: llm-wiki (wiki github fix) made commit {clean(f.get('commit', ''), 40)[:7]} on {clean(f.get('branch', ''), 100)}"
-                     f" after run {int_or_none(f.get('run_id')) or 0} failed, with nobody watching. Read that commit before relying on it.")
-    lines += ["", "Ticket: none"]
-    wikis_dir = os.environ.get("WIKIS_DIR") or os.getcwd()
-    slug = "ci-flaky" if flaky else "ci-fixed"
-    exe = os.environ.get("LLM_WIKI")
-    if not exe:
-        print(f"{repo}: LLM_WIKI isn't set, so no note was saved. Run this as: {CMD} github")
-        return True
-    try:
-        # From the wikis' folder, so a note taken in a ticket's folder gets no Ticket: line of that ticket.
-        c = subprocess.run([exe, "capture", wiki, slug], input="\n".join(lines) + "\n", text=True, capture_output=True,
-                           cwd=wikis_dir, timeout=120)
-        s = subprocess.run([exe, "sync", wiki, "-m", f"{wiki}: CI failure {'was flaky' if flaky else 'fixed'}"],
-                           capture_output=True, text=True, timeout=300) if c.returncode == 0 else None
-    except (OSError, subprocess.TimeoutExpired) as e:
-        print(f"{repo}: couldn't save the note in {wiki}: {e}")
-        return False
-    if c.returncode != 0 or s is None:
-        print(f"{repo}: couldn't save the note in {wiki}: {first_line(c.stderr)}")
-        return False
-    if s.returncode != 0:
-        print(f"{repo}: saved the note in {wiki}, but the sync failed. Run: {CMD} sync {wiki}")
-    else:
-        print(f"{repo}: noted in {wiki} that {prev['workflow']} on {prev['branch']} " + ("was flaky." if flaky else "is fixed."))
-    return True
+        body.append(f"Fixed unattended: llm-wiki (wiki github fix) made commit {clean(f.get('commit', ''), 40)[:7]} on {clean(f.get('branch', ''), 100)}"
+                    f" after run {int_or_none(f.get('run_id')) or 0} failed, with nobody watching. Read that commit before relying on it.")
+    return cc.save_note(folder, repo, repo.split("/")[1], "github", f"{prev['workflow']} on {prev['branch']}", body, flaky)
 
 
-NOTICE_DAYS = 3
-
-
-def stale(created):
-    """Whether a run began too long ago to be news. A run with no readable time is fresh."""
-    try:
-        then = datetime.datetime.strptime(created or "", "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
-    except ValueError:
-        return False
-    return (datetime.datetime.now(datetime.timezone.utc) - then).days >= NOTICE_DAYS
 
 
 # ---- an unattended fix, only where a person turned it on -----------------------------------------

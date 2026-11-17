@@ -18,8 +18,8 @@ hook: a ticket key, the Jira extension not set up	431
 hook: a ticket key, the Jira extension set up	129
 list: the fixture wikis	68
 mcp: INSTRUCTIONS	1559
-setup: the guide for Jira, on and not set up	1612
-setup: the whole guide	6511
+setup: the guide for Jira, on and not set up	1733
+setup: the whole guide	6776
 skill: the description	197
 start: a branch named for a ticket, no wiki	1022
 start: a clone with a wiki	765
