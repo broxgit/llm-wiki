@@ -177,6 +177,33 @@ def get_token(conf):
     return ""
 
 
+def token_shape(conf):
+    """Why what token_cmd prints can't be a Jenkins API token, or nothing. A wrong paste into the keychain is otherwise
+    found only when a sign-in fails, with nothing to say it was the paste, and by then it has been sent to Jenkins. A
+    wrong paste is often another secret, so this says only what kind of thing is wrong: never any part of what is
+    saved, and not how long it is. A token from the environment is the user's own affair and isn't looked at."""
+    if os.environ.get(TOKEN_ENV) or not conf.get("token_cmd"):
+        return ""
+    try:
+        out = subprocess.run(conf["token_cmd"], shell=True, capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
+    except (subprocess.TimeoutExpired, OSError):
+        return "the command that prints it didn't answer"
+    except ValueError:
+        return "what is saved isn't text"
+    saved = out.stdout.strip()
+    if out.returncode != 0 or not saved:
+        return "nothing is saved yet"
+    if any(c.isspace() for c in saved):
+        return "what is saved has a space or a line break in it, which no Jenkins token has"
+    if saved.lower().startswith(("http://", "https://")):
+        return "what is saved is an address, not a token"
+    if len(saved) < 16:
+        return "what is saved is much shorter than a Jenkins token, which is about 34 letters and digits"
+    if len(saved) > 200:
+        return "what is saved is much longer than a Jenkins token, which is about 34 letters and digits"
+    return ""
+
+
 def url_problem(url):
     """Why an address can't be Jenkins', in words that don't repeat it, or nothing: https:// anywhere, http:// only on this
     machine; a host; no login, query or fragment; no space or control character. It is read by a parser, not by how the
@@ -268,7 +295,9 @@ class Jenkins:
         if e.code in (401, 403):
             if EVENT:
                 not_now(f"Jenkins refused the sign-in ({e.code})")
-            die(f"Jenkins refused the sign-in ({e.code}) at {self.url}. Do: check the user and the token: {CMD} jenkins config")
+            # Where Jenkins signs people in through a company account, the name it knows them by is often an email address.
+            hint = " If the token is right, the user may need to be your email address, as it is where Jenkins signs you in through a company account." if e.code == 401 and "@" not in self.user else ""
+            die(f"Jenkins refused the sign-in ({e.code}) at {self.url}.{hint} Do: check the user and the token: {CMD} jenkins config")
         if 300 <= e.code < 400:
             die(f"{self.url} redirected to another address, which wasn't followed, so the sign-in stays with {self.url}. "
                 f"Do: set url to the address Jenkins really answers at, in a terminal: {CMD} extensions setup jenkins")
@@ -1123,6 +1152,25 @@ def setup():
                 print()
             if answer is not None and answer.strip().lower() != "skip":
                 set_conf(CONFIG, "token_cmd", KEYCHAIN_CMD)
+                # Looked at now, while the token is still on the clipboard to paste again. Three more tries at
+                # most. Skipping leaves no token set up, so nothing that isn't one is ever sent to Jenkins.
+                shape = token_shape(settings())
+                tries = 0
+                while shape and tries < 3:
+                    tries += 1
+                    print(f"  That doesn't look like a token: {shape}.")
+                    print("  Copy the token in Jenkins again, and run the security command again.")
+                    sys.stdout.write("  Press Enter to look again, or type skip: ")
+                    sys.stdout.flush()
+                    answer = read_line()
+                    if answer is None:
+                        print()
+                    if answer is None or answer.strip().lower() == "skip":
+                        break
+                    shape = token_shape(settings())
+                if shape:
+                    set_conf(CONFIG, "token_cmd", "")
+                    print(f"  No token is set up yet. Run this again when it is in the keychain: {CMD} extensions setup jenkins")
         else:
             cmd = ask("A command that prints the token, such as: pass show jenkins", "")
             if "#" in cmd or unfit(cmd):
@@ -1131,17 +1179,28 @@ def setup():
                 set_conf(CONFIG, "token_cmd", cmd)
     conf = settings()
     miss = sign_in_missing(conf)
+    tested = "not tested"
     if miss:
         print(f"  Jenkins can't sign in yet: {miss}.")
+        print(f"  So the sign-in isn't tested. When it is all there, test it with: {CMD} jenkins config")
+        tested = f"not set up: {miss}"
+    elif token_shape(conf):
+        # What is saved isn't a token, and may be something else that is secret: it is not sent anywhere.
+        print(f"  The token doesn't look right: {token_shape(conf)}.")
+        print(f"  So nothing was sent to Jenkins. Save the token again, then run: {CMD} extensions setup jenkins")
+        tested = "not tested: what is saved as the token doesn't look like one"
     else:
         try:
             who = Jenkins(conf).get_json("/whoAmI/api/json" + tree("name,authenticated"), soft=True)
             if signed_in_as(who):
                 print(f"  Signed in to Jenkins as {signed_in_as(who)}.")
+                tested = f"works: {conf['url']}, as {signed_in_as(who)}"
             else:
                 print(f"  {conf['url']} doesn't answer as Jenkins, or sees no signed-in user. Run {CMD} jenkins config to see.")
+                tested = f"didn't work: {conf['url']} doesn't answer as Jenkins. Test it again: {CMD} jenkins config"
         except SystemExit:
             print("  The sign-in didn't work. The line above says why.")
+            tested = f"didn't work, as {clean(conf['user'], 80)}. Fix it and run this again, or test it: {CMD} jenkins config"
     print()
     print("== Step 2 of 3: which job builds which clone")
     print("Jenkins doesn't know which repository a job builds, so you say. A watched clone and its job are")
@@ -1186,8 +1245,7 @@ def setup():
     conf = settings()
     print()
     print("What is set")
-    miss = sign_in_missing(conf)
-    print("  Sign-in   " + (f"not set up: {miss}" if miss else f"{conf['url']}, as {conf['user']}"))
+    print("  Sign-in   " + tested)
     print("  watch     " + (", ".join(f"{f}={j}" for f, j in conf["watch"]) or "nothing yet"))
     if conf["job_pattern"]:
         print("  pattern   " + conf["job_pattern"] + (": such a clone is watched when a session starts in it" if conf["job_auto"] else ": such a clone needs no job named"))

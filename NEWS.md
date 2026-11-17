@@ -4,6 +4,12 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2027-01-08: Jenkins setup says why a sign-in fails
+
+- Setting up Jenkins now tests the sign-in and says in its summary whether it works, and as whom.
+- It looks at what you saved as the token first. A wrong paste is caught there, with a chance to paste again, and is never sent to Jenkins.
+- When Jenkins refuses the sign-in and the user isn't an email address, it says that may be the cause.
+
 ## 2027-01-06: wiki uninstall covers Codex, Antigravity, Cursor and the Claude app
 
 - `wiki uninstall` now takes out what setup put into Codex, Antigravity, Cursor and the Claude app, where before it only listed them.

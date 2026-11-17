@@ -9067,6 +9067,56 @@ for v in 'https://ci.example.com/prefix' 'http://127.0.0.1:8080' 'http://localho
   printf 'url = %s\nuser = smoke-user\ntoken_cmd = cat %s\n' "$v" "$JK/token" > "$JKCF"
   check "jenkins takes $v" bash -c "'$JKEXT' --wiki-ready"
 done
+# From a real setup (2026-11-17): a refused sign-in says what to try, and a wrong paste is caught when it is made.
+cp "$JKCF" "$JK/jenkins.signin"
+printf 'url = %s\nuser = smoke-user\ntoken_cmd = cat %s\n' "$JKURL" "$JK/token" > "$JKCF"
+out="$(env JENKINS_API_TOKEN="${JKFAKE}-wrong" WIKIS_DIR="$JKW" "$W" jenkins config 2>&1)"
+case "$out" in *"Jenkins refused the sign-in (401) at $JKURL. If the token is right, the user may need to be your email address, as it is where Jenkins signs you in through a company account. Do: check the user and the token"*) ok "a refused sign-in says the user may need to be an email address" ;; *) bad "a refused sign-in says the user may need to be an email address" "$out" ;; esac
+out="$(env JENKINS_USER="someone@example.com" JENKINS_API_TOKEN="${JKFAKE}-wrong" WIKIS_DIR="$JKW" "$W" jenkins config 2>&1)"
+case "$out" in *"your email address"*) bad "and doesn't say it when the user is one already" "$out" ;; *"Jenkins refused the sign-in (401)"*) ok "and doesn't say it when the user is one already" ;; *) bad "and doesn't say it when the user is one already" "$out" ;; esac
+check "what is saved as the token is judged by its shape, and no word of the judgement holds any of it" python3 -I -c "
+import importlib.machinery, importlib.util, os, sys
+sys.path.insert(0, os.path.dirname(sys.argv[1]))
+l = importlib.machinery.SourceFileLoader('wj', sys.argv[1]); m = importlib.util.module_from_spec(importlib.util.spec_from_loader('wj', l)); l.exec_module(m)
+os.environ.pop('JENKINS_API_TOKEN', None)
+def why(text):
+    open(sys.argv[2], 'w').write(text)
+    return m.token_shape({'token_cmd': 'cat ' + sys.argv[2]})
+secret = 'Zq9Xw7secretsecret'
+cases = {'': 'nothing is saved yet', secret + ' two words': 'a space or a line break', 'https://ci.example.com/' + secret: 'an address, not a token', 'short': 'much shorter', secret * 20: 'much longer', '11' + 'a1' * 16: '', ' 11' + 'a1' * 16 + '\n': ''}
+bad = [k[:12] for k, v in cases.items() if (v == '') != (why(k) == '') or v not in why(k) or (k and secret in why(k)) or any(ch.isdigit() for ch in why(k).replace('34', ''))]
+bad += ['env'] if (os.environ.__setitem__('JENKINS_API_TOKEN', 'x y') or m.token_shape({'token_cmd': 'cat ' + sys.argv[2]})) else []
+sys.exit(1 if bad else 0)" "$JKEXT" "$JK/shape"
+# The setup, on a Mac, with a stand-in for the keychain: the first paste is wrong, the second right.
+mkdir -p "$JK/kbin"
+cat > "$JK/kbin/security" <<FAKE
+#!/bin/sh
+n="\$(cat "$JK/kcount" 2>/dev/null || echo 0)"; n=\$((n + 1)); echo "\$n" > "$JK/kcount"
+if [ "\$n" -le 1 ]; then echo "oops not-the-token"; else cat "$JK/token"; fi
+FAKE
+chmod +x "$JK/kbin/security"; rm -f "$JK/kcount"
+: > "$JKCF"
+out="$(printf '%s\nsmoke-user\n\n\n\n\n\n' "$JKURL" | env -u JENKINS_API_TOKEN PATH="$JK/kbin:$PATH" LLM_WIKI_TEST_OS=darwin LLM_WIKI_TEST_TTY=1 "$JKEXT" --wiki-setup 2>&1)"
+case "$out" in *"That doesn't look like a token: what is saved has a space or a line break in it, which no Jenkins token has."*"Copy the token in Jenkins again, and run the security command again."*"Press Enter to look again, or type skip: "*) ok "a wrong paste into the keychain is caught at once, and it says what is wrong and what to do" ;; *) bad "a wrong paste into the keychain is caught at once, and it says what is wrong and what to do" "$out" ;; esac
+case "$out" in *"oops"*|*"not-the-token"*|*"$JKFAKE"*) bad "nothing of what was saved, wrong or right, is printed" "$out" ;; *) ok "nothing of what was saved, wrong or right, is printed" ;; esac
+case "$out" in *"Signed in to Jenkins as smoke-user."*"  Sign-in   works: $JKURL, as smoke-user"*) ok "after the second paste it signs in, and the summary says the sign-in works" ;; *) bad "after the second paste it signs in, and the summary says the sign-in works" "$out" ;; esac
+: > "$JKCF"
+out="$(printf '%s\n\n' "$JKURL" | env -u JENKINS_API_TOKEN LLM_WIKI_TEST_OS=linux LLM_WIKI_TEST_TTY=1 "$JKEXT" --wiki-setup 2>&1)"
+case "$out" in *"So the sign-in isn't tested. When it is all there, test it with: wiki jenkins config"*"  Sign-in   not set up: "*) ok "with something missing, it says the sign-in isn't tested, and how to test it later" ;; *) bad "with something missing, it says the sign-in isn't tested, and how to test it later" "$out" ;; esac
+# A paste that is never put right: skipping leaves no token set up, and nothing that isn't a token is sent.
+printf '#!/bin/sh\necho "my other password"\n' > "$JK/kbin/security"
+: > "$JKCF"; : > "$JK/requests.log"; : > "$JK/auth.log"
+out="$(printf '%s\nsmoke-user\n\nskip\n\n\n\n' "$JKURL" | env -u JENKINS_API_TOKEN PATH="$JK/kbin:$PATH" LLM_WIKI_TEST_OS=darwin LLM_WIKI_TEST_TTY=1 "$JKEXT" --wiki-setup 2>&1)"
+case "$out" in *"No token is set up yet. Run this again when it is in the keychain: wiki extensions setup jenkins"*) ok "skipping after a wrong paste says no token is set up" ;; *) bad "skipping after a wrong paste says no token is set up" "$out" ;; esac
+check "and none is: the setting that says where the token comes from is not left behind" bash -c "! grep -q '^token_cmd' '$JKCF'"
+check "nothing was sent to Jenkins" bash -c "[ ! -s '$JK/requests.log' ] && [ ! -s '$JK/auth.log' ]"
+case "$out" in *"other password"*|*"17"*) bad "what was pasted is not printed, nor how long it is" "$out" ;; *) ok "what was pasted is not printed, nor how long it is" ;; esac
+printf 'url = %s\nuser = smoke-user\ntoken_cmd = echo my other password\n' "$JKURL" > "$JKCF"
+: > "$JK/requests.log"; : > "$JK/auth.log"
+out="$(printf '\n\n\n\n\n' | env -u JENKINS_API_TOKEN LLM_WIKI_TEST_OS=linux LLM_WIKI_TEST_TTY=1 "$JKEXT" --wiki-setup 2>&1)"
+case "$out" in *"The token doesn't look right: what is saved has a space or a line break in it"*"So nothing was sent to Jenkins."*"  Sign-in   not tested: what is saved as the token doesn't look like one"*) ok "a saved thing that isn't a token is never used to sign in, and the summary says the sign-in wasn't tested" ;; *) bad "a saved thing that isn't a token is never used to sign in, and the summary says the sign-in wasn't tested" "$out" ;; esac
+check "and it reached Jenkins in no request" bash -c "[ ! -s '$JK/requests.log' ] && [ ! -s '$JK/auth.log' ]"
+rm -f "$JK/kcount" "$JK/shape"; cp "$JK/jenkins.signin" "$JKCF"
 # Typed at the interactive setup: the same check, and the address is not saved.
 bads=""
 for v in "${JKBADS[@]}"; do
