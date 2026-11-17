@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -58,6 +59,65 @@ func TestRunNamesByTheClockInUTC(t *testing.T) {
 		if err != nil || string(got) != "Captured: 2026-01-03\n\nbody\n" {
 			t.Errorf("run %d wrote %q, %v", i, got, err)
 		}
+	}
+}
+
+// Two captures can pick the same free name at once: two sessions, the same second, the
+// same slug. Neither may write over the other.
+func TestRunNeverWritesOverANoteThatAppearsAfterTheNameWasChosen(t *testing.T) {
+	o, root := wiki(t)
+	o.Args = []string{"demo", "raced"}
+	const runs = 40
+	errs := make(chan error, runs)
+	for i := 0; i < runs; i++ {
+		go func(i int) {
+			p := o
+			p.Stdin = strings.NewReader("body " + strconv.Itoa(i) + "\n")
+			_, err := Run(p)
+			errs <- err
+		}(i)
+	}
+	for i := 0; i < runs; i++ {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	files, err := filepath.Glob(filepath.Join(root, "raw", "*-raced*.md"))
+	if err != nil || len(files) != runs {
+		t.Fatalf("%d notes in raw/ after %d captures: %v", len(files), runs, err)
+	}
+	seen := map[string]bool{}
+	for _, f := range files {
+		got, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen[string(got)] = true
+	}
+	if len(seen) != runs {
+		t.Errorf("%d different notes after %d captures: one wrote over another", len(seen), runs)
+	}
+}
+
+// A name that is a link, even to nowhere, is taken: the note goes under the next name and
+// nothing is written through the link.
+func TestRunTakesTheNextNameWhenTheNameIsALink(t *testing.T) {
+	o, root := wiki(t)
+	o.Args = []string{"demo", "linked"}
+	if err := os.MkdirAll(filepath.Join(root, "raw"), 0o777); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.Symlink(outside, filepath.Join(root, "raw", "2026-01-03-060405-linked.md")); err != nil {
+		t.Skip("no links here")
+	}
+	o.Stdin = strings.NewReader("body\n")
+	line, err := Run(o)
+	if err != nil || line != "captured: raw/2026-01-03-060405-linked-2.md in ~/wikis/demo" {
+		t.Errorf("printed %q, %v", line, err)
+	}
+	if _, err := os.Stat(outside); err == nil {
+		t.Error("the note was written through the link")
 	}
 }
 
