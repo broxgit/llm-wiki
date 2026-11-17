@@ -251,6 +251,7 @@ Usage: $WIKI_CMD <command> [options]
   journal on | off     Turn the journal on or off. It is on by default.
   journal set <key> <value>  Change a setting. See $(tilde "$WIKIS_DIR")/journal/config.
   journal depth        How deep your repositories go, and the depth setting that reaches them all.
+  journal keep         Keep every journal setting as it is, so setup doesn't ask about each.
   journal note [--day DATE] [--at HH:MM] <project> <text>
                        Add one line to today's journal, or a past day's.
   journal backfill [--since 14d] [--until DATE] [--done]
@@ -7100,13 +7101,20 @@ PY
 }
 
 cmd_journal() {
-  local sub="${1:-show}"
+  local sub="${1:-show}" k
   [ $# -gt 0 ] && shift
   case "$sub" in
     show) journal_show ;;
     on) write_journal_config >/dev/null; journal_set enabled yes; apply_journal_commit; setup_mark journal.enabled ;;
     off) write_journal_config >/dev/null; journal_set enabled no; setup_mark journal.enabled ;;
     set) [ $# -ge 1 ] || die_usage "usage: $WIKI_CMD journal set <key> <value>"; journal_set "$1" "${2:-}"; setup_mark "journal.$1" ;;
+    # keep: the user's answer to "keep the journal's settings as they are?". Every one is
+    # marked answered, at the value it has, so setup doesn't ask about each.
+    keep)
+      [ $# -eq 0 ] || die_usage "usage: $WIKI_CMD journal keep"
+      for k in $JOURNAL_KEYS; do setup_mark "journal.$k"; done
+      ui_item ok "The journal's settings stay as they are. $WIKI_CMD journal shows them, and $WIKI_CMD journal set <key> <value> changes one."
+      ;;
     note) cmd_journal_note "$@" ;;
     backfill) journal_backfill "$@" ;;
     depth) cmd_journal_depth "$@" ;;
@@ -11449,7 +11457,16 @@ guide_ext() {
 
 # setup_guide [section]
 setup_guide() {
-  local sec="${1:-}" c="$WIKI_CMD" line id val mark n any=0
+  local sec="${1:-}" c line id val mark n any=0 jdef=0 jpend=0 unlinked=""
+  # The guide is read by an agent that then tells the user what to type. From the plugin, the
+  # script's own path is a long one in a cache that changes with every update: nobody can
+  # type it, and it stops working. So the name here is plain wiki once that is a command,
+  # and the plugin's lasting command until then.
+  if [ -z "${LLM_WIKI_CMD:-}" ] && from_plugin; then
+    if wiki_linked; then WIKI_CMD=wiki; else WIKI_CMD="$(tilde "$(plugin_cmd)")"; fi
+  fi
+  if from_plugin && ! wiki_linked; then unlinked=1; fi
+  c="$WIKI_CMD"
   [ $# -le 1 ] || die_usage "usage: $c setup --guide [section]"
   [ -z "$sec" ] || guide_known "$sec" || die_usage "no setup section called $sec. Sections: $GUIDE_SECTIONS, journal.<key>, or an extension such as jira"
   style_off
@@ -11468,11 +11485,16 @@ setup_guide() {
 llm-wiki setup guide, to follow with the user in this session, one topic at a time.
 ${first}- Start with topics marked [not answered yet] ($c setup --new would ask them), then ask what else to change.
 - Per topic: say what it does and its value in a line, ask, then run its Change command.
+- Where you can show choices to pick from, ask that way, your pick first.
 - Never ask for, accept or write a token or password. If the user pastes one, don't store or repeat it: they put it in their keychain themselves.
-- Change only what the user chose. Where it says Terminal only, the user runs the command: give it to them.
+- Change only what the user chose. Where it says Terminal only, the user runs the command: give it to them, or, if you can open a terminal for them, offer to start it there. They answer its questions, never you.
 $last
 
 EOF
+  if [ -n "$unlinked" ] && [ -z "$sec" ]; then
+    echo "- command = not yet something the user can type [not answered yet]: Do this first, with their yes: $c link --yes. It makes plain wiki a command in their terminal. After it, write wiki for them, not this long path."
+    any=1
+  fi
   while IFS= read -r line; do
     case "$line" in "" | "("* | " "*) continue ;; esac
     id="${line%% *}"
@@ -11481,6 +11503,22 @@ EOF
     val="${val%  <- new}"
     val="${val//  (default)/ (default)}"
     guide_in "$sec" "$id" || continue
+    # In the whole guide, the journal's settings that are as they come are one row, below.
+    if [ -z "$sec" ]; then
+      case "$id" in
+        journal.enabled) ;;
+        journal.*)
+          case "$val" in
+            *" (default)")
+              jdef=$((jdef + 1))
+              if guide_unanswered "$id"; then jpend=$((jpend + 1)); fi
+              any=1
+              continue
+              ;;
+          esac
+          ;;
+      esac
+    fi
     case "$id" in collection | claude | compile | schedule) mark="" ;; *) if guide_unanswered "$id"; then mark=" [not answered yet]"; else mark=" [answered]"; fi ;; esac
     any=1
     printf -- '- %s = %s%s: %s\n' "$id" "${val:-(none)}" "$mark" "$(guide_entry "$id")"
@@ -11500,6 +11538,10 @@ EOF2
       plugin | skills | upgrade | tools | collections) echo "- $sec: Terminal only: $c setup $sec" ;;
       *) echo "- $sec: not on this machine, so there is nothing to set. $c setup --list shows what is." ;;
     esac
+  fi
+  if [ "$jdef" -gt 0 ]; then
+    if [ "$jpend" -gt 0 ]; then mark=" [not answered yet]"; else mark=" [answered]"; fi
+    echo "- journal, $jdef more settings, all as they come$mark: the report's shape and range, where your code is, which days are working days. Ask once whether to keep them as they are. Keep them: $c journal keep. To go through them: $c setup --guide journal"
   fi
   [ -n "$sec" ] || echo "- Also terminal only: $c setup plugin | skills | upgrade | tools | collections"
   return 0

@@ -8,6 +8,12 @@ Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title i
 
 - `wiki journal depth` says how many of your repositories the depth setting reaches, and the value that reaches them all.
 - Setup's depth question shows the same line, so the number isn't a guess.
+## 2027-01-07: the guided setup, after a real run
+
+- Where your agent can show a question with answers to pick from, as Claude Code can, the guided setup asks that way, with its own pick first.
+- It makes `wiki` a command first, and then says `wiki`, not a long path nobody can type.
+- The journal's settings are one question, keep them as they are or not, where they were fourteen. `wiki journal keep` is the yes.
+- For a step only you can do in a terminal, the agent can offer to start it there for you to answer.
 
 ## 2027-01-06: wiki uninstall covers Codex, Antigravity, Cursor and the Claude app
 

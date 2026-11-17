@@ -112,6 +112,7 @@
   journal on | off     Turn the journal on or off. It is on by default.
   journal set <key> <value>  Change a setting. See <tmp>/wikis/journal/config.
   journal depth        How deep your repositories go, and the depth setting that reaches them all.
+  journal keep         Keep every journal setting as it is, so setup doesn't ask about each.
   journal note [--day DATE] [--at HH:MM] <project> <text>
                        Add one line to today's journal, or a past day's.
   journal backfill [--since 14d] [--until DATE] [--done]

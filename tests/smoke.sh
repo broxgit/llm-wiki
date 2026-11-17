@@ -10452,8 +10452,9 @@ expect "init's next steps say it" "ask it to run wiki setup --guide" env HOME="$
 expect "the session hook, with no collection, offers the guide before the terminal" "offer to walk them through setup: run $T/data/bin/wiki setup --guide and follow it. Or they run $T/data/bin/wiki setup in a terminal" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; export WIKIS_DIR='$T/none'; hook '$T' | context"
 
 # The guide lists every row of setup --list.
+# The journal's settings that are as they come are one row in the whole guide, and each has its own in the journal's.
 rows="$(gw setup --list | awk 'NF == 0 { exit } $1 !~ /^[(]/ { print $1 }')"
-guide="$(gw setup --guide)"
+guide="$(gw setup --guide; gw setup --guide journal)"
 missing=""
 for r in $rows; do
   printf '%s\n' "$guide" | grep -q "^- $r = " || missing="$missing $r"
@@ -10467,8 +10468,8 @@ case "$guide" in *"wiki setup --list and tell the user what changed"*) ok "and t
 case "$guide" in *"- delegation.mode = ask [not answered yet]: "*"Change: wiki delegation <off|ask|auto>"*) ok "an unanswered setting is marked, with its value and the command that changes it" ;; *) bad "an unanswered setting is marked, with its value and the command that changes it" "$guide" ;; esac
 case "$guide" in *"- git = "*"Terminal only: wiki setup git"*) ok "one with no safe command from a session says terminal only, and which" ;; *) bad "one with no safe command from a session says terminal only, and which" "$guide" ;; esac
 lacks "the session's command name is used, never a path" "$REPO/wiki.sh" gw setup --guide
-case "$(gw setup --guide | grep -c '^- journal.format = standup')" in 1) ok "a journal setting shows its value" ;; *) bad "a journal setting shows its value" ;; esac
-expect "a journal setting says which values it takes" "Change: wiki journal set format <standup|summary|detailed>" gw setup --guide
+case "$(gw setup --guide journal | grep -c '^- journal.format = standup')" in 1) ok "a journal setting shows its value" ;; *) bad "a journal setting shows its value" ;; esac
+expect "a journal setting says which values it takes" "Change: wiki journal set format <standup|summary|detailed>" gw setup --guide journal
 check "the whole guide is under 7,000 bytes here" test "$(gw setup --guide | wc -c | tr -d ' ')" -lt 7000
 
 # It is plain: style forced on, or a pipe, gives no colour code.
@@ -10594,6 +10595,21 @@ g="$(env -u WIKIS_DIR HOME="$SF/none" XDG_CONFIG_HOME="$SF/none/.config" LLM_WIK
 case "$g" in *"a folder of their own"*"apart from the folders the user works in"*"With the user's yes, create it: wiki init"*) ok "with no collection, the guide gives the command that creates one, so no terminal is needed" ;; *) bad "with no collection, the guide gives the command that creates one, so no terminal is needed" "$g" ;; esac
 case "$g" in *"Then run wiki setup --guide again: the other topics appear once it exists"*) ok "and says to read the guide again once it exists, since the other topics appear only then" ;; *) bad "and says to read the guide again once it exists, since the other topics appear only then" "$g" ;; esac
 g="$(sf setup --guide)"
+case "$g" in *"- Where you can show choices to pick from, ask that way, your pick first."*) ok "the whole guide tells the agent to ask with choices where it can" ;; *) bad "the whole guide tells the agent to ask with choices where it can" "$g" ;; esac
+# From a real guided setup (2026-11-17): fourteen journal questions are one, and a terminal can be offered.
+case "$g" in *"- journal, "*" more settings, all as they come"*"Ask once whether to keep them as they are. Keep them: wiki journal keep. To go through them: wiki setup --guide journal"*) ok "the whole guide has one row for the journal's settings that are as they come" ;; *) bad "the whole guide has one row for the journal's settings that are as they come" "$(printf '%s\n' "$g" | grep journal)" ;; esac
+[ -z "$(printf '%s\n' "$g" | grep '^- journal\.' | grep -v '^- journal\.enabled' | grep '(default)')" ] && ok "and none of its own rows for a setting that is as it comes, but the one that turns the journal on or off" || bad "and none of its own rows for a setting that is as it comes, but the one that turns the journal on or off" "$(printf '%s\n' "$g" | grep '^- journal')"
+case "$g" in *"if you can open a terminal for them, offer to start it there. They answer its questions, never you."*) ok "the guide lets the agent start a terminal-only step in a terminal, for the user to answer" ;; *) bad "the guide lets the agent start a terminal-only step in a terminal, for the user to answer" "$g" ;; esac
+gw journal set format summary >/dev/null 2>&1
+g2="$(gw setup --guide)"
+case "$g2" in *"- journal.format = summary"*"- journal, "*" more settings, all as they come"*) ok "a journal setting the user changed keeps a row of its own" ;; *) bad "a journal setting the user changed keeps a row of its own" "$(printf '%s\n' "$g2" | grep journal)" ;; esac
+gw journal set format standup >/dev/null 2>&1
+expect "the guide for the journal alone still lists every setting" "- journal.workdays = " gw setup --guide journal
+out="$(gw journal keep 2>&1)"
+case "$out" in *"The journal's settings stay as they are."*) ok "journal keep says the settings stay" ;; *) bad "journal keep says the settings stay" "$out" ;; esac
+case "$(gw setup --guide | grep '^- journal')" in *"not answered yet"*) bad "and after it none of them is asked about" "$(gw setup --guide | grep '^- journal')" ;; *) ok "and after it none of them is asked about" ;; esac
+check "journal keep takes nothing after it" bash -c "'$W' journal keep extra >/dev/null 2>&1; [ \$? = 2 ]"
+check "the Claude Code command may use the question box, and says how" bash -c "grep -qx 'allowed-tools: Bash, AskUserQuestion' '$REPO/commands/setup.md' && grep -q 'such as AskUserQuestion, ask with it, not in prose' '$REPO/commands/setup.md'"
 case "$g" in *"Don't hand the user a list of Terminal only commands."*) ok "the whole guide tells the agent not to hand over a list of terminal chores" ;; *) bad "the whole guide tells the agent not to hand over a list of terminal chores" "$g" ;; esac
 lacks "a section's guide doesn't carry that rule, or the opening" "Terminal only commands" sf setup --guide palette
 # A pattern for the folders inside, given one wiki or none, says what it leaves out.
@@ -10652,7 +10668,7 @@ ok "and every setting the interactive setup asks for"
 case "$out" in *"https://id.atlassian.com/manage-profile/security/api-tokens"*'security add-generic-password -a "$USER" -s atlassian -U -w "$(pbpaste)"'*"Terminal only."*) ok "the token step names the page, and the command, for the user's own terminal" ;; *) bad "the token step names the page, and the command, for the user's own terminal" "$out" ;; esac
 case "$out" in *"The user runs wiki extensions setup jira in a terminal: it asks for the address, the account and where the token comes from. Then wiki jira config tests it"*"the keychain command the setup offers"*) ok "then the terminal setup for the address, the account and the token, and the test" ;; *) bad "then the terminal setup for the address, the account and the token, and the test" "$out" ;; esac
 # The site, once there is a token, and where the token comes from are for a terminal, and their lines say so.
-check "the jira section is under 1,850 bytes" test "$(printf '%s' "$out" | wc -c | tr -d ' ')" -lt 1850
+check "the jira section is under 2,100 bytes" test "$(printf '%s' "$out" | wc -c | tr -d ' ')" -lt 2100
 printf 'site = https://acme.atlassian.net\ntoken_cmd = touch %s; echo %s\n' "$MARK" "$FAKE" > "$GCFG/atlassian"
 rm -f "$MARK"
 settings_out="$(env JIRA_API_TOKEN="$FAKE" HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_CMD=wiki "$W" extensions settings jira 2>&1)"
