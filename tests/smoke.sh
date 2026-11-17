@@ -8175,6 +8175,22 @@ cp "$JK/fx/job__team__job__app.json" "$JK/fx/job__my%20team__job__app.json"
 : > "$JK/requests.log"
 jkw check "$JK/jkdemo" "my team/app" >/dev/null 2>&1
 check "a space in a part is encoded in the address: /job/my%20team/job/app" grep -q '^GET /job/my%20team/job/app/api/json' "$JK/requests.log"
+# A project in a GitLab or GitHub organization folder is a job whose own name holds %2F (group%2Fapp), so its address has %252F.
+cp "$JK/fx/job__team__job__app.json" "$JK/fx/job__Platform__job__grp%252Fsub%252Fapp.json"
+: > "$JK/requests.log"
+out="$(jkw check "$JK/jkdemo" 'Platform/grp%2Fsub%2Fapp' 2>&1)"; code=$?
+check "a job whose name holds %2F is asked for with the % encoded again: /job/Platform/job/grp%252Fsub%252Fapp" grep -q '^GET /job/Platform/job/grp%252Fsub%252Fapp/api/json' "$JK/requests.log"
+case "$out" in "== Platform/grp%2Fsub%2Fapp  (Jenkins)"*) ok "and check names it as it was given" ;; *) bad "and check names it as it was given" "exit $code: $out" ;; esac
+cp "$JKCF" "$JK/jenkins.enc"
+jkw watch "$JK/jkdemo" "$JKURL/job/Platform/job/grp%252Fsub%252Fapp/" >/dev/null 2>&1
+check "its address from the browser is turned into that path" grep -q "=Platform/grp%2Fsub%2Fapp" "$JKCF"
+cp "$JK/jenkins.enc" "$JKCF"
+: > "$JK/requests.log"
+check "an escape that stands for a % is refused, since it could be decoded twice" jkexits 2 jkw check "$JK/jkdemo" 'team/a%252e'
+check "so is one that stands for a control character" jkexits 2 jkw check "$JK/jkdemo" 'team/a%00b'
+check "a % with no two hex digits after it" jkexits 2 jkw check "$JK/jkdemo" 'team/a%2'
+check "and escapes that read as .. between slashes" jkexits 2 jkw check "$JK/jkdemo" 'team/a%2F%2E%2E%2Fb'
+check "and none of those reached Jenkins" test ! -s "$JK/requests.log"
 
 # Not set up, not signed in, not reachable, and wrong usage.
 mv "$JKCF" "$JK/jenkins.keep"

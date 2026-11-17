@@ -338,9 +338,29 @@ class Jenkins:
 PART_CHARS = " ._-"
 
 
+ESCAPE = re.compile(r"%([0-9A-Fa-f]{2})")
+
+
+def part_ok(p):
+    """One part of a job's path: letters, digits, space and ._-, and %XX where a job's own name holds one, as the name of a
+    project in a GitLab or GitHub organization folder does (group%2Fapp). An escape has to stand for a printing character
+    other than %, and the part with its escapes read can't be . or hold a .., so no reading of it climbs out of the job."""
+    if not p or p != p.strip() or p in (".", ".."):
+        return False
+    for m in ESCAPE.finditer(p):
+        c = int(m.group(1), 16)
+        if c < 0x20 or c > 0x7e or c == 0x25:
+            return False
+    plain = ESCAPE.sub("", p)
+    if not all(c.isalnum() or c in PART_CHARS for c in plain):
+        return False
+    read = urllib.parse.unquote(p)
+    return ".." not in read and read.strip() not in ("", ".")
+
+
 def job_problem(job):
-    """Why a job's path as Jenkins shows it can't be one, or nothing: parts of letters, digits, space and ._- joined by /,
-    none empty or starting or ending with a space, no .. anywhere."""
+    """Why a job's path as Jenkins shows it can't be one, or nothing: parts joined by /, each one part_ok, none empty or
+    starting or ending with a space, no .. anywhere."""
     if not job or len(job) > 300:
         return "is empty or too long"
     if ".." in job:
@@ -349,7 +369,7 @@ def job_problem(job):
     if len(parts) > 8:
         return "has more than 8 parts"
     for p in parts:
-        if not p or p != p.strip() or p in (".", "..") or not all(c.isalnum() or c in PART_CHARS for c in p):
+        if not part_ok(p):
             return "isn't a job path: each part is letters, digits, spaces and . _ - only, and parts are joined by /"
     return ""
 
@@ -979,7 +999,7 @@ def setup():
     cwd = clone_top(os.getcwd())
     entries = conf["watch"]
     if cwd and cwd not in [os.path.realpath(f) for f, _ in entries] and not any(c in cwd for c in ",#="):
-        job = ask(f"The Jenkins job that builds {cwd}, as Jenkins shows it, such as team/app. Enter for none", "")
+        job = ask(f"The Jenkins job that builds {cwd}: its path, such as team/app, or its address in your browser. Enter for none", "")
         if job:
             if job_problem(job) and "://" not in job:
                 print(f"  {clean(job, 60)!r} isn't a job path, so it wasn't saved.")
