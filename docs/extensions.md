@@ -166,6 +166,10 @@ An agent can leave a line for a session in the same way, from any extension: `"$
 
 When the excerpt is not enough, the whole log is `gh run view <id> --log-failed`.
 
+**Comments on your pull requests.** With `comments = yes`, the tick also looks at each of your open pull requests in a watched clone. When one has changed and someone else has commented on it, commented on its diff, or reviewed it since the last tick, the next session on that branch gets one line: how many, from whom, and `wiki github comments <number>`. The line never holds what they wrote, and a name that isn't a GitHub login is "someone". Bots, your own comments and a review that only holds diff comments don't count. The first look at a pull request only notes where it stands. It is off unless you turn it on.
+
+`wiki github comments [<folder>] [<number>] [--all]` prints what other people wrote since you last looked: who, when, the file and line for a comment on the diff, whether a review approved or asked for changes, and the text, cut at twelve lines, with every line of it marked `  | ` under a line that says it is text from outside. `--all` shows the newest twenty, bots too. It reads only: `gh pr view`, and GETs of `issues/<number>/comments`, `pulls/<number>/comments`, `pulls/<number>/reviews` and `user`. GitHub's REST API doesn't say whether a thread is resolved, so resolved threads are shown.
+
 #### An unattended fix
 
 Off. It is the one thing in this extension that writes to GitHub, and the first time llm-wiki has an agent's change committed and pushed with nobody watching, so it is turned on by a person, at a terminal, for one clone at a time. For a run that starts failing in a clone where it is on, the tick starts your agent on a fresh copy of the code, and then llm-wiki itself, never the agent, checks the change, commits it and pushes it.
