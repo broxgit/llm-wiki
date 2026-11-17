@@ -4,6 +4,12 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2027-01-04: wiki uninstall, and setup from nothing
+
+- `wiki uninstall` undoes what setup did on this machine and keeps your wikis. It asks first, and `--dry-run` only says what it would do.
+- Your settings are moved to `~/llm-wiki-removed-<time>`, never deleted. It lists what it leaves, such as the plugin, and how to remove that.
+- `wiki setup --fresh` does the same, then walks through setup as if for the first time.
+
 ## 2027-01-03: wiki github tells a session about new comments
 
 - With `comments = yes`, a new comment or review from someone else on your open pull request is handed to the next session on that branch.

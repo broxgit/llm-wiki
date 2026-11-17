@@ -142,6 +142,9 @@ Usage: $WIKI_CMD <command> [options]
   setup                Walk through every setting, step by step. Safe to rerun.
   setup --new          Only what's new since you last ran it, such as after a template update.
   setup --list         Print current settings without asking.
+  setup --fresh        Start again from nothing, keeping your wikis.
+  uninstall [--dry-run]
+                       Undo what setup did on this machine. Your wikis and settings are kept.
   setup --guide [section]
                        Text for your agent to walk you through setup in your session.
   init                 Create the wiki collection at $(tilde "$WIKIS_DIR") and its shared wiki, $SHARED.
@@ -8932,7 +8935,7 @@ cmd_extensions() {
 # Tab completion. `completion zsh|bash` prints a small script for the shell, which
 # asks `__complete` for candidates on every Tab. The candidates live here, so a
 # plugin update can't leave completion stale.
-COMMANDS="setup init new update start collections deps permissions seed harvest capture lock compile helper log sync index lint pending cover workflows which list status find stale patterns open pages skills tips report stats feedback news obsidian extensions tour mcp delegation upgrade unlock claude link journal standup completion"
+COMMANDS="setup uninstall init new update start collections deps permissions seed harvest capture lock compile helper log sync index lint pending cover workflows which list status find stale patterns open pages skills tips report stats feedback news obsidian extensions tour mcp delegation upgrade unlock claude link journal standup completion"
 RANGES="lastworkday yesterday today week lastweek 7d 14d 30d"
 
 wiki_names() {
@@ -11099,8 +11102,459 @@ guide_all_ext() {
   for n in $(guide_ext_names | sort -u); do guide_ext_one "$n"; done
 }
 
+# ---- uninstall: undo, on this machine, what setup did ------------------------------------
+# It takes away what llm-wiki added outside the wikis and moves its own settings aside. It
+# never touches a wiki, and never deletes a setting: the folders are moved, under a name
+# with the time in it, so putting them back is one mv each. Every file it changes gets a
+# backup named with that time first. What belongs to another program (the Claude Code plugin
+# itself, another agent's plugin, a keychain entry) is listed, with what to do, and left.
+# `setup --fresh` is this, then setup.
+#
+# Everything here leans to leaving a thing alone: a folder is moved only when it looks like
+# llm-wiki's and holds no wiki collection and not this copy; a line is removed only when it
+# is the whole line setup wrote; a link only when it leads to llm-wiki.
+
+# What the last run did: none (nothing to undo), declined, done, or failed (something could
+# not be undone, and was said).
+UN_RESULT=none
+# Shells an agent runs commands in. Uninstall is a person's decision, so it is not taken
+# from one of these. A person can set one away: this guards against a mistake, it is no lock.
+UN_AGENT_SHELLS="CLAUDECODE CLAUDE_CODE_ENTRYPOINT CODEX_SANDBOX CODEX_CI GEMINI_CLI CURSOR_AGENT"
+
+un_agent_shell() {
+  local v
+  for v in $UN_AGENT_SHELLS; do
+    if [ -n "$(eval "printf '%s' \"\${$v:-}\"")" ]; then return 0; fi
+  done
+  return 1
+}
+
+# un_collections: every collection's folder, one a line, each once. Never a failure: a list
+# that can't be read gives what is known, and un_collections_known says so.
+un_collections() {
+  { collections 2>/dev/null | cut -f 2 || true; printf '%s\n' "$WIKIS_DIR"; } | awk 'NF && !seen[$0]++' || true
+}
+
+# un_collections_known: the list of collections could be read, so every collection is known.
+un_collections_known() { [ ! -f "$COLLECTIONS_FILE" ] || can_read "$COLLECTIONS_FILE"; }
+
+# un_real <path>: the path with every link in it followed, when it is a folder that is there.
+un_real() { (cd "$1" 2>/dev/null && pwd -P) || printf '%s' "${1%/}"; }
+
+# un_inside <path> <folder>: the path is the folder or under it, links followed.
+un_inside() {
+  local a b
+  a="$(un_real "$1")"
+  b="$(un_real "$2")"
+  case "$a/" in "$b/"*) return 0 ;; esac
+  return 1
+}
+
+# un_holds_wiki <folder>: there is a wiki somewhere in it, whatever the list of collections says.
+un_holds_wiki() {
+  local f
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    if is_wiki "${f%/*}"; then return 0; fi
+  done <<UNEOF
+$(find "$1" -maxdepth 5 -name AGENTS.md -type f 2>/dev/null | head -n 200 || true)
+UNEOF
+  return 1
+}
+
+# un_bak <file> <stamp>: a name for a copy of the file that nothing has yet.
+un_bak() {
+  local b="$1.llm-wiki-$2.bak" i=2
+  while [ -e "$b" ] || [ -L "$b" ]; do b="$1.llm-wiki-$2-$i.bak"; i=$((i + 1)); done
+  printf '%s' "$b"
+}
+
+# un_folder_kept <folder> <settings|state|data>: why one of llm-wiki's folders is left where it
+# is, or nothing when it can be moved: it holds a wiki collection or this copy of llm-wiki, or
+# nothing in it is something llm-wiki keeps there.
+un_folder_kept() {
+  local d="$1" c n found=""
+  if ! un_collections_known; then printf 'the list of your collections can'"'"'t be read, so there is no telling whether your wikis are in it'; return 0; fi
+  if un_holds_wiki "$d"; then printf 'there is a wiki in it'; return 0; fi
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    if un_inside "$c" "$d"; then printf 'it holds your wikis in %s' "$(tilde "$c")"; return 0; fi
+  done <<UNEOF
+$(un_collections)
+UNEOF
+  if un_inside "$REPO" "$d"; then printf 'this copy of llm-wiki is in it'; return 0; fi
+  case "$2" in
+    settings) set -- setup extensions-on collections theme palette tips completion.zsh completion.bash helper github gitlab jenkins jira confluence delegation ;;
+    state) set -- notices offers extensions compile recall reminders news-seen feedback schedule.log ;;
+    *) set -- helper extensions ;;
+  esac
+  for n in "$@"; do
+    if [ -e "$d/$n" ]; then found=1; break; fi
+  done
+  [ -n "$found" ] || printf 'nothing in it is something llm-wiki keeps there'
+  return 0
+}
+
+# un_folders: "<folder><TAB><settings|state|data>" for each of llm-wiki's own folders that is
+# there, each folder once.
+un_folders() {
+  local d k seen=""
+  for k in settings state data; do
+    case "$k" in
+      settings) d="${XDG_CONFIG_HOME:-$HOME/.config}" ;;
+      state) d="${XDG_STATE_HOME:-$HOME/.local/state}" ;;
+      *) d="${XDG_DATA_HOME:-$HOME/.local/share}" ;;
+    esac
+    d="${d%/}/llm-wiki"
+    [ -d "$d" ] && [ ! -L "$d" ] || continue
+    case "$seen" in *"|$d|"*) continue ;; esac
+    seen="$seen|$d|"
+    printf '%s\t%s\n' "$d" "$k"
+  done
+}
+
+# un_links: links called wiki that lead to llm-wiki: the plugin's command or this copy.
+un_links() {
+  local d l t
+  for d in "$HOME/.local/bin" "$HOME/bin" /opt/homebrew/bin /usr/local/bin; do
+    l="$d/wiki"
+    [ -L "$l" ] || continue
+    t="$(readlink "$l" 2>/dev/null || true)"
+    case "$t" in
+      "$HOME/.claude/plugins/"*llm-wiki*/bin/wiki | "$REPO/wiki.sh") printf '%s\n' "$l" ;;
+      *) if from_plugin && [ "$t" = "$(plugin_cmd)" ]; then printf '%s\n' "$l"; fi ;;
+    esac
+  done
+}
+
+# un_profile_lines: "<file><TAB><line>" for each line setup added to a shell's startup file
+# to turn tab completion on: the whole line, as setup wrote it.
+un_profile_lines() {
+  local sh f prof
+  for sh in zsh bash; do
+    f="$(completion_file "$sh")"
+    prof="$(completion_profile "$sh")"
+    [ -f "$prof" ] || continue
+    if grep -qxF -- "[ -f \"$f\" ] && source \"$f\"" "$prof" 2>/dev/null; then printf '%s\t%s\n' "$prof" "[ -f \"$f\" ] && source \"$f\""; fi
+  done
+}
+
+# un_claude_line: the wiki line in CLAUDE.md, as setup writes it: one that starts with its words
+# and names wiki.sh, which every version of that line has.
+un_claude_line() {
+  [ -f "$CLAUDE_FILE" ] && can_read "$CLAUDE_FILE" || return 0
+  grep "^My knowledge wikis live in " "$CLAUDE_FILE" 2>/dev/null | grep -m 1 -F "wiki.sh" || true
+}
+
+# un_take_line <file> <line> <backup>: take every copy of that whole line out of the file, after
+# copying the file to the backup. The file is written in place, so a link to it stays a link.
+# Fails, with the file as it was, when the backup or the new text can't be made.
+un_take_line() {
+  local file="$1" line="$2" bak="$3" tmp code=0
+  tmp="$(mktemp "${TMPDIR:-/tmp}/llm-wiki.XXXXXX" 2>/dev/null)" || return 1
+  grep -vxF -- "$line" "$file" > "$tmp" 2>/dev/null || code=$?
+  if [ "$code" -gt 1 ]; then rm -f "$tmp"; return 1; fi
+  if ! cp "$file" "$bak" 2>/dev/null; then rm -f "$tmp"; return 1; fi
+  if ! cat "$tmp" > "$file" 2>/dev/null; then
+    # Half written: put it back as it was.
+    cat "$bak" > "$file" 2>/dev/null || true
+    rm -f "$tmp"
+    return 1
+  fi
+  rm -f "$tmp"
+  return 0
+}
+
+# un_perms [remove <backup>]: the allow rules for llm-wiki's commands in Claude Code's settings,
+# one a line: plain wiki, the plugin's command, and this copy's script, each with a word setup
+# offers. With remove, they are taken out, everything else is kept, the file is copied to the
+# backup first and replaced in one step.
+un_perms() {
+  local f="$HOME/.claude/settings.json"
+  [ -f "$f" ] && can_read "$f" && command -v python3 >/dev/null 2>&1 || return 0
+  SUBS="$PERM_SUBCOMMANDS" UN_HOME="${HOME%/}" UN_REPO="$REPO" python3 -c '
+import json, os, re, shutil, sys, tempfile
+path, remove = os.path.realpath(sys.argv[1]), sys.argv[2] == "remove"
+try:
+    s = json.load(open(path, encoding="utf-8"))
+except Exception:
+    sys.exit(1 if remove else 0)
+perms = s.get("permissions") if isinstance(s, dict) else None
+allow = perms.get("allow") if isinstance(perms, dict) else None
+if not isinstance(allow, list):
+    sys.exit(0)
+home, repo = os.environ["UN_HOME"], os.environ["UN_REPO"]
+def short(p):
+    return "~" + p[len(home):] if p.startswith(home + "/") else p
+cmds = {"wiki", repo + "/wiki.sh", short(repo + "/wiki.sh")}
+plugin = re.compile(r"(?:%s|~)/\.claude/plugins/data/[^/]*llm-wiki[^/]*/bin/wiki" % re.escape(home))
+def ours(rule):
+    if not isinstance(rule, str) or not rule.startswith("Bash(") or not rule.endswith(" *)"):
+        return False
+    cmd, _, sub = rule[5:-3].rpartition(" ")
+    return sub in os.environ["SUBS"].split() and (cmd in cmds or plugin.fullmatch(cmd) is not None)
+mine = [r for r in allow if ours(r)]
+if not remove:
+    if mine:
+        print("\n".join(mine))
+    sys.exit(0)
+if mine:
+    perms["allow"] = [r for r in allow if r not in mine]
+    tmp = ""
+    try:
+        shutil.copyfile(path, sys.argv[3])
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+        with os.fdopen(fd, "w", encoding="utf-8") as out:
+            json.dump(s, out, indent=2)
+            out.write("\n")
+        os.chmod(tmp, os.stat(path).st_mode & 0o777)
+        os.replace(tmp, path)
+    except Exception:
+        if tmp and os.path.exists(tmp):
+            os.unlink(tmp)
+        sys.exit(1)' "$f" "${1:-list}" "${2:-}" 2>/dev/null
+}
+
+# un_skill_links: links in Claude Code's skills folder that lead into a wiki collection. A
+# collection that is the home folder, or holds the skills folder, is no way to tell a link of
+# llm-wiki's from any other, so nothing is listed for it.
+un_skill_links() {
+  local l t c cols
+  [ -d "$SKILLS_DIR" ] || return 0
+  cols="$(un_collections)"
+  for l in "$SKILLS_DIR"/*; do
+    [ -L "$l" ] || continue
+    t="$(readlink "$l" 2>/dev/null || true)"
+    [ -n "$t" ] || continue
+    while IFS= read -r c; do
+      [ -n "$c" ] && [ "${c%/}" != "${HOME%/}" ] && [ "${c%/}" != "" ] || continue
+      if un_inside "$SKILLS_DIR" "$c"; then continue; fi
+      # A link of llm-wiki's leads to <collection>/<wiki>/skills/<name>, and that folder is a wiki.
+      case "$t" in
+        "${c%/}"/*/skills/*)
+          t="${t#"${c%/}"/}"
+          if is_wiki "${c%/}/${t%%/*}"; then printf '%s\n' "$l"; fi
+          ;;
+      esac
+    done <<UNEOF
+$cols
+UNEOF
+  done | awk '!seen[$0]++'
+}
+
+# un_left: what is left alone, and what to do about each, one a line.
+un_left() {
+  local n f
+  while IFS= read -r n; do
+    [ -z "$n" ] || [ ! -d "$n" ] || printf 'Your wikis in %s: untouched.\n' "$(tilde "$n")"
+  done <<UNEOF
+$(un_collections)
+UNEOF
+  if [ -z "${UN_FRESH:-}" ]; then
+    if from_plugin; then
+      printf 'The Claude Code plugin, which this command is part of. To remove it: claude plugin uninstall %s\n' "$(plugin_key)"
+    else
+      printf 'This copy of llm-wiki, in %s. Delete the folder to remove it.\n' "$(tilde "$REPO")"
+    fi
+  fi
+  [ ! -d "$CODEX_MKT" ] || printf 'The Codex plugin, in %s, the wiki lines in %s and the wiki skills in %s. Remove the plugin in Codex, then delete those.\n' "$(tilde "$CODEX_MKT")" "$(tilde "$CODEX_DIR/AGENTS.md")" "$(tilde "$CODEX_DIR/skills")"
+  [ ! -d "$AGY_DIR" ] || printf 'The Antigravity plugin, in %s, and the grants for wiki commands in %s. Delete the folder and those grants.\n' "$(tilde "$AGY_DIR")" "$(tilde "$AGY_CONFIG")"
+  if [ -f "$CURSOR_HOOKS" ] && grep -qF -- "__cursor-start" "$CURSOR_HOOKS" 2>/dev/null; then
+    printf 'The Cursor hook, in %s, and the wiki skills in %s. Delete the entry that runs __cursor-start, and those skills.\n' "$(tilde "$CURSOR_HOOKS")" "$(tilde "$CURSOR_DIR/skills")"
+  fi
+  if [ -f "$CLAUDE_DESKTOP_CONFIG" ] && grep -qF -- "llm-wiki" "$CLAUDE_DESKTOP_CONFIG" 2>/dev/null; then
+    printf 'The connector for the Claude app, in %s. Delete the llm-wiki entry under mcpServers.\n' "$(tilde "$CLAUDE_DESKTOP_CONFIG")"
+  fi
+  if [ -f "$HOME/.claude/settings.json" ] && grep -qF -- "extraKnownMarketplaces" "$HOME/.claude/settings.json" 2>/dev/null && grep -qF -- "llm-wiki" "$HOME/.claude/settings.json" 2>/dev/null; then
+    printf 'The auto-update setting for the llm-wiki marketplace, in ~/.claude/settings.json. Removing the plugin'"'"'s marketplace takes it away.\n'
+  fi
+  for f in "$HOME/.zshrc" "$HOME/.bash_profile"; do
+    # shellcheck disable=SC2016
+    if [ -f "$f" ] && grep -qxF -- 'export PATH="$HOME/.local/bin:$PATH"' "$f" 2>/dev/null; then
+      printf 'The line that puts ~/.local/bin on your PATH, in %s. Other commands may need it.\n' "$(tilde "$f")"
+    fi
+  done
+  printf 'A token in your keychain or password manager, if you saved one for Jira, Confluence or Jenkins.\n'
+  printf 'A line about the wiki in a project AGENTS.md or CLAUDE.md, if you added one.\n'
+  ! command -v gitleaks >/dev/null 2>&1 || printf 'gitleaks, which setup installs when it is missing. Other tools may use it.\n'
+}
+
+cmd_uninstall() {
+  local dry="" a aside stamp d k l prof line why n=0 fail=0 any="" i bak
+  local links lines perms skills folders sched claude_line moves="" kept=""
+  UN_RESULT=none
+  for a in "$@"; do
+    case "$a" in
+      --dry-run) dry=1 ;;
+      -h | --help)
+        printf '%s\n' "Usage: $WIKI_CMD uninstall [--dry-run]" "" \
+          "  Undo what setup did on this machine, and keep your wikis. It takes away the background" \
+          "  job, the wiki command's link, tab completion, the allow rules in Claude Code's settings" \
+          "  and the links to your wikis' skills, and moves llm-wiki's own settings aside, under" \
+          "  ~/llm-wiki-removed-<time>, so nothing you set is lost. Each file it changes is copied" \
+          "  first. It says what it leaves, such as the plugin itself, and how to remove that. It" \
+          "  asks before it changes anything." "" \
+          "  --dry-run   Say what it would do, and do nothing." "" \
+          "  To start again from nothing, keeping your wikis: $WIKI_CMD setup --fresh"
+        return 0
+        ;;
+      *) die_usage "usage: $WIKI_CMD uninstall [--dry-run]" ;;
+    esac
+  done
+  if [ -z "$dry" ]; then
+    if un_agent_shell; then
+      die "uninstall is a person's decision, so it isn't taken from an agent's shell. Do: run it yourself in a terminal: $WIKI_CMD uninstall. To see what it would do: $WIKI_CMD uninstall --dry-run"
+    fi
+    [ -t 0 ] || [ -n "${LLM_WIKI_TEST_TTY:-}" ] || die "uninstall asks before it changes anything, and there is no terminal to ask at. Do: run it in a terminal, or see what it would do: $WIKI_CMD uninstall --dry-run"
+  fi
+  # Looking never stops it: what can't be read is taken as not there, and is left.
+  sched="$( (sched_means 2>/dev/null || true) | tr '\n' ' ' | sed 's/ $//')"
+  links="$(un_links || true)"
+  lines="$(un_profile_lines || true)"
+  perms="$(un_perms || true)"
+  skills="$(un_skill_links || true)"
+  folders="$(un_folders || true)"
+  claude_line="$(un_claude_line || true)"
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  aside="${LLM_WIKI_REMOVED_DIR:-$HOME}/llm-wiki-removed-$stamp"
+  i=2
+  while [ -e "$aside" ] || [ -L "$aside" ]; do aside="${LLM_WIKI_REMOVED_DIR:-$HOME}/llm-wiki-removed-$stamp-$i"; i=$((i + 1)); done
+  # Which of its folders can be moved, and which are left, with why.
+  while IFS="$TAB" read -r d k; do
+    [ -n "$d" ] || continue
+    why="$(un_folder_kept "$d" "$k")"
+    if [ -n "$why" ]; then kept="$kept$d$TAB$why
+"; else moves="$moves$d$TAB$k
+"; fi
+  done <<UNEOF
+$folders
+UNEOF
+  any="$sched$links$lines$perms$skills$moves$claude_line"
+
+  if [ -z "$any" ]; then
+    ui_stage UNINSTALL "Nothing of llm-wiki's is set up on this machine"
+  else
+    if [ -n "$dry" ]; then ui_stage UNINSTALL "What would be undone on this machine"; else ui_stage UNINSTALL "What will be undone on this machine"; fi
+    [ -z "$sched" ] || ui_item ok "the background job that runs every few minutes ($sched)"
+    while IFS= read -r l; do [ -z "$l" ] || ui_item ok "the wiki command's link, $(tilde "$l")"; done <<UNEOF
+$links
+UNEOF
+    while IFS="$TAB" read -r prof line; do [ -z "$prof" ] || ui_item ok "the tab completion line in $(tilde "$prof") (the file is copied first)"; done <<UNEOF
+$lines
+UNEOF
+    [ -z "$perms" ] || ui_item ok "$(printf '%s\n' "$perms" | grep -c .) allow rule(s) for wiki commands in ~/.claude/settings.json (the file is copied first)"
+    [ -z "$claude_line" ] || ui_item ok "the wiki line in $(tilde "$CLAUDE_FILE") (the file is copied first)"
+    [ -z "$skills" ] || ui_item ok "$(printf '%s\n' "$skills" | grep -c .) link(s) to your wikis' skills in $(tilde "$SKILLS_DIR")"
+    while IFS="$TAB" read -r d k; do [ -z "$d" ] || ui_item ok "$(tilde "$d"), moved to $(tilde "$aside/$k")"; done <<UNEOF
+$moves
+UNEOF
+  fi
+  ui_stage KEPT "What is left as it is"
+  while IFS="$TAB" read -r d why; do [ -z "$d" ] || ui_item warn "$(tilde "$d"): left where it is, because $why."; done <<UNEOF
+$kept
+UNEOF
+  while IFS= read -r l; do [ -z "$l" ] || ui_item ok "$l"; done <<UNEOF
+$(un_left)
+UNEOF
+  [ -z "$dry" ] || return 0
+  [ -n "$any" ] || return 0
+  if ! SETUP_YES="" ask_yn "Go ahead?" n; then
+    ui_item ok "Nothing was changed."
+    UN_RESULT=declined
+    return 0
+  fi
+
+  ui_stage UNDOING "One thing at a time. Anything that can't be undone is said, and the rest goes on"
+  if [ -n "$sched" ]; then
+    sched_remove || true
+    if [ -z "$(sched_means 2>/dev/null || true)" ]; then ui_item ok "background job removed"; else fail=1; ui_item warn "the background job is still there: ${SCHED_ERR:-its file could not be removed}"; fi
+  fi
+  while IFS= read -r l; do
+    [ -n "$l" ] || continue
+    rm -f "$l" 2>/dev/null || true
+    if [ ! -L "$l" ]; then ui_item ok "removed $(tilde "$l")"; else fail=1; ui_item warn "couldn't remove $(tilde "$l"). Do: delete it yourself"; fi
+  done <<UNEOF
+$links
+UNEOF
+  while IFS="$TAB" read -r prof line; do
+    [ -n "$prof" ] || continue
+    bak="$(un_bak "$prof" "$stamp")"
+    if un_take_line "$prof" "$line" "$bak"; then
+      ui_item ok "tab completion line taken out of $(tilde "$prof")" "copy: $(tilde "$bak")"
+    else
+      fail=1
+      ui_item warn "couldn't change $(tilde "$prof"), so it is as it was. Do: delete the line that sources llm-wiki's completion file"
+    fi
+  done <<UNEOF
+$lines
+UNEOF
+  if [ -n "$perms" ]; then
+    bak="$(un_bak "$HOME/.claude/settings.json" "$stamp")"
+    if un_perms remove "$bak" && [ -z "$(un_perms || true)" ]; then
+      ui_item ok "allow rules taken out of ~/.claude/settings.json" "copy: $(tilde "$bak")"
+    else
+      fail=1
+      ui_item warn "couldn't change ~/.claude/settings.json, so it is as it was. Do: delete the allow rules for wiki commands yourself"
+    fi
+  fi
+  if [ -n "$claude_line" ]; then
+    bak="$(un_bak "$CLAUDE_FILE" "$stamp")"
+    if un_take_line "$CLAUDE_FILE" "$claude_line" "$bak"; then
+      ui_item ok "wiki line taken out of $(tilde "$CLAUDE_FILE")" "copy: $(tilde "$bak")"
+    else
+      fail=1
+      ui_item warn "couldn't change $(tilde "$CLAUDE_FILE"), so it is as it was. Do: delete the line about your knowledge wikis yourself"
+    fi
+  fi
+  if [ -n "$skills" ]; then
+    n=0
+    while IFS= read -r l; do
+      [ -n "$l" ] || continue
+      rm -f "$l" 2>/dev/null || true
+      if [ ! -L "$l" ]; then n=$((n + 1)); else fail=1; ui_item warn "couldn't remove $(tilde "$l"). Do: delete it yourself"; fi
+    done <<UNEOF
+$skills
+UNEOF
+    [ "$n" -eq 0 ] || ui_item ok "$n link(s) to your wikis' skills removed"
+  fi
+  if [ -n "$moves" ]; then
+    n=0
+    if mkdir -p "$aside" 2>/dev/null; then
+      while IFS="$TAB" read -r d k; do
+        [ -n "$d" ] || continue
+        if [ ! -e "$aside/$k" ] && [ ! -L "$aside/$k" ] && mv "$d" "$aside/$k" 2>/dev/null && [ ! -e "$d" ]; then
+          n=$((n + 1))
+        else
+          fail=1
+          ui_item warn "couldn't move $(tilde "$d") to $(tilde "$aside/$k"). Do: look at both, and move or delete them yourself"
+        fi
+      done <<UNEOF
+$moves
+UNEOF
+      if [ "$n" -gt 0 ]; then
+        ui_item ok "settings moved to $(tilde "$aside")" "$n folder(s)"
+        ui_detail "To put them back: move settings, state and data from there to where they were. To be rid of them: delete that folder."
+      else
+        rmdir "$aside" 2>/dev/null || true
+      fi
+    else
+      fail=1
+      ui_item warn "couldn't make $(tilde "$aside"), so the settings are where they were"
+    fi
+  fi
+  if [ "$fail" = 1 ]; then
+    UN_RESULT=failed
+    ui_stage --warn UNFINISHED "Some of it could not be undone. Each line with a ! above says what, and what to do"
+    return 1
+  fi
+  UN_RESULT="done"
+  ui_stage --ok DONE "llm-wiki's set-up on this machine is undone"
+  if [ -z "${UN_FRESH:-}" ] && from_plugin; then ui_next "claude plugin uninstall $(plugin_key)"; fi
+  return 0
+}
+
 cmd_setup() {
-  local what="" a n
+  local what="" a n fresh=""
   if [ "${1:-}" = --guide ]; then
     shift
     setup_guide "$@"
@@ -11126,14 +11580,17 @@ cmd_setup() {
   for a in "$@"; do
     case "$a" in
       --new) SETUP_MODE=new ;;
+      --fresh) fresh=1 ;;
       --list) setup_list; return 0 ;;
       --yes) SETUP_YES=1 ;;
       -h | --help)
         cat <<EOF
-Usage: $WIKI_CMD setup [--new | --list | --guide [section] | <section> | <setting>]
+Usage: $WIKI_CMD setup [--new | --fresh | --list | --guide [section] | <section> | <setting>]
 
   setup            Walk through every setting. Enter keeps what you have.
   setup --new      Only what's missing, out of date, or added since you last ran it.
+  setup --fresh    Start again from nothing, keeping your wikis: undo what setup did on this
+                   machine, as $WIKI_CMD uninstall does, then walk through setup as if for the first time.
   setup --list     Print current values without asking anything.
   setup --guide [section]
                    Print what an agent needs to walk you through setup in its session: each
@@ -11167,6 +11624,15 @@ EOF
   [ -z "${SETUP_YES:-}" ] || [ "$what" = chat ] || die "--yes works only with: $WIKI_CMD setup chat"
   # LLM_WIKI_TEST_TTY: the smoke tests answer setup's questions through a pipe.
   [ -n "${SETUP_YES:-}" ] || [ -t 0 ] || [ -n "${LLM_WIKI_TEST_TTY:-}" ] || die "setup asks questions, so it needs a terminal. $WIKI_CMD setup --list prints the current values. Run: $WIKI_CMD setup --guide, and follow it with the user in this session."
+  if [ -n "$fresh" ]; then
+    [ -z "$what" ] && [ "$SETUP_MODE" != new ] || die_usage "--fresh goes through everything, so it takes no section and no --new"
+    UN_FRESH=1 cmd_uninstall || die "the old set-up is only partly undone, so setup wasn't started. Do: see to the lines marked ! above, then run: $WIKI_CMD setup --fresh"
+    [ "$UN_RESULT" != declined ] || return 0
+    # A new process, so that nothing read from the settings that were just moved is still in hand.
+    # It is given the collection and the command's name this one had.
+    export WIKIS_DIR LLM_WIKI_CMD="$WIKI_CMD"
+    exec "$REPO/wiki.sh" setup
+  fi
   if [ "$SETUP_MODE" = new ] && [ -d "$WIKIS_DIR" ] && [ "$(claude_state)" = current ] && ! plugin_pending; then
     n="$(setup_pending | wc -l | tr -d ' ')"
     [ "$n" -gt 0 ] || [ -n "$(setup_upgrade_needed)" ] || { ui_item ok "Nothing new to set up."; return 0; }
@@ -11404,6 +11870,7 @@ case "$cmd" in
   capture) cmd_capture "$@"; exit 0 ;;
   feedback) cmd_feedback "$@"; exit 0 ;;
   news) cmd_news "$@"; exit 0 ;;
+  uninstall) cmd_uninstall "$@"; exit 0 ;;
   tour) cmd_tour "$@"; exit 0 ;;
   relay) cmd_relay "$@"; exit $? ;;
   mcp) cmd_mcp "$@"; exit 0 ;;
