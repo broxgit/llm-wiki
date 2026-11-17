@@ -26,6 +26,12 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 - **So, in stages:** (1) try it in a throwaway repository: a `version` in the manifest, a `stable` branch, an update, and going back, since the last is not documented; (2) a `version` in the manifest, a `stable` branch that moves only at a release, a release made by CI from a tag (the whole suite, the helper built and checked against its lock, notes from `NEWS.md`, a build attestation), and `wiki update` saying which version it left and reached; (3) moving the people who follow `main` today onto `stable`, and a way to follow `main` on purpose; (4) a page for an organization: the managed settings that name the marketplace and its ref.
 - **Open:** Whether the Codex, Antigravity and Cursor plugins follow the same version. Whether Homebrew becomes a second way to install: it can't run `wiki uninstall`, and two installs can disagree about which version runs, so it waits for the Go port to leave one binary. Whether machine settings get a version of their own with a step that runs when it is behind, which `wiki uninstall` made the inventory for. Who may cut a release, and what has to pass first.
 
+### Obsidian as the home, for people who don't use git
+
+- **Why:** asked for on 2026-11-17: people who are not software engineers want a nice place to keep wikis that is synced and backed up, and Obsidian is that place. An Obsidian vault is a folder of markdown, and `wiki obsidian` already opens the collection as one, so the gap is what such a person needs around it.
+- **Sketch:** three parts. The first is done (see Done): a note typed in an inbox folder becomes a note of the wiki. The second is a collection that needs no git: Obsidian Sync or a cloud drive carries it, setup asks no git questions, and `wiki sync` doesn't push, with a local history kept as a safety net the person never sees. The third is a plugin inside Obsidian with buttons for saving, compiling and what needs attention.
+- **Open:** for the second part, two things about Obsidian Sync that nobody has checked and that decide the design: what it does with hidden folders such as `.git`, and how it merges a page edited on a phone and by an agent at once. A cloud drive that syncs `.git` can corrupt it. Without git there is no history of what an agent changed and no secret scan before a push. The lock that keeps compiles to one session is a file, and would sync late. Whatever is built reads only the wikis' vault, never another vault.
+
 ### Learn where a person works, by asking
 
 - **Why:** llm-wiki assumed a session belongs to one repository. Most of one team starts sessions in a folder for a ticket, which holds clones, and for weeks their project wikis never loaded and nothing said so. Decided on 2026-11-11: never guess silently; ask when unsure; write what is learned into the person's own wiki, so the questions get rarer.
@@ -92,6 +98,12 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### An inbox: notes a person types become notes of the wiki (2026-11-17)
+
+- **Why:** the only way into a wiki was through an agent's session. A person who would rather type a note, in Obsidian or on a phone, had nowhere to put it.
+- **What changed:** a markdown file in a folder called `inbox`, in a wiki or at the top of the collection, is taken into `raw/` by `capture` and waits to be compiled like any other. `start`, `pending` and `compile` take what is ready, `wiki inbox` does it and says why anything was left, and `wiki obsidian` makes the collection's inbox. A note is claimed by a rename, read only once it is known to be a small plain file, removed only after it is saved, and put back if anything goes wrong. "Unchanged for two minutes" is by the time this machine last saw the file change, which a sync can't set back.
+- **Still untested:** with a real Obsidian vault and a real sync. Whether a sync client touches files often enough to keep a note waiting is not known; `wiki inbox --now` is the way out if it does.
 
 ### Comments on merge requests and pull requests reach a session (2026-11-17)
 
