@@ -75,6 +75,8 @@
                        access. An MCP client starts it. --print gives its config entry.
   news [--all]         What's new in llm-wiki since you last looked.
   obsidian [--no-open] Browse the wikis in Obsidian: write the vault's starter settings and open it.
+  inbox                Take the notes you typed into an inbox folder, in Obsidian or any editor,
+                       into the wikis. A session does it when it starts.
   extensions [path | add <name> | remove <name> | setup <name> | settings <name> | set <name> <key> <value> | log <name> | tick | every ... | offer <name> no|never|again]
                        Commands of your own: wiki <name> runs an executable named
                        wiki-<name> in the extensions folder. Lists them, or prints the folder.

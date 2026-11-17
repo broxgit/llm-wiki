@@ -75,6 +75,17 @@ The settings stay on each machine, since git ignores `.obsidian/`, so run it onc
 
 Agents maintain the pages, so read in Obsidian and ask an agent for changes. Nothing you do there breaks a wiki, but a change you type has no source, and a later compile or check may correct it. A new note you make there is reported by lint, and an agent offers to file it as a capture. If an agent rewrites a page while you have it open with unsaved typing, Obsidian asks which to keep.
 
+### Typing a note yourself: the inbox
+
+You don't need a session to add something. Put a markdown note in a folder called `inbox` and the next session takes it into the wiki's notes, where it waits to be compiled like any other:
+
+- `inbox` inside a wiki, such as `~/wikis/my-project/inbox`, is for that wiki.
+- `inbox` at the top of the collection is for the shared wiki. `wiki obsidian` makes it.
+
+It works from Obsidian, a phone that syncs the vault, or any editor. The note is taken once it has been unchanged on that machine for two minutes, so one you are still typing, or one still arriving from a sync, is never cut in half. It is removed from the inbox only after it is saved. It is left where it is when it is empty, over 200 kB, not a `.md` file, or a link. Pictures and other files in an inbox stay there.
+
+`wiki inbox` takes what is ready now, and says what it took and why it left the rest.
+
 Don't use the Obsidian Git plugin on the collection. It commits on a timer and can pull with a rebase. `wiki sync` already does the committing and pushing.
 
 ## Many repositories
