@@ -11633,13 +11633,18 @@ UNEOF
       printf 'This copy of llm-wiki, in %s. Delete the folder to remove it.\n' "$(tilde "$REPO")"
     fi
   fi
-  [ ! -d "$CODEX_MKT" ] || printf 'The Codex plugin, in %s, the wiki lines in %s and the wiki skills in %s. Remove the plugin in Codex, then delete those.\n' "$(tilde "$CODEX_MKT")" "$(tilde "$CODEX_DIR/AGENTS.md")" "$(tilde "$CODEX_DIR/skills")"
-  [ ! -d "$AGY_DIR" ] || printf 'The Antigravity plugin, in %s, and the grants for wiki commands in %s. Delete the folder and those grants.\n' "$(tilde "$AGY_DIR")" "$(tilde "$AGY_CONFIG")"
-  if [ -f "$CURSOR_HOOKS" ] && grep -qF -- "__cursor-start" "$CURSOR_HOOKS" 2>/dev/null; then
-    printf 'The Cursor hook, in %s, and the wiki skills in %s. Delete the entry that runs __cursor-start, and those skills.\n' "$(tilde "$CURSOR_HOOKS")" "$(tilde "$CURSOR_DIR/skills")"
+  if [ -d "$CODEX_MKT" ] && ! un_ours_codex; then printf '%s: it is not the folder setup makes, or it holds a wiki, so it is left.\n' "$(tilde "$CODEX_MKT")"; fi
+  if [ -d "$AGY_DIR" ] && ! un_ours_agy; then printf '%s: it is not the folder setup makes, or it holds a wiki, so it is left.\n' "$(tilde "$AGY_DIR")"; fi
+  if [ -f "$AGY_CONFIG" ] && [ ! -L "$AGY_CONFIG" ] && grep -qF -- "_file($WIKIS_DIR)" "$AGY_CONFIG" 2>/dev/null; then
+    printf 'Antigravity'"'"'s grants to read and write your wikis'"'"' folder, in %s. Your wikis stay, so these do too.\n' "$(tilde "$AGY_CONFIG")"
   fi
-  if [ -f "$CLAUDE_DESKTOP_CONFIG" ] && grep -qF -- "llm-wiki" "$CLAUDE_DESKTOP_CONFIG" 2>/dev/null; then
-    printf 'The connector for the Claude app, in %s. Delete the llm-wiki entry under mcpServers.\n' "$(tilde "$CLAUDE_DESKTOP_CONFIG")"
+  for f in "$AGY_CONFIG" "$CURSOR_HOOKS" "$CLAUDE_DESKTOP_CONFIG"; do
+    if [ -L "$f" ] && grep -qF -e "__cursor-start" -e "llm-wiki" -e "wiki.sh" "$f" 2>/dev/null; then
+      printf '%s is a link to a file kept somewhere else, so it is not changed. Take llm-wiki'"'"'s entries out of it yourself.\n' "$(tilde "$f")"
+    fi
+  done
+  if un_codex_listed && ! codex_bin >/dev/null 2>&1; then
+    printf 'The llm-wiki plugin in Codex'"'"'s own list: there is no codex command here to remove it with. Remove it in Codex'"'"'s settings.\n'
   fi
   if [ -f "$HOME/.claude/settings.json" ] && grep -qF -- "extraKnownMarketplaces" "$HOME/.claude/settings.json" 2>/dev/null && grep -qF -- "llm-wiki" "$HOME/.claude/settings.json" 2>/dev/null; then
     printf 'The auto-update setting for the llm-wiki marketplace, in ~/.claude/settings.json. Removing the plugin'"'"'s marketplace takes it away.\n'
@@ -11655,9 +11660,300 @@ UNEOF
   ! command -v gitleaks >/dev/null 2>&1 || printf 'gitleaks, which setup installs when it is missing. Other tools may use it.\n'
 }
 
+# ---- uninstall: what setup put into other agents -----------------------------------------
+# The same leaning as above: a thing is taken only when it is plainly llm-wiki's. A folder
+# that is wholly ours (the Antigravity plugin, the Codex marketplace) is moved aside, never
+# deleted. A file we share with the agent (its hooks, its grants, its settings) is copied
+# first and only our entries are taken out. Codex keeps its own list of plugins, so Codex is
+# asked to remove ours, and when there is no codex command it is left and said.
+
+# un_wiki_line <file>: the wiki line setup writes into an agent's instructions file: one that
+# starts with its words and names wiki.sh, which every version of that line has.
+un_wiki_line() {
+  [ -f "$1" ] && [ ! -L "$1" ] && can_read "$1" || return 0
+  grep "^My knowledge wikis live in " "$1" 2>/dev/null | grep -m 1 -F "wiki.sh" || true
+}
+
+# un_agent_skills <skills folder>: what llm-wiki put in an agent's skills folder, one path a
+# line: the llm-wiki skill when it is a link into this copy or the plugin, each wiki-<command>
+# folder that holds nothing but the SKILL.md wiki.sh made, and links into a wiki's skills.
+un_agent_skills() {
+  local d="$1" l t f c cols
+  [ -d "$d" ] && [ ! -L "$d" ] || return 0
+  l="$d/llm-wiki"
+  if [ -L "$l" ]; then
+    t="$(readlink "$l" 2>/dev/null || true)"
+    case "$t" in "$REPO/skills/llm-wiki" | "$HOME/.claude/plugins/"*llm-wiki*/skills/llm-wiki) printf '%s\n' "$l" ;; esac
+  fi
+  for f in "$d"/wiki-*; do
+    [ -d "$f" ] && [ ! -L "$f" ] || continue
+    un_plain_name "${f##*/}" || continue
+    [ -f "$f/SKILL.md" ] && [ ! -L "$f/SKILL.md" ] || continue
+    grep -qF -- "$COMMAND_SKILL_MARK" "$f/SKILL.md" 2>/dev/null || continue
+    # Nothing in it but the file wiki.sh made, and the one the Finder leaves.
+    [ "$(find "$f" -mindepth 1 ! -name .DS_Store 2>/dev/null | wc -l | tr -d ' ')" = 1 ] || continue
+    # Only when it can go whole: a folder that can't be removed is not emptied.
+    [ -w "$f" ] && [ -w "$d" ] || continue
+    printf '%s\n' "$f"
+  done
+  cols="$(un_collections)"
+  for l in "$d"/*; do
+    [ -L "$l" ] || continue
+    un_plain_name "${l##*/}" || continue
+    t="$(readlink "$l" 2>/dev/null || true)"
+    [ -n "$t" ] || continue
+    while IFS= read -r c; do
+      [ -n "$c" ] && [ "${c%/}" != "${HOME%/}" ] && [ "${c%/}" != "" ] || continue
+      if un_inside "$d" "$c"; then continue; fi
+      # A link of llm-wiki's leads to <collection>/<wiki>/skills/<name>, and no deeper.
+      case "$t" in
+        "${c%/}"/*/skills/*/*) ;;
+        "${c%/}"/*/skills/*)
+          t="${t#"${c%/}"/}"
+          case "${t%%/*}" in */*) ;; *) if [ "${t#*/}" = "skills/${t##*/}" ] && is_wiki "${c%/}/${t%%/*}"; then printf '%s\n' "$l"; fi ;; esac
+          ;;
+      esac
+    done <<UNEOF
+$cols
+UNEOF
+  done | awk '!seen[$0]++'
+}
+
+# un_plain_name <name>: a file's name with no control character in it, so that a list of
+# paths, one a line, is one path a line.
+un_plain_name() {
+  local LC_ALL=C
+  case "$1" in *[[:cntrl:]]*) return 1 ;; esac
+  return 0
+}
+
+# un_run_quiet <seconds> <command...>: run another program's command with nothing to read, its
+# words thrown away, and a limit: it is stopped when it takes longer. Never a failure.
+un_run_quiet() {
+  local limit="$1" pid t=0
+  shift
+  ( exec "$@" ) </dev/null >/dev/null 2>&1 &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$t" -ge $((limit * 10)) ]; then kill "$pid" 2>/dev/null || true; break; fi
+    sleep 0.1
+    t=$((t + 1))
+  done
+  wait "$pid" 2>/dev/null || true
+  return 0
+}
+
+# un_ours_codex / un_ours_agy: the folder is the one setup makes, by what is in it, and holds
+# no wiki. A folder of that name that someone made themselves is not moved.
+un_ours_codex() {
+  [ -d "$CODEX_MKT" ] && [ ! -L "$CODEX_MKT" ] || return 1
+  [ -f "$CODEX_MKT/.agents/plugins/marketplace.json" ] && [ -f "$CODEX_PLUGIN/.codex-plugin/plugin.json" ] || return 1
+  ! un_holds_wiki "$CODEX_MKT"
+}
+un_ours_agy() {
+  [ -d "$AGY_DIR" ] && [ ! -L "$AGY_DIR" ] || return 1
+  [ -f "$AGY_DIR/plugin.json" ] && [ -f "$AGY_DIR/hooks.json" ] || return 1
+  ! un_holds_wiki "$AGY_DIR"
+}
+
+# un_agy_grants: the grants that are only ever llm-wiki's: the ones for its own command. The
+# grants to read and write the wikis' folder are left: a person may have given those
+# themselves, and their wikis stay.
+un_agy_grants() { agy_grants 2>/dev/null | grep '^command(' || true; }
+
+# un_agent_skills_remove <paths>: take those away. Prints how many went. A folder goes only
+# by removing the one file in it and then the empty folder, never by a recursive delete.
+un_agent_skills_remove() {
+  local p n=0
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    if [ -L "$p" ]; then
+      rm -f "$p" 2>/dev/null || true
+    elif [ -d "$p" ] && [ -w "$p" ]; then
+      rm -f "$p/SKILL.md" "$p/.DS_Store" 2>/dev/null || true
+      rmdir "$p" 2>/dev/null || true
+    fi
+    if [ ! -e "$p" ] && [ ! -L "$p" ]; then n=$((n + 1)); fi
+  done <<UNEOF
+$1
+UNEOF
+  printf '%s' "$n"
+}
+
+# un_json <cursor|agy|desktop> <file> [remove <backup>]: llm-wiki's entries in a JSON file an
+# agent owns. Listing prints one line for each. With remove, the file is copied to the backup,
+# the entries are taken out, everything else is kept, and the file is replaced in one step.
+# For agy the grants to look for come on standard input.
+#   cursor   hooks.sessionStart entries whose command runs __cursor-start
+#   agy      userSettings.globalPermissionGrants.allow entries that are on standard input
+#   desktop  mcpServers["llm-wiki"], when it runs a wiki command with the one argument mcp
+un_json() {
+  local what="$1" f="$2"
+  # A settings file that is a link leads somewhere this has no business writing: it is left.
+  [ -f "$f" ] && [ ! -L "$f" ] && can_read "$f" && command -v python3 >/dev/null 2>&1 || return 0
+  python3 -c '
+import json, os, shutil, sys, tempfile
+what, path, remove = sys.argv[1], sys.argv[2], sys.argv[3] == "remove"
+try:
+    s = json.load(open(path, encoding="utf-8"))
+except Exception:
+    sys.exit(1 if remove else 0)
+if not isinstance(s, dict):
+    sys.exit(1 if remove else 0)
+found = []
+if what == "cursor":
+    hooks = s.get("hooks")
+    starts = hooks.get("sessionStart") if isinstance(hooks, dict) else None
+    if isinstance(starts, list):
+        ours = [x for x in starts if isinstance(x, dict) and "__cursor-start" in str(x.get("command", ""))]
+        found = [str(x.get("command", "")) for x in ours]
+        if remove and ours:
+            hooks["sessionStart"] = [x for x in starts if x not in ours]
+elif what == "agy":
+    want = [g for g in sys.stdin.read().splitlines() if g]
+    us = s.get("userSettings")
+    grants = us.get("globalPermissionGrants") if isinstance(us, dict) else None
+    allow = grants.get("allow") if isinstance(grants, dict) else None
+    if isinstance(allow, list):
+        found = [g for g in allow if isinstance(g, str) and g in want]
+        if remove and found:
+            grants["allow"] = [g for g in allow if g not in found]
+elif what == "desktop":
+    servers = s.get("mcpServers")
+    e = servers.get("llm-wiki") if isinstance(servers, dict) else None
+    cmd = e.get("command") if isinstance(e, dict) else None
+    if isinstance(cmd, str) and e.get("args") == ["mcp"] and (cmd.endswith("/wiki") or cmd.endswith("/wiki.sh") or cmd == "wiki"):
+        found = [cmd]
+        if remove:
+            del servers["llm-wiki"]
+if not remove:
+    if found:
+        print("\n".join(" ".join(x.split()) for x in found))
+    sys.exit(0)
+if not found:
+    sys.exit(0)
+tmp = ""
+try:
+    shutil.copy(path, sys.argv[4])
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+    with os.fdopen(fd, "w", encoding="utf-8") as out:
+        json.dump(s, out, indent=2)
+        out.write("\n")
+    os.chmod(tmp, os.stat(path).st_mode & 0o777)
+    os.replace(tmp, path)
+except Exception:
+    if tmp and os.path.exists(tmp):
+        os.unlink(tmp)
+    sys.exit(1)' "$what" "$f" "${3:-list}" "${4:-}" 2>/dev/null
+}
+
+# un_codex_listed: Codex's own settings still name the llm-wiki plugin or its marketplace.
+un_codex_listed() {
+  [ -f "$CODEX_DIR/config.toml" ] || return 1
+  LC_ALL=C grep -qE "^[[:space:]]*\\[[[:space:]]*(plugins[[:space:]]*\\.[[:space:]]*[\"']llm-wiki@llm-wiki[\"']|marketplaces[[:space:]]*\\.[[:space:]]*[\"']?llm-wiki[\"']?)[[:space:]]*\\]" "$CODEX_DIR/config.toml" 2>/dev/null
+}
+
+# un_move_aside <folder> <aside folder> <name there>: move a folder that is wholly llm-wiki's.
+# Never onto anything, and checked.
+un_move_aside() {
+  [ -d "$1" ] && [ ! -L "$1" ] || return 1
+  mkdir -p "$2" 2>/dev/null || return 1
+  if [ -e "$2/$3" ] || [ -L "$2/$3" ]; then return 1; fi
+  mv "$1" "$2/$3" 2>/dev/null || return 1
+  [ ! -e "$1" ]
+}
+
+# un_agents_plan: what would be undone in other agents, one line each, for the list.
+un_agents_plan() {
+  local n
+  if un_ours_codex; then printf 'the Codex plugin: its folder %s, moved aside\n' "$(tilde "$CODEX_MKT")"; fi
+  if un_codex_listed; then
+    if codex_bin >/dev/null 2>&1; then printf 'the llm-wiki plugin and marketplace in Codex'"'"'s own list, by asking Codex to remove them\n'; fi
+  fi
+  [ -z "$(un_wiki_line "$CODEX_DIR/AGENTS.md")" ] || printf 'the wiki line in %s (the file is copied first)\n' "$(tilde "$CODEX_DIR/AGENTS.md")"
+  n="$(un_agent_skills "$CODEX_DIR/skills" | grep -c . || true)"
+  [ "$n" -eq 0 ] || printf '%s wiki skill(s) in %s\n' "$n" "$(tilde "$CODEX_DIR/skills")"
+  if un_ours_agy; then printf 'the Antigravity plugin: its folder %s, moved aside\n' "$(tilde "$AGY_DIR")"; fi
+  n="$(un_agy_grants | un_json agy "$AGY_CONFIG" | grep -c . || true)"
+  [ "$n" -eq 0 ] || printf '%s grant(s) for wiki commands in %s (the file is copied first)\n' "$n" "$(tilde "$AGY_CONFIG")"
+  n="$(un_json cursor "$CURSOR_HOOKS" < /dev/null | grep -c . || true)"
+  [ "$n" -eq 0 ] || printf 'the Cursor hook in %s (the file is copied first)\n' "$(tilde "$CURSOR_HOOKS")"
+  n="$(un_agent_skills "$CURSOR_DIR/skills" | grep -c . || true)"
+  [ "$n" -eq 0 ] || printf '%s wiki skill(s) in %s\n' "$n" "$(tilde "$CURSOR_DIR/skills")"
+  n="$(un_json desktop "$CLAUDE_DESKTOP_CONFIG" < /dev/null | grep -c . || true)"
+  [ "$n" -eq 0 ] || printf 'the connector for the Claude app in %s (the file is copied first)\n' "$(tilde "$CLAUDE_DESKTOP_CONFIG")"
+}
+
+# un_agents_do <aside> <stamp>: undo them, one thing at a time, saying each. Returns 1 when
+# something could not be undone.
+un_agents_do() {
+  local aside="$1" stamp="$2" fail=0 c line bak paths n want
+  if un_codex_listed; then
+    if c="$(codex_bin 2>/dev/null)"; then
+      un_run_quiet 30 "$c" plugin remove "$CODEX_KEY"
+      un_run_quiet 30 "$c" plugin marketplace remove llm-wiki
+      if un_codex_listed; then
+        fail=1
+        ui_item warn "Codex still lists the llm-wiki plugin or its marketplace. Do: remove them in Codex: codex plugin remove $CODEX_KEY, then codex plugin marketplace remove llm-wiki"
+      else
+        ui_item ok "Codex was asked to remove the llm-wiki plugin and marketplace, and has"
+      fi
+    else
+      ui_item warn "Codex lists the llm-wiki plugin, and there is no codex command here to remove it with. Do: remove it in Codex's settings"
+    fi
+  fi
+  if un_ours_codex; then
+    if un_move_aside "$CODEX_MKT" "$aside" codex-plugin; then ui_item ok "Codex plugin's folder moved to $(tilde "$aside/codex-plugin")"; else fail=1; ui_item warn "couldn't move $(tilde "$CODEX_MKT"). Do: move or delete it yourself"; fi
+  fi
+  line="$(un_wiki_line "$CODEX_DIR/AGENTS.md")"
+  if [ -n "$line" ]; then
+    bak="$(un_bak "$CODEX_DIR/AGENTS.md" "$stamp")"
+    if un_take_line "$CODEX_DIR/AGENTS.md" "$line" "$bak"; then ui_item ok "wiki line taken out of $(tilde "$CODEX_DIR/AGENTS.md")" "copy: $(tilde "$bak")"; else fail=1; ui_item warn "couldn't change $(tilde "$CODEX_DIR/AGENTS.md"), so it is as it was. Do: delete the line about your knowledge wikis yourself"; fi
+  fi
+  for c in "$CODEX_DIR/skills" "$CURSOR_DIR/skills"; do
+    paths="$(un_agent_skills "$c")"
+    [ -n "$paths" ] || continue
+    want="$(printf '%s\n' "$paths" | grep -c . || true)"
+    n="$(un_agent_skills_remove "$paths")"
+    if [ "$n" = "$want" ]; then ui_item ok "$n wiki skill(s) removed from $(tilde "$c")"; else fail=1; ui_item warn "$n of $want wiki skill(s) removed from $(tilde "$c"). Do: delete the rest yourself"; fi
+  done
+  if [ -n "$(un_agy_grants | un_json agy "$AGY_CONFIG")" ]; then
+    bak="$(un_bak "$AGY_CONFIG" "$stamp")"
+    if un_agy_grants | un_json agy "$AGY_CONFIG" remove "$bak" && [ -z "$(un_agy_grants | un_json agy "$AGY_CONFIG")" ]; then
+      ui_item ok "grants for wiki commands taken out of $(tilde "$AGY_CONFIG")" "copy: $(tilde "$bak")"
+    else
+      fail=1
+      ui_item warn "couldn't change $(tilde "$AGY_CONFIG"), so it is as it was. Do: delete the grants for wiki commands yourself"
+    fi
+  fi
+  if un_ours_agy; then
+    if un_move_aside "$AGY_DIR" "$aside" antigravity-plugin; then ui_item ok "Antigravity plugin's folder moved to $(tilde "$aside/antigravity-plugin")"; else fail=1; ui_item warn "couldn't move $(tilde "$AGY_DIR"). Do: move or delete it yourself"; fi
+  fi
+  if [ -n "$(un_json cursor "$CURSOR_HOOKS" < /dev/null)" ]; then
+    bak="$(un_bak "$CURSOR_HOOKS" "$stamp")"
+    if un_json cursor "$CURSOR_HOOKS" remove "$bak" < /dev/null && [ -z "$(un_json cursor "$CURSOR_HOOKS" < /dev/null)" ]; then
+      ui_item ok "Cursor hook taken out of $(tilde "$CURSOR_HOOKS")" "copy: $(tilde "$bak")"
+    else
+      fail=1
+      ui_item warn "couldn't change $(tilde "$CURSOR_HOOKS"), so it is as it was. Do: delete the entry that runs __cursor-start yourself"
+    fi
+  fi
+  if [ -n "$(un_json desktop "$CLAUDE_DESKTOP_CONFIG" < /dev/null)" ]; then
+    bak="$(un_bak "$CLAUDE_DESKTOP_CONFIG" "$stamp")"
+    if un_json desktop "$CLAUDE_DESKTOP_CONFIG" remove "$bak" < /dev/null && [ -z "$(un_json desktop "$CLAUDE_DESKTOP_CONFIG" < /dev/null)" ]; then
+      ui_item ok "connector for the Claude app taken out of $(tilde "$CLAUDE_DESKTOP_CONFIG")" "copy: $(tilde "$bak")"
+      ui_detail "Quit and reopen the Claude app for it to notice."
+    else
+      fail=1
+      ui_item warn "couldn't change $(tilde "$CLAUDE_DESKTOP_CONFIG"), so it is as it was. Do: delete the llm-wiki entry under mcpServers yourself"
+    fi
+  fi
+  return "$fail"
+}
+
 cmd_uninstall() {
   local dry="" a aside stamp d k l prof line why n=0 fail=0 any="" i bak
-  local links lines perms skills folders sched claude_line moves="" kept=""
+  local links lines perms skills folders sched claude_line agents moves="" kept=""
   UN_RESULT=none
   for a in "$@"; do
     case "$a" in
@@ -11666,7 +11962,8 @@ cmd_uninstall() {
         printf '%s\n' "Usage: $WIKI_CMD uninstall [--dry-run]" "" \
           "  Undo what setup did on this machine, and keep your wikis. It takes away the background" \
           "  job, the wiki command's link, tab completion, the allow rules in Claude Code's settings" \
-          "  and the links to your wikis' skills, and moves llm-wiki's own settings aside, under" \
+          "  and the links to your wikis' skills, what setup put into Codex, Antigravity, Cursor and" \
+          "  the Claude app, and moves llm-wiki's own settings aside, under" \
           "  ~/llm-wiki-removed-<time>, so nothing you set is lost. Each file it changes is copied" \
           "  first. It says what it leaves, such as the plugin itself, and how to remove that. It" \
           "  asks before it changes anything." "" \
@@ -11691,6 +11988,7 @@ cmd_uninstall() {
   skills="$(un_skill_links || true)"
   folders="$(un_folders || true)"
   claude_line="$(un_claude_line || true)"
+  agents="$(un_agents_plan 2>/dev/null || true)"
   stamp="$(date +%Y%m%d-%H%M%S)"
   aside="${LLM_WIKI_REMOVED_DIR:-$HOME}/llm-wiki-removed-$stamp"
   i=2
@@ -11705,7 +12003,7 @@ cmd_uninstall() {
   done <<UNEOF
 $folders
 UNEOF
-  any="$sched$links$lines$perms$skills$moves$claude_line"
+  any="$sched$links$lines$perms$skills$moves$claude_line$agents"
 
   if [ -z "$any" ]; then
     ui_stage UNINSTALL "Nothing of llm-wiki's is set up on this machine"
@@ -11721,6 +12019,9 @@ UNEOF
     [ -z "$perms" ] || ui_item ok "$(printf '%s\n' "$perms" | grep -c .) allow rule(s) for wiki commands in ~/.claude/settings.json (the file is copied first)"
     [ -z "$claude_line" ] || ui_item ok "the wiki line in $(tilde "$CLAUDE_FILE") (the file is copied first)"
     [ -z "$skills" ] || ui_item ok "$(printf '%s\n' "$skills" | grep -c .) link(s) to your wikis' skills in $(tilde "$SKILLS_DIR")"
+    while IFS= read -r l; do [ -z "$l" ] || ui_item ok "$l"; done <<UNEOF
+$agents
+UNEOF
     while IFS="$TAB" read -r d k; do [ -z "$d" ] || ui_item ok "$(tilde "$d"), moved to $(tilde "$aside/$k")"; done <<UNEOF
 $moves
 UNEOF
@@ -11792,6 +12093,10 @@ UNEOF
 $skills
 UNEOF
     [ "$n" -eq 0 ] || ui_item ok "$n link(s) to your wikis' skills removed"
+  fi
+  # Other agents before the settings move: what is theirs is found with the settings in place.
+  if [ -n "$agents" ]; then
+    un_agents_do "$aside" "$stamp" || fail=1
   fi
   if [ -n "$moves" ]; then
     n=0
