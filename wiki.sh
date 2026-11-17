@@ -147,6 +147,8 @@ Usage: $WIKI_CMD <command> [options]
                        Undo what setup did on this machine. Your wikis and settings are kept.
   setup --guide [section]
                        Text for your agent to walk you through setup in your session.
+  setup --pending      The topics setup hasn't had an answer on, for you or an agent to read.
+  setup keep <topic>   Leave a topic as it is, so setup stops asking about it.
   init                 Create the wiki collection at $(tilde "$WIKIS_DIR") and its shared wiki, $SHARED.
   new <name|path>      Create a wiki from the template. A bare name goes under $(tilde "$WIKIS_DIR").
   capture <wiki> <slug>  Save a note piped on stdin in raw/, named from the clock.
@@ -3954,11 +3956,11 @@ EOF2
   [ "$n" -eq 0 ] || todo_add "llm-wiki: $n new thing(s) to read about. Run: $WIKI_CMD news"
   n="$(TIP_REPO="$PWD" tips_due | wc -l | tr -d ' ')"
   [ "$n" -eq 0 ] || todo_add "tips: $n feature(s) your wikis suggest trying. Run: $WIKI_CMD tips"
-  n="$(setup_pending | wc -l | tr -d ' ')"
+  n="$(setup_topics | wc -l | tr -d ' ')"
   if [ ! -f "$SETUP_STATE" ]; then
     todo_add "setup: never run on this machine. Run: $WIKI_CMD setup. Or ask an agent: \"run $WIKI_CMD setup --guide and walk me through it\""
   elif [ "$n" -gt 0 ]; then
-    todo_add "setup: $n new setting(s). Run: $WIKI_CMD setup --new. Or ask an agent: \"run $WIKI_CMD setup --guide and walk me through it\""
+    todo_add "setup: $n topic(s) not answered yet: $(setup_topics | head -n 8 | tr '\n' ' ' | sed -e 's/ $//' -e 's/ /, /g')$([ "$n" -le 8 ] || echo " and $((n - 8)) more"). Run: $WIKI_CMD setup --new. Or ask an agent: \"run $WIKI_CMD setup --guide and walk me through it\""
   fi
   if [ -n "$STATUS_TODO" ]; then
     echo
@@ -10474,6 +10476,82 @@ setup_pending() {
   done
 }
 
+# setup_topic <id>: the name an unanswered question goes by, which is the section
+# setup --guide takes for it. The journal's settings, other than whether it is on, are one topic.
+setup_topic() {
+  case "$1" in
+    journal.enabled) echo journal.enabled ;;
+    journal.*) echo journal ;;
+    extension.*) echo "${1#extension.}" ;;
+    extensions.every) echo extensions ;;
+    claude.permissions) echo permissions ;;
+    antigravity*) echo antigravity ;;
+    completion.*) echo completion ;;
+    delegation.mode) echo delegation ;;
+    *) echo "$1" ;;
+  esac
+}
+
+# setup_topics: the topics not answered yet, one a line, each once, in setup's order.
+setup_topics() {
+  local id
+  setup_pending | while IFS= read -r id; do setup_topic "$id"; done | awk '!seen[$0]++'
+}
+
+# setup_topics_total: how many topics this machine has in all, answered or not: what
+# would be unanswered with nothing recorded.
+setup_topics_total() { (SETUP_STATE="$SETUP_STATE.none"; setup_topics | wc -l | tr -d ' '); }
+
+# setup_pending_list: what setup --pending prints. Plain lines, for an agent to read: the
+# guide's last step is to run it until it lists nothing.
+setup_pending_list() {
+  local c="$WIKI_CMD" n
+  if [ -z "${LLM_WIKI_CMD:-}" ] && from_plugin; then
+    if wiki_linked; then c=wiki; else c="$(tilde "$(plugin_cmd)")"; fi
+  fi
+  style_off
+  n="$(setup_topics | wc -l | tr -d ' ')"
+  if [ "$n" -eq 0 ]; then
+    echo "Every setup topic is answered. Nothing is left to ask."
+    return 0
+  fi
+  echo "$n of $(setup_topics_total) setup topics not answered yet:"
+  setup_topics | sed 's/^/- /'
+  echo "For each: $c setup --guide <topic> says what it is and how to change it. $c setup keep <topic> leaves it as it is."
+  echo "Agents: ask the user about each one, one at a time. Leaving one as it is is an answer too: record it with keep, only when they said so. Then run this again, until it lists none."
+}
+
+# setup_keep <topic>...: the user's answer "leave it as it is", recorded so setup stops
+# asking. It changes no setting and installs nothing.
+setup_keep() {
+  local t id hit left
+  [ $# -gt 0 ] || die_usage "usage: $WIKI_CMD setup keep <topic>... $WIKI_CMD setup --pending lists the topics."
+  for t in "$@"; do
+    [ "$t" = journal.enabled ] || guide_known "$t" || die_usage "no setup topic called $t. $WIKI_CMD setup --pending lists the ones not answered yet."
+  done
+  for t in "$@"; do
+    hit=0
+    while IFS= read -r id; do
+      [ -n "$id" ] || continue
+      [ "$(setup_topic "$id")" = "$t" ] || continue
+      setup_mark "$id"
+      hit=1
+    done <<EOF
+$(setup_pending)
+EOF
+    if setup_topics | grep -qxF -- "$t"; then
+      # Not a question but something out of date: an answer doesn't settle it.
+      ui_item warn "$t can't be left as it is: what is set up is out of date. $WIKI_CMD setup --guide $t says what to do."
+    elif [ "$hit" = 1 ]; then
+      ui_item ok "$t stays as it is."
+    else
+      ui_item ok "$t was answered already."
+    fi
+  done
+  left="$(setup_topics | wc -l | tr -d ' ')"
+  if [ "$left" -eq 0 ]; then ui_detail "Every setup topic is answered."; else ui_detail "$left of $(setup_topics_total) left: $WIKI_CMD setup --pending"; fi
+}
+
 # section <title>: one step of setup, as a stage of the kit: SETUP and the title.
 section() { ui_stage SETUP "$1"; }
 
@@ -11407,18 +11485,25 @@ setup_guide() {
   style_off
   GUIDE_PENDING=" $(setup_pending | tr '\n' ' ')"
   # The whole guide opens and ends as a whole setup does: what llm-wiki is, then tips and how to help.
-  local first="" last="- Finish with $c setup --list and tell the user what changed."
+  local first="" last="- Finish with $c setup --list and tell the user what changed." left
   if [ -z "$sec" ]; then
     first="- If the user is new to llm-wiki, first say what it is in two or three plain sentences: notes on this computer, a wiki for each project, that give their assistant a memory that lasts.
 - Use everyday words unless the user uses others: folder, not repository; a history or a backup, not git or sync. Never say a setting's internal name.
 - Don't hand the user a list of Terminal only commands. Give one only when they asked for that topic, or it is marked [not answered yet].
 "
-    last="- Finish with $c setup --list and tell the user what changed: only what they chose, not every row. Then give two or three tips (say \"remember this\" to save something, ask what was decided, $c status, the llm-wiki tour).
+    last="- Ask about every topic marked [not answered yet], in order. Don't pick a few: each one gets asked. After each, say how many are left.
+- If they want a topic left as it is, that is an answer: run $c setup keep <topic>.
+- Type a command as it is written here, not from a variable.
+- You are not finished while $c setup --pending lists a topic. Run it before you say setup is done, ask about each topic it lists, and run it again, until it lists none.
+- Finish with $c setup --list and tell the user what changed: only what they chose, not every row. Then give two or three tips (say \"remember this\" to save something, ask what was decided, $c status, the llm-wiki tour).
 - Your last line, always: how they can help improve llm-wiki, with feedback notes ($c setup feedback notes) and issues at https://github.com/$(feedback_repo)/issues."
   fi
+  left=""
+  [ -n "$sec" ] || left="$(setup_topics | wc -l | tr -d ' ') of $(setup_topics_total) topics are not answered yet. $c setup --pending lists them at any time.
+"
   cat <<EOF
 llm-wiki setup guide, to follow with the user in this session, one topic at a time.
-${first}- Start with topics marked [not answered yet] ($c setup --new would ask them), then ask what else to change.
+$left${first}- Start with topics marked [not answered yet] ($c setup --new would ask them), then ask what else to change.
 - Per topic: say what it does and its value in a line, ask, then run its Change command.
 - Where you can show choices to pick from, ask that way, your pick first.
 - Never ask for, accept or write a token or password. If the user pastes one, don't store or repeat it: they put it in their keychain themselves.
@@ -12267,6 +12352,16 @@ cmd_setup() {
     setup_guide "$@"
     return 0
   fi
+  if [ "${1:-}" = --pending ]; then
+    [ $# -eq 1 ] || die_usage "usage: $WIKI_CMD setup --pending"
+    setup_pending_list
+    return 0
+  fi
+  if [ "${1:-}" = keep ]; then
+    shift
+    setup_keep "$@"
+    return 0
+  fi
   # palette, theme and feedback take a value, for a session that can't answer questions.
   case "${1:-}" in
     palette | theme | feedback)
@@ -12292,7 +12387,7 @@ cmd_setup() {
       --yes) SETUP_YES=1 ;;
       -h | --help)
         cat <<EOF
-Usage: $WIKI_CMD setup [--new | --fresh | --list | --guide [section] | <section> | <setting>]
+Usage: $WIKI_CMD setup [--new | --fresh | --list | --pending | --guide [section] | keep <topic> | <section> | <setting>]
 
   setup            Walk through every setting. Enter keeps what you have.
   setup --new      Only what's missing, out of date, or added since you last ran it.
@@ -12304,6 +12399,9 @@ Usage: $WIKI_CMD setup [--new | --fresh | --list | --guide [section] | <section>
                    setting, whether it is answered, and the command that changes it. In Claude
                    Code, /llm-wiki:setup does the same. No question is asked, and no token is
                    ever asked for or written by the agent.
+  setup --pending  List the topics not answered yet, with the command for each. No question is asked.
+  setup keep <topic>...
+                   Leave a topic as it is and stop asking about it. Changes no setting.
   setup palette <default|colorblind>, setup theme <auto|dark|light>, setup feedback <off|notes|share>
                    Set one without questions.
   setup <section>  Just one section: collection, collections, tools, git, workflows, claude, permissions, antigravity, codex, cursor, upgrade, delegation, feedback, palette, theme, chat, obsidian, extensions, journal.

@@ -281,6 +281,7 @@ Settings live in `~/wikis/journal/config`. Walk through them with `wiki setup jo
 
 - `wiki setup --list` prints every setting and marks the ones still at their default.
 - `wiki setup --new` asks only about what's new since you last ran it.
+- `wiki setup --pending` lists the topics setup has no answer on, without asking anything. `wiki setup keep <topic>` leaves one as it is and stops setup asking about it.
 - `wiki setup --guide` is for your agent: ask it to walk you through setup (in Claude Code, `/llm-wiki:setup`) and it goes through each setting with you, the unanswered ones first. `wiki setup --guide journal` does one section. A token stays yours to store.
 - `wiki setup plugin`, `wiki setup git`, `wiki setup journal` or `wiki setup delegation` reruns one section.
 - `wiki setup format` edits one journal setting.
