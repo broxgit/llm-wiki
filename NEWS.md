@@ -4,6 +4,13 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2027-01-07: the guided setup, after a real run
+
+- Where your agent can show a question with answers to pick from, as Claude Code can, the guided setup asks that way, with its own pick first.
+- It makes `wiki` a command first, and then says `wiki`, not a long path nobody can type.
+- The journal's settings are one question, keep them as they are or not, where they were fourteen. `wiki journal keep` is the yes.
+- For a step only you can do in a terminal, the agent can offer to start it there for you to answer.
+
 ## 2027-01-06: wiki uninstall covers Codex, Antigravity, Cursor and the Claude app
 
 - `wiki uninstall` now takes out what setup put into Codex, Antigravity, Cursor and the Claude app, where before it only listed them.
