@@ -29,7 +29,30 @@ import (
 // one of those changes, so a binary left over from an older checkout is passed over.
 const protocol = "21"
 
+// gitSafe is wiki.sh's own first step, for a helper started without it, as the MCP server
+// can be: every git this process starts gets safe.bareRepository=explicit, after whatever
+// settings the environment already carries. A folder that holds HEAD, objects/ and refs/ is
+// then no repository to git unless it is named, so a wiki's own files can't pass for one.
+func gitSafe() {
+	n, err := strconv.Atoi(os.Getenv("GIT_CONFIG_COUNT"))
+	if err != nil || n < 0 {
+		n = 0
+	}
+	// Ours has to be the last word: a later setting of the key wins, and so does one in a file
+	// a later include names. So it is added unless it is already the last one there.
+	if n > 0 {
+		last := strconv.Itoa(n - 1)
+		if strings.EqualFold(os.Getenv("GIT_CONFIG_KEY_"+last), "safe.bareRepository") && os.Getenv("GIT_CONFIG_VALUE_"+last) == "explicit" {
+			return
+		}
+	}
+	os.Setenv("GIT_CONFIG_KEY_"+strconv.Itoa(n), "safe.bareRepository")
+	os.Setenv("GIT_CONFIG_VALUE_"+strconv.Itoa(n), "explicit")
+	os.Setenv("GIT_CONFIG_COUNT", strconv.Itoa(n+1))
+}
+
 func main() {
+	gitSafe()
 	if len(os.Args) < 2 {
 		fail("usage: llm-wiki protocol | report-tokens|report-tokens-gemini <transcripts> <start> <end> <day-starts> <wikis> <exclude> | standup-activity <options> | journal-backfill <transcripts> <start> <end> <day-starts> <wikis> <exclude> <out> <brain> | which <options> | find <options> | status <options> | capture <options> -- <arguments> | feedback-add <options> -- <arguments> | mcp")
 	}

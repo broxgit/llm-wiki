@@ -83,6 +83,7 @@ read -r -d '' PARTS <<'TABLE' || true
 3 | Size budget |
 3 | Uninstall | Collection
 3 | What CI skips |
+2 | A wiki that passes for a repository |
 2 | The suite itself |
 3 | Obsidian plugin |
 2 | History without git |
@@ -11441,6 +11442,112 @@ if command -v node >/dev/null 2>&1; then
 else
   skipped "the plugin's own tests (node isn't installed)"
 fi
+fi
+
+if section "A wiki that passes for a repository"; then
+# Git takes a folder that holds HEAD, objects/ and refs/ for a repository and reads the config
+# beside them, which can name a command to run and a remote to push to. Those are ordinary
+# file names, so a push can carry them into a wiki. Two machines share a collection here:
+# the first pushes such a wiki, and the second captures a note and syncs.
+H4="$T/h4"
+mkdir -p "$H4/a" "$H4/b" "$H4/bin"
+# Sync scans before it pushes from a clone, which has no hook yet. Without gitleaks here, a stand-in.
+command -v gitleaks >/dev/null 2>&1 || { printf '#!/bin/sh\nexit 0\n' > "$H4/bin/gitleaks"; chmod +x "$H4/bin/gitleaks"; }
+h4w() { local h="$1"; shift; env HOME="$H4/$h" WIKIS_DIR="$H4/$h/wikis" PATH="$PATH:$H4/bin" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com "$W" "$@"; }
+h4g() { local h="$1"; shift; env HOME="$H4/$h" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com git -C "$H4/$h/wikis" "$@"; }
+h4plant() { # <folder> <proof file>: the files of a repository, with a config that runs a command and names a remote
+  mkdir -p "$1/objects" "$1/refs"
+  printf 'ref: refs/heads/main\n' > "$1/HEAD"; : > "$1/objects/keep"; : > "$1/refs/keep"
+  printf '[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tworktree = .\n\tfsmonitor = "touch %s; false"\n[remote "origin"]\n\turl = %s\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n' "$2" "$H4/elsewhere.git" > "$1/config"
+}
+# Made with the first machine's home, so both name the first branch the same way.
+env HOME="$H4/a" git init -q --bare "$H4/team.git"; env HOME="$H4/a" git init -q --bare "$H4/elsewhere.git"
+h4w a init --git >/dev/null 2>&1
+h4w a new demo >/dev/null 2>&1
+h4g a remote add origin "$H4/team.git"
+h4plant "$H4/a/wikis/demo" "$H4/PROOF"
+h4plant "$H4/a/wikis/demo/wiki/deep/down" "$H4/PROOF-DEEP"
+printf 'A private page of the team.\n' > "$H4/a/wikis/demo/wiki/private.md"
+h4g a add -A && h4g a commit -q --no-verify -m all && h4g a push -q -u origin HEAD 2>/dev/null
+env HOME="$H4/b" git clone -q "$H4/team.git" "$H4/b/wikis" 2>/dev/null
+check "the second machine has the wiki, with the planted files in it" test -f "$H4/b/wikis/demo/config"
+rm -f "$H4/PROOF" "$H4/PROOF-DEEP"
+printf 'A note.\n' | h4w b capture demo a-note >/dev/null 2>&1
+out="$(h4w b sync demo -m "demo: capture 1 note" 2>&1)"
+check "sync runs no command that a pushed config names" test ! -e "$H4/PROOF"
+check "nor one planted two folders down in the wiki" test ! -e "$H4/PROOF-DEEP"
+case "$out" in *"committed: demo: capture 1 note"*"synced: "*) ok "the note is committed and pushed" ;; *) bad "the note is committed and pushed" "$out" ;; esac
+check "to the team's remote, which is the collection's" bash -c "git --git-dir='$H4/team.git' ls-tree -r --name-only HEAD | grep -q 'demo/raw/.*a-note'"
+check "and nothing went to the remote the planted config names" test -z "$(git --git-dir="$H4/elsewhere.git" for-each-ref | head -n 1)"
+lacks "the wiki isn't taken for a repository of its own" "to origin for the first time" printf '%s\n' "$out"
+# The other commands, from the Bash and from the helper where there is one.
+for c in "start demo" "status" "pending" "find note" "lint demo" "index demo --check"; do
+  # shellcheck disable=SC2086
+  h4w b $c >/dev/null 2>&1 || true
+  # shellcheck disable=SC2086
+  LLM_WIKI_NO_GO=1 h4w b $c >/dev/null 2>&1 || true
+done
+check "start, status, pending, find, lint and index run none either" bash -c "! test -e '$H4/PROOF' && ! test -e '$H4/PROOF-DEEP'"
+# git, asked from inside such a folder by anything this script starts, refuses it.
+mkdir -p "$H4/b/.local/share/llm-wiki/extensions"
+cat > "$H4/b/.local/share/llm-wiki/extensions/wiki-gitsafe" <<'EXT'
+#!/bin/sh
+# wiki-extension: Says what git is told, for the smoke test.
+cd "$WIKIS_DIR" || exit 1
+printf 'setting=%s count=%s name=%s\n' "$(git config --get safe.bareRepository)" "$GIT_CONFIG_COUNT" "$(git config --get user.name)"
+git -C "$WIKIS_DIR/demo" rev-parse --git-dir 2>&1 | head -n 1
+printf 'nested: '; "$LLM_WIKI" gitsafe-count
+EXT
+cat > "$H4/b/.local/share/llm-wiki/extensions/wiki-gitsafe-count" <<'EXT'
+#!/bin/sh
+# wiki-extension: The count again, one wiki command further in.
+printf 'count=%s\n' "$GIT_CONFIG_COUNT"
+EXT
+chmod +x "$H4/b/.local/share/llm-wiki/extensions/wiki-gitsafe" "$H4/b/.local/share/llm-wiki/extensions/wiki-gitsafe-count"
+out="$(h4w b gitsafe 2>&1)"
+case "$out" in *"setting=explicit count=1 "*) ok "an extension's git gets the setting" ;; *) bad "an extension's git gets the setting" "$out" ;; esac
+case "$out" in *"safe.bareRepository is 'explicit'"*) ok "and so refuses the wiki's planted files as a repository" ;; *"not a git repository"*) ok "and so refuses the wiki's planted files as a repository" ;; *) bad "and so refuses the wiki's planted files as a repository" "$out" ;; esac
+case "$out" in *"nested: count=1"*) ok "a wiki command inside a wiki command doesn't add it twice" ;; *) bad "a wiki command inside a wiki command doesn't add it twice" "$out" ;; esac
+check "nothing ran while git refused" test ! -e "$H4/PROOF"
+# Settings the environment already carries stay, and ours goes after them.
+out="$(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0=from-the-environment h4w b gitsafe 2>&1)"
+case "$out" in *"setting=explicit count=2 name=from-the-environment"*) ok "a setting already in the environment still applies, and so does ours" ;; *) bad "a setting already in the environment still applies, and so does ours" "$out" ;; esac
+out="$(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all h4w b gitsafe 2>&1)"
+case "$out" in *"setting=explicit count=2 "*) ok "one that would let any folder pass is overridden" ;; *) bad "one that would let any folder pass is overridden" "$out" ;; esac
+out="$(GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=explicit GIT_CONFIG_KEY_1=user.name GIT_CONFIG_VALUE_1=later h4w b gitsafe 2>&1)"
+case "$out" in *"setting=explicit count=3 name=later"*) ok "ours goes last even when it is there already, so nothing after it can undo it" ;; *) bad "ours goes last even when it is there already, so nothing after it can undo it" "$out" ;; esac
+out="$(GIT_CONFIG_COUNT=01 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all h4w b gitsafe 2>&1)"
+case "$out" in *"setting=explicit count=2 "*) ok "a count written with a zero in front is read as git reads it" ;; *) bad "a count written with a zero in front is read as git reads it" "$out" ;; esac
+out="$(GIT_CONFIG_COUNT=nonsense h4w b gitsafe 2>&1)"
+case "$out" in *"setting=explicit count=1 "*) ok "a count that isn't a number is started again" ;; *) bad "a count that isn't a number is started again" "$out" ;; esac
+# A git that doesn't know the setting, as one older than 2.38 doesn't: this stand-in drops it.
+# The script looks for the planted files itself before it asks git about a folder.
+mkdir -p "$H4/oldgit"
+printf '#!/bin/sh\nunset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 GIT_CONFIG_KEY_1 GIT_CONFIG_VALUE_1\nexec "%s" "$@"\n' "$(command -v git)" > "$H4/oldgit/git"; chmod +x "$H4/oldgit/git"
+h4old() { PATH="$H4/oldgit:$PATH" h4w "$@"; }
+rm -f "$H4/PROOF" "$H4/PROOF-DEEP"
+printf 'Another note.\n' | h4old b capture demo b-note >/dev/null 2>&1
+out="$(h4old b sync demo -m "demo: capture another" 2>&1)"
+case "$out" in *"committed: demo: capture another"*"synced: "*) ok "with a git that doesn't know the setting, the note still goes to the team's remote" ;; *) bad "with a git that doesn't know the setting, the note still goes to the team's remote" "$out" ;; esac
+h4old b upgrade --all >/dev/null 2>&1 || true
+h4old b status >/dev/null 2>&1 || true
+(cd "$H4/b/wikis/demo" && h4old b which >/dev/null 2>&1) || true
+(cd "$H4/b/wikis/demo/wiki/deep/down" && LLM_WIKI_NO_GO=1 h4old b which >/dev/null 2>&1) || true
+check "and nothing planted ran: not at sync, upgrade or status, nor from inside the wiki" bash -c "! test -e '$H4/PROOF' && ! test -e '$H4/PROOF-DEEP'"
+check "no hook was put among the wiki's planted files" test ! -e "$H4/b/wikis/demo/hooks/pre-commit"
+# A stray .git that is no repository, in a wiki of a collection kept in git, doesn't cut the wiki off.
+: > "$H4/b/wikis/global/.git"
+printf '# G\n' > "$H4/b/wikis/global/wiki/g.md"
+out="$(h4w b sync global -m "global: a page" 2>&1)"
+unlink "$H4/b/wikis/global/.git"
+case "$out" in *"committed: global: a page"*) ok "an empty file called .git in a wiki doesn't stop its sync" ;; *) bad "an empty file called .git in a wiki doesn't stop its sync" "$out" ;; esac
+# A wiki that really is a repository of its own, inside the collection's folder, still syncs as one.
+mkdir -p "$H4/c"
+h4w c init >/dev/null 2>&1
+h4w c new own --git >/dev/null 2>&1
+printf '# Own\n' > "$H4/c/wikis/own/wiki/own.md"
+out="$(h4w c sync own -m "own: a page" 2>&1)"
+case "$out" in *"committed: own: a page"*) ok "a wiki with a .git of its own still syncs as its own repository" ;; *) bad "a wiki with a .git of its own still syncs as its own repository" "$out" ;; esac
 fi
 
 if section "What CI skips"; then
