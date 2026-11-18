@@ -12393,6 +12393,10 @@ case "$out" in *"knowledge wiki is"*|*"AGENTS.md"*) bad "and names no wiki and n
 lacks "lint has no finding for the shared wiki's workflows.md" "workflows.md" "$W" lint global
 check "the workflows rule ships in the template" grep -q 'workflows add' "$REPO/template/rules/workflows.md"
 check "and AGENTS.md points to it" grep -q 'rules/workflows.md' "$REPO/template/AGENTS.md"
+# What an agent may do with an extension: read by itself, send outside or choose only on the user's word, never sign in.
+check "the extensions rule ships in the template" bash -c "grep -q 'Being signed in is not a request' '$REPO/template/rules/extensions.md' && grep -q 'Never set, change or clear an address, a user name, a token' '$REPO/template/rules/extensions.md'"
+check "and AGENTS.md points to it" grep -q 'rules/extensions.md' "$REPO/template/AGENTS.md"
+check "the changelog has a section for the handbook's version" bash -c "grep -q \"^## v\$(sed -n 's/^Handbook version \\([0-9]*\\)\\.\$/\\1/p' '$REPO/template/AGENTS.md') \" '$REPO/CHANGELOG.md'"
 rm -rf "$PF" "$HOME/notesdir" "$HOME/gone" "$WFILE"
 fi
 

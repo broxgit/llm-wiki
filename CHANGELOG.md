@@ -4,6 +4,14 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v39 (2026-11-18)
+
+The handbook now says what an agent may do with an extension, such as Confluence, Jira or Jenkins.
+
+- A new file, `rules/extensions.md`. Reading is the agent's to do. Publishing a wiki to Confluence, choosing what an extension watches or publishes into, and anything that then runs by itself need your word in that session. Being signed in is not a request.
+- Signing in stays yours: the agent never sets an address, a user name or a token, and never answers a question an extension says is for a terminal.
+- Do: run `wiki upgrade --all`.
+
 ## v38 (2026-11-15)
 
 A finished ticket no longer closes an open item that only sat in its folder.
