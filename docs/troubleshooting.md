@@ -14,6 +14,19 @@
 - **Tab completion doesn't work.** Run `wiki setup completion`, then open a new terminal. `wiki setup --list` shows whether it's on.
 - **`wiki setup` says it needs a terminal.** It asks questions, so run it in a terminal, not through the agent. `wiki setup --list` shows the current values anywhere.
 
+## Obsidian
+
+[llm-wiki in Obsidian](obsidian.md) has the setup steps.
+
+- **The status bar says `wiki: command not set up`, or a command says the wiki command isn't set.** The plugin doesn't know where `wiki` is on this computer. In a terminal, run `wiki obsidian --plugin`, then restart Obsidian. The same after moving or reinstalling llm-wiki.
+- **Obsidian says "Vault not found" when `wiki obsidian` opens it.** Obsidian hasn't been shown the folder yet. In Obsidian, choose "Open folder as vault" and pick your wikis folder, once. After that `wiki obsidian` opens it.
+- **No `llm-wiki` commands in the command palette.** The plugin is off. Open Settings, then Community plugins. If it says restricted mode is on, choose "Turn on community plugins". Then switch llm-wiki on in the list. If llm-wiki isn't in the list, run `wiki obsidian --plugin` and restart Obsidian.
+- **A command says this vault isn't a wiki collection.** The plugin only works in the vault that holds your wikis, the folder with `WIKIS.md` at its top. Open that vault.
+- **A note in `inbox` isn't taken.** It is left while it is empty, larger than 200 kB, not a `.md` file, or changed in the last two minutes, so a note still being typed or still arriving from a sync is never cut in half. `wiki inbox` says why each was left, and `wiki inbox --now` takes the ones that are only too new.
+- **`wiki sync` says the wikis have no backup.** The folder has no git and no history. Where an app such as Obsidian Sync carries the folder, run `wiki history on "Obsidian Sync"`. Otherwise `wiki setup git`.
+- **The plugin stopped working after an update.** It is a copy. Run `wiki obsidian --plugin` again and restart Obsidian.
+- **Links come out as `[[like this]]`, or pasted images land outside the wiki.** The vault has settings of its own, so the starter ones weren't written. `wiki obsidian --no-open` prints the ones to set.
+
 ## Day to day
 
 - **Notes pile up in `raw/` and never become pages.** `wiki status` flags `compile due` at five waiting and `lint due` after 10 compiles. The next session there compiles at startup. Say "compile" to do it now.

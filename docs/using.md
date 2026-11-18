@@ -63,6 +63,8 @@ Every wiki is plain markdown. Read pages in any editor, on GitHub, or in Obsidia
 
 ### Browsing in Obsidian
 
+Setting it up for the first time? [llm-wiki in Obsidian](obsidian.md) has the steps in order. The sections here say how each piece works.
+
 `wiki obsidian` sets up one vault over the whole collection and opens it. The first time, Obsidian has to be shown the folder: choose "Open folder as vault" and pick your wikis folder. After that the command opens it.
 
 It writes the vault's starter settings to `.obsidian/app.json`, unless that file already has settings of yours, in which case it prints them for you to copy:
@@ -466,6 +468,9 @@ Run `wiki` with no arguments for the full list. The ones you're likely to use:
 | `wiki standup` | Raw material for a standup. |
 | `wiki upgrade --all` | Bring every wiki's handbook up to the template's. |
 | `wiki new <name>` | Create a wiki. Usually the agent does this. |
+| `wiki obsidian`, `--plugin` | Open the wikis in Obsidian as one vault, with starter settings. `--plugin` adds llm-wiki's commands inside Obsidian. [llm-wiki in Obsidian](obsidian.md) has the steps. |
+| `wiki inbox` | Take the notes you typed into an `inbox` folder into the wikis now, and say why any was left. |
+| `wiki history`, `on`, `off`, `show` | For wikis with no git: keep every earlier version on this machine, list the snapshots, and print a file as it was. |
 | `wiki cover <wiki> <repo>...` | One wiki for several repositories. |
 | `wiki uncover <repo>... [--new]` | Take a repository off the wiki that covers it. `--new` also gives it a wiki of its own. Its pages stay where they are until you say to move them. |
 | `wiki workflows [add\|remove\|check]` | Where sessions outside a repository belong. |
