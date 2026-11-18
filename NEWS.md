@@ -4,6 +4,13 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2027-01-17: snapshots stay readable, and a dead compile stops warning
+
+- `wiki history` still lists and shows what was saved after `history off`, or once the folder becomes a git repository.
+- A snapshot's whole 40-character id is accepted, not only the short one.
+- In Obsidian, a compile lock left behind over 30 minutes ago no longer says the wiki is being compiled.
+- Do: run `wiki obsidian --plugin` again to get the new plugin, then restart Obsidian.
+
 ## 2027-01-16: sync scans for secrets where no hook does
 
 - In a wikis folder with no llm-wiki hook, such as a fresh clone, `wiki sync` now scans before it pushes, and keeps the commit here when gitleaks isn't found.

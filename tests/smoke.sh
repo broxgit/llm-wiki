@@ -11224,6 +11224,13 @@ expect "off stops it and says what was kept is still there" "What was kept is st
 check "the marker is gone" test ! -e "$HC/.llm-wiki-history"
 expect "sync is back to saying the wikis are on this machine only" "has no backup" hw sync demo
 expect "off again has nothing to do" "already off" hw history off
+# What was saved before it was turned off can still be read.
+out="$(hw history 2>&1)"
+case "$out" in *"history turned on"*"The history is off, so nothing new is saved."*) ok "with the history off, the snapshots saved before are still listed, and it says it is off" ;; *) bad "with the history off, the snapshots saved before are still listed, and it says it is off" "$out" ;; esac
+HFULL="$(hg rev-parse HEAD)"
+expect "a snapshot's whole 40-character id is taken" "HISTORY" hw history "$HFULL"
+check "and so it is by show, with the history off" bash -c "$(declare -f hw); HT='$HT' HC='$HC' W='$W'; hw history show '$HFULL' demo/wiki/new.md | grep -q '^# New'"
+check "41 characters are not an id" test "$(hcode hw history "${HFULL}0")" = 2
 hw history on >/dev/null 2>&1
 check "on again goes back to the same store, with no app named" bash -c "grep -qx 'id=$HID' '$HC/.llm-wiki-history' && ! grep -q '^carried=' '$HC/.llm-wiki-history'"
 check "the earlier snapshots are still listed" bash -c "$(declare -f hw); HT='$HT' HC='$HC' W='$W'; hw history | grep -q 'history turned on'"

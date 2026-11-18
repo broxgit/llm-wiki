@@ -2787,10 +2787,22 @@ history_id_ok() {
   [ "${#1}" -ge 8 ] && [ "${#1}" -le 40 ]
 }
 
+# history_snap_ok <id>: a snapshot's id as a person may give it, short or whole: 4 to 40 of
+# 0-9 and a-f.
+history_snap_ok() {
+  case "$1" in '' | *[!0123456789abcdef]*) return 1 ;; esac
+  [ "${#1}" -ge 4 ] && [ "${#1}" -le 40 ]
+}
+
+# 1 while cmd_history reads the snapshots of a history that is off.
+HISTORY_READ_OFF=0
+
 # history_store: the folder that holds this collection's history, or fail.
 history_store() {
   local id
   id="$(history_read "$WIKIS_DIR/$HISTORY_MARK" id)"
+  # To read what was saved before the history was turned off: the marker that off set aside.
+  history_id_ok "$id" || [ "$HISTORY_READ_OFF" = 0 ] || id="$(history_read "$WIKIS_DIR/$HISTORY_MARK-off" id)"
   history_id_ok "$id" || return 1
   printf '%s/%s.git' "$HISTORY_DIR" "$id"
 }
@@ -2993,13 +3005,23 @@ EOF
       return 0
       ;;
   esac
+  local was=""
   if ! history_on; then
-    if history_own_git; then
-      ui_detail "$(tilde "$WIKIS_DIR") is a git repository, which keeps every version itself. This history is for wikis without git."
-    else
-      ui_detail "No history is kept of $(tilde "$WIKIS_DIR"). To start, where an app such as Obsidian Sync carries the folder: $(typed "$WIKI_CMD history on \"Obsidian Sync\"")"
+    # Off, or the collection has since become a git repository: nothing new is saved, and
+    # what was saved before can still be listed and shown.
+    HISTORY_READ_OFF=1
+    store="$(history_store 2>/dev/null || true)"
+    if [ -z "$store" ] || [ ! -f "$store/HEAD" ] || ! history_git rev-parse -q --verify HEAD >/dev/null 2>&1; then
+      HISTORY_READ_OFF=0
+      if history_own_git; then
+        ui_detail "$(tilde "$WIKIS_DIR") is a git repository, which keeps every version itself. This history is for wikis without git."
+      else
+        ui_detail "No history is kept of $(tilde "$WIKIS_DIR"). To start, where an app such as Obsidian Sync carries the folder: $(typed "$WIKI_CMD history on \"Obsidian Sync\"")"
+      fi
+      return 0
     fi
-    return 0
+    if history_own_git; then was="$(tilde "$WIKIS_DIR") is a git repository now, which keeps every version itself. These were saved before it was."
+    else was="The history is off, so nothing new is saved. These were saved before. To turn it on again: $(typed "$WIKI_CMD history on")"; fi
   fi
   history_git rev-parse -q --verify HEAD >/dev/null 2>&1 || { ui_detail "The history is on, and nothing is saved yet. The next session start saves the first snapshot."; return 0; }
   case "${1:-}" in
@@ -3010,11 +3032,12 @@ EOF
         ui_detail "$id" "$by" "$(history_shown "$f")"
       done
       [ "$n" -le 30 ] || ui_detail "and $((n - 30)) older"
+      [ -z "$was" ] || ui_detail "$was"
       ui_detail "What changed in one: $(typed "$WIKI_CMD history <snapshot>"). A file as it was: $(typed "$WIKI_CMD history show <snapshot> <file>")"
       ;;
     show)
       [ $# -eq 3 ] || die_usage "usage: $WIKI_CMD history show <snapshot> <file>"
-      history_id_ok "0000000$2" && [ "${#2}" -ge 4 ] || die_usage "$(history_shown "$2") isn't a snapshot. $WIKI_CMD history lists them."
+      history_snap_ok "$2" || die_usage "$(history_shown "$2") isn't a snapshot. $WIKI_CMD history lists them."
       history_git cat-file -e "$2^{commit}" 2>/dev/null || die "there is no snapshot $2. $WIKI_CMD history lists them."
       f="${3#./}"
       case "$f" in "" | /* | -* | .. | ../* | */../* | */..) die_usage "name the file from the top of the collection, such as global/wiki/conventions.md" ;; esac
@@ -3023,7 +3046,7 @@ EOF
       ;;
     *)
       [ $# -eq 1 ] || die_usage "usage: $WIKI_CMD history [on [<app>] | off | <snapshot> | show <snapshot> <file>]"
-      history_id_ok "0000000$1" && [ "${#1}" -ge 4 ] || die_usage "$(history_shown "$1") isn't a snapshot or a history command. $WIKI_CMD history --help has them."
+      history_snap_ok "$1" || die_usage "$(history_shown "$1") isn't a snapshot or a history command. $WIKI_CMD history --help has them."
       history_git cat-file -e "$1^{commit}" 2>/dev/null || die "there is no snapshot $1. $WIKI_CMD history lists them."
       ui_stage HISTORY "$(history_shown "$(history_git log -n 1 --date=format:'%Y-%m-%d %H:%M' --format='%h · %ad · %s' "$1" -- 2>/dev/null || true)")"
       # Names come out quoted by git where they hold anything odd, so each is one line.

@@ -24,6 +24,7 @@ const obsidian = require("obsidian");
 const TIMEOUT_MS = 120000;
 const MAX_OUTPUT = 200000;
 const POLL_MS = 5 * 60 * 1000;
+const LOCK_STALE_MS = 30 * 60 * 1000;
 const SLUG_MAX = 60;
 
 // A file name's words as a note's name: lower case, letters and digits, dashes between.
@@ -344,7 +345,12 @@ class LlmWikiPlugin extends obsidian.Plugin {
       const lock = wiki + "/.compile-lock";
       if (!(await this.app.vault.adapter.exists(lock))) return;
       const first = (await this.app.vault.adapter.read(lock)).split("\n")[0] || "";
-      if (first.startsWith("held ")) new obsidian.Notice(`llm-wiki: ${wiki} is being compiled right now. What you type into its pages may be overwritten.`, 8000);
+      if (!first.startsWith("held ")) return;
+      // A lock a session left behind when it died is not a compile in progress. As the wiki
+      // command has it: stale after 30 minutes, and a time that can't be read counts as held.
+      const when = Date.parse(first.split(/\s+/)[2] || "");
+      if (!Number.isNaN(when) && Date.now() - when >= LOCK_STALE_MS) return;
+      new obsidian.Notice(`llm-wiki: ${wiki} is being compiled right now. What you type into its pages may be overwritten.`, 8000);
     } catch (e) {
       // Reading the lock is a courtesy: never an error for the person.
     }
