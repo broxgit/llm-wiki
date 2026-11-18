@@ -1,0 +1,6 @@
+# llm-wiki's rules for the secret scan: gitleaks' own, all of them.
+# The scan is given this file by name, so a .gitleaks.toml inside the wikis folder is never
+# read. Such a file replaces gitleaks' rules, and one that arrived from a remote or a sync
+# app could switch the scan off. Installed beside the hook by wiki.sh; upgrade replaces it.
+[extend]
+useDefault = true
