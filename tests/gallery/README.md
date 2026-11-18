@@ -28,6 +28,8 @@ What each command a person reads prints at a terminal, made by `scripts/gallery.
 
 - `wiki extensions`: kit. Pieces: detail stage typed. [wiki-extensions.txt](wiki-extensions.txt)
 
+- `wiki history`: kit. Pieces: detail typed. [wiki-history.txt](wiki-history.txt)
+
 - `wiki extensions certs`: unstyled. Pieces: -. [wiki-extensions-certs.txt](wiki-extensions-certs.txt)
 
 - `wiki skills`: kit. Pieces: detail. [wiki-skills.txt](wiki-skills.txt)

@@ -86,6 +86,27 @@ It works from Obsidian, a phone that syncs the vault, or any editor. The note is
 
 `wiki inbox` takes what is ready now, and says what it took and why it left the rest.
 
+### Commands inside Obsidian
+
+`wiki obsidian --plugin` puts llm-wiki's plugin in the vault that holds your wikis, and in no other. Open the vault in Obsidian. If it asks whether you trust the author of the vault, choose "Trust author and enable plugins": the plugin it means is this one. If it doesn't ask, open Settings, then Community plugins, turn community plugins on, and check llm-wiki is switched on. Then open the command palette and type `llm-wiki`:
+
+- **Save this note to a wiki.** The note in view becomes a waiting note of the wiki it is in, or of one you pick. An agent's next compile works it into the pages.
+- **Take in the inbox now**, **Find across every wiki**, and **What needs attention**, which shows what `wiki status` prints.
+- **Compile this wiki's waiting notes** and **Sync**, for the wiki of the page in view.
+
+The status bar shows how many notes wait. When you open a page of a wiki that an agent is compiling, a notice says so, so you don't type into a page that is about to be rewritten.
+
+The plugin runs the `wiki` command on this computer, so it works on a computer and not on a phone. It runs only when you choose a command, apart from the count for the status bar, and only on the vault it is in. Where the command is, is written in `~/.config/llm-wiki/obsidian-command`, on this computer and never in the vault, so nothing a sync brings can change what runs. The plugin is a copy: after an update of llm-wiki, run `wiki obsidian --plugin` again and restart Obsidian.
+
+### Wikis without git
+
+Git is not needed. If an app such as Obsidian Sync or iCloud already carries your wikis folder to your other devices, run `wiki history on "Obsidian Sync"`, naming the app. `wiki setup git` asks the same thing where the folder is already an Obsidian vault.
+
+- What you would lose without git is every earlier version of a page. `wiki history on` keeps them on this machine instead: a snapshot at session start, after a compile, and at each `wiki sync`. They live outside the folder, in `~/.local/state/llm-wiki/history`, so the app never carries them and nothing shows in the vault. Nothing is sent anywhere.
+- `wiki history` lists the snapshots. `wiki history <snapshot>` lists what changed in one, and `wiki history show <snapshot> <file>` prints a file as it was. To put a page back, ask an agent to restore it from a snapshot.
+- Run it once on each computer: each keeps its own history. Hidden files are never kept, so Obsidian's settings stay out.
+- Use one app to carry the folder, never two. Computers can't see each other's compile in progress, so let one session finish before another starts elsewhere. Without git, nothing checks a note for a password before the app carries it.
+
 Don't use the Obsidian Git plugin on the collection. It commits on a timer and can pull with a rebase. `wiki sync` already does the committing and pushing.
 
 ## Many repositories
