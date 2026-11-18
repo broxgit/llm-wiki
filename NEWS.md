@@ -4,11 +4,19 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2027-01-09: the guided setup finishes every topic
+
+- `wiki setup --pending` lists the topics setup has no answer on. It asks nothing, so an agent can run it.
+- `wiki setup keep <topic>` records "leave it as it is" as your answer, so setup stops asking. It changes no setting.
+- The guide now tells the agent to ask every topic, say how many are left, and not call setup done while any is listed.
+- `wiki status` names the topics not answered yet, where it gave only a number.
+
 ## 2027-01-08: Jenkins setup says why a sign-in fails
 
 - Setting up Jenkins now tests the sign-in and says in its summary whether it works, and as whom.
 - It looks at what you saved as the token first. A wrong paste is caught there, with a chance to paste again, and is never sent to Jenkins.
 - When Jenkins refuses the sign-in and the user isn't an email address, it says that may be the cause.
+
 ## 2027-01-07: the guided setup, after a real run
 
 - Where your agent can show a question with answers to pick from, as Claude Code can, the guided setup asks that way, with its own pick first.
