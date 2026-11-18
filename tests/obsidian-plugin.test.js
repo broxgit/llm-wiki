@@ -93,8 +93,8 @@ fs.writeFileSync(path.join(vault, "notes", "loose.md"), "a loose note\n");
 fs.writeFileSync(
   fake,
   // Each call is written to a file of its own: two calls at once can't mix their lines.
-  '#!/bin/sh\n{ echo "dir=$WIKIS_DIR"; echo "style=$LLM_WIKI_STYLE"; for a in "$@"; do echo "arg=$a"; done; echo "stdin=$(cat)"; } > "' + scratch + '/.call.$$"\nmv "' + scratch + '/.call.$$" "' + calls + '/$$"\n' +
-    'case "$1" in pending) echo "demo: 2 waiting"; echo "global: 1 waiting" ;; status) printf "all \\033[31mred\\033[0m well\\n" ;; sync) echo "saved: a snapshot" ;; capture) [ "$2" = fails ] && { echo "error: no such wiki" >&2; exit 1; }; echo "captured: raw/x.md" ;; *) echo "ran $1" ;; esac\n'
+  '#!/bin/sh\n{ echo "path=$PATH"; echo "dir=$WIKIS_DIR"; echo "style=$LLM_WIKI_STYLE"; for a in "$@"; do echo "arg=$a"; done; echo "stdin=$(cat)"; } > "' + scratch + '/.call.$$"\nmv "' + scratch + '/.call.$$" "' + calls + '/$$"\n' +
+    'case "$1" in pending) echo "demo: 2 waiting"; echo "global: 1 waiting" ;; status) printf "all \\033[31mred\\033[0m well\\n" ;; sync) echo "saved: a snapshot"; [ ! -f "' + scratch + '/warn" ] || echo "note: this commit wasn\'t scanned"; [ ! -f "' + scratch + '/warn" ] || echo "synced: pushed" ;; capture) [ "$2" = fails ] && { echo "error: no such wiki" >&2; exit 1; }; echo "captured: raw/x.md" ;; *) echo "ran $1" ;; esac\n'
 );
 fs.chmodSync(fake, 0o755);
 
@@ -189,7 +189,16 @@ function callCount() {
   check("only real wikis are found: a folder with a handbook and an index, and a proper name", JSON.stringify(await p.wikis()) === '["demo"]', JSON.stringify(await p.wikis()));
 
   check("the status bar counts the notes that wait, across wikis", await status(p, "wiki: 3 waiting"), p.status.text);
-  check("with one read-only command, on this vault, with style off", await seen(/dir=.*vault with a space\nstyle=off\narg=pending\n/), lastCall());
+  check("with one command, on this vault, with style off", await seen(/dir=.*vault with a space\nstyle=off\narg=pending\n/), lastCall());
+  check("which is told to leave the notes in every inbox where they are", await seen(/arg=pending\narg=--keep-inbox\nstdin=/), lastCall());
+  // An app started from the Dock has a PATH with no Homebrew in it, and there a sync went unscanned.
+  // Whatever order they come in: on Linux the PATH has /usr/local/bin already.
+  const hasFolders = (c) => { const m = /^path=(.*)$/m.exec(c); const parts = m ? m[1].split(":") : []; return parts.includes("/opt/homebrew/bin") && parts.includes("/usr/local/bin"); };
+  check("the command's PATH has the folders tools are installed in", allCalls().every(hasFolders), lastCall());
+  const wtf = LlmWiki.withToolFolders;
+  check("they are added to a short PATH, after what it has", wtf("/usr/bin:/bin") === "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin", wtf("/usr/bin:/bin"));
+  check("and not twice to one that has them", wtf("/opt/homebrew/bin:/usr/bin:/usr/local/bin") === "/opt/homebrew/bin:/usr/bin:/usr/local/bin", wtf("/opt/homebrew/bin:/usr/bin:/usr/local/bin"));
+  check("no PATH at all stays none, so the system's own is used", wtf("") === "" && wtf(undefined) === undefined);
 
   await cmd("save-note");
   let c = lastCall();
@@ -231,6 +240,12 @@ function callCount() {
   notices.length = 0;
   await cmd("sync");
   check("sync runs for the wiki in view and says what it said", await seen(/arg=sync\narg=demo\n/) && notices.some((x) => x.includes("saved: a snapshot")), notices.join(" | "));
+  fs.writeFileSync(path.join(scratch, "warn"), "");
+  modals.length = 0;
+  notices.length = 0;
+  await cmd("sync");
+  check("a sync that warns shows all it said in a window, not just its last line", modals.length === 1 && notices.length === 0, modals.length + " windows, notices: " + notices.join(" | "));
+  fs.unlinkSync(path.join(scratch, "warn"));
   active.file = file("notes/loose.md");
   n = callCount();
   await cmd("sync");

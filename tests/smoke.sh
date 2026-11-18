@@ -456,6 +456,64 @@ if command -v gitleaks >/dev/null 2>&1; then
 else
   skipped "secret scan (gitleaks isn't installed)"
 fi
+# A commit that went through unscanned: sync says so every time. An app started from the Dock
+# has a short PATH, where a gitleaks that is installed isn't found, and git only shows a
+# hook's words when the commit fails.
+SSP="/usr/bin:/bin:/usr/sbin:/sbin"
+if PATH="$SSP" command -v gitleaks >/dev/null 2>&1 || ! PATH="$SSP" command -v git >/dev/null 2>&1; then
+  skipped "sync with no gitleaks (needs git, and no gitleaks, in /usr/bin and /bin)"
+else
+  SS="$T/ss"
+  mkdir -p "$SS/home" "$SS/bin"
+  ssw() { env HOME="$SS/home" WIKIS_DIR="$SS/home/wikis" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com "$@"; }
+  ssw "$W" init --git >/dev/null 2>&1
+  ssw "$W" new demo >/dev/null 2>&1
+  check "the collection has the scan's hook" test -f "$SS/home/wikis/.git/hooks/pre-commit"
+  printf 'Captured: 2026-01-01\n\nA note.\n' > "$SS/home/wikis/demo/raw/one.md"
+  out="$(ssw env PATH="$SSP" "$W" sync demo -m "demo: one" 2>&1)"
+  case "$out" in *"committed: demo: one"*"note: this commit wasn't scanned for secrets, because gitleaks wasn't found."*) ok "sync says when a commit went through with no scan" ;; *) bad "sync says when a commit went through with no scan" "$out" ;; esac
+  printf '#!/bin/sh\nexit 0\n' > "$SS/bin/gitleaks"; chmod +x "$SS/bin/gitleaks"
+  printf 'Captured: 2026-01-01\n\nAnother.\n' > "$SS/home/wikis/demo/raw/two.md"
+  out="$(ssw env PATH="$SS/bin:$SSP" "$W" sync demo -m "demo: two" 2>&1)"
+  case "$out" in *"wasn't scanned"*) bad "and says nothing of it when the scan ran" "$out" ;; *"committed: demo: two"*) ok "and says nothing of it when the scan ran" ;; *) bad "and says nothing of it when the scan ran" "$out" ;; esac
+  # With a remote, a commit that wasn't scanned is never pushed.
+  git init -q --bare "$SS/remote.git"
+  ssrem() { git --git-dir="$SS/remote.git" for-each-ref --format='%(objectname)' refs/heads | head -n 1; }
+  ssis() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "wanted: $2, got: $3"; fi; }
+  git -C "$SS/home/wikis" remote add origin "$SS/remote.git"
+  unlink "$SS/home/wikis/.git/llm-wiki-unscanned" 2>/dev/null
+  ssw env PATH="$SS/bin:$SSP" "$W" sync demo >/dev/null 2>&1
+  check "with the scan there, a sync pushes" test -n "$(ssrem)"
+  ssat="$(ssrem)"
+  printf 'Captured: 2026-01-01\n\nThird.\n' > "$SS/home/wikis/demo/raw/three.md"
+  out="$(ssw env PATH="$SSP" "$W" sync demo -m "demo: three" 2>&1)"; code=$?
+  [ "$code" = 1 ] && case "$out" in *"committed: demo: three"*"not pushed: a commit here wasn't scanned for secrets"*"Do: install gitleaks"*) true ;; *) false ;; esac && ok "sync refuses to push a commit that wasn't scanned, and exits 1" || bad "sync refuses to push a commit that wasn't scanned, and exits 1" "exit $code: $out"
+  ssis "nothing reached the remote" "$ssat" "$(ssrem)"
+  out="$(ssw env PATH="$SSP" "$W" sync demo 2>&1)"; code=$?
+  [ "$code" = 1 ] && ssis "nor on the next sync, which has nothing new to commit" "$ssat" "$(ssrem)" || bad "nor on the next sync, which has nothing new to commit" "exit $code: $out"
+  # Once gitleaks is found, what waits is scanned before it goes: here by one that says no, then yes.
+  printf '#!/bin/sh\ncase "$*" in *--log-opts*) echo "$PWD: $*" >> "%s/gl-calls"; [ ! -f "%s/leak" ] || exit 1 ;; esac\nexit 0\n' "$SS" "$SS" > "$SS/bin/gitleaks"
+  : > "$SS/leak"
+  out="$(ssw env PATH="$SS/bin:$SSP" "$W" sync demo 2>&1)"; code=$?
+  [ "$code" = 1 ] && case "$out" in *"not pushed: a commit made with no scan holds what looks like a secret"*) true ;; *) false ;; esac && ok "a waiting commit that the scan refuses is not pushed" || bad "a waiting commit that the scan refuses is not pushed" "exit $code: $out"
+  ssis "and the remote is as it was" "$ssat" "$(ssrem)"
+  unlink "$SS/leak"
+  out="$(ssw env PATH="$SS/bin:$SSP" "$W" sync demo 2>&1)"
+  case "$out" in *"scanned: the commits that were made with no scan."*"synced: pushed"*) ok "one that passes is pushed, and sync says it was scanned first" ;; *) bad "one that passes is pushed, and sync says it was scanned first" "$out" ;; esac
+  check "the commits on no remote were scanned, on every branch, from the repository where its ignore file is" grep -q -- "/home/wikis: git --log-opts=--all --not --remotes " "$SS/gl-calls"
+  ssis "the remote has the commit now" "$(git -C "$SS/home/wikis" rev-parse HEAD)" "$(ssrem)"
+  ssnow="$(ssrem)"
+  check "and the mark is gone" test ! -e "$SS/home/wikis/.git/llm-wiki-unscanned"
+  # A commit made some other way with no scan is marked by the hook itself.
+  printf 'Captured: 2026-01-01\n\nBy hand.\n' > "$SS/home/wikis/demo/raw/four.md"
+  ssw env PATH="$SSP" git -C "$SS/home/wikis" add demo/raw/four.md
+  ssw env PATH="$SSP" git -C "$SS/home/wikis" commit -q -m "by hand" >/dev/null 2>&1
+  check "a commit made by hand with no scan leaves the mark" test -f "$SS/home/wikis/.git/llm-wiki-unscanned"
+  out="$(ssw env PATH="$SSP" "$W" sync demo 2>&1)"; code=$?
+  [ "$code" = 1 ] && case "$out" in *"not pushed: a commit here wasn't scanned"*) true ;; *) false ;; esac && ok "and sync won't push that one either" || bad "and sync won't push that one either" "exit $code: $out"
+  out="$(ssw env PATH="$SSP" LLM_WIKI_STYLE=off "$W" update --wikis-only </dev/null 2>&1)" || true
+  ssis "nor does wiki update" "$ssnow" "$(ssrem)"
+fi
 fi
 
 if section "Session hook"; then
@@ -10299,6 +10357,15 @@ check "a note named in other letters is taken, and its line says so in place of 
 check "the wait can only be lowered, never raised: a larger number is the two minutes" bash -c "printf 'x\n' > '$IBW/demo/inbox/w.md'; LLM_WIKI_INBOX_MINUTES=9999 '$W' inbox 2>&1 | grep -q 'changed in the last 2 minutes'"
 rm -f "$IBW/demo/inbox/w.md"
 expect "the help says when a note is left" "Nothing in an inbox is deleted until it is saved." "$W" inbox --help
+# A count that must change nothing, such as the Obsidian plugin's status bar every five minutes.
+mkdir -p "$IBW/demo/inbox"
+printf 'Still being typed, with the app showing it open.\n' > "$IBW/demo/inbox/Open note.md"
+ibnow "$W" pending --keep-inbox >/dev/null 2>&1
+check "pending --keep-inbox leaves a note that is ready in the inbox" test -f "$IBW/demo/inbox/Open note.md"
+expect "and still counts what waits" "demo: " ibnow "$W" pending --keep-inbox
+ibnow "$W" pending >/dev/null 2>&1
+check "without it, pending takes the note as before" test ! -e "$IBW/demo/inbox/Open note.md"
+check "an option pending doesn't know is a usage error that names both" bash -c "out=\"\$('$W' pending --nope 2>&1)\"; [ \$? = 2 ] && case \"\$out\" in *'--show, --keep-inbox'*) true ;; *) false ;; esac"
 export HOME="$IB_SAVED_HOME" WIKIS_DIR="$IB_SAVED_WIKIS_DIR"
 unset LLM_WIKI_CMD
 rm -rf "$IB"
@@ -11082,6 +11149,56 @@ nw init >/dev/null 2>&1
 expect "wiki obsidian names the history where the folder has no git" "history: this folder has no git" nw obsidian --no-open
 nw history on >/dev/null 2>&1
 lacks "and not once it is on" "history:" nw obsidian --no-open
+# What a snapshot leaves out. Only a real repository inside the collection: something merely
+# called .git, an empty file included, once left its whole wiki out and said nothing.
+nw new demo >/dev/null 2>&1
+NS="$(ls -d "$HT/n/home/.local/state/llm-wiki/history"/*.git 2>/dev/null | head -n 1)"
+ntree() { git --git-dir="$NS" ls-tree -r --name-only HEAD 2>/dev/null; }
+: > "$HT/n/home/wikis/demo/.git"
+printf '# Kept\n' > "$HT/n/home/wikis/demo/wiki/kept.md"
+expect "with an empty file called .git in a wiki, sync still saves a snapshot" "saved: a snapshot" nw sync demo
+check "and the wiki's new page is in it" bash -c "$(declare -f ntree); NS='$NS'; ntree | grep -qx demo/wiki/kept.md"
+unlink "$HT/n/home/wikis/demo/.git"
+mkdir -p "$HT/n/home/wikis/demo/code" "$HT/n/home/wikis/demo/halfgit/.git"
+git -C "$HT/n/home/wikis/demo/code" init -q 2>/dev/null
+printf 'x\n' > "$HT/n/home/wikis/demo/code/x.txt"
+printf '# Half\n' > "$HT/n/home/wikis/demo/halfgit/half.md"
+# Reached through a link, as a wikis folder in iCloud or Dropbox often is.
+ln -s "$HT/n/home/wikis" "$HT/n/link"
+lw() { env HOME="$HT/n/home" WIKIS_DIR="$HT/n/link" "$W" "$@"; }
+expect "through a link to the wikis folder, sync saves a snapshot" "saved: a snapshot" lw sync demo
+check "a real repository inside the collection is left out of it, through the link too" bash -c "$(declare -f ntree); NS='$NS'; ! ntree | grep -q '^demo/code'"
+check "and a folder that only holds an empty .git folder is kept" bash -c "$(declare -f ntree); NS='$NS'; ntree | grep -qx demo/halfgit/half.md"
+# One file that can't be read is left out, and the rest is saved.
+if [ "$(id -u)" != 0 ]; then
+  printf '# Locked\n' > "$HT/n/home/wikis/demo/wiki/locked.md"
+  printf '# Open\n' > "$HT/n/home/wikis/demo/wiki/open.md"
+  chmod 000 "$HT/n/home/wikis/demo/wiki/locked.md"
+  out="$(nw sync demo 2>&1)"
+  chmod 644 "$HT/n/home/wikis/demo/wiki/locked.md"
+  case "$out" in *"saved: a snapshot"*"note: something in the folder couldn't be read or saved, and was left out of the snapshot."*) ok "a file that can't be read doesn't stop the snapshot, and sync says one was left out" ;; *) bad "a file that can't be read doesn't stop the snapshot, and sync says one was left out" "$out" ;; esac
+  check "the pages that could be read are in it" bash -c "$(declare -f ntree); NS='$NS'; ntree | grep -qx demo/wiki/open.md && ! ntree | grep -qx demo/wiki/locked.md"
+  lacks "and a snapshot with nothing left out doesn't say so" "left out" nw sync demo
+  # The same when the unreadable file is all that changed, and when git only warns: a folder it can't open.
+  printf '# Locked two\n' > "$HT/n/home/wikis/demo/wiki/locked2.md"; chmod 000 "$HT/n/home/wikis/demo/wiki/locked2.md"
+  out="$(nw sync demo 2>&1)"
+  unlink "$HT/n/home/wikis/demo/wiki/locked2.md"
+  case "$out" in *"nothing new to save"*"note: something in the folder couldn't be read"*) ok "with nothing else new, sync still says a file was left out" ;; *) bad "with nothing else new, sync still says a file was left out" "$out" ;; esac
+  mkdir -p "$HT/n/home/wikis/demo/wiki/shut"; printf '# In\n' > "$HT/n/home/wikis/demo/wiki/shut/in.md"; printf '# Beside\n' > "$HT/n/home/wikis/demo/wiki/beside.md"
+  chmod 000 "$HT/n/home/wikis/demo/wiki/shut"
+  out="$(nw sync demo 2>&1)"
+  chmod 755 "$HT/n/home/wikis/demo/wiki/shut"
+  case "$out" in *"saved: a snapshot"*"note: something in the folder couldn't be read"*) ok "a folder that can't be opened is left out, and said" ;; *) bad "a folder that can't be opened is left out, and said" "$out" ;; esac
+  # A .git that can't be looked at must not hang the snapshot or stop it.
+  mkdir -p "$HT/n/home/wikis/demo/piped"; mkfifo "$HT/n/home/wikis/demo/piped/.git" 2>/dev/null || : > "$HT/n/home/wikis/demo/piped/.git"
+  printf '# After\n' > "$HT/n/home/wikis/demo/wiki/after.md"
+  out="$(nw sync demo 2>&1)"
+  unlink "$HT/n/home/wikis/demo/piped/.git"
+  case "$out" in *"saved: a snapshot"*) ok "a .git that is a pipe doesn't hang the snapshot" ;; *) bad "a .git that is a pipe doesn't hang the snapshot" "$out" ;; esac
+  check "and the rest is in it" bash -c "$(declare -f ntree); NS='$NS'; ntree | grep -qx demo/wiki/after.md"
+else
+  skipped "a file that can't be read (running as root, which can read anything)"
+fi
 fi
 
 if section "Obsidian plugin"; then

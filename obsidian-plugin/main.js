@@ -33,6 +33,18 @@ function slugOf(name) {
 }
 
 // A wiki's name is letters, digits, dots, dashes and underscores, and never starts with a dash or a dot.
+// The PATH a wiki command gets: this app's own, then the folders tools are installed in,
+// where they aren't in it already. They go last, so nothing the PATH already finds changes.
+const TOOL_FOLDERS = ["/opt/homebrew/bin", "/usr/local/bin"];
+function withToolFolders(current) {
+  if (process.platform === "win32") return current;
+  // With no PATH at all the system picks its own, which a PATH of only these would take away.
+  if (!current) return current;
+  const have = String(current).split(":").filter(Boolean);
+  for (const f of TOOL_FOLDERS) if (!have.includes(f)) have.push(f);
+  return have.join(":");
+}
+
 function isWikiName(name) {
   return /^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$/.test(String(name || ""));
 }
@@ -186,7 +198,9 @@ class LlmWikiPlugin extends obsidian.Plugin {
       if (!base) return resolve({ code: 1, text: "This vault has no folder on this device, so the wiki command can't run here." });
       const command = this.command();
       if (!command) return resolve({ code: 127, text: NO_COMMAND });
-      const env = Object.assign({}, process.env, { WIKIS_DIR: base, LLM_WIKI_STYLE: "off", NO_COLOR: "1" });
+      // An app started from the Dock or Finder gets a short PATH, without Homebrew's folders.
+      // There the secret scan wouldn't be found, and a sync would go through unscanned.
+      const env = Object.assign({}, process.env, { WIKIS_DIR: base, LLM_WIKI_STYLE: "off", NO_COLOR: "1", PATH: withToolFolders(process.env.PATH) });
       let child = null;
       let settled = false;
       let timer = null;
@@ -313,7 +327,10 @@ class LlmWikiPlugin extends obsidian.Plugin {
     const wiki = await this.activeWiki();
     if (!wiki) return;
     const r = await this.run(["sync", wiki]);
-    if (r.code === 0) new obsidian.Notice("llm-wiki: " + (r.text.split("\n").pop() || "synced").slice(0, 300));
+    // A line that starts "note:" is a warning, such as a commit that went through with no
+    // scan for secrets. It is never the last line, so the whole of what sync said is shown.
+    const warned = r.text.split("\n").some((line) => line.startsWith("note:"));
+    if (r.code === 0 && !warned) new obsidian.Notice("llm-wiki: " + (r.text.split("\n").pop() || "synced").slice(0, 300));
     else new OutputModal(this.app, "Sync " + wiki, r.text).open();
     this.refresh();
   }
@@ -333,7 +350,8 @@ class LlmWikiPlugin extends obsidian.Plugin {
     }
   }
 
-  // The status bar: how many notes wait, from one read-only command.
+  // The status bar: how many notes wait, from one command that changes nothing. Without
+  // --keep-inbox the count would first take the notes in every inbox, a note still open here included.
   async refresh() {
     // One count at a time: a slow one must not pile up, or write an old number over a new one.
     if (this.polling) return;
@@ -343,7 +361,7 @@ class LlmWikiPlugin extends obsidian.Plugin {
         this.statusEl.setText("");
         return;
       }
-      const r = await this.run(["pending"]);
+      const r = await this.run(["pending", "--keep-inbox"]);
       if (r.code !== 0) {
         this.statusEl.setText(r.code === 127 ? "wiki: command not set up" : "");
         return;
@@ -366,3 +384,4 @@ module.exports = LlmWikiPlugin;
 module.exports.slugOf = slugOf;
 module.exports.isWikiName = isWikiName;
 module.exports.clean = clean;
+module.exports.withToolFolders = withToolFolders;

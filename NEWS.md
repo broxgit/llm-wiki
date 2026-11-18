@@ -4,6 +4,13 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2027-01-15: the Obsidian plugin scans what it syncs, and its count moves nothing
+
+- A sync from the plugin now finds gitleaks when Obsidian was opened from the Dock. Before, such a sync was pushed with no scan for secrets.
+- `wiki sync` no longer pushes a commit that wasn't scanned for secrets. It keeps it here, says so, and pushes it once gitleaks is found and passes it.
+- The status bar's count no longer takes notes out of an inbox, so a note you are still typing stays put.
+- Do: run `wiki obsidian --plugin` again to get the new plugin, then restart Obsidian.
+
 ## 2027-01-14: llm-wiki's commands inside Obsidian
 
 - `wiki obsidian --plugin` puts a plugin in your wikis' vault: save a note, take in the inbox, find, see what needs attention, compile, sync.

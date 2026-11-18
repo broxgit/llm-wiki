@@ -167,8 +167,9 @@ Usage: $WIKI_CMD <command> [options]
   lint <wiki>... | --all  The mechanical lint checks. Reports, changes nothing.
   harvest [--dry-run]  Copy Claude Code's own memory notes into the wikis, where every
                        repo and teammate can use them.
-  pending [<wiki>] [--show]
+  pending [<wiki>] [--show] [--keep-inbox]
                        Notes waiting to be compiled. --show prints a wiki's in one go.
+                       --keep-inbox counts without taking the notes in an inbox.
   seed [<repo>] [--wiki NAME] [--max N] [--dry-run]
                        Start a wiki from a repository's own docs: README, agent
                        instructions, skills, docs/, decision records.
@@ -2758,6 +2759,8 @@ HISTORY_MARK=".llm-wiki-history"
 HISTORY_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/llm-wiki/history"
 # 0 nothing had changed, 1 a snapshot was saved, 2 one was wanted and couldn't be made.
 HISTORY_SAVED=0
+# 1 when the last snapshot left out a file that couldn't be read.
+HISTORY_LEFT=0
 
 # history_own_git: the collection is itself a git repository, which keeps its own history.
 # A repository above it, such as a home folder kept in git, is not that.
@@ -2814,8 +2817,9 @@ history_git() {
 # history_snap <why>: save what the collection holds now, when history is on and anything
 # changed. It never fails the command that called it, and says nothing.
 history_snap() {
-  local store d rel why="${1:-update}"
+  local store d rel err n=0 why="${1:-update}"
   HISTORY_SAVED=0
+  HISTORY_LEFT=0
   history_on || return 0
   HISTORY_SAVED=2
   command -v git >/dev/null 2>&1 || return 0
@@ -2830,18 +2834,47 @@ history_snap() {
   # What is kept: every file, whatever a .gitignore in the collection says (-f), but never a
   # hidden file or folder at any depth (Obsidian's settings, the trash, locks, a note half
   # taken, this marker), and never a folder that is a git repository of its own, which keeps
-  # its own history and which git would refuse or record as one line.
-  set -- add -A -f -- . ':(glob,exclude).*' ':(glob,exclude).*/**' ':(glob,exclude)**/.*' ':(glob,exclude)**/.*/**'
+  # its own history and which git would refuse or record as one line. Only a real one: a
+  # .git folder with a HEAD, or the .git file a worktree or a submodule has. Anything else
+  # called .git, an empty file included, would leave a whole wiki out and say nothing.
+  # The search runs from inside the collection, so a wikis folder that is a link, or one
+  # set with a slash at its end, gives the same paths.
+  set -- add -A -f --ignore-errors -- . ':(glob,exclude).*' ':(glob,exclude).*/**' ':(glob,exclude)**/.*' ':(glob,exclude)**/.*/**'
   while IFS= read -r d; do
     [ -n "$d" ] || continue
-    rel="${d#"$WIKIS_DIR"/}"
+    rel="${d#./}"
     rel="${rel%/.git}"
-    case "$rel" in "" | /* | .git) continue ;; esac
+    case "$rel" in "" | /* | .git | .GIT | ./*) continue ;; esac
+    d="$WIKIS_DIR/$d"
+    if [ -d "$d" ]; then
+      [ -f "$d/HEAD" ] || continue
+    elif [ -f "$d" ] && [ ! -L "$d" ] && [ -r "$d" ]; then
+      case "$(head -c 8 "$d" 2>/dev/null || true)" in "gitdir: "*) ;; *) continue ;; esac
+    else
+      # A .git that can't be looked at: a pipe, a link, a file with no leave to read. git
+      # would stop on it or take the folder for a repository, so the folder is left out, and said.
+      HISTORY_LEFT=1
+    fi
+    n=$((n + 1))
+    [ "$n" -le 200 ] || break
     set -- "$@" ":(literal,exclude)$rel"
   done <<HISTEOF
-$(find "$WIKIS_DIR" -mindepth 2 -maxdepth 5 -name .git -prune 2>/dev/null | head -n 200 || true)
+$(cd "$WIKIS_DIR" 2>/dev/null && find . -mindepth 2 -maxdepth 5 -iname .git -prune 2>/dev/null | head -n 2000 || true)
 HISTEOF
-  history_git "$@" >/dev/null 2>&1 || return 0
+  # A file that can't be read is left out and the rest is saved: one such file, anywhere,
+  # must not stop every snapshot. Anything else that fails, such as another session holding
+  # the store's lock, saves nothing this time.
+  # git says a folder it couldn't open and still ends well, so what it said is read either way.
+  if err="$(LC_ALL=C history_git "$@" 2>&1 >/dev/null)"; then
+    case "$err" in *"Permission denied"*) HISTORY_LEFT=1 ;; esac
+  else
+    case "$err" in
+      # The store itself, which no file in the collection can name: locked by another session, or not writable.
+      *"$store"*) return 0 ;;
+      *"Permission denied"* | *"unable to index file"* | *"invalid path"* | *"adding files failed"* | *"does not have a commit checked out"*) HISTORY_LEFT=1 ;;
+      *) return 0 ;;
+    esac
+  fi
   if history_git rev-parse -q --verify HEAD >/dev/null 2>&1 && history_git diff --cached --quiet 2>/dev/null; then
     HISTORY_SAVED=0
     return 0
@@ -3010,6 +3043,34 @@ cmd_sync() {
   [ -z "$SYNC_REPO" ] || ext_sync_event "$SYNC_REPO" "$SYNC_PATH" "$SYNC_ROOT" "$SYNC_BEFORE" || true
 }
 
+# Where a repository keeps the mark that it holds a commit made with no scan for secrets.
+sync_unscanned() {
+  local m
+  m="$(git -C "$1" rev-parse --git-path llm-wiki-unscanned 2>/dev/null)" || m=".git/llm-wiki-unscanned"
+  case "$m" in /*) printf '%s\n' "$m" ;; *) printf '%s\n' "$1/$m" ;; esac
+}
+
+# sync_scan_gate <repo>: nothing that wasn't scanned for secrets leaves this machine. Where
+# a commit went through with no scan, the commits not yet pushed are scanned now, and with
+# no gitleaks to do it, sync stops here: the commit stays, and is pushed by a later sync.
+sync_scan_gate() {
+  local repo="$1" mark fail
+  mark="$(sync_unscanned "$repo")"
+  [ -f "$mark" ] || return 0
+  command -v gitleaks >/dev/null 2>&1 || die "not pushed: a commit here wasn't scanned for secrets, because gitleaks wasn't found. It is kept on this machine. Do: install gitleaks (brew install gitleaks), then run $WIKI_CMD sync again"
+  fail="not pushed: a commit made with no scan holds what looks like a secret (above). Ask the user: the secret has to come out of that commit before anything is pushed. Never push it by hand"
+  # Every commit that is on no remote yet, on any branch: the mark is the repository's, so a
+  # scan of one branch's commits must not clear it for another's. Run from the repository,
+  # where its .gitleaksignore is. gitleaks 8.19 replaced `detect` with `git`.
+  if gitleaks git --help >/dev/null 2>&1; then
+    (cd "$repo" && gitleaks git --log-opts="--all --not --remotes" --redact --no-banner --no-color --log-level warn --verbose .) >&2 || die "$fail"
+  else
+    (cd "$repo" && gitleaks detect --source . --log-opts="--all --not --remotes" --redact --no-banner --no-color --log-level warn --verbose) >&2 || die "$fail"
+  fi
+  unlink "$mark" 2>/dev/null || true
+  echo "scanned: the commits that were made with no scan. Nothing like a secret in them."
+}
+
 sync_do() {
   local wiki="" msg="" root repo path top err ahead here coll how cname
   while [ $# -gt 0 ]; do
@@ -3038,6 +3099,7 @@ sync_do() {
             2) echo "The snapshot couldn't be saved this time, so the last one is still the newest. Another session may be saving one: if it happens again, run $WIKI_CMD history to see the last." ;;
             *) echo "nothing new to save since the last snapshot.$(history_by)" ;;
           esac
+          [ "$HISTORY_LEFT" = 0 ] || [ "$HISTORY_SAVED" = 2 ] || echo "note: something in the folder couldn't be read or saved, and was left out of the snapshot."
           return 0
         fi
         ;;
@@ -3078,10 +3140,21 @@ sync_do() {
       die "the commit was refused. If the secret scan stopped it, redact the secret as the handbook says, then sync again."
     fi
     echo "committed: $msg"
+    # The hook lets a commit through where gitleaks isn't found, and git shows its line only
+    # when a commit fails. An app started from the desktop may not find a gitleaks that is
+    # installed, so say it every time: the scan is what stands between a pasted key and the remote.
+    # It is also written down, so no later sync pushes the commit before it has been scanned.
+    case "$err" in
+      *"this commit wasn't scanned for secrets"*)
+        echo "note: this commit wasn't scanned for secrets, because gitleaks wasn't found. Install it: brew install gitleaks"
+        : > "$(sync_unscanned "$repo")" 2>/dev/null || true
+        ;;
+    esac
   else
     echo "nothing to commit in ${root##*/}"
   fi
   [ -n "$(git -C "$repo" remote)" ] || { echo "no remote, so nothing to pull or push"; return 0; }
+  sync_scan_gate "$repo"
   if [ "$(track_remote "$repo")" = new ]; then
     git -C "$repo" push -q -u origin HEAD || die "the first push to origin failed. Check the remote with: $WIKI_CMD setup git"
     # "synced: " is how both MCP servers know a capture was pushed. Keep it on every
@@ -3526,15 +3599,18 @@ unlisted() {
 
 # pending [<wiki>] [--show]
 cmd_pending() {
-  local wiki="" show=0 root f size total=0 n=0 left=0 d
+  local wiki="" show=0 take=1 root f size total=0 n=0 left=0 d
   while [ $# -gt 0 ]; do
     case "$1" in
       --show) show=1; shift ;;
-      -*) die_usage "pending options: --show" ;;
+      --keep-inbox) take=0; shift ;;
+      -*) die_usage "pending options: --show, --keep-inbox" ;;
       *) wiki="$1"; shift ;;
     esac
   done
-  inbox_take >/dev/null 2>&1 || true
+  # --keep-inbox is for a count that must change nothing, such as a status bar's: a note
+  # someone is still writing in an inbox stays where it is.
+  [ "$take" = 0 ] || inbox_take >/dev/null 2>&1 || true
   if [ -z "$wiki" ]; then
     [ "$show" = 0 ] || die "pending --show needs a wiki name"
     left=0
@@ -6913,7 +6989,9 @@ update_wikis() {
     [ -z "$k" ] || upgrade_changed "${k%%"$TAB"*}" "$(printf '%s' "$k" | cut -f 2)"
     if in_git_repo "$f" && [ -n "$(git -C "$f" remote 2>/dev/null)" ]; then
       ahead="$(git -C "$f" rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)"
-      if [ "$track" = new ]; then
+      if ! (sync_scan_gate "$f") >/dev/null 2>&1; then
+        ui_item warn "not pushed: a commit here wasn't scanned for secrets. Run: $(typed "$WIKI_CMD sync <wiki>"), which says what to do."
+      elif [ "$track" = new ]; then
         git -C "$f" push -q -u origin HEAD </dev/null && ui_item ok "pushed to origin for the first time" || ui_item warn "the first push failed. Check the remote with: $(typed "$WIKI_CMD setup git")"
       elif [ "${ahead:-0}" -gt 0 ]; then
         git -C "$f" push -q </dev/null && ui_item ok "pushed $ahead commit(s)" || ui_item warn "the push failed. Run: $(typed "git -C $(tilde "$f") pull --no-rebase && git -C $(tilde "$f") push")"
