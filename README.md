@@ -64,10 +64,13 @@ Everything is plain markdown, in git, readable in any editor. The rules are a ha
 
 Joining a team that already shares a collection? Read [Teams](docs/teams.md#join-a-shared-collection) first.
 
+Want to read and write your wikis in Obsidian? After either guide, follow [llm-wiki in Obsidian](docs/obsidian.md): five more minutes, with or without git.
+
 ## Then
 
 - **Take the tour.** Ask your agent: "Give me the llm-wiki tour". It walks you through the features hands-on, on a made-up project, so your wikis aren't touched. About 10 minutes for the short version.
 - [Using it](docs/using.md): what the agent does on its own, what to say, and every feature above in detail.
+- [llm-wiki in Obsidian](docs/obsidian.md): your wikis as a vault, your own notes through an inbox, and llm-wiki's commands inside Obsidian.
 - [Teams](docs/teams.md): one shared collection for everyone.
 - [Troubleshooting](docs/troubleshooting.md)
 - [Maintaining the template](docs/maintaining.md): changing the rules, releasing.
