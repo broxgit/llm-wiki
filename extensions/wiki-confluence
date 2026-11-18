@@ -25,6 +25,7 @@ Atlassian marks it deprecated on Cloud, where it still answers.
 """
 import base64
 import datetime
+import importlib.util
 import difflib
 import hashlib
 import html.parser
@@ -41,6 +42,27 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from xml.sax.saxutils import escape, quoteattr
+
+# The certificate authorities the user chose to trust are in tls_trust.py, beside this file. A copy of this file
+# without it still works, with Python's own list only.
+sys.dont_write_bytecode = True
+
+
+def _beside(name):
+    """A module from this file's own folder and from nowhere else, or None when it isn't there."""
+    path = os.path.join(os.path.dirname(os.path.realpath(__file__)), name + ".py")
+    if not os.path.isfile(path):
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location(name, path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    except ImportError:
+        return None
+    return mod
+
+
+tls_trust = _beside("tls_trust")
 
 CMD = os.environ.get("LLM_WIKI_CMD", "wiki")
 CONFIG_DIR = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "llm-wiki")
@@ -407,7 +429,20 @@ class SameOrigin(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-OPENER = urllib.request.build_opener(SameOrigin)
+# What a server's certificate is checked against: Python's own list and what the user chose, with wiki extensions certs.
+TRUST_PROBLEM = ""
+_handlers = [SameOrigin]
+if tls_trust:
+    try:
+        _handlers.append(tls_trust.https_handler())
+    except tls_trust.Problem as e:
+        TRUST_PROBLEM = str(e)
+OPENER = urllib.request.build_opener(*_handlers)
+
+
+def no_answer(e, url):
+    """A request that got no answer. A certificate that was refused says so, with the command that fixes it."""
+    unreachable((tls_trust.hint(e, url) if tls_trust else None) or f"can't reach {url}: {getattr(e, 'reason', e)}")
 
 
 def address_trouble():
@@ -663,6 +698,9 @@ class Confluence:
             die(f"no Confluence address. Set site in {SHARED}, or url in {CONFIG}, or CONFLUENCE_URL. {CMD} confluence --help has the settings.")
         if address_trouble():
             die(f"{address_trouble()}. Do: fix it, in a terminal: {CMD} extensions setup confluence")
+        # Before the token is read: with a saved file that can't be used, nothing is asked for and nothing is sent.
+        if TRUST_PROBLEM:
+            die(TRUST_PROBLEM)
         tok, _ = token(conf)
         if not tok:
             die(f"no API token. Set token_cmd in {SHARED}, or CONFLUENCE_API_TOKEN. {CMD} confluence --help has the settings.")
@@ -693,7 +731,7 @@ class Confluence:
                 raise Refused(e.code, " ".join(msg.split())[:300])
             die(f"Confluence answered {e.code} for {method} {path.split('?')[0]}: {' '.join(msg.split())[:200]}")
         except (urllib.error.URLError, TimeoutError, OSError) as e:
-            unreachable(f"can't reach {self.url}: {getattr(e, 'reason', e)}")
+            no_answer(e, self.url)
         except ValueError:
             die(f"{self.url} didn't answer with JSON. Is url the address of Confluence itself? On Cloud it ends in /wiki.")
 

@@ -102,6 +102,7 @@ render delegation "" delegation
 render feedback "" feedback
 render helper "" helper
 render extensions "" extensions
+render extensions-certs "" extensions certs
 render skills "" skills
 render tips "" tips
 render list "" list

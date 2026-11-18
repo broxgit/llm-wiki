@@ -1,0 +1,2 @@
+No certificate authority is trusted beyond Python's own list.
+If an extension can't check a site's certificate, it names the command to run: wiki extensions certs <https://address>
