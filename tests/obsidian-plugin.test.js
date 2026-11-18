@@ -192,7 +192,9 @@ function callCount() {
   check("with one command, on this vault, with style off", await seen(/dir=.*vault with a space\nstyle=off\narg=pending\n/), lastCall());
   check("which is told to leave the notes in every inbox where they are", await seen(/arg=pending\narg=--keep-inbox\nstdin=/), lastCall());
   // An app started from the Dock has a PATH with no Homebrew in it, and there a sync went unscanned.
-  check("the command's PATH ends with the folders tools are installed in", allCalls().every((c) => /^path=.*\/opt\/homebrew\/bin.*\/usr\/local\/bin/m.test(c)), lastCall());
+  // Whatever order they come in: on Linux the PATH has /usr/local/bin already.
+  const hasFolders = (c) => { const m = /^path=(.*)$/m.exec(c); const parts = m ? m[1].split(":") : []; return parts.includes("/opt/homebrew/bin") && parts.includes("/usr/local/bin"); };
+  check("the command's PATH has the folders tools are installed in", allCalls().every(hasFolders), lastCall());
   const wtf = LlmWiki.withToolFolders;
   check("they are added to a short PATH, after what it has", wtf("/usr/bin:/bin") === "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin", wtf("/usr/bin:/bin"));
   check("and not twice to one that has them", wtf("/opt/homebrew/bin:/usr/bin:/usr/local/bin") === "/opt/homebrew/bin:/usr/bin:/usr/local/bin", wtf("/opt/homebrew/bin:/usr/bin:/usr/local/bin"));
