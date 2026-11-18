@@ -26,12 +26,6 @@ Each item says why it matters, a sketch of how, and what is still undecided.
 - **So, in stages:** (1) try it in a throwaway repository: a `version` in the manifest, a `stable` branch, an update, and going back, since the last is not documented; (2) a `version` in the manifest, a `stable` branch that moves only at a release, a release made by CI from a tag (the whole suite, the helper built and checked against its lock, notes from `NEWS.md`, a build attestation), and `wiki update` saying which version it left and reached; (3) moving the people who follow `main` today onto `stable`, and a way to follow `main` on purpose; (4) a page for an organization: the managed settings that name the marketplace and its ref.
 - **Open:** Whether the Codex, Antigravity and Cursor plugins follow the same version. Whether Homebrew becomes a second way to install: it can't run `wiki uninstall`, and two installs can disagree about which version runs, so it waits for the Go port to leave one binary. Whether machine settings get a version of their own with a step that runs when it is behind, which `wiki uninstall` made the inventory for. Who may cut a release, and what has to pass first.
 
-### Obsidian as the home, for people who don't use git
-
-- **Why:** asked for on 2026-11-17: people who are not software engineers want a nice place to keep wikis that is synced and backed up, and Obsidian is that place. An Obsidian vault is a folder of markdown, and `wiki obsidian` already opens the collection as one, so the gap is what such a person needs around it.
-- **Sketch:** three parts. The first is done (see Done): a note typed in an inbox folder becomes a note of the wiki. The second is a collection that needs no git: Obsidian Sync or a cloud drive carries it, setup asks no git questions, and `wiki sync` doesn't push, with a local history kept as a safety net the person never sees. The third is a plugin inside Obsidian with buttons for saving, compiling and what needs attention.
-- **Open:** for the second part, two things about Obsidian Sync that nobody has checked and that decide the design: what it does with hidden folders such as `.git`, and how it merges a page edited on a phone and by an agent at once. A cloud drive that syncs `.git` can corrupt it. Without git there is no history of what an agent changed and no secret scan before a push. The lock that keeps compiles to one session is a file, and would sync late. Whatever is built reads only the wikis' vault, never another vault.
-
 ### Learn where a person works, by asking
 
 - **Why:** llm-wiki assumed a session belongs to one repository. Most of one team starts sessions in a folder for a ticket, which holds clones, and for weeks their project wikis never loaded and nothing said so. Decided on 2026-11-11: never guess silently; ask when unsure; write what is learned into the person's own wiki, so the questions get rarer.
@@ -98,6 +92,22 @@ Things that have never been run for real. Treat them as unproven until crossed o
 - **More scaffolding automation.** Setup is one command.
 
 ## Done
+
+### A plugin: llm-wiki's commands inside Obsidian (2026-11-18)
+
+- **Why:** the third part of Obsidian as the home, asked for on 2026-11-17. A person who keeps wikis in Obsidian and uses no terminal had no way to save a note, see what waits, or ask for a compile without one.
+- **What changed:** `obsidian-plugin/` holds a plugin in plain JavaScript, with nothing to build. `wiki obsidian --plugin` copies it into the collection's `.obsidian/plugins/llm-wiki`, writes the wiki command's full path to `~/.config/llm-wiki/obsidian-command` (Obsidian has no shell PATH, and a vault is a folder a sync writes to, so it is never kept there), and lists it in `community-plugins.json` when there is no such file. Six commands: save the note in view to a wiki, take in the inbox, find, what needs attention, compile, sync. A status bar count of waiting notes, and a notice on a page whose wiki is being compiled. It runs the command with its arguments as a list, never through a shell, with `WIKIS_DIR` set to the vault, and does nothing in a vault that has no `WIKIS.md`. What a command prints is shown as text.
+- **Decided:** it lives in this repository and is installed by copying, not from Obsidian's community directory, which has a review of its own. It is for a computer only: a phone can't run the command, and uses the inbox.
+- **Tested in a real Obsidian (1.12.7, 2026-11-18, a scratch vault opened in a separate profile):** opening the vault brought Obsidian's own question, "Do you trust the author of this vault?", and a yes loaded the plugin from `community-plugins.json` with nothing more to switch on. The status bar read `wiki: 2 waiting` and went to 4 as notes were added. What needs attention, save this note, take in the inbox, find, and the notice on a page whose wiki is being compiled all worked.
+- **Still untested:** the compile and sync commands in the app, which run through the same code as the others, and a vault whose plugin list already existed.
+
+### Wikis without git: a history kept on the machine (2026-11-18)
+
+- **Why:** the second part of Obsidian as the home. A person whose vault is carried by Obsidian Sync or a cloud drive has no git and shouldn't need to learn it, but without it no earlier version of a page is kept, `wiki sync` said the wikis had no backup, and setup kept asking about git.
+- **What changed:** `wiki history on [<app>]` keeps a snapshot of the collection at session start, when a compile's lock is released, and at each `wiki sync`. The store is a git repository under the state folder, outside the collection, so no sync service carries or corrupts it; the collection holds one hidden file with the store's id and the app's name. The user's own git settings never apply to it, hidden files are never kept, and a snapshot that can't be made never fails the command that asked. `wiki history` lists snapshots, `wiki history <snapshot>` what changed, `wiki history show <snapshot> <file>` a file as it was. `wiki setup git` asks about an app where the folder is an Obsidian vault, and counts the question answered once the history is on.
+- **Decided by what Obsidian Sync does (read 2026-11-17):** it leaves out hidden files and folders except `.obsidian`, so the marker stays on one machine and each computer runs `history on` once. A cloud drive would carry the marker, and the next computer then starts its own store under the same id.
+- **Tested on a real vault (2026-11-18, a scratch copy of two wikis, 409 files):** `history on`, a snapshot at sync, the list, and a page as it was before an edit. No hidden file was kept.
+- **Still untested:** with a real sync between two devices. Two computers can compile at once, because the lock is a hidden file that isn't carried: the docs say to let one finish. Without git there is no secret scan before the app carries a note.
 
 ### An inbox: notes a person types become notes of the wiki (2026-11-17)
 
