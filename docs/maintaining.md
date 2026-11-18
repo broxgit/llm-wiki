@@ -137,7 +137,7 @@ A journal setting is one line in `JOURNAL_SETTINGS` in `wiki.sh`: key, type, bas
 Merging to `main` is the release. The plugin has no version number, so every commit on `main` reaches plugin users with auto-update on, and a broken one breaks everyone's sessions at once. So:
 
 1. Work on a branch.
-2. Run the smoke tests: `tests/smoke.sh`. They take a few minutes, run in a temp folder with their own `HOME`, and never touch your wikis. Install gitleaks first, or the secret-scan tests are skipped.
+2. Run the sections of the smoke tests that cover what you changed: `tests/smoke.sh --section "<name>"`, once for each, and `tests/smoke.sh --list` names them. They run in a temp folder with their own `HOME`, and never touch your wikis. Install gitleaks first, or the secret-scan tests are skipped. The whole suite, `tests/smoke.sh` with no option, is CI's job: it takes many minutes on one machine, and a change that breaks a section you didn't run shows there, on the pull request.
 3. Push the branch and open a pull request. CI runs shellcheck, `claude plugin validate`, and the smoke tests on Linux and on macOS with Apple's bash 3.2, in four parts at once on each.
 4. Merge when CI is green. GitHub enforces this: `main` is protected, so it takes a pull request with all three CI checks passing, for admins too. In an emergency, untick "Do not allow bypassing the above settings" in the repository's Settings → Branches, and tick it again afterwards.
 
@@ -145,7 +145,7 @@ Add a smoke test when you fix a bug or add a command. Each one is a line or two:
 
 ### The smoke test's parts
 
-On macOS the whole suite took nine minutes in CI, so CI runs it in four parts, each its own job: `tests/smoke.sh --part <n>`. `tests/smoke.sh` with no option still runs everything, in order. `tests/smoke.sh --list` shows which part each section is in.
+On macOS the whole suite took nine minutes in CI, so CI runs it in four parts, each its own job: `tests/smoke.sh --part <n>`. `tests/smoke.sh` with no option still runs everything, in order. `tests/smoke.sh --list` shows which part each section is in. `tests/smoke.sh --section "<name>"` runs one section and, without counting their checks, the earlier sections it uses.
 
 The table at the top of `tests/smoke.sh` holds, for each section, its part and the earlier sections it uses: the ones that made a wiki, a repository, a file or a setting it reads. A part runs its own sections and, without counting their checks, the sections they use from other parts, in the suite's order. So a part starts from the state its sections expect, without copying setup into them.
 
