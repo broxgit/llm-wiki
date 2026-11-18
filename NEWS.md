@@ -9,6 +9,13 @@ Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title i
 - `wiki journal depth` says how many of your repositories the depth setting reaches, and the value that reaches them all.
 - Setup's depth question shows the same line, so the number isn't a guess.
 
+## 2027-01-09: the guided setup finishes every topic
+
+- `wiki setup --pending` lists the topics setup has no answer on. It asks nothing, so an agent can run it.
+- `wiki setup keep <topic>` records "leave it as it is" as your answer, so setup stops asking. It changes no setting.
+- The guide now tells the agent to ask every topic, say how many are left, and not call setup done while any is listed.
+- `wiki status` names the topics not answered yet, where it gave only a number.
+
 ## 2027-01-08: Jenkins setup says why a sign-in fails
 
 - Setting up Jenkins now tests the sign-in and says in its summary whether it works, and as whom.

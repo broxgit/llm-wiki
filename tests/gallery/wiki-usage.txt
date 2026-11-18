@@ -8,6 +8,8 @@
                        Undo what setup did on this machine. Your wikis and settings are kept.
   setup --guide [section]
                        Text for your agent to walk you through setup in your session.
+  setup --pending      The topics setup hasn't had an answer on, for you or an agent to read.
+  setup keep <topic>   Leave a topic as it is, so setup stops asking about it.
   init                 Create the wiki collection at <tmp>/wikis and its shared wiki, global.
   new <name|path>      Create a wiki from the template. A bare name goes under <tmp>/wikis.
   capture <wiki> <slug>  Save a note piped on stdin in raw/, named from the clock.

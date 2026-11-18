@@ -9080,6 +9080,7 @@ out="$(env JENKINS_USER="someone@example.com" JENKINS_API_TOKEN="${JKFAKE}-wrong
 case "$out" in *"your email address"*) bad "and doesn't say it when the user is one already" "$out" ;; *"Jenkins refused the sign-in (401)"*) ok "and doesn't say it when the user is one already" ;; *) bad "and doesn't say it when the user is one already" "$out" ;; esac
 check "what is saved as the token is judged by its shape, and no word of the judgement holds any of it" python3 -I -c "
 import importlib.machinery, importlib.util, os, sys
+sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(sys.argv[1]))
 l = importlib.machinery.SourceFileLoader('wj', sys.argv[1]); m = importlib.util.module_from_spec(importlib.util.spec_from_loader('wj', l)); l.exec_module(m)
 os.environ.pop('JENKINS_API_TOKEN', None)
@@ -10577,7 +10578,6 @@ gw journal set depth 5 >/dev/null 2>&1
 check "so does another" grep -qx 'journal.depth' "$GCFG/setup"
 gw helper auto off >/dev/null 2>&1
 check "helper auto counts as answering the helper step" grep -qx 'helper' "$GCFG/setup"
-expect "status now counts only what is left, and names the guide" 'new setting(s). Run: wiki setup --new. Or ask an agent: "run wiki setup --guide and walk me through it"' gw status
 # From a real setup (2026-11-17): depth is hard to answer in the abstract, and the default
 # would have missed a repository six folders down. journal depth says what it reaches here.
 JD="$T/jdepth"; mkdir -p "$JD/home/dev/near/.git" "$JD/home/dev/a/b/c/d/e/far/.git" "$JD/home/dev/node_modules/pkg/.git"
@@ -10598,6 +10598,56 @@ jd journal set code_dirs "$JD/home/nowhere" >/dev/null 2>&1
 expect "with no repository found it says where it looked, and how to say where the code is" "No repository found under" jd journal depth
 check "it takes no other word" test "$(jd journal depth 9 >/dev/null 2>&1; echo $?)" = 2
 expect "the usage names it" "journal depth" jd --help
+
+expect "status now counts only what is left, and names the guide" 'Run: wiki setup --new. Or ask an agent: "run wiki setup --guide and walk me through it"' gw status
+
+# From a real setup (2026-11-17): the agent asked about a few topics, called setup done
+# with nineteen unanswered, and could not list what was left without a terminal. So:
+# a listing it can run, "leave it as it is" as a recorded answer, and a count.
+KP="$T/keepall"; mkdir -p "$KP/home"
+cp "$HOME/.gitconfig" "$KP/home/.gitconfig" 2>/dev/null || true
+kp() { env HOME="$KP/home" WIKIS_DIR="$KP/home/wikis" LLM_WIKI_CMD=wiki LLM_WIKI_TEST_OS=darwin "$W" "$@"; }
+kp init >/dev/null 2>&1
+out="$(kp setup --pending 2>&1)"
+kn="$(printf '%s\n' "$out" | grep -c '^- ')"
+case "$out" in "$kn of $kn setup topics not answered yet:"*"- palette"*"- jira"*"wiki setup --guide <topic> says what it is"*"wiki setup keep <topic> leaves it as it is"*"Agents: ask the user about each one"*"until it lists none"*) ok "setup --pending lists the topics not answered yet, how many, and what to do with each" ;; *) bad "setup --pending lists the topics not answered yet, how many, and what to do with each" "$out" ;; esac
+check "it asks nothing, so it needs no terminal" bash -c "env HOME='$KP/home' WIKIS_DIR='$KP/home/wikis' LLM_WIKI_CMD=wiki '$W' setup --pending </dev/null >/dev/null"
+check "and takes no other word" test "$(code_of kp setup --pending jira)" = 2
+check "keep with a name that is no topic is a usage error" test "$(code_of kp setup keep palette nonsense)" = 2
+check "and records nothing, not even the topic named before it" test "$(kp setup --pending | grep -c '^- ')" = "$kn"
+check "so is keep with no topic" test "$(code_of kp setup keep)" = 2
+out="$(kp setup keep palette jira 2>&1)"
+case "$out" in *"palette stays as it is."*"jira stays as it is."*"$((kn - 2)) of $kn left: wiki setup --pending"*) ok "setup keep records leaving a topic as it is, and says how many are left" ;; *) bad "setup keep records leaving a topic as it is, and says how many are left" "$out" ;; esac
+check "an extension left off is recorded as answered" grep -qx 'extension.jira' "$KP/home/.config/llm-wiki/setup"
+check "and nothing was turned on or set" test ! -e "$KP/home/.config/llm-wiki/palette"
+lacks "the listing no longer has them" "- jira" kp setup --pending
+expect "and counts what is left" "$((kn - 2)) of $kn setup topics not answered yet:" kp setup --pending
+expect "keeping one again says it was answered already" "palette was answered already." kp setup keep palette
+out="$(kp status 2>&1)"
+case "$out" in *"setup: $((kn - 2)) topic(s) not answered yet: git, "*"Run: wiki setup --new. Or ask an agent:"*) ok "status names the topics not answered yet, not just how many" ;; *) bad "status names the topics not answered yet, not just how many" "$(printf '%s\n' "$out" | grep -a 'setup:')" ;; esac
+case "$out" in *" and "*" more. Run: wiki setup --new"*) ok "past eight it names eight and counts the rest" ;; *) bad "past eight it names eight and counts the rest" "$(printf '%s\n' "$out" | grep -a 'setup:')" ;; esac
+out="$(kp setup --guide 2>&1)"
+case "$out" in *"$((kn - 2)) of $kn topics are not answered yet. wiki setup --pending lists them"*"Don't pick a few: each one gets asked. After each, say how many are left."*"that is an answer: run wiki setup keep <topic>."*"You are not finished while wiki setup --pending lists a topic."*"until it lists none."*) ok "the guide says how many are left, to ask every one, and not to finish while any is listed" ;; *) bad "the guide says how many are left, to ask every one, and not to finish while any is listed" "$(printf '%s\n' "$out" | head -18)" ;; esac
+expect "and to type a command as it is written" "Type a command as it is written here, not from a variable." kp setup --guide
+lacks "a guide for one section doesn't carry the finishing rule" "You are not finished" kp setup --guide palette
+kp journal on >/dev/null 2>&1
+expect "the journal's settings are one topic, however many there are" "- journal" kp setup --pending
+check "listed once" test "$(kp setup --pending | grep -c '^- journal')" = 1
+kp setup keep journal >/dev/null 2>&1
+check "and keeping it answers every one of them" grep -qx 'journal.depth' "$KP/home/.config/llm-wiki/setup"
+# What is out of date is not a question, so an answer can't settle it.
+mkdir -p "$KP/home/.cursor"
+printf '{"hooks":{"sessionStart":[{"command":"\\"/gone/wiki.sh\\" __cursor-start"}]}}\n' > "$KP/home/.cursor/hooks.json"
+expect "an out-of-date setup is listed" "- cursor" kp setup --pending
+expect "and can't be kept: it says where to look" "cursor can't be left as it is: what is set up is out of date. wiki setup --guide cursor" kp setup keep cursor
+expect "so it is still listed" "- cursor" kp setup --pending
+rm -rf "$KP/home/.cursor"
+# shellcheck disable=SC2046
+kp setup keep $(kp setup --pending | sed -n 's/^- //p') >/dev/null 2>&1
+expect "with every topic answered, the listing says so" "Every setup topic is answered. Nothing is left to ask." kp setup --pending
+lacks "and status has no setup line" "setup:" kp status
+expect "the usage names both" "setup --pending" kp setup --help
+expect "in the main usage too" "setup keep <topic>" kp --help
 
 # Setup from start to finish, for someone new: why, the questions, how they work, then tips
 # and how to help. A fresh machine, and every answer Enter.
