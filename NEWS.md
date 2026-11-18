@@ -4,6 +4,13 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2027-01-18: a wiki can't be called inbox, and an inbox of junk no longer blocks a note
+
+- `wiki new inbox` and `wiki new journal` are refused: a wiki made in those folders had its own files taken as notes.
+- Files in an inbox that can never be taken, such as empty ones, no longer keep a real note after them waiting for ever.
+- After a compile, the sync's message now reaches `wiki history`.
+- Under the Claude Code plugin, `wiki obsidian --plugin` gives Obsidian a command that survives an update.
+
 ## 2027-01-17: snapshots stay readable, and a dead compile stops warning
 
 - `wiki history` still lists and shows what was saved after `history off`, or once the folder becomes a git repository.

@@ -1495,6 +1495,9 @@ def cmd_config(args):
     bad = address_trouble()
     if bad:
         die(f"{bad}. Do: fix it, in a terminal: {CMD} extensions setup confluence")
+    # And so is the saved certificates file: with one that can't be used, nothing is asked for.
+    if TRUST_PROBLEM:
+        die(TRUST_PROBLEM)
     _, where = token(conf)
     print(f"shared    {SHARED}{'' if os.path.isfile(SHARED) else ' (not there yet)'}")
     print(f"file      {CONFIG}{'' if os.path.isfile(CONFIG) else ' (not there yet)'}")

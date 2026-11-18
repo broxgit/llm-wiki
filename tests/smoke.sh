@@ -674,6 +674,15 @@ expect "from the plugin, claude skips the CLAUDE.md line" "came with the llm-wik
 expect "from the plugin, claude --print names the stable command" "plugins/data/llm-wiki-llm-wiki/bin/wiki start" "$P/wiki.sh" claude --print
 lacks "from the plugin, claude --print never names the versioned folder" "abc123" "$P/wiki.sh" claude --print
 check "from the plugin, CLAUDE.md is untouched" test ! -e "$HOME/.claude/CLAUDE.md"
+# The Obsidian plugin is told where the wiki command is. From the Claude Code plugin that must
+# be the command in the data folder, not this folder, which is named for a version and removed
+# by an update.
+mkdir -p "$T/lp/home/shim"
+printf '#!/bin/sh\nexit 0\n' > "$T/lp/home/shim/wiki"; chmod +x "$T/lp/home/shim/wiki"
+env WIKIS_DIR="$T/lp/wikis" "$P/wiki.sh" init >/dev/null 2>&1
+env WIKIS_DIR="$T/lp/wikis" LLM_WIKI_SHIM="$T/lp/home/shim/wiki" PATH="/usr/bin:/bin:/usr/sbin:/sbin" "$P/wiki.sh" obsidian --plugin >/dev/null 2>&1
+check "from the plugin, Obsidian is given the command that outlives an update" test "$(cat "$HOME/.config/llm-wiki/obsidian-command" 2>/dev/null)" = "$T/lp/home/shim/wiki"
+unlink "$HOME/.config/llm-wiki/obsidian-command" 2>/dev/null || true
 set_version "$WIKIS_DIR/demo/AGENTS.md" 999
 out="$("$P/wiki.sh" status 2>&1)"
 set_version "$WIKIS_DIR/demo/AGENTS.md" "$TV"
@@ -10482,6 +10491,19 @@ expect "and still counts what waits" "demo: " ibnow "$W" pending --keep-inbox
 ibnow "$W" pending >/dev/null 2>&1
 check "without it, pending takes the note as before" test ! -e "$IBW/demo/inbox/Open note.md"
 check "an option pending doesn't know is a usage error that names both" bash -c "out=\"\$('$W' pending --nope 2>&1)\"; [ \$? = 2 ] && case \"\$out\" in *'--show, --keep-inbox'*) true ;; *) false ;; esac"
+# Files that can never be taken don't use up the run's count: a real note after them is taken.
+mkdir -p "$IBW/demo/inbox"
+i=0; while [ "$i" -lt 205 ]; do : > "$IBW/demo/inbox/a-empty-$i.md"; i=$((i + 1)); done
+printf 'A real note, sorted after every empty one.\n' > "$IBW/demo/inbox/zz real.md"
+ibnow "$W" inbox >/dev/null 2>&1
+check "a note that sorts after 205 files that can't be taken is still taken" test ! -e "$IBW/demo/inbox/zz real.md"
+rm -f "$IBW/demo/inbox"/a-empty-*.md
+# A wiki can't be made in the folders a collection uses for something else.
+for x in inbox Inbox journal; do
+  out="$("$W" new "$x" 2>&1)"; code=$?
+  [ "$code" = 1 ] && case "$out" in *"a wiki can't be called $x"*) true ;; *) false ;; esac && ok "wiki new $x is refused" || bad "wiki new $x is refused" "exit $code: $out"
+done
+check "and nothing of a wiki was put in the inbox" test ! -e "$IBW/inbox/AGENTS.md"
 export HOME="$IB_SAVED_HOME" WIKIS_DIR="$IB_SAVED_WIKIS_DIR"
 unset LLM_WIKI_CMD
 rm -rf "$IB"
@@ -10956,6 +10978,15 @@ expect "a file others can write is not used, and says so" "can be written by som
 expect "Jira says the same" "can be written by someone else" tcji
 expect "so does Confluence" "can be written by someone else" tccf
 expect "and certs itself" "can be written by someone else" "$W" extensions certs
+# With such a file, config stops before it runs the command that prints the token.
+for x in jira confluence; do
+  printf 'token_cmd = touch %s/%s-token-ran; echo t\n' "$TC" "$x" > "$HOME/.config/llm-wiki/$x"
+done
+env JIRA_URL="$TCO" JIRA_EMAIL=me@example.com LLM_WIKI_CMD=wiki "$REPO/extensions/wiki-jira" config >/dev/null 2>&1
+check "Jira's config ran no token command" test ! -e "$TC/jira-token-ran"
+env CONFLUENCE_URL="$TCO" CONFLUENCE_EMAIL=me@example.com LLM_WIKI_CMD=wiki "$REPO/extensions/wiki-confluence" config >/dev/null 2>&1
+check "nor did Confluence's" test ! -e "$TC/confluence-token-ran"
+unlink "$HOME/.config/llm-wiki/jira"; unlink "$HOME/.config/llm-wiki/confluence"
 chmod 600 "$TRUSTED"
 mv "$TRUSTED" "$TC/real.pem"
 ln -s "$TC/real.pem" "$TRUSTED"
@@ -11118,6 +11149,12 @@ check "releasing the compile lock saves what the compile wrote" test "$(hg log -
 out="$(hw history 2>&1)"
 case "$out" in *"4 snapshots of "*"on this machine only"*"compiled: demo"*"session start"*"demo: second"*"history turned on"*) ok "history lists the snapshots, newest first, with why each was saved" ;; *) bad "history lists the snapshots, newest first, with why each was saved" "$out" ;; esac
 HS="$(hg log --format='%h %s' | sed -n 's/ demo: second$//p')"
+# The sync after a compile finds nothing new, and its message still reaches the history.
+expect "the sync after a compile has nothing new to save" "nothing new to save" hw sync demo -m "demo: why the page changed"
+check "and the compile's snapshot now carries the sync's message" test "$(hg log -n 1 --format=%s)" = "demo: why the page changed (compiled: demo)"
+n="$(hg rev-list --count HEAD)"
+hw sync demo -m "demo: said again" >/dev/null 2>&1
+check "a second sync leaves it as it is" bash -c "$(declare -f hg); HSTORE='$HSTORE' HID='$HID'; [ \"\$(hg rev-list --count HEAD)\" = '$n' ] && [ \"\$(hg log -n 1 --format=%s)\" = 'demo: why the page changed (compiled: demo)' ]"
 expect "a snapshot's id lists what changed in it" "demo/wiki/p.md" hw history "$HS"
 check "show prints the file as it was then" test "$(hw history show "$HS" demo/wiki/p.md | tail -n 1)" = second
 check "and the file on disk is untouched" test "$(tail -n 1 "$HC/demo/wiki/p.md")" = fourth
@@ -11383,6 +11420,16 @@ out="$(ow obsidian --plugin 2>&1)"; code=$?
 check "and nothing was put where it points" bash -c "! ls '$OP/elsewhere' | grep -q ."
 unlink "$OV/.obsidian/plugins"
 mv "$OP/real-plugins" "$OV/.obsidian/plugins"
+# The files in the plugin's folder too: a link to a folder there would take the new file inside it.
+mkdir -p "$OP/trap"
+ow obsidian --plugin >/dev/null 2>&1
+unlink "$OD/main.js"; ln -s "$OP/trap" "$OD/main.js"
+out="$(ow obsidian --plugin 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"main.js isn't a plain file, so the plugin isn't put there"*) true ;; *) false ;; esac && ok "a main.js that is a link is refused" || bad "a main.js that is a link is refused" "exit $code: $out"
+check "and nothing was put where it points" bash -c "! ls -A '$OP/trap' | grep -q ."
+unlink "$OD/main.js"
+ow obsidian --plugin >/dev/null 2>&1
+check "with the link gone the plugin goes in again" cmp -s "$REPO/obsidian-plugin/main.js" "$OD/main.js"
 check "obsidian --plugin with another word exits 2" test "$(ocode ow obsidian --plugin extra)" = 2
 expect "the usage names it" "obsidian [--no-open | --plugin]" ow --help
 expect "obsidian --help says what the plugin does" "Put the llm-wiki plugin in this vault" ow obsidian --help
