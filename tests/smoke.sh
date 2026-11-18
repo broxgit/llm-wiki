@@ -495,12 +495,12 @@ else
   printf '#!/bin/sh\ncase "$*" in *--log-opts*) echo "$PWD: $*" >> "%s/gl-calls"; [ ! -f "%s/leak" ] || exit 1 ;; esac\nexit 0\n' "$SS" "$SS" > "$SS/bin/gitleaks"
   : > "$SS/leak"
   out="$(ssw env PATH="$SS/bin:$SSP" "$W" sync demo 2>&1)"; code=$?
-  [ "$code" = 1 ] && case "$out" in *"not pushed: a commit made with no scan holds what looks like a secret"*) true ;; *) false ;; esac && ok "a waiting commit that the scan refuses is not pushed" || bad "a waiting commit that the scan refuses is not pushed" "exit $code: $out"
+  [ "$code" = 1 ] && case "$out" in *"not pushed: a commit that wasn't scanned holds what looks like a secret"*) true ;; *) false ;; esac && ok "a waiting commit that the scan refuses is not pushed" || bad "a waiting commit that the scan refuses is not pushed" "exit $code: $out"
   ssis "and the remote is as it was" "$ssat" "$(ssrem)"
   unlink "$SS/leak"
   out="$(ssw env PATH="$SS/bin:$SSP" "$W" sync demo 2>&1)"
   case "$out" in *"scanned: the commits that were made with no scan."*"synced: pushed"*) ok "one that passes is pushed, and sync says it was scanned first" ;; *) bad "one that passes is pushed, and sync says it was scanned first" "$out" ;; esac
-  check "the commits on no remote were scanned, on every branch, from the repository where its ignore file is" grep -q -- "/home/wikis: git --log-opts=--all --not --remotes " "$SS/gl-calls"
+  check "the commits on no remote were scanned, on every branch, from the repository where its ignore file is" grep -q -- "/home/wikis: git --log-opts=--branches --not --remotes=origin " "$SS/gl-calls"
   ssis "the remote has the commit now" "$(git -C "$SS/home/wikis" rev-parse HEAD)" "$(ssrem)"
   ssnow="$(ssrem)"
   check "and the mark is gone" test ! -e "$SS/home/wikis/.git/llm-wiki-unscanned"
@@ -513,6 +513,92 @@ else
   [ "$code" = 1 ] && case "$out" in *"not pushed: a commit here wasn't scanned"*) true ;; *) false ;; esac && ok "and sync won't push that one either" || bad "and sync won't push that one either" "exit $code: $out"
   out="$(ssw env PATH="$SSP" LLM_WIKI_STYLE=off "$W" update --wikis-only </dev/null 2>&1)" || true
   ssis "nor does wiki update" "$ssnow" "$(ssrem)"
+  ssw env PATH="$SS/bin:$SSP" "$W" sync demo >/dev/null 2>&1
+  ssis "with the scan back, it goes" "$(git -C "$SS/home/wikis" rev-parse HEAD)" "$(ssrem)"
+  # A repository with no hook of ours, as a fresh clone has none: nothing scans a commit and
+  # nothing leaves a mark, so sync scans what waits before it pushes.
+  n="$(wc -l < "$SS/gl-calls" | tr -d ' ')"
+  printf 'Captured: 2026-01-01\n\nFive.\n' > "$SS/home/wikis/demo/raw/five.md"
+  ssw env PATH="$SS/bin:$SSP" "$W" sync demo >/dev/null 2>&1
+  ssis "with our hook in place and no mark, sync runs no scan of its own" "$n" "$(wc -l < "$SS/gl-calls" | tr -d ' ')"
+  unlink "$SS/home/wikis/.git/hooks/pre-commit"
+  ssnow="$(ssrem)"
+  printf 'Captured: 2026-01-01\n\nSix.\n' > "$SS/home/wikis/demo/raw/six.md"
+  out="$(ssw env PATH="$SSP" "$W" sync demo -m "demo: six" 2>&1)"; code=$?
+  [ "$code" = 1 ] && case "$out" in *"committed: demo: six"*"not pushed: nothing scans commits for secrets in "*"Do: install gitleaks"*) true ;; *) false ;; esac && ok "with no hook and no gitleaks, sync commits and refuses to push" || bad "with no hook and no gitleaks, sync commits and refuses to push" "exit $code: $out"
+  check "no mark was left, since no hook ran" test ! -e "$SS/home/wikis/.git/llm-wiki-unscanned"
+  ssis "and the remote is as it was" "$ssnow" "$(ssrem)"
+  : > "$SS/leak"
+  out="$(ssw env PATH="$SS/bin:$SSP" "$W" sync demo 2>&1)"; code=$?
+  [ "$code" = 1 ] && case "$out" in *"not pushed: a commit that wasn't scanned holds what looks like a secret"*) true ;; *) false ;; esac && ok "with no hook, a scan that says no stops the push" || bad "with no hook, a scan that says no stops the push" "exit $code: $out"
+  unlink "$SS/leak"
+  out="$(ssw env PATH="$SS/bin:$SSP" "$W" sync demo 2>&1)"
+  case "$out" in *"scanned: the commits"*) bad "one that says yes is pushed, with nothing said of a mark there never was" "$out" ;; *"synced: pushed"*) ok "one that says yes is pushed, with nothing said of a mark there never was" ;; *) bad "one that says yes is pushed, with nothing said of a mark there never was" "$out" ;; esac
+  if git -C "$SS/home/wikis" log --remerge-diff --max-count=0 >/dev/null 2>&1; then
+    check "the scan is asked to read what settled a merge" bash -c "tail -n 1 '$SS/gl-calls' | grep -q -- '--log-opts=--branches --not --remotes=origin --remerge-diff '"
+  else
+    skipped "the scan of a merge (this git has no --remerge-diff)"
+  fi
+  ssw env PATH="$SS/bin:$SSP" "$W" sync demo >/dev/null 2>&1
+  ssis "with nothing waiting, a sync there runs no scan" "$(wc -l < "$SS/gl-calls" | tr -d ' ')" "$(ssw env PATH="$SS/bin:$SSP" "$W" sync demo >/dev/null 2>&1; wc -l < "$SS/gl-calls" | tr -d ' ')"
+  # Putting the hook in afterwards must not make what was committed before it look scanned.
+  unlink "$SS/home/wikis/.git/hooks/pre-commit" 2>/dev/null
+  printf 'Captured: 2026-01-01\n\nSeven.\n' > "$SS/home/wikis/demo/raw/seven.md"
+  ssw env PATH="$SSP" "$W" sync demo -m "demo: seven" >/dev/null 2>&1
+  ssnow="$(ssrem)"
+  ssw env PATH="$SSP" "$W" setup git --yes </dev/null >/dev/null 2>&1 || ssw env PATH="$SSP" "$W" upgrade --all </dev/null >/dev/null 2>&1
+  if [ -f "$SS/home/wikis/.git/hooks/pre-commit" ]; then
+    check "a hook put in after an unscanned commit leaves the mark" test -f "$SS/home/wikis/.git/llm-wiki-unscanned"
+    out="$(ssw env PATH="$SSP" "$W" sync demo 2>&1)"; code=$?
+    [ "$code" = 1 ] && ssis "and sync still won't push that commit" "$ssnow" "$(ssrem)" || bad "and sync still won't push that commit" "exit $code: $out"
+    # A hook that lost its execute bit runs for nothing, so sync scans as if there were none.
+    ssw env PATH="$SS/bin:$SSP" "$W" sync demo >/dev/null 2>&1
+    chmod -x "$SS/home/wikis/.git/hooks/pre-commit"
+    printf 'Captured: 2026-01-01\n\nEight.\n' > "$SS/home/wikis/demo/raw/eight.md"
+    ssnow="$(ssrem)"
+    out="$(ssw env PATH="$SSP" "$W" sync demo -m "demo: eight" 2>&1)"; code=$?
+    [ "$code" = 1 ] && ssis "a hook git won't run counts as none: the push is refused" "$ssnow" "$(ssrem)" || bad "a hook git won't run counts as none: the push is refused" "exit $code: $out"
+    chmod +x "$SS/home/wikis/.git/hooks/pre-commit"
+  else
+    bad "the hook was put back by setup or upgrade" "no hook at $SS/home/wikis/.git/hooks/pre-commit"
+  fi
+  # A stash is never pushed, so what is in it can't stop a sync.
+  ssw env PATH="$SS/bin:$SSP" "$W" sync demo >/dev/null 2>&1
+  printf 'not for the remote\n' >> "$SS/home/wikis/demo/raw/one.md"
+  ssw git -C "$SS/home/wikis" stash push -q 2>/dev/null
+  unlink "$SS/home/wikis/.git/hooks/pre-commit"
+  check "with only a stash on no remote, a sync without gitleaks isn't refused" ssw env PATH="$SSP" "$W" sync demo
+  ssw git -C "$SS/home/wikis" stash drop -q 2>/dev/null
+fi
+# A secret typed in to settle a merge conflict, in a commit that went unscanned: git's log
+# shows no diff for a merge, so the scan has to be asked for it. With the real gitleaks.
+if command -v gitleaks >/dev/null 2>&1 && git log --remerge-diff --max-count=0 >/dev/null 2>&1; then
+  SM="$T/sm"
+  mkdir -p "$SM/home"
+  smw() { env HOME="$SM/home" WIKIS_DIR="$SM/home/wikis" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com "$@"; }
+  smw "$W" init --git >/dev/null 2>&1
+  smw "$W" new demo >/dev/null 2>&1
+  git init -q --bare "$SM/remote.git"
+  git -C "$SM/home/wikis" remote add origin "$SM/remote.git"
+  printf '# Page\n\nfirst\n' > "$SM/home/wikis/demo/wiki/page.md"
+  smw "$W" sync demo >/dev/null 2>&1
+  smw git clone -q "$SM/remote.git" "$SM/other" 2>/dev/null
+  printf '# Page\n\ntheirs\n' > "$SM/other/demo/wiki/page.md"
+  smw git -C "$SM/other" commit -q -am theirs && smw git -C "$SM/other" push -q 2>/dev/null
+  smat="$(git --git-dir="$SM/remote.git" for-each-ref --format='%(objectname)' refs/heads | head -n 1)"
+  printf '# Page\n\nours\n' > "$SM/home/wikis/demo/wiki/page.md"
+  smw git -C "$SM/home/wikis" commit -q -am ours
+  smw git -C "$SM/home/wikis" pull -q --no-rebase --no-edit >/dev/null 2>&1
+  printf '# Page\n\nsettled\n\nDeploy token: ghp_%s\n' "$(printf 'a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8')" > "$SM/home/wikis/demo/wiki/page.md"
+  smw git -C "$SM/home/wikis" add demo/wiki/page.md
+  smw git -C "$SM/home/wikis" commit -q --no-verify -m "settle the merge" >/dev/null 2>&1
+  : > "$SM/home/wikis/.git/llm-wiki-unscanned"
+  out="$(smw "$W" sync demo 2>&1)"; code=$?
+  [ "$code" = 1 ] && case "$out" in *"not pushed: a commit that wasn't scanned holds what looks like a secret"*) true ;; *) false ;; esac && ok "a token typed in to settle a merge is found, and nothing is pushed" || bad "a token typed in to settle a merge is found, and nothing is pushed" "exit $code: $out"
+  case "$(git --git-dir="$SM/remote.git" for-each-ref --format='%(objectname)' refs/heads | head -n 1)" in "$smat") ok "the remote is as it was" ;; *) bad "the remote is as it was" "moved" ;; esac
+  case "$out" in *ghp_a1B2*) bad "and the token isn't printed" "$out" ;; *) ok "and the token isn't printed" ;; esac
+else
+  skipped "a secret in a merge (needs gitleaks, and a git with --remerge-diff)"
 fi
 fi
 
@@ -4329,6 +4415,8 @@ fi
 
 if section "News"; then
 N="$T/news"; mkdir -p "$N/state"
+# status needs a collection. Run alone, this section has none from an earlier one.
+[ -f "$WIKIS_DIR/WIKIS.md" ] || "$W" init >/dev/null 2>&1
 printf '# News\n\n## 2026-01-02: Second\n\nSecond body.\n\n- Do: second step.\n\n## 2026-01-01: First\n\nFirst body.\n' > "$N/NEWS.md"
 news() { env XDG_STATE_HOME="$N/state" LLM_WIKI_NEWS_FILE="$N/NEWS.md" "$W" "$@"; }
 out="$(news status 2>&1)"

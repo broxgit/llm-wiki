@@ -3050,23 +3050,43 @@ sync_unscanned() {
   case "$m" in /*) printf '%s\n' "$m" ;; *) printf '%s\n' "$1/$m" ;; esac
 }
 
-# sync_scan_gate <repo>: nothing that wasn't scanned for secrets leaves this machine. Where
-# a commit went through with no scan, the commits not yet pushed are scanned now, and with
-# no gitleaks to do it, sync stops here: the commit stays, and is pushed by a later sync.
+# sync_scan_gate <repo>: nothing that wasn't scanned for secrets leaves this machine. Two
+# cases. A commit went through with no scan, and left its mark. Or the repository has no
+# hook of ours, as a fresh clone hasn't, and one with core.hooksPath or a hook of its own:
+# there nothing scans a commit, so sync does, whenever something waits to be pushed. Either
+# way the commits that are on no remote are scanned now, and with no gitleaks to do it sync
+# stops here: the commit stays, and is pushed by a later sync.
 sync_scan_gate() {
-  local repo="$1" mark fail
+  local repo="$1" mark fail marked=0 hook opts="--branches --not --remotes=origin"
   mark="$(sync_unscanned "$repo")"
-  [ -f "$mark" ] || return 0
-  command -v gitleaks >/dev/null 2>&1 || die "not pushed: a commit here wasn't scanned for secrets, because gitleaks wasn't found. It is kept on this machine. Do: install gitleaks (brew install gitleaks), then run $WIKI_CMD sync again"
-  fail="not pushed: a commit made with no scan holds what looks like a secret (above). Ask the user: the secret has to come out of that commit before anything is pushed. Never push it by hand"
-  # Every commit that is on no remote yet, on any branch: the mark is the repository's, so a
-  # scan of one branch's commits must not clear it for another's. Run from the repository,
-  # where its .gitleaksignore is. gitleaks 8.19 replaced `detect` with `git`.
-  if gitleaks git --help >/dev/null 2>&1; then
-    (cd "$repo" && gitleaks git --log-opts="--all --not --remotes" --redact --no-banner --no-color --log-level warn --verbose .) >&2 || die "$fail"
+  if [ -f "$mark" ]; then
+    marked=1
   else
-    (cd "$repo" && gitleaks detect --source . --log-opts="--all --not --remotes" --redact --no-banner --no-color --log-level warn --verbose) >&2 || die "$fail"
+    # A hook of ours that git won't run, its execute bit lost on the way here, scans nothing.
+    hook="$(hook_file "$repo" 2>/dev/null || true)"
+    [ "$(hook_state "$repo")" != ours ] || [ ! -x "$hook" ] || return 0
+    [ -n "$(git -C "$repo" rev-list --max-count=1 --branches --not --remotes=origin 2>/dev/null || true)" ] || return 0
   fi
+  if ! command -v gitleaks >/dev/null 2>&1; then
+    [ "$marked" = 0 ] || die "not pushed: a commit here wasn't scanned for secrets, because gitleaks wasn't found. It is kept on this machine. Do: install gitleaks (brew install gitleaks), then run $WIKI_CMD sync again"
+    die "not pushed: nothing scans commits for secrets in $(tilde "$repo"), and gitleaks wasn't found to do it now. What you committed is kept on this machine. Do: install gitleaks (brew install gitleaks), then run $WIKI_CMD sync again"
+  fi
+  fail="not pushed: a commit that wasn't scanned holds what looks like a secret (above). Ask the user: the secret has to come out of that commit before anything is pushed. Never push it by hand"
+  # Every commit that origin doesn't have yet, on any branch: the mark is the repository's,
+  # so a scan of one branch's commits must not clear it for another's. Branches only: a
+  # stash or a tag is never pushed by sync, and one that fails the scan would stop every
+  # sync from then on. And origin only: another remote having a commit doesn't make it
+  # scanned. A merge has no diff of its
+  # own in git's log, so what was typed to settle a conflict would go unread: --remerge-diff
+  # shows it, where git has it (2.36 on). Run from the repository, where its .gitleaksignore
+  # is. gitleaks 8.19 replaced `detect` with `git`.
+  ! git -C "$repo" log --remerge-diff --max-count=0 >/dev/null 2>&1 || opts="$opts --remerge-diff"
+  if gitleaks git --help >/dev/null 2>&1; then
+    (cd "$repo" && gitleaks git --log-opts="$opts" --redact --no-banner --no-color --log-level warn --verbose .) >&2 || die "$fail"
+  else
+    (cd "$repo" && gitleaks detect --source . --log-opts="$opts" --redact --no-banner --no-color --log-level warn --verbose) >&2 || die "$fail"
+  fi
+  [ "$marked" = 1 ] || return 0
   unlink "$mark" 2>/dev/null || true
   echo "scanned: the commits that were made with no scan. Nothing like a secret in them."
 }
@@ -4042,7 +4062,12 @@ install_hook() {
       ;;
   esac
   f="$(hook_file "$dir")"
-  cmp -s "$HOOK_SRC" "$f" 2>/dev/null && return 0
+  cmp -s "$HOOK_SRC" "$f" 2>/dev/null && [ -x "$f" ] && return 0
+  # Commits made here before there was a hook were scanned by nothing. Once the hook is in,
+  # sync would take them for scanned, so say they weren't: sync scans them before it pushes.
+  if [ ! -f "$f" ] && [ -n "$(git -C "$dir" rev-list --max-count=1 --branches --not --remotes=origin 2>/dev/null || true)" ] && [ -n "$(git -C "$dir" remote 2>/dev/null || true)" ]; then
+    : > "$(sync_unscanned "$dir")" 2>/dev/null || true
+  fi
   mkdir -p "$(dirname "$f")"
   cp "$HOOK_SRC" "$f"
   chmod +x "$f"
