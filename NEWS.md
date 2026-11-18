@@ -4,6 +4,12 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2027-01-12: Jira, Confluence and Jenkins behind a company proxy
+
+- When a company proxy's certificate is refused, Jira, Confluence and Jenkins now say why, and name the command that fixes it.
+- `wiki extensions certs <https://address>` shows the authority that signs that site, by name, and asks before trusting it. Run it once, in a terminal.
+- `wiki extensions certs` lists what you chose to trust, and `wiki extensions certs --remove` forgets it.
+
 ## 2027-01-11: fixes from a day of tests and reviews by Codex and Gemini
 
 - `wiki setup keep` takes the names the guide shows, such as `delegation.mode`, `extensions` and `journal.format`.

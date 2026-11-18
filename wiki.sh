@@ -221,7 +221,7 @@ Usage: $WIKI_CMD <command> [options]
   obsidian [--no-open] Browse the wikis in Obsidian: write the vault's starter settings and open it.
   inbox                Take the notes you typed into an inbox folder, in Obsidian or any editor,
                        into the wikis. A session does it when it starts.
-  extensions [path | add <name> | remove <name> | setup <name> | settings <name> | set <name> <key> <value> | log <name> | tick | every ... | offer <name> yes|no|never|again]
+  extensions [path | add <name> | remove <name> | setup <name> | settings <name> | set <name> <key> <value> | log <name> | tick | every ... | offer <name> yes|no|never|again | certs [<https://address>]]
                        Commands of your own: $WIKI_CMD <name> runs an executable named
                        wiki-<name> in the extensions folder. Lists them, or prints the folder.
                        add turns on one that ships with llm-wiki, such as jira. remove turns it off.
@@ -9337,6 +9337,15 @@ cmd_extensions() {
       cmd_schedule "$@"
       return 0
       ;;
+    certs)
+      # The certificate authorities the user chose to trust, for the extensions that talk HTTPS themselves.
+      # All of it is in tls_trust.py, which those extensions read too. Adding one is a question for a terminal.
+      shift
+      command -v python3 >/dev/null 2>&1 || die "extensions certs needs python3, which isn't on this machine. Do: install python3"
+      [ -f "$EXT_SHIPPED/tls_trust.py" ] || die "$(tilde "$EXT_SHIPPED/tls_trust.py") isn't there, so this copy of llm-wiki is incomplete. Run: $WIKI_CMD update"
+      LLM_WIKI_CMD="$WIKI_CMD" python3 -B "$EXT_SHIPPED/tls_trust.py" "$@"
+      return $?
+      ;;
     every)
       shift
       [ $# -le 2 ] || die_usage "usage: $WIKI_CMD extensions every [<name>] [<time>]"
@@ -9463,11 +9472,12 @@ cmd_complete() {
     open) [ "$i" -eq 2 ] && echo --data; [ "$i" -eq 3 ] && wiki_names ;;
     pages) [ "$i" -eq 2 ] && wiki_names; echo --data ;;
     extensions)
-      [ "$i" -eq 2 ] && printf 'path\nadd\nremove\nsetup\nsettings\nset\nlog\ntick\nevery\nschedule\noffer\n'
+      [ "$i" -eq 2 ] && printf 'path\nadd\nremove\nsetup\nsettings\nset\nlog\ntick\nevery\nschedule\noffer\ncerts\n'
       if [ "$i" -eq 3 ] && { [ "${2:-}" = log ] || [ "${2:-}" = every ] || [ "${2:-}" = setup ] || [ "${2:-}" = settings ] || [ "${2:-}" = set ]; }; then extension_names; return 0; fi
       if [ "$i" -eq 4 ] && [ "${2:-}" = every ]; then echo default; return 0; fi
       if [ "$i" -eq 3 ] && [ "${2:-}" = schedule ]; then printf 'on\noff\nstatus\n'; return 0; fi
       if [ "$i" -eq 3 ] && [ "${2:-}" = tick ]; then echo --due; return 0; fi
+      if [ "${2:-}" = certs ]; then [ "$i" -ne 3 ] || echo --remove; return 0; fi
       if [ "$i" -eq 3 ]; then for k in "$EXT_SHIPPED"/wiki-*; do [ ! -f "$k" ] || printf '%s\n' "${k##*/wiki-}"; done; fi
       ;;
     log)
@@ -11809,7 +11819,7 @@ $(un_collections)
 UNEOF
   if un_inside "$REPO" "$d"; then printf 'this copy of llm-wiki is in it'; return 0; fi
   case "$2" in
-    settings) set -- setup extensions-on collections theme palette tips completion.zsh completion.bash helper github gitlab jenkins jira confluence delegation compile feedback extensions-tick harvested atlassian ;;
+    settings) set -- setup extensions-on collections theme palette tips completion.zsh completion.bash helper github gitlab jenkins jira confluence delegation compile feedback extensions-tick harvested atlassian trusted-certs.pem ;;
     state) set -- notices offers extensions compile recall reminders news-seen feedback schedule.log ;;
     *) set -- helper extensions ;;
   esac

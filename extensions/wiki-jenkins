@@ -19,6 +19,7 @@ the Jenkins address you set, and is never printed, logged, stored or put in an e
 """
 import base64
 import datetime
+import importlib.util
 import hashlib
 import json
 import os
@@ -41,6 +42,25 @@ except ImportError:
     print(f"error: wiki-jenkins needs ci_common.py in its own folder, and it isn't there: it was copied without it. "
           f"Do: turn it on with {CMD} extensions add jenkins instead of copying it", file=sys.stderr)
     sys.exit(1)
+
+
+# The certificate authorities the user chose to trust. Without the file, Python's own list only.
+def _beside(name):
+    """A module from this file's own folder and from nowhere else, or None when it isn't there."""
+    path = os.path.join(os.path.dirname(os.path.realpath(__file__)), name + ".py")
+    if not os.path.isfile(path):
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location(name, path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    except ImportError:
+        return None
+    return mod
+
+
+tls_trust = _beside("tls_trust")
+
 from ci_common import (KEEP_BYTES, KEEP_DAYS, KEEP_LINES, NOTICE_DAYS, clean, clear_notice, die, die_usage, first_line, is_yes,
                        known_in_wikis, read_conf, set_conf, signature_of, stale, unfit)
 
@@ -277,13 +297,29 @@ class Jenkins:
         need_sign_in(conf)
         self.url = conf["url"]
         self.user = conf["user"]
+        # Before the token is read: with a saved file that can't be used, nothing is asked for and nothing is sent.
+        handlers = [SameOrigin()]
+        if tls_trust:
+            try:
+                handlers.append(tls_trust.https_handler())
+            except tls_trust.Problem as e:
+                die(str(e))
         tok = get_token(conf)
         if not tok:
             die(f"no API token. Set token_cmd in {CONFIG}, or {TOKEN_ENV}. {CMD} jenkins --help has the settings.")
         if ":" in self.user or unfit(self.user):
             die(f"the Jenkins user can't hold a colon or a control character. Do: set it again, in a terminal: {CMD} extensions setup jenkins")
         self.headers = {"Authorization": "Basic " + base64.b64encode(f"{self.user}:{tok}".encode()).decode(), "Accept": "application/json"}
-        self.opener = urllib.request.build_opener(SameOrigin())
+        self.opener = urllib.request.build_opener(*handlers)
+
+    def no_answer(self, e):
+        """A request that got no answer. A certificate that was refused says so, with the command that fixes it."""
+        hint = tls_trust.hint(e, self.url) if tls_trust else None
+        if hint:
+            if EVENT:
+                not_now(hint)
+            die(hint)
+        unreachable(f"can't reach {self.url}: {clean(str(getattr(e, 'reason', e)), 120)}")
 
     def open(self, path, headers=None):
         """The open response to one GET of an address under the Jenkins address, or the code Jenkins refused it with."""
@@ -323,7 +359,7 @@ class Jenkins:
                 return None
             self.fail(e, path)
         except (urllib.error.URLError, TimeoutError, OSError) as e:
-            unreachable(f"can't reach {self.url}: {clean(str(getattr(e, 'reason', e)), 120)}")
+            self.no_answer(e)
         if len(body) > JSON_BYTES:
             unreachable(f"Jenkins answered with more than {JSON_BYTES // 1024 // 1024} MB for {clean(path, 80)}")
         try:
@@ -346,7 +382,7 @@ class Jenkins:
                 self.fail(e, path)
             return None
         except (urllib.error.URLError, TimeoutError, OSError) as e:
-            unreachable(f"can't reach {self.url}: {clean(str(getattr(e, 'reason', e)), 120)}")
+            self.no_answer(e)
         buf = bytearray()
         cut = False
         if getattr(r, "status", 200) == 206:

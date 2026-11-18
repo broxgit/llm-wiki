@@ -80,6 +80,7 @@ read -r -d '' PARTS <<'TABLE' || true
 3 | Size budget |
 3 | Uninstall | Collection
 3 | What CI skips |
+2 | Trusted certificates |
 3 | Tour |
 4 | The released helper | Session hook
 TABLE
@@ -4654,7 +4655,7 @@ expect "extensions lists it with its description" "Says hello, for the smoke tes
 expect "the first word completes to it" "hello" "$W" __complete 1 he
 expect "and to extensions" "extensions" "$W" __complete 1 ex
 expect "extensions completes to path" "path" "$W" __complete 2 extensions ""
-expect "the usage names the command" "extensions [path | add <name> | remove <name> | setup <name> | settings <name> | set <name> <key> <value> | log <name> | tick | every ... | offer <name> yes|no|never|again]" "$W" --help
+expect "the usage names the command" "extensions [path | add <name> | remove <name> | setup <name> | settings <name> | set <name> <key> <value> | log <name> | tick | every ... | offer <name> yes|no|never|again | certs [<https://address>]]" "$W" --help
 # A command of llm-wiki's own always wins.
 printf '#!/bin/sh\necho HIJACK\n' > "$XD/wiki-news"
 printf '#!/bin/sh\necho HIJACK\n' > "$XD/wiki-relay"
@@ -10565,6 +10566,234 @@ check "every file the wikis had is still there, unchanged" bash -c "cd '$UNW' &&
 export HOME="$UN_SAVED_HOME" WIKIS_DIR="$UN_SAVED_WIKIS_DIR" LLM_WIKI_LAUNCHCTL="$T/bin/inert"
 unset LLM_WIKI_CMD LLM_WIKI_TEST_OS
 rm -rf "$UN"
+fi
+
+if section "Trusted certificates"; then
+# Behind a company proxy every site's certificate is signed again by the company's own authority, which the
+# operating system knows and Python doesn't. `wiki extensions certs <address>` shows the user that authority by
+# name, at a terminal, and on a yes the extensions that talk HTTPS themselves trust it too. Here a server on this
+# machine has a certificate signed by an authority made for the test, which stands in for the proxy's.
+TC="$T/tc"
+mkdir -p "$TC/fx" "$TC/run"
+TRUSTED="$HOME/.config/llm-wiki/trusted-certs.pem"
+tc_code() { "$@" >/dev/null 2>&1; echo $?; }
+check "tls_trust.py is beside the extensions, is not executable, and has no extension header" bash -c "test -f '$REPO/extensions/tls_trust.py' && test ! -x '$REPO/extensions/tls_trust.py' && ! head -n 10 '$REPO/extensions/tls_trust.py' | grep -q 'wiki-extension:'"
+lacks "the list of extensions never names it" "tls_trust" "$W" extensions
+expect "with nothing chosen, certs says so, and how one is added" "No certificate authority is trusted beyond Python's own list." "$W" extensions certs
+expect "tab completion offers certs" "certs" "$W" __complete 2 extensions
+check "an address that isn't https exits 2" test "$(tc_code "$W" extensions certs http://jira.example.com)" = 2
+check "so does one with a login in it" test "$(tc_code "$W" extensions certs https://sam:pw@jira.example.com)" = 2
+check "and one that would be more than an address in a command" test "$(tc_code "$W" extensions certs 'https://jira.example.com;id')" = 2
+check "and one with a line break in it" test "$(tc_code "$W" extensions certs "$(printf 'https://jira.example\n.com')")" = 2
+check "and too many words" test "$(tc_code "$W" extensions certs https://a.example https://b.example)" = 2
+expect "certs --help says what it is for" "the proxy" "$W" extensions certs --help
+if command -v openssl >/dev/null 2>&1; then
+tc_ca() {
+  printf '[req]\ndistinguished_name=dn\nx509_extensions=v3\nprompt=no\n[dn]\nCN=%s\nO=Acme Corp\n[v3]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\n' "$1" > "$TC/fx/$2.cnf"
+  openssl req -x509 -newkey rsa:2048 -nodes -keyout "$TC/fx/$2.key" -out "$TC/fx/$2.pem" -days 3 -config "$TC/fx/$2.cnf" 2>/dev/null
+}
+tc_ca "Acme Proxy Root" ca
+tc_ca "Some Other Root" other
+# A certificate that signs nothing: it is in every Mac's System keychain, and is never offered.
+printf '[req]\ndistinguished_name=dn\nx509_extensions=v3\nprompt=no\n[dn]\nCN=not an authority\n[v3]\nbasicConstraints=critical,CA:FALSE\nsubjectKeyIdentifier=hash\n' > "$TC/fx/leaf.cnf"
+openssl req -x509 -newkey rsa:2048 -nodes -keyout "$TC/fx/leaf.key" -out "$TC/fx/leaf.pem" -days 3 -config "$TC/fx/leaf.cnf" 2>/dev/null
+printf '[req]\ndistinguished_name=dn\nprompt=no\n[dn]\nCN=localhost\n' > "$TC/fx/srv.cnf"
+openssl req -new -newkey rsa:2048 -nodes -keyout "$TC/fx/srv.key" -out "$TC/fx/srv.csr" -config "$TC/fx/srv.cnf" 2>/dev/null
+printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid\n' > "$TC/fx/srv.ext"
+# As a proxy does it: the root signs an issuing authority, which signs the site's certificate, and the server sends
+# both of those. Only the root is in the keychain.
+printf '[req]\ndistinguished_name=dn\nprompt=no\n[dn]\nCN=Acme Proxy Issuing\nO=Acme Corp\n' > "$TC/fx/mid.cnf"
+openssl req -new -newkey rsa:2048 -nodes -keyout "$TC/fx/mid.key" -out "$TC/fx/mid.csr" -config "$TC/fx/mid.cnf" 2>/dev/null
+printf 'basicConstraints=critical,CA:TRUE,pathlen:0\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid\n' > "$TC/fx/mid.ext"
+openssl x509 -req -in "$TC/fx/mid.csr" -CA "$TC/fx/ca.pem" -CAkey "$TC/fx/ca.key" -CAcreateserial -out "$TC/fx/mid.pem" -days 3 -extfile "$TC/fx/mid.ext" 2>/dev/null
+openssl x509 -req -in "$TC/fx/srv.csr" -CA "$TC/fx/mid.pem" -CAkey "$TC/fx/mid.key" -CAcreateserial -out "$TC/fx/srv.pem" -days 3 -extfile "$TC/fx/srv.ext" 2>/dev/null
+cat "$TC/fx/srv.pem" "$TC/fx/mid.pem" > "$TC/fx/chain.pem"
+cat "$TC/fx/other.pem" "$TC/fx/leaf.pem" "$TC/fx/ca.pem" > "$TC/fx/keychain.pem"
+cat > "$TC/serve.py" <<'PY'
+import http.server, socketserver, ssl, sys
+fx, run = sys.argv[1], sys.argv[2]
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        with open(run + "/hits", "a") as f:
+            f.write(self.path + " sign-in=" + ("yes" if self.headers.get("Authorization") else "no") + "\n")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", "2")
+        self.end_headers()
+        self.wfile.write(b"{}")
+    def log_message(self, *a):
+        pass
+class S(http.server.ThreadingHTTPServer):
+    # HTTPServer's own bind looks the host's name up, which can take seconds on a Mac.
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+s = S(("127.0.0.1", 0), H)
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+ctx.load_cert_chain(fx + "/chain.pem", fx + "/srv.key")
+s.socket = ctx.wrap_socket(s.socket, server_side=True)
+with open(run + "/port", "w") as f:
+    f.write(str(s.server_address[1]))
+s.serve_forever()
+PY
+# The question is asked at a real terminal only, so the test gives the command one of its own.
+cat > "$TC/at_tty.py" <<'PY'
+import os, pty, select, sys, time
+answer = sys.argv[1]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(sys.argv[2], sys.argv[2:])
+out, sent, end = b"", False, time.time() + 90
+while time.time() < end:
+    r, _, _ = select.select([fd], [], [], 0.2)
+    if not r:
+        continue
+    try:
+        chunk = os.read(fd, 4096)
+    except OSError:
+        break
+    if not chunk:
+        break
+    out += chunk
+    if not sent and b"[y/N]" in out:
+        os.write(fd, answer.encode() + b"\n")
+        sent = True
+_, status = os.waitpid(pid, 0)
+sys.stdout.write(out.decode("utf-8", "replace").replace("\r\n", "\n"))
+sys.exit(os.waitstatus_to_exitcode(status))
+PY
+python3 -I "$TC/serve.py" "$TC/fx" "$TC/run" > "$TC/serve.log" 2>&1 &
+TCPID=$!
+i=0; while [ ! -s "$TC/run/port" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+TCO="https://localhost:$(cat "$TC/run/port" 2>/dev/null)"
+tcjk() { env JENKINS_URL="$TCO" JENKINS_USER=sam JENKINS_API_TOKEN=smoke-token-0123456789 LLM_WIKI_CMD=wiki "$REPO/extensions/wiki-jenkins" config; }
+tcji() { env JIRA_URL="$TCO" JIRA_EMAIL=me@example.com JIRA_API_TOKEN=smoke-token-0123456789 LLM_WIKI_CMD=wiki "$REPO/extensions/wiki-jira" config; }
+tccf() { env CONFLUENCE_URL="$TCO" CONFLUENCE_EMAIL=me@example.com CONFLUENCE_API_TOKEN=smoke-token-0123456789 LLM_WIKI_CMD=wiki "$REPO/extensions/wiki-confluence" config; }
+tcask() { local a="$1"; shift; python3 -I "$TC/at_tty.py" "$a" "$W" extensions certs "$@"; }
+tchits() { grep -c "sign-in=$1" "$TC/run/hits" 2>/dev/null || true; }
+FIX="Run, in a terminal: wiki extensions certs $TCO"
+expect "Jenkins, refused the server's certificate, says why and names the command with the address" "can't check the certificate of $TCO: it is signed by an authority Python doesn't know, as it is behind a company proxy. $FIX" tcjk
+expect "so does Jira" "$FIX" tcji
+expect "and Confluence" "$FIX" tccf
+lacks "none of them shows Python's own words for it" "CERTIFICATE_VERIFY_FAILED" bash -c "$(declare -f tcjk tcji tccf); TCO='$TCO' REPO='$REPO'; tcjk; tcji; tccf"
+check "and nothing reached the server" test ! -s "$TC/run/hits"
+# Only a person at a terminal answers.
+out="$("$W" extensions certs "$TCO" --from "$TC/fx/keychain.pem" < /dev/null 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"a question for a person, at a terminal, and an agent never answers it"*"Do: run it yourself, in a terminal: "*"extensions certs $TCO"*) true ;; *) false ;; esac && ok "with no terminal, certs asks nothing and exits 1, with what to do" || bad "with no terminal, certs asks nothing and exits 1, with what to do" "exit $code: $out"
+out="$(printf 'y\n' | in_tty "$W" extensions certs "$TCO" --from "$TC/fx/keychain.pem" 2>&1)"
+case "$out" in *"at a terminal"*) ok "a yes through a pipe is not an answer, even with the tests' own switch for setup" ;; *) bad "a yes through a pipe is not an answer, even with the tests' own switch for setup" "$out" ;; esac
+check "and nothing was saved" test ! -e "$TRUSTED"
+# A no.
+out="$(tcask n "$TCO" --from "$TC/fx/keychain.pem" 2>&1)"; code=$?
+case "$out" in *"$TCO is signed by an authority that Python doesn't know"*"Acme Proxy Root"*"from     Acme Corp"*"SHA-256  "*"your API tokens included"*"Trust it for llm-wiki's extensions?"*"Nothing was changed."*) ok "at a terminal it shows the authority by name, says what a yes means, and asks" ;; *) bad "at a terminal it shows the authority by name, says what a yes means, and asks" "exit $code: $out" ;; esac
+case "$out" in *"Some Other Root"* | *"not an authority"* | *"Acme Proxy Issuing"*) bad "only the one that is needed is shown" "$out" ;; *) ok "only the one that is needed is shown" ;; esac
+check "a no saves nothing" test ! -e "$TRUSTED"
+check "the checks before the question carried no sign-in" test "$(tchits yes)" = 0
+# What it reads must hold the authority.
+out="$(tcask y "$TCO" --from "$TC/fx/other.pem" 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"none of the 1 certificate authority in "*" signs $TCO"*"--from <file.pem>"*) true ;; *) false ;; esac && ok "a file without the authority offers nothing and exits 1" || bad "a file without the authority offers nothing and exits 1" "exit $code: $out"
+expect "a certificate that signs nothing is never offered" "none of the 0 certificate authorities" tcask y "$TCO" --from "$TC/fx/leaf.pem"
+expect "the server's own certificate isn't one either" "none of the 0 certificate authorities" tcask y "$TCO" --from "$TC/fx/srv.pem"
+expect "a file that isn't there is said" "can't be read" tcask y "$TCO" --from "$TC/fx/nowhere.pem"
+mkfifo "$TC/fifo.pem"
+expect "a pipe in place of a file is refused, with no wait" "isn't a .pem file" tcask y "$TCO" --from "$TC/fifo.pem"
+cp "$TC/fx/other.pem" "$TC/this Mac's System keychain"
+expect "a file is called a file, whatever its name" "none of the 1 certificate authority in the file /" tcask y "$TCO" --from "$TC/this Mac's System keychain"
+expect "off a Mac, with no file, it says to get one" "get your company's root certificate as a .pem file" env LLM_WIKI_TEST_OS=linux python3 -I "$TC/at_tty.py" y "$W" extensions certs "$TCO"
+check "none of that saved anything" test ! -e "$TRUSTED"
+# On a Mac it reads the System keychain. The stand-in prints three certificates.
+printf '#!/bin/sh\n[ "$1 $2 $3 $4" = "find-certificate -a -p /Library/Keychains/System.keychain" ] || exit 1\ncat "%s"\n' "$TC/fx/keychain.pem" > "$T/bin/tc-security"
+chmod +x "$T/bin/tc-security"
+out="$(env LLM_WIKI_TEST_OS=darwin SECURITY_BIN="$T/bin/tc-security" python3 -I "$TC/at_tty.py" y "$W" extensions certs "$TCO" 2>&1)"; code=$?
+[ "$code" = 0 ] && case "$out" in *"Acme Proxy Root"*"Trusted, for llm-wiki's extensions only. $TCO checks out now."*) true ;; *) false ;; esac && ok "on a Mac, a yes trusts the authority found in the keychain" || bad "on a Mac, a yes trusts the authority found in the keychain" "exit $code: $out"
+case "$out" in *"this Mac's System keychain"*) bad "and with another command in place of security it doesn't claim the keychain" "$out" ;; *"found in what the command in SECURITY_BIN printed"*) ok "and with another command in place of security it doesn't claim the keychain" ;; *) bad "and with another command in place of security it doesn't claim the keychain" "$out" ;; esac
+check "the file is the user's alone" bash -c "test -f '$TRUSTED' && [ \"\$(ls -l '$TRUSTED' | cut -c1-10)\" = '-rw-------' ]"
+check "it holds that one certificate, and what it was added for" bash -c "[ \$(grep -c 'BEGIN CERTIFICATE' '$TRUSTED') = 1 ] && grep -q '^# added [0-9-]* for localhost:[0-9]*\$' '$TRUSTED'"
+out="$("$W" extensions certs 2>&1)"
+want="$(openssl x509 -in "$TC/fx/ca.pem" -noout -fingerprint -sha256 | sed 's/.*=//' | tr ':' ' ')"
+case "$out" in *"1 you chose"*"Acme Proxy Root"*"SHA-256  $want"*"added "*" for localhost:"*"extensions certs --remove"*) ok "certs lists it, with the fingerprint openssl gives" ;; *) bad "certs lists it, with the fingerprint openssl gives" "want $want: $out" ;; esac
+expect "the address checks out now, with no terminal needed to say so" "already checks out. Nothing to add." "$W" extensions certs "$TCO"
+lacks "Jenkins gets through" "certificate" tcjk
+lacks "so does Jira" "certificate" tcji
+lacks "and Confluence" "certificate" tccf
+check "and only now did a sign-in reach the server" test "$(tchits yes)" -ge 3
+# The saved file is used only when it is the user's own plain file.
+before="$(tchits yes)"
+chmod 666 "$TRUSTED"
+expect "a file others can write is not used, and says so" "can be written by someone else, so it isn't used and nothing was sent" tcjk
+expect "Jira says the same" "can be written by someone else" tcji
+expect "so does Confluence" "can be written by someone else" tccf
+expect "and certs itself" "can be written by someone else" "$W" extensions certs
+chmod 600 "$TRUSTED"
+mv "$TRUSTED" "$TC/real.pem"
+ln -s "$TC/real.pem" "$TRUSTED"
+expect "a link in its place is not followed" "can't be opened" tcjk
+rm -f "$TRUSTED"
+printf -- '-----BEGIN CERTIFICATE-----\naGVsbG8gd29ybGQ=\n-----END CERTIFICATE-----\n' > "$TRUSTED"
+chmod 600 "$TRUSTED"
+ODD="holds something that isn't a certificate authority, so it isn't used and nothing was sent"
+expect "one that holds something that isn't a certificate is not used" "$ODD" tcjk
+printf 'not a certificate at all\n' > "$TRUSTED"
+expect "nor one that holds other text" "$ODD" tcjk
+cp "$TC/fx/leaf.pem" "$TRUSTED"
+expect "nor one that holds a certificate that signs nothing" "$ODD" tcjk
+expect "and certs says the same as the extensions do" "$ODD" "$W" extensions certs
+{ cat "$TC/real.pem"; printf -- '-----BEGIN CERTIFICATE-----\nMIIB\n'; } > "$TRUSTED"
+expect "nor one that was cut off half way" "$ODD" tcjk
+# The token is never read when the file can't be used.
+printf 'url = %s\nuser = sam\ntoken_cmd = touch %s; echo smoke-token-0123456789\n' "$TCO" "$TC/token-read" > "$HOME/.config/llm-wiki/jenkins"
+env LLM_WIKI_CMD=wiki "$REPO/extensions/wiki-jenkins" config >/dev/null 2>&1
+check "and with it unusable, the token command is not run" test ! -e "$TC/token-read"
+rm -f "$HOME/.config/llm-wiki/jenkins"
+check "none of those sent a sign-in" test "$(tchits yes)" = "$before"
+mv "$TC/real.pem" "$TRUSTED"
+lacks "the real file back, Jenkins gets through again" "certificate" tcjk
+# Adding the same one again changes nothing, and --remove forgets.
+expect "--remove says what it removed" "Removed 1 certificate authority. The extensions trust only Python's own list again." "$W" extensions certs --remove
+check "the file is gone" test ! -e "$TRUSTED"
+expect "and a second --remove has nothing to do" "Nothing to remove" "$W" extensions certs --remove
+expect "Jenkins is refused again, with the command" "$FIX" tcjk
+# The hint names the command only for the failure it fixes, and only with an address that is safe to type.
+cat > "$TC/hint.py" <<'PY'
+import ssl, sys, urllib.error
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+import tls_trust as t
+def failure(code, msg):
+    e = ssl.SSLCertVerificationError(1, msg)
+    e.verify_code, e.verify_message = code, msg
+    return urllib.error.URLError(e)
+unknown = t.hint(failure(20, "unable to get local issuer certificate"), "https://jira.example.com/rest/api/2/myself?x=1")
+expired = t.hint(failure(10, "certificate has expired\x1b[31m"), "https://jira.example.com")
+odd = t.hint(failure(19, "self-signed certificate in certificate chain"), "https://jira.example.com;rm -rf ~/x")
+other = t.hint(urllib.error.URLError(OSError("connection refused")), "https://jira.example.com")
+ok = (unknown.endswith("extensions certs https://jira.example.com")
+      and "extensions certs" not in expired and "was refused: certificate has expired" in expired and "\x1b" not in expired
+      and "rm -rf" not in odd and odd.endswith("extensions certs <its https:// address>")
+      and other is None
+      and t.origin_of("https://Jira.Example.com:8443/x") == "https://jira.example.com:8443"
+      and t.origin_of("https://jira.example.com:443") == "https://jira.example.com"
+      and t.origin_of("http://jira.example.com") == "" and t.origin_of("https://a@jira.example.com") == "")
+print(unknown, expired, odd, other, sep="\n")
+sys.exit(0 if ok else 1)
+PY
+check "the command is named for an unknown authority only, with an address that is only an address" python3 -I "$TC/hint.py" "$REPO/extensions"
+# A copy of an extension without tls_trust.py still runs, with Python's own list.
+mkdir -p "$TC/alone"
+cp "$REPO/extensions/wiki-jira" "$TC/alone/wiki-jira"
+check "wiki-jira copied without tls_trust.py still runs" env LLM_WIKI_CMD=wiki "$TC/alone/wiki-jira" --help
+# And it takes the module from its own folder only: one on Python's path is never loaded.
+mkdir -p "$TC/planted"
+printf 'import sys\nprint("PLANTED")\n' > "$TC/planted/tls_trust.py"
+lacks "a tls_trust.py elsewhere on Python's path is not loaded" "PLANTED" env PYTHONPATH="$TC/planted" LLM_WIKI_CMD=wiki "$TC/alone/wiki-jira" --help
+lacks "by the shipped extensions either" "PLANTED" bash -c "PYTHONPATH='$TC/planted' '$REPO/extensions/wiki-jenkins' --help; PYTHONPATH='$TC/planted' '$REPO/extensions/wiki-confluence' --help"
+expect "and says Python's own words when a certificate is refused" "can't reach $TCO" env JIRA_URL="$TCO" JIRA_EMAIL=me@example.com JIRA_API_TOKEN=smoke-token-0123456789 LLM_WIKI_CMD=wiki "$TC/alone/wiki-jira" config
+check "nothing here left Python's cache in the extensions folder" test ! -e "$REPO/extensions/__pycache__"
+kill "$TCPID" 2>/dev/null
+wait "$TCPID" 2>/dev/null || true
+else
+  skipped "trusting an authority against a server (openssl isn't installed)"
+fi
+rm -f "$TRUSTED"
 fi
 
 if section "What CI skips"; then
