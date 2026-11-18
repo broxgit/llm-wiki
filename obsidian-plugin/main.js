@@ -53,6 +53,8 @@ class OutputModal extends obsidian.Modal {
   }
   onOpen() {
     this.titleEl.setText(this.title);
+    // Wide enough for a table from the command not to wrap, where the window allows.
+    if (this.modalEl && this.modalEl.style) this.modalEl.style.width = "min(960px, 92vw)";
     const pre = this.contentEl.createEl("pre");
     pre.style.whiteSpace = "pre-wrap";
     pre.style.userSelect = "text";

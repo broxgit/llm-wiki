@@ -88,7 +88,7 @@ It works from Obsidian, a phone that syncs the vault, or any editor. The note is
 
 ### Commands inside Obsidian
 
-`wiki obsidian --plugin` puts llm-wiki's plugin in the vault that holds your wikis, and in no other. In Obsidian, open Settings, then Community plugins, turn community plugins on, and switch llm-wiki on. Then open the command palette and type `llm-wiki`:
+`wiki obsidian --plugin` puts llm-wiki's plugin in the vault that holds your wikis, and in no other. Open the vault in Obsidian. If it asks whether you trust the author of the vault, choose "Trust author and enable plugins": the plugin it means is this one. If it doesn't ask, open Settings, then Community plugins, turn community plugins on, and check llm-wiki is switched on. Then open the command palette and type `llm-wiki`:
 
 - **Save this note to a wiki.** The note in view becomes a waiting note of the wiki it is in, or of one you pick. An agent's next compile works it into the pages.
 - **Take in the inbox now**, **Find across every wiki**, and **What needs attention**, which shows what `wiki status` prints.

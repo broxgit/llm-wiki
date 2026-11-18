@@ -6311,7 +6311,7 @@ obsidian_plugin() {
   ui_detail "It runs $(tilde "$c"), which is written in $(tilde "$cf"): on this computer, not in the vault."
   ui_detail "It is in this vault only, and it runs the wiki command on this vault only."
   ui_turn
-  ui_step 1 "In Obsidian, open Settings, then Community plugins, and choose Turn on community plugins" "once for this vault"
+  ui_step 1 "Open the vault in Obsidian. If it asks whether you trust the author of this vault, choose Trust author and enable plugins. If it doesn't ask, open Settings, then Community plugins, and choose Turn on community plugins" "once for this vault"
   if [ "$listed" = 1 ]; then ui_step 2 "Check that llm-wiki is switched on in the list there" "it is already listed"
   else ui_step 2 "Switch llm-wiki on in the list there" "your own list of plugins was left as it is"; fi
   ui_step 3 "Open the command palette and type llm-wiki" "save a note, the inbox, find, what needs attention, compile, sync"
