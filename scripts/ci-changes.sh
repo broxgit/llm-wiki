@@ -13,13 +13,14 @@ set -euo pipefail
 
 unread() {
   case "$1" in
+    *..*) return 1 ;;
     ROADMAP.md | docs/research/*) return 0 ;;
   esac
   return 1
 }
 
 any=0
-while IFS= read -r f; do
+while IFS= read -r f || [ -n "$f" ]; do
   [ -n "$f" ] || continue
   any=1
   if ! unread "$f"; then echo true; exit 0; fi

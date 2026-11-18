@@ -171,6 +171,8 @@ def get_token(conf):
             out = subprocess.run(conf["token_cmd"], shell=True, capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
         except subprocess.TimeoutExpired:
             die(f"token_cmd took more than 30 seconds. Do: run the command in {CONFIG} yourself to see why")
+        except (OSError, ValueError):
+            die(f"token_cmd didn't print text. Do: run the command in {CONFIG} yourself to see why")
         if out.returncode != 0 or not out.stdout.strip():
             die(f"token_cmd printed no token (exit {out.returncode}). Do: run the command in {CONFIG} yourself to see why")
         return out.stdout.strip()
@@ -525,6 +527,7 @@ def remote_of(folder):
     if not m:
         return None
     host, path = m.group(1).lower(), m.group(2)
+    path = path.rstrip("/")
     if path.endswith(".git"):
         path = path[:-4]
     parts = path.strip("/").split("/")
@@ -748,6 +751,9 @@ def jobs_for(folder, conf):
     top = clone_top(folder) or os.path.realpath(folder)
     jobs = [j for f, j in conf["watch"] if os.path.realpath(f) == top]
     if not jobs:
+        mine = cc.common_dir(top)
+        jobs = [j for f, j in conf["watch"] if mine and cc.common_dir(f) == mine]
+    if not jobs:
         d = derived_job(folder, conf)
         jobs = [d] if d else []
     return jobs
@@ -860,13 +866,17 @@ def cmd_unwatch(args):
     top = clone_top(folder) or os.path.realpath(folder)
     entries = settings()["watch"]
     job = args[1].strip() if len(args) == 2 else None
-    keep = [(f, j) for f, j in entries if not (os.path.realpath(f) == top and (job is None or j == job))]
+    mine = cc.common_dir(top)
+
+    def same(f):
+        return os.path.realpath(f) == top or bool(mine and cc.common_dir(f) == mine)
+    keep = [(f, j) for f, j in entries if not (same(f) and (job is None or j == job))]
     if len(keep) == len(entries):
         print(f"{top} wasn't watched.")
         return 0
     write_watch(keep)
     conf = settings()
-    gone = not any(os.path.realpath(f) == top for f, _ in keep)
+    gone = not any(same(f) for f, _ in keep)
     if gone and conf["job_auto"] and derived_job(top, conf) and not skipped(top, conf) and path_fits_file(top):
         set_conf(CONFIG, "job_skip", ", ".join(conf["job_skip"] + [top]))
         print(f"No longer watching {top}, and job_auto won't watch it again. {CMD} jenkins watch {top} undoes that.")
@@ -1129,17 +1139,21 @@ def setup():
     url = ask("Your Jenkins, such as https://ci.example.com", conf["url"])
     why = url_problem(url) if url else ""
     if why:
-        print(f"  {url if len(url) < 80 else url[:80]} {why}, so it wasn't saved.")
+        print(f"  What you typed {why}, so it wasn't saved.")
     else:
         set_conf(CONFIG, "url", url.rstrip("/"))
     user = ask("Your Jenkins user name", conf["user"])
     if user and (":" in user or unfit(user) or "#" in user):
         print("  A user name can't hold a colon, a # or a control character, so it wasn't saved.")
+    elif user and "@" not in user and " " not in user and re.fullmatch(r"[A-Za-z0-9_-]{30,}", user):
+        print("  That looks like a token, not a user name, so it wasn't saved. The token is never typed here.")
     else:
         set_conf(CONFIG, "user", user)
     conf = settings()
-    if not has_token(conf):
+    if not has_token(conf) or token_shape(conf):
         print()
+        if has_token(conf):
+            print("The token that is saved doesn't look right, so here it is again.")
         print("The API token is kept out of this file. In Jenkins, open your user, then Configure, then API Token,")
         print("and add one. Copy it.")
         if on_mac():
@@ -1175,19 +1189,23 @@ def setup():
             cmd = ask("A command that prints the token, such as: pass show jenkins", "")
             if "#" in cmd or unfit(cmd):
                 print("  A command can't hold a # or a control character, so it wasn't saved.")
-            else:
+            elif re.fullmatch(r"[^\s/]{20,}", cmd):
+                print("  That is one long word, so it looks like the token itself. A command is wanted here, not the token, so it wasn't saved.")
+            elif cmd:
                 set_conf(CONFIG, "token_cmd", cmd)
     conf = settings()
     miss = sign_in_missing(conf)
     tested = "not tested"
+    shape_now = "" if miss else token_shape(conf)
     if miss:
         print(f"  Jenkins can't sign in yet: {miss}.")
         print(f"  So the sign-in isn't tested. When it is all there, test it with: {CMD} jenkins config")
         tested = f"not set up: {miss}"
-    elif token_shape(conf):
+    elif shape_now:
         # What is saved isn't a token, and may be something else that is secret: it is not sent anywhere.
-        print(f"  The token doesn't look right: {token_shape(conf)}.")
-        print(f"  So nothing was sent to Jenkins. Save the token again, then run: {CMD} extensions setup jenkins")
+        print(f"  The token doesn't look right: {shape_now}.")
+        set_conf(CONFIG, "token_cmd", "")
+        print(f"  So nothing was sent to Jenkins. The saved command was cleared too. Save the token again, then run: {CMD} extensions setup jenkins")
         tested = "not tested: what is saved as the token doesn't look like one"
     else:
         try:

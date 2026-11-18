@@ -639,7 +639,8 @@ def save_state(state):
     as the disk has them, never changed here."""
     with state_lock() as held:
         disk = load_state()
-        for repo in list((disk.get("repos") or {}).keys()):
+        disk_repos = disk.get("repos")
+        for repo in list(disk_repos.keys()) if isinstance(disk_repos, dict) else []:
             theirs = attempts_of(disk, repo)
             if theirs:
                 mine = attempts_of(state, repo, make=True)
@@ -665,7 +666,7 @@ def save_state(state):
 
 # ---- comments on pull requests -------------------------------------------------------------------
 
-LOGIN_OK = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")
+LOGIN_OK = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9_-]{0,38})")
 TIME_OK = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ")
 VERDICTS = {"APPROVED": "approved", "CHANGES_REQUESTED": "asked for changes"}
 PATH_OK = re.compile(r"[A-Za-z0-9._/@+-]{1,200}")
@@ -734,7 +735,8 @@ def comment_mark(repo, n, **fields):
             if k in fields and time_of(fields[k]) >= time_of(e.get(k)):
                 same = time_of(fields[k]) == time_of(e.get(k))
                 old = e.get("at_" + k) if same and isinstance(e.get("at_" + k), list) else []
-                e[k], e["at_" + k] = time_of(fields[k]), sorted(set(old) | set(fields.get("at_" + k, [])))[:200]
+                new = fields.get("at_" + k) if isinstance(fields.get("at_" + k), list) else []
+                e[k], e["at_" + k] = time_of(fields[k]), sorted({x for x in old if isinstance(x, str)} | {x for x in new if isinstance(x, str)})[:200]
         for k, v in fields.items():
             if k not in ("told", "read", "at_told", "at_read"):
                 e[k] = v

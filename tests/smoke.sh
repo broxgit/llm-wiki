@@ -7179,6 +7179,37 @@ ghcs dc 7; ghcs rv 7
 out="$(gtick 2>&1)"
 case "$(cnote)" in *"1 new comment(s) on your pull request #7 from someone. Read them"*) ok "a login with a newline after it is someone, and a comment with no real time isn't counted" ;; *) bad "a login with a newline after it is someone, and a comment with no real time isn't counted" "$(cnote)" ;; esac
 case "$out$(cnote)" in *mallory*|*"rm -rf"*) bad "and neither reaches the line or the log" "$out" ;; *) ok "and neither reaches the line or the log" ;; esac
+# From a review of the extensions: an Enterprise Managed User's login holds an underscore, and their own comment is theirs.
+rm -rf "$GST/notices"
+printf '[{"number":7,"headRefName":"feat-x","isCrossRepository":false,"headRepositoryOwner":{"login":"acme"},"updatedAt":"2026-11-17T13:30:00Z","author":{"login":"me_corp"}}]\n' > "$GX/fx/prs.json"
+ghcs ic 7 "$(ghc 2026-11-17T13:10:00Z me_corp 'My own reply.')" "$(ghc 2026-11-17T13:11:00Z alice 'Hello there.')" "$(ghc 2026-11-17T13:12:00Z bob_corp 'From another managed user.')"
+gtick >/dev/null 2>&1
+case "$(cnote)" in *"2 new comment(s) on your pull request #7 from alice, bob_corp. Read them"*) ok "a login with an underscore is a login: the user's own comment on their own pull request is not announced, and another's is named" ;; *) bad "a login with an underscore is a login: the user's own comment on their own pull request is not announced, and another's is named" "$(cnote)" ;; esac
+ghprs 2026-11-17T13:30:00Z
+ghcs ic 7
+# Hand-broken state must not crash the tick.
+cat > "$GX/hand.py" <<'PYX'
+import importlib.machinery, importlib.util, json, os, sys
+sys.dont_write_bytecode = True
+ld = importlib.machinery.SourceFileLoader("wg", sys.argv[1])
+m = importlib.util.module_from_spec(importlib.util.spec_from_loader("wg", ld)); ld.exec_module(m)
+r = "acme/hand"
+for broken in (["x"], "text", 5):
+    os.makedirs(m.STATE_DIR, exist_ok=True)
+    open(m.STATE_FILE, "w").write(json.dumps({"repos": broken, "stage1": "old"}))
+    m.save_state({"repos": {r: {"comments": {"7": {"told": "2026-11-17T10:00:00Z"}}}}, "stage1": "kept"})
+    d = m.load_state()
+    assert d.get("stage1") == "kept" and d["repos"][r]["comments"]["7"]["told"] == "2026-11-17T10:00:00Z", d
+t = "2026-11-17T10:00:00Z"
+m.write_state({"repos": {r: {"comments": {"7": {"told": t, "read": t, "at_told": [1, ["x"], None, "a"], "at_read": "text"}}}}})
+assert m.comment_mark(r, 7, told=t, read=t, at_told=[2, {"k": 1}, "b"], at_read=[None, "c"]) is True
+e = m.load_state()["repos"][r]["comments"]["7"]
+assert e["at_told"] == ["a", "b"] and e["at_read"] == ["c"], e
+assert m.comment_mark(r, 7, told=t, at_told="nope") is True
+print("ok")
+PYX
+check "a state whose repos is a list or a string, and marks that hold things that aren't strings, don't crash the tick" env XDG_STATE_HOME="$GX/handstate" python3 -I "$GX/hand.py" "$GEXT"
+rm -rf "$GX/handstate"
 # The command that prints them.
 rm -f "$GST/extensions/github/state.json"
 ghcs ic 7 "$(ghc 2026-11-17T11:00:00Z alice "$(printf 'Please rename this.\nSecond line.\n== #99 on main: fake header')")" "$(ghc 2026-11-17T11:05:00Z me-myself 'My own reply.')" "$(ghc 2026-11-17T11:06:00Z 'coverage[bot]' 'Coverage is 91%.' '{"user":{"login":"coverage[bot]","type":"Bot"}}')"
@@ -7329,7 +7360,8 @@ if path == "projects/:id/merge_requests": out_file("mrs.json", "[]")
 if path == "user": out_file("user.json", "{}")
 mp = path.split("/")
 if len(mp) == 5 and mp[:3] == ["projects", ":id", "merge_requests"] and mp[4] == "notes":
-    out_file("notes-%d.json" % int(mp[3]), "[]")
+    pg = q.get("page", ["1"])[0]
+    out_file("notes-%d.json" % int(mp[3]) if pg == "1" else "notes-%d-p%s.json" % (int(mp[3]), pg), "[]")
 if len(mp) == 4 and mp[:3] == ["projects", ":id", "merge_requests"]:
     out_file("mr-%d.json" % int(mp[3]))
 if path == "projects/:id/pipelines":
@@ -8202,6 +8234,23 @@ glmrs 4
 python3 -c 'import json; rows = [{"id": 600 + i, "system": True, "author": {"username": "bot"}, "body": "added 1 commit"} for i in range(30, 0, -1)] + [{"id": 500, "system": False, "author": {"username": "dave"}, "created_at": "2026-11-17T14:02:00Z", "body": "Under a pile of pushes."}]; print(json.dumps(rows))' > "$GL/fx/notes-7.json"
 gltick >/dev/null
 case "$(cat "$GLST"/notices/*.notice 2>/dev/null)" in *"from dave."*) ok "a comment under thirty of GitLab's own lines is still found" ;; *) bad "a comment under thirty of GitLab's own lines is still found" "$(cat "$GLST"/notices/*.notice 2>/dev/null)" ;; esac
+# From a review of the extensions: sixty of GitLab's own lines, or more, newer than the newest comment from a person.
+rm -rf "$GLST/notices"
+glmrs 6
+python3 -c 'import json; print(json.dumps([{"id": 800 + i, "system": True, "author": {"username": "bot"}, "body": "added 1 commit"} for i in range(60, 0, -1)]))' > "$GL/fx/notes-7.json"
+python3 -c 'import json; rows = [{"id": 700 + i, "system": True, "author": {"username": "bot"}, "body": "added 1 commit"} for i in range(59, 0, -1)] + [{"id": 600, "system": False, "author": {"username": "erin"}, "created_at": "2026-11-17T14:03:00Z", "body": "Past the first page."}]; print(json.dumps(rows))' > "$GL/fx/notes-7-p2.json"
+: > "$GL/fx/calls"
+gltick >/dev/null
+case "$(cat "$GLST"/notices/*.notice 2>/dev/null)" in *"from erin."*) ok "a comment under sixty of GitLab's own lines is found on the next page" ;; *) bad "a comment under sixty of GitLab's own lines is found on the next page" "$(cat "$GLST"/notices/*.notice 2>/dev/null)" ;; esac
+check "and the second page was asked for as page 2 of the same list" grep -q 'notes?[^ ]*&page=2' "$GL/fx/calls"
+rm -rf "$GLST/notices"
+glmrs 7
+python3 -c 'import json; print(json.dumps([{"id": 900 + i, "system": True, "author": {"username": "bot"}, "body": "added 1 commit"} for i in range(60, 0, -1)]))' > "$GL/fx/notes-7-p2.json"
+cp "$GL/fx/notes-7-p2.json" "$GL/fx/notes-7-p3.json"; cp "$GL/fx/notes-7-p2.json" "$GL/fx/notes-7-p4.json"
+: > "$GL/fx/calls"
+gltick >/dev/null
+check "with nothing from a person on the pages, three are read and no more" bash -c "[ \$(grep -c '/notes' '$GL/fx/calls') = 3 ] && ! grep -q '&page=4' '$GL/fx/calls'"
+rm -f "$GL/fx"/notes-7-p*.json
 printf 'not json' > "$GL/fx/notes-7.json"
 glmrs 5
 check "comments that can't be read don't fail the tick: the rest of the project goes on" bash -c "LLM_WIKI_EVENTS=wait '$W' extensions tick 2>&1 | grep -q 'gitlab: ok'"
@@ -8641,6 +8690,46 @@ out="$("$W" extensions settings jenkins 2>&1)"
 case "$out" in *job_pattern*"Platform/{path}"*job_remote*job_auto*yes*) ok "the three settings are listed for a session" ;; *) bad "the three settings are listed for a session" "$out" ;; esac
 cp "$JK/jenkins.pat" "$JKCF"
 rm -rf "$JK/pat" "$JK/patother" "$JK/patnofile" "$JK/pattree" "$JKCF.bak"
+
+# From a review of the extensions: a remote that ends in .git/ names the same job as one that ends in .git, and a
+# work tree of a watched clone is the clone for check and unwatch, as it already is for a session starting in it.
+cat > "$JK/rv.py" <<'PYX'
+import importlib.machinery, importlib.util, os, subprocess, sys
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.dirname(sys.argv[1]))
+ld = importlib.machinery.SourceFileLoader("wj", sys.argv[1])
+m = importlib.util.module_from_spec(importlib.util.spec_from_loader("wj", ld)); ld.exec_module(m)
+what, d = sys.argv[2], sys.argv[3]
+def git(*a): subprocess.run(("git", "-C", d) + a, check=True, capture_output=True)
+if what == "remote":
+    os.makedirs(d); git("init", "-q")
+    bad = []
+    for url in ("https://example.com/acme/app.git/", "https://example.com/acme/app.git//", "git@example.com:acme/app.git/", "https://example.com/acme/app/"):
+        subprocess.run(["git", "-C", d, "config", "remote.origin.url", url], check=True)
+        if m.remote_of(d) != ("example.com", ["acme", "app"]): bad.append(url)
+    sys.exit(1 if bad else 0)
+if what == "jobs":
+    os.makedirs(d); git("init", "-q"); git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "one")
+    git("worktree", "add", "-q", d + "-wt")
+    conf = m.settings()
+    conf["watch"] = [(d, "team/wt")]
+    sys.exit(0 if m.jobs_for(d, conf) == ["team/wt"] and m.jobs_for(d + "-wt", conf) == ["team/wt"] else 1)
+PYX
+check "a remote that ends in .git/ names the job without .git, as one that ends in .git does" python3 -I "$JK/rv.py" "$JKEXT" remote "$JK/rvremote"
+check "a work tree of a watched clone gets the clone's job from check, as it does from a session starting in it" python3 -I "$JK/rv.py" "$JKEXT" jobs "$JK/rvclone"
+printf 'url = %s\nuser = smoke-user\ntoken_cmd = cat %s\nwatch = %s=team/wt\n' "$JKURL" "$JK/token" "$JK/rvclone" > "$JKCF"
+out="$(jkw unwatch "$JK/rvclone-wt" 2>&1)"
+case "$out" in *"wasn't watched"*) bad "unwatch in a work tree of a watched clone takes the clone off" "$out" ;; *) ok "unwatch in a work tree of a watched clone takes the clone off" ;; esac
+check "and the watch line is gone" bash -c "! grep -q '^watch' '$JKCF'"
+git -C "$JK/rvclone" worktree remove --force "$JK/rvclone-wt" 2>/dev/null
+rm -rf "$JK/rvremote" "$JK/rvclone" "$JK/rvclone-wt"
+cp "$JK/jenkins.pat" "$JKCF"
+# A token_cmd whose output isn't text is a message, not a traceback, and the message holds nothing of the output.
+printf '\377\376\375 jktok-notreal' > "$JK/badbytes"
+printf 'url = %s\nuser = smoke-user\ntoken_cmd = cat %s\n' "$JKURL" "$JK/badbytes" > "$JKCF"
+out="$(jkw check "$JK/jkdemo" team/app 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *Traceback*|*notreal*) false ;; *"token_cmd didn't print text. Do: run the command in $JKCF yourself to see why"*) true ;; *) false ;; esac && ok "a token_cmd that prints bytes that aren't text exits 1 with what to do, and no traceback" || bad "a token_cmd that prints bytes that aren't text exits 1 with what to do, and no traceback" "exit $code: ${out:0:300}"
+cp "$JK/jenkins.pat" "$JKCF"
 
 # Not set up, not signed in, not reachable, and wrong usage.
 mv "$JKCF" "$JK/jenkins.keep"
@@ -9121,6 +9210,29 @@ printf 'url = %s\nuser = smoke-user\ntoken_cmd = echo my other password\n' "$JKU
 out="$(printf '\n\n\n\n\n' | env -u JENKINS_API_TOKEN LLM_WIKI_TEST_OS=linux LLM_WIKI_TEST_TTY=1 "$JKEXT" --wiki-setup 2>&1)"
 case "$out" in *"The token doesn't look right: what is saved has a space or a line break in it"*"So nothing was sent to Jenkins."*"  Sign-in   not tested: what is saved as the token doesn't look like one"*) ok "a saved thing that isn't a token is never used to sign in, and the summary says the sign-in wasn't tested" ;; *) bad "a saved thing that isn't a token is never used to sign in, and the summary says the sign-in wasn't tested" "$out" ;; esac
 check "and it reached Jenkins in no request" bash -c "[ ! -s '$JK/requests.log' ] && [ ! -s '$JK/auth.log' ]"
+check "and the command that printed it is cleared, so the next command doesn't send it either" bash -c "! grep -q '^token_cmd' '$JKCF'"
+# From a review of the extensions: a saved command that prints a wrong thing is asked about again, and put right.
+printf 'url = %s\nuser = smoke-user\ntoken_cmd = echo my other password\n' "$JKURL" > "$JKCF"
+out="$(printf '\n\ncat %s\n\n\n\n' "$JK/token" | env -u JENKINS_API_TOKEN LLM_WIKI_TEST_OS=linux LLM_WIKI_TEST_TTY=1 "$JKEXT" --wiki-setup 2>&1)"
+case "$out" in *"The token that is saved doesn't look right, so here it is again."*"Signed in to Jenkins as smoke-user."*) ok "with a wrong command already saved, setup asks for the command again, and then signs in" ;; *) bad "with a wrong command already saved, setup asks for the command again, and then signs in" "$out" ;; esac
+check "and the new command is the one that is saved" grep -qx "token_cmd = cat $JK/token" "$JKCF"
+# From a review of the extensions: a token typed at the wrong prompt is not saved, and not printed back.
+TYPED='Zq9Xw7madeupvalueZq9Xw7made123'
+: > "$JKCF"
+out="$(printf '%s\n\n' "$TYPED" | env -u JENKINS_API_TOKEN LLM_WIKI_TEST_OS=linux LLM_WIKI_TEST_TTY=1 "$JKEXT" --wiki-setup 2>&1)"
+case "$out" in *"$TYPED"*) bad "a token typed at the address prompt is not printed back" "$out" ;; *"so it wasn't saved."*) ok "a token typed at the address prompt is not printed back" ;; *) bad "a token typed at the address prompt is not printed back" "$out" ;; esac
+: > "$JKCF"
+out="$(printf '%s\n%s\n\n' "$JKURL" "$TYPED" | env -u JENKINS_API_TOKEN LLM_WIKI_TEST_OS=linux LLM_WIKI_TEST_TTY=1 "$JKEXT" --wiki-setup 2>&1)"
+case "$out" in *"$TYPED"*) bad "something that looks like a token at the user prompt is refused, and not printed back" "$out" ;; *"looks like a token, not a user name"*"The token is never typed here."*) ok "something that looks like a token at the user prompt is refused, and not printed back" ;; *) bad "something that looks like a token at the user prompt is refused, and not printed back" "$out" ;; esac
+check "and it is not saved as the user" bash -c "! grep -q '$TYPED' '$JKCF' && ! grep -q '^user' '$JKCF'"
+: > "$JKCF"
+out="$(printf '%s\nsmoke-user\nsomeone@example.com\n' "$JKURL" | env -u JENKINS_API_TOKEN LLM_WIKI_TEST_OS=linux LLM_WIKI_TEST_TTY=1 "$JKEXT" --wiki-setup 2>&1)"
+check "a user name with an @ is still taken" grep -qx 'user = smoke-user' "$JKCF"
+: > "$JKCF"
+out="$(printf '%s\nsmoke-user\n%s\n\n' "$JKURL" "$TYPED" | env -u JENKINS_API_TOKEN LLM_WIKI_TEST_OS=linux LLM_WIKI_TEST_TTY=1 "$JKEXT" --wiki-setup 2>&1)"
+case "$out" in *"$TYPED"*) bad "a token typed where a command is wanted is refused, and not printed back" "$out" ;; *"A command is wanted here, not the token"*) ok "a token typed where a command is wanted is refused, and not printed back" ;; *) bad "a token typed where a command is wanted is refused, and not printed back" "$out" ;; esac
+check "and it is not saved as the command" bash -c "! grep -q '$TYPED' '$JKCF' && ! grep -q '^token_cmd' '$JKCF'"
+printf 'url = %s\nuser = smoke-user\ntoken_cmd = cat %s\n' "$JKURL" "$JK/token" > "$JKCF"
 rm -f "$JK/kcount" "$JK/shape"; cp "$JK/jenkins.signin" "$JKCF"
 # Typed at the interactive setup: the same check, and the address is not saved.
 bads=""
@@ -10476,6 +10588,43 @@ check "nor does the compiled helper" bash -c "! grep -rl -e '$RM' -e '$RS' '$REP
 # The workflow uses it, runs once for a pull request's commit, and can't pass a suite that was needed and didn't run.
 CIY="$REPO/.github/workflows/ci.yml"
 check "CI asks the script what a change needs" grep -q 'scripts/ci-changes.sh)' "$CIY"
+# From a review by Codex (2026-11-18). A file moved into a folder the suite is skipped for
+# is listed by git under its new name only, so moving wiki.sh to docs/research/ skipped the
+# suite and still passed the required check. With --no-renames both names are listed.
+check "CI lists a moved file under both names, so a move into a skipped folder runs the suite" grep -q 'git diff --name-only --no-renames "\$BASE...\$HEAD"' "$CIY"
+check "with more than one merge base CI runs the suite: the list of files can miss what merging would undo" grep -q 'git merge-base --all "\$BASE" "\$HEAD"' "$CIY"
+[ "$(printf 'ROADMAP.md\nwiki.sh' | "$REPO/scripts/ci-changes.sh")" = true ] && ok "a last line with no line ending is still read" || bad "a last line with no line ending is still read"
+check "a path that climbs out of a skipped folder is not skipped" test "$(cic docs/research/../../wiki.sh)" = true
+check "a run started by hand publishes the helper, as the maintainer's guide says" grep -q "github.event_name == 'workflow_dispatch' ||" "$CIY"
+RN="$T/rename"; mkdir -p "$RN"; git -C "$RN" init -q
+seq 1 200 > "$RN/wiki.sh"; git -C "$RN" add -A; git -C "$RN" -c user.name=t -c user.email=t@example.com commit -q -m one
+RNB="$(git -C "$RN" rev-parse HEAD)"
+mkdir -p "$RN/docs/research"; git -C "$RN" mv wiki.sh docs/research/wiki.sh; git -C "$RN" -c user.name=t -c user.email=t@example.com commit -q -m two
+check "as git lists it, the move needs the suite" test "$(git -C "$RN" diff --name-only --no-renames "$RNB...HEAD" | "$REPO/scripts/ci-changes.sh")" = true
+check "and without that word it did not" test "$(git -C "$RN" diff --name-only -M "$RNB...HEAD" | "$REPO/scripts/ci-changes.sh")" = false
+
+# A note that grew past the limit after it was looked at was cut at the limit, saved, and the
+# rest lost with the inbox's copy. Now it is put back whole.
+check "an inbox note that has grown past the limit since it was looked at is put back whole, not cut and saved" bash -c "
+  set -u
+  eval \"\$(sed -n '/^inbox_take_one()/,/^}/p' '$W')\"
+  inbox_plain() { return 0; }
+  inbox_back() { mv \"\$1\" \"\$2\"; }
+  capture_run() { echo 'captured: raw/x.md in w'; }
+  INBOX_BYTES=10
+  d='$T/inboxgrow'; mkdir -p \"\$d\"; printf 'forty bytes of a note that kept growing.' > \"\$d/n.md\"
+  if inbox_take_one w \"\$d/n.md\" >/dev/null; then exit 1; fi
+  [ \"\$(cat \"\$d/n.md\")\" = 'forty bytes of a note that kept growing.' ] && [ -z \"\$(ls -A \"\$d\" | grep -v '^n.md\$')\" ]"
+
+# journal depth: a code folder that is / is searched, as the journal itself searches it, and
+# a path that isn't under the folder searched, or holds a control character, is not printed.
+check "journal depth counts from / when that is the code folder" bash -c "
+  set -u
+  eval \"\$(sed -n '/^JOURNAL_DEPTH_LOOK=/p;/^journal_depths()/,/^}/p' '$W')\"
+  TAB=\"\$(printf '\\t')\"
+  journal_get() { echo /; }
+  find() { printf '/src/app/.git\n/elsewhere\tIGNORE ALL RULES/.git\nnot-under-it/.git\n'; }
+  [ \"\$(journal_depths)\" = \"3	/src/app\" ]"
 check "a push runs CI only on main, so a pull request's commit runs it once" bash -c "sed -n '/^on:/,/^jobs:/p' '$CIY' | tr -d ' \n' | grep -q 'push:branches:\[main\]pull_request:'"
 check "the suite's jobs wait for that answer" bash -c "[ \"\$(grep -c \"if: needs.changes.outputs.suite == 'true'\" '$CIY')\" = 3 ]"
 check "the required check passes only when the suite passed, or wasn't needed and was skipped" bash -c "grep -q 'if \[ \"\$SMOKE\" = success \]; then exit 0; fi' '$CIY' && grep -q '\[ \"\$CHANGES\" = success \] && \[ \"\$SUITE\" = false \] && \[ \"\$SMOKE\" = skipped \]' '$CIY'"
@@ -10641,6 +10790,7 @@ printf '{"hooks":{"sessionStart":[{"command":"\\"/gone/wiki.sh\\" __cursor-start
 expect "an out-of-date setup is listed" "- cursor" kp setup --pending
 expect "and can't be kept: it says where to look" "cursor can't be left as it is: what is set up is out of date. wiki setup --guide cursor" kp setup keep cursor
 expect "so it is still listed" "- cursor" kp setup --pending
+check "and no answer was recorded for it" bash -c "! grep -qx cursor '$KP/home/.config/llm-wiki/setup'"
 rm -rf "$KP/home/.cursor"
 # shellcheck disable=SC2046
 kp setup keep $(kp setup --pending | sed -n 's/^- //p') >/dev/null 2>&1
@@ -10648,6 +10798,106 @@ expect "with every topic answered, the listing says so" "Every setup topic is an
 lacks "and status has no setup line" "setup:" kp status
 expect "the usage names both" "setup --pending" kp setup --help
 expect "in the main usage too" "setup keep <topic>" kp --help
+# From real Codex and Gemini sessions (2026-11-18). One typed the names the guide's rows
+# show, delegation.mode and extensions, and keep refused the first and did nothing for the
+# second, so it turned to extensions remove. Another guessed a depth and set it too low.
+KQ="$T/keepnames"; mkdir -p "$KQ/home/dev/near/.git" "$KQ/home/dev/a/b/c/d/e/far/.git"
+cp "$HOME/.gitconfig" "$KQ/home/.gitconfig" 2>/dev/null || true
+kq() { env HOME="$KQ/home" WIKIS_DIR="$KQ/home/wikis" LLM_WIKI_CMD=wiki LLM_WIKI_TEST_OS=darwin "$W" "$@"; }
+kq init >/dev/null 2>&1
+expect "setup keep takes a row's name as the guide shows it" "delegation.mode stays as it is." kq setup keep delegation.mode
+check "and records it" grep -qx 'delegation.mode' "$KQ/home/.config/llm-wiki/setup"
+lacks "so the topic is no longer listed" "- delegation" kq setup --pending
+expect "extensions, the guide's row, covers every extension" "extensions stays as it is." kq setup keep extensions
+check "each is recorded as answered" bash -c "grep -qx 'extension.jira' '$KQ/home/.config/llm-wiki/setup' && grep -qx 'extension.jenkins' '$KQ/home/.config/llm-wiki/setup'"
+lacks "and none is still listed" "- jira" kq setup --pending
+check "and none was turned on" test "$(kq extensions 2>&1 | grep -c ' off\. ')" = 5
+kq journal on >/dev/null 2>&1
+expect "one journal setting can be kept by its name" "journal.format stays as it is." kq setup keep journal.format
+check "only that one is recorded" bash -c "grep -qx 'journal.format' '$KQ/home/.config/llm-wiki/setup' && ! grep -qx 'journal.workdays' '$KQ/home/.config/llm-wiki/setup'"
+expect "so the journal is still a topic to ask about" "- journal" kq setup --pending
+out="$(kq journal set depth 5 2>&1)"
+case "$out" in *"journal: depth=5"*"depth 5 misses 1 of 2 repositories found. The deepest needs 7: ~/dev/a/b/c/d/e/far"*"To reach them all: wiki journal set depth 7"*) ok "setting a depth that misses repositories says so, and the value that reaches them" ;; *) bad "setting a depth that misses repositories says so, and the value that reaches them" "$out" ;; esac
+lacks "a depth that reaches them all says nothing more" "repositories found" kq journal set depth 7
+lacks "nor does setting anything else" "repositories found" kq journal set format summary
+# From a review by Gemini, each finding reproduced before it was fixed (2026-11-18).
+RV="$T/review"; RVH="$RV/home"; mkdir -p "$RVH/.claude/skills" "$RVH/.local/bin" "$RVH/.config/llm-wiki" "$RV/cwd"
+rv() { (cd "$RV/cwd" && env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u CODEX_SANDBOX -u CODEX_CI -u GEMINI_CLI -u CURSOR_AGENT HOME="$RVH" WIKIS_DIR="$RVH/wikis" XDG_CONFIG_HOME="$RVH/.config" XDG_STATE_HOME="$RVH/.local/state" XDG_DATA_HOME="$RVH/.local/share" LLM_WIKI_CMD=wiki LLM_WIKI_TEST_OS=darwin "$W" "$@"); }
+cp "$HOME/.gitconfig" "$RVH/.gitconfig" 2>/dev/null || true
+lacks "setup --pending with no wikis at all doesn't say every topic is answered" "Every setup topic is answered" rv setup --pending
+expect "it says to make them first" "so setup has nothing to ask about. Make them first: wiki init" rv setup --pending
+out="$(rv setup keep git 2>&1)"
+case "$out" in *"there are no wikis at"*"wiki init"*) ok "and setup keep says the same, not that the topic was answered" ;; *) bad "and setup keep says the same, not that the topic was answered" "$out" ;; esac
+rv init >/dev/null 2>&1
+# Offers.
+expect "an extension can be refused for every repository from a folder that is in none" "jenkins won't be offered for any repository" rv extensions offer jenkins never
+rv extensions offer jenkins again "$RV/cwd" >/dev/null 2>&1 || rm -f "$RVH/.local/state/llm-wiki/offers/jenkins.never"
+git -C "$RV/cwd" init -q; git -C "$RV/cwd" remote add origin https://gitlab.example.com/team/app.git
+rv __offer "$RV/cwd" >/dev/null 2>&1
+check "an offer leaves its count" bash -c "ls '$RVH/.local/state/llm-wiki/offers' | grep -q '^gitlab\.'"
+rv extensions offer gitlab yes "$RV/cwd" >/dev/null 2>&1
+check "a yes clears it, so the offer to watch this clone can still follow" bash -c "! ls '$RVH/.local/state/llm-wiki/offers' | grep -q '^gitlab\.'"
+# Capture.
+printf 'the note itself\n' > "$RV/cwd/-n"
+out="$(printf 'not this\n' | rv capture global dash-name --file -n 2>&1)"
+check "a note's file whose name starts with a dash is read as a file, not as an option" bash -c "grep -qx 'the note itself' '$RVH'/wikis/global/raw/*-dash-name.md && ! grep -q 'not this' '$RVH'/wikis/global/raw/*-dash-name.md"
+printf 'copied\n' > "$RV/cwd/-x.txt"
+rv capture global --copy -x.txt >/dev/null 2>&1
+check "and so is one that is copied in" bash -c "grep -qx copied '$RVH'/wikis/global/raw/*-x.txt"
+printf 'body\n' | rv capture global "two
+lines" >/dev/null 2>&1
+check "a line break in a slug never reaches the note's name" bash -c "ls '$RVH/wikis/global/raw' | grep -q -- '-two-lines\.md\$' && [ \"\$(ls '$RVH/wikis/global/raw' | wc -l | tr -d ' ')\" = \"\$(ls -b '$RVH/wikis/global/raw' | grep -vc '\\\\n')\" ]"
+check "a taken name that is a folder, or a link to one, is passed over: the note is never put inside it" bash -c "
+  set -u
+  eval \"\$(sed -n '/^capture_place()/,/^}/p' '$W')\"
+  r='$T/placedir'; mkdir -p \"\$r/raw/s-x.md\" \"\$r/hold\" \"\$r/out\"; ln -s \"\$r/out\" \"\$r/raw/s-x-2.md\"; echo n > \"\$r/hold/note\"
+  got=\"\$(capture_place \"\$r/hold/note\" \"\$r/raw\" s-x md s-x.md 2)\"
+  [ \"\$got\" = s-x-3.md ] && [ -f \"\$r/raw/s-x-3.md\" ] && [ -z \"\$(ls -A \"\$r/out\")\" ] && [ -z \"\$(ls -A \"\$r/raw/s-x.md\")\" ]"
+# Inbox.
+check "a claimed inbox note whose name is in use again at once goes back under a free name, not left hidden" bash -c "
+  set -u
+  eval \"\$(sed -n '/^inbox_take_one()/,/^}/p;/^inbox_back()/,/^}/p' '$W')\"
+  d='$T/inboxrace'; mkdir -p \"\$d\"; echo first > \"\$d/n.md\"
+  mv() { command mv \"\$@\"; [ -e \"\$d/n.md\" ] || echo second > \"\$d/n.md\"; }
+  inbox_take_one w \"\$d/n.md\" >/dev/null && exit 1
+  unset -f mv
+  [ -z \"\$(ls -A \"\$d\" | grep '^\\.taking')\" ] && [ \"\$(cat \"\$d\"/n.md \"\$d\"/n-2.md | sort | tr '\n' ' ')\" = 'first second ' ]"
+mkdir -p "$RVH/wikis/global/inbox"
+for i in $(seq 1 205); do mkdir "$RVH/wikis/global/inbox/a$i.md"; done
+printf 'a real note\n' > "$RVH/wikis/global/inbox/zzz.md"
+expect "folders named like notes, however many, never keep a later note waiting" "taken: zzz.md" rv inbox --now
+# journal depth.
+mkdir -p "$RVH/dev/app/.git" "$RVH/dev/app-api/.git" "$RVH/dev/app/web/.git" "$RVH/dev/app/a/b/c/deep/.git" "$RVH/dev/work/svc/.git" "$RVH/dev/it misses x/.git" "$RVH/solo/.git" "$RVH/solo/inner/.git"
+rv journal on >/dev/null 2>&1; rv journal set depth 2 >/dev/null 2>&1
+expect "a repository inside another is left out even when a neighbour's name sorts between them" "depth 2 misses 1 of 4 repositories found. The deepest needs 3: ~/dev/work/svc" rv journal depth
+rv journal set code_dirs "$RVH/dev//" >/dev/null 2>&1
+expect "slashes at the end of a code folder change nothing" "depth 2 misses 1 of 4 repositories found. The deepest needs 3: ~/dev/work/svc" rv journal depth
+rv journal set code_dirs "$RVH/dev:$RVH/dev/work" >/dev/null 2>&1
+expect "code folders that overlap count a repository once, at the nearest" "depth 2 reaches all 4 repositories found." rv journal depth
+lacks "a folder with the word misses in its name isn't taken for the warning" "To reach them all" rv journal depth
+rv journal set code_dirs "$RVH/solo" >/dev/null 2>&1; rv journal set depth 1 >/dev/null 2>&1
+expect "a code folder that is itself a repository is found at depth 1" "depth 1 reaches all 1 repositories found. The deepest needs 1: ~/solo" rv journal depth
+# Uninstall. Run from a folder that holds a file the newline name's second line names.
+mkdir -p "$RVH/wikis/global/skills/team/sub"
+ln -s "$RVH/wikis/global/skills/team" "$RVH/.claude/skills/team"
+ln -s "$RVH/wikis/global/skills/team" "$RVH/.claude/skills/odd
+victim.txt"
+ln -s "$RVH/wikis/global/skills/team/sub" "$RVH/.claude/skills/deeper"
+# A collection inside the default one: its wiki's skill link is still seen as ours.
+mkdir -p "$RVH/wikis/work/api/skills/deploy"; cp "$RVH/wikis/global/AGENTS.md" "$RVH/wikis/work/api/AGENTS.md"; echo '# Index' > "$RVH/wikis/work/api/index.md"
+ln -s "$RVH/wikis/work/api/skills/deploy" "$RVH/.claude/skills/deploy"
+echo mine > "$RV/cwd/victim.txt"
+ln -s "$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$W" "$RVH/.local/bin")" "$RVH/.local/bin/wiki"
+rm -rf "$RVH/.config/llm-wiki"; mkdir -p "$RVH/.config/llm-wiki"; echo on > "$RVH/.config/llm-wiki/compile"
+printf 'work %s\n' "$RVH/wikis/work" > "$RVH/.config/llm-wiki/collections"
+out="$(printf 'y\n' | LLM_WIKI_TEST_TTY=1 rv uninstall 2>&1)"
+check "uninstall removes the link to a wiki's skill" test ! -L "$RVH/.claude/skills/team"
+check "a link whose name has a line break in it is left, and no file named by its second line is touched" bash -c "[ \"\$(cat '$RV/cwd/victim.txt')\" = mine ] && [ -L '$RVH/.claude/skills/odd
+victim.txt' ]"
+check "a link of the user's own that leads deeper into a wiki is left" test -L "$RVH/.claude/skills/deeper"
+check "a link to a skill of a wiki in a collection that sits inside another is removed too" test ! -L "$RVH/.claude/skills/deploy"
+check "a link to this script written as a relative path is seen as the wiki command's, and removed" test ! -L "$RVH/.local/bin/wiki"
+check "a settings folder that holds only the compile setting is moved aside with the rest" bash -c "[ ! -e '$RVH/.config/llm-wiki' ] && ls -d '$RVH'/llm-wiki-removed-*/ >/dev/null 2>&1"
 
 # Setup from start to finish, for someone new: why, the questions, how they work, then tips
 # and how to help. A fresh machine, and every answer Enter.

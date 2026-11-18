@@ -4,6 +4,13 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2027-01-11: fixes from a day of tests and reviews by Codex and Gemini
+
+- `wiki setup keep` takes the names the guide shows, such as `delegation.mode`, `extensions` and `journal.format`.
+- `wiki journal set depth` says so when the depth misses repositories, and `wiki journal depth` no longer counts a repository inside another.
+- Jenkins setup refuses a token typed where the address, the user or the command goes, and asks for the token again when what is saved isn't one.
+- GitHub: your own comments are no longer announced as someone's when your login has an underscore in it.
+
 ## 2027-01-10: how deep the journal looks for your code
 
 - `wiki journal depth` says how many of your repositories the depth setting reaches, and the value that reaches them all.

@@ -30,7 +30,11 @@ jobs:
           HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           suite=true
-          if [ -n "$BASE" ] && files="$(git diff --name-only "$BASE...$HEAD" 2>/dev/null)"; then
+          # --no-renames: a file moved into a folder the suite is skipped for is listed under
+          # its old name too. One merge base only: with two, the list can miss what merging
+          # would undo, so the suite runs.
+          if [ -n "$BASE" ] && [ "$(git merge-base --all "$BASE" "$HEAD" 2>/dev/null | wc -l | tr -d ' ')" = 1 ] \
+            && files="$(git diff --name-only --no-renames "$BASE...$HEAD" 2>/dev/null)"; then
             suite="$(printf '%s\n' "$files" | scripts/ci-changes.sh)"
           fi
           echo "suite=$suite" | tee -a "$GITHUB_OUTPUT"
@@ -98,7 +102,7 @@ jobs:
       # hand anyone the wrong bytes. A pull request from a fork can't publish.
       # A prerelease, so GitHub doesn't show a helper as the project's latest release.
       - name: Publish the release, if it isn't there yet
-        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET: ${{ github.event.pull_request.head.sha || github.sha }}
