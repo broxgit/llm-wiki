@@ -476,6 +476,43 @@ else
   printf 'Captured: 2026-01-01\n\nAnother.\n' > "$SS/home/wikis/demo/raw/two.md"
   out="$(ssw env PATH="$SS/bin:$SSP" "$W" sync demo -m "demo: two" 2>&1)"
   case "$out" in *"wasn't scanned"*) bad "and says nothing of it when the scan ran" "$out" ;; *"committed: demo: two"*) ok "and says nothing of it when the scan ran" ;; *) bad "and says nothing of it when the scan ran" "$out" ;; esac
+  # With a remote, a commit that wasn't scanned is never pushed.
+  git init -q --bare "$SS/remote.git"
+  ssrem() { git --git-dir="$SS/remote.git" for-each-ref --format='%(objectname)' refs/heads | head -n 1; }
+  ssis() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "wanted: $2, got: $3"; fi; }
+  git -C "$SS/home/wikis" remote add origin "$SS/remote.git"
+  unlink "$SS/home/wikis/.git/llm-wiki-unscanned" 2>/dev/null
+  ssw env PATH="$SS/bin:$SSP" "$W" sync demo >/dev/null 2>&1
+  check "with the scan there, a sync pushes" test -n "$(ssrem)"
+  ssat="$(ssrem)"
+  printf 'Captured: 2026-01-01\n\nThird.\n' > "$SS/home/wikis/demo/raw/three.md"
+  out="$(ssw env PATH="$SSP" "$W" sync demo -m "demo: three" 2>&1)"; code=$?
+  [ "$code" = 1 ] && case "$out" in *"committed: demo: three"*"not pushed: a commit here wasn't scanned for secrets"*"Do: install gitleaks"*) true ;; *) false ;; esac && ok "sync refuses to push a commit that wasn't scanned, and exits 1" || bad "sync refuses to push a commit that wasn't scanned, and exits 1" "exit $code: $out"
+  ssis "nothing reached the remote" "$ssat" "$(ssrem)"
+  out="$(ssw env PATH="$SSP" "$W" sync demo 2>&1)"; code=$?
+  [ "$code" = 1 ] && ssis "nor on the next sync, which has nothing new to commit" "$ssat" "$(ssrem)" || bad "nor on the next sync, which has nothing new to commit" "exit $code: $out"
+  # Once gitleaks is found, what waits is scanned before it goes: here by one that says no, then yes.
+  printf '#!/bin/sh\ncase "$*" in *--log-opts*) echo "$PWD: $*" >> "%s/gl-calls"; [ ! -f "%s/leak" ] || exit 1 ;; esac\nexit 0\n' "$SS" "$SS" > "$SS/bin/gitleaks"
+  : > "$SS/leak"
+  out="$(ssw env PATH="$SS/bin:$SSP" "$W" sync demo 2>&1)"; code=$?
+  [ "$code" = 1 ] && case "$out" in *"not pushed: a commit made with no scan holds what looks like a secret"*) true ;; *) false ;; esac && ok "a waiting commit that the scan refuses is not pushed" || bad "a waiting commit that the scan refuses is not pushed" "exit $code: $out"
+  ssis "and the remote is as it was" "$ssat" "$(ssrem)"
+  unlink "$SS/leak"
+  out="$(ssw env PATH="$SS/bin:$SSP" "$W" sync demo 2>&1)"
+  case "$out" in *"scanned: the commits that were made with no scan."*"synced: pushed"*) ok "one that passes is pushed, and sync says it was scanned first" ;; *) bad "one that passes is pushed, and sync says it was scanned first" "$out" ;; esac
+  check "the commits on no remote were scanned, on every branch, from the repository where its ignore file is" grep -q -- "/home/wikis: git --log-opts=--all --not --remotes " "$SS/gl-calls"
+  ssis "the remote has the commit now" "$(git -C "$SS/home/wikis" rev-parse HEAD)" "$(ssrem)"
+  ssnow="$(ssrem)"
+  check "and the mark is gone" test ! -e "$SS/home/wikis/.git/llm-wiki-unscanned"
+  # A commit made some other way with no scan is marked by the hook itself.
+  printf 'Captured: 2026-01-01\n\nBy hand.\n' > "$SS/home/wikis/demo/raw/four.md"
+  ssw env PATH="$SSP" git -C "$SS/home/wikis" add demo/raw/four.md
+  ssw env PATH="$SSP" git -C "$SS/home/wikis" commit -q -m "by hand" >/dev/null 2>&1
+  check "a commit made by hand with no scan leaves the mark" test -f "$SS/home/wikis/.git/llm-wiki-unscanned"
+  out="$(ssw env PATH="$SSP" "$W" sync demo 2>&1)"; code=$?
+  [ "$code" = 1 ] && case "$out" in *"not pushed: a commit here wasn't scanned"*) true ;; *) false ;; esac && ok "and sync won't push that one either" || bad "and sync won't push that one either" "exit $code: $out"
+  out="$(ssw env PATH="$SSP" LLM_WIKI_STYLE=off "$W" update --wikis-only </dev/null 2>&1)" || true
+  ssis "nor does wiki update" "$ssnow" "$(ssrem)"
 fi
 fi
 

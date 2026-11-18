@@ -3,6 +3,8 @@
 # Agents commit to wikis on their own. This stops a pasted key or token from reaching the remote.
 
 if ! command -v gitleaks >/dev/null 2>&1; then
+  # Leave a mark, so wiki sync scans this commit before it pushes anything.
+  mark="$(git rev-parse --git-path llm-wiki-unscanned 2>/dev/null)" && [ -n "$mark" ] && : > "$mark" 2>/dev/null
   echo "llm-wiki: gitleaks isn't installed, so this commit wasn't scanned for secrets. Install it: brew install gitleaks" >&2
   exit 0
 fi

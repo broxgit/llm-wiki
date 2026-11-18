@@ -3043,6 +3043,34 @@ cmd_sync() {
   [ -z "$SYNC_REPO" ] || ext_sync_event "$SYNC_REPO" "$SYNC_PATH" "$SYNC_ROOT" "$SYNC_BEFORE" || true
 }
 
+# Where a repository keeps the mark that it holds a commit made with no scan for secrets.
+sync_unscanned() {
+  local m
+  m="$(git -C "$1" rev-parse --git-path llm-wiki-unscanned 2>/dev/null)" || m=".git/llm-wiki-unscanned"
+  case "$m" in /*) printf '%s\n' "$m" ;; *) printf '%s\n' "$1/$m" ;; esac
+}
+
+# sync_scan_gate <repo>: nothing that wasn't scanned for secrets leaves this machine. Where
+# a commit went through with no scan, the commits not yet pushed are scanned now, and with
+# no gitleaks to do it, sync stops here: the commit stays, and is pushed by a later sync.
+sync_scan_gate() {
+  local repo="$1" mark fail
+  mark="$(sync_unscanned "$repo")"
+  [ -f "$mark" ] || return 0
+  command -v gitleaks >/dev/null 2>&1 || die "not pushed: a commit here wasn't scanned for secrets, because gitleaks wasn't found. It is kept on this machine. Do: install gitleaks (brew install gitleaks), then run $WIKI_CMD sync again"
+  fail="not pushed: a commit made with no scan holds what looks like a secret (above). Ask the user: the secret has to come out of that commit before anything is pushed. Never push it by hand"
+  # Every commit that is on no remote yet, on any branch: the mark is the repository's, so a
+  # scan of one branch's commits must not clear it for another's. Run from the repository,
+  # where its .gitleaksignore is. gitleaks 8.19 replaced `detect` with `git`.
+  if gitleaks git --help >/dev/null 2>&1; then
+    (cd "$repo" && gitleaks git --log-opts="--all --not --remotes" --redact --no-banner --no-color --log-level warn --verbose .) >&2 || die "$fail"
+  else
+    (cd "$repo" && gitleaks detect --source . --log-opts="--all --not --remotes" --redact --no-banner --no-color --log-level warn --verbose) >&2 || die "$fail"
+  fi
+  unlink "$mark" 2>/dev/null || true
+  echo "scanned: the commits that were made with no scan. Nothing like a secret in them."
+}
+
 sync_do() {
   local wiki="" msg="" root repo path top err ahead here coll how cname
   while [ $# -gt 0 ]; do
@@ -3115,11 +3143,18 @@ sync_do() {
     # The hook lets a commit through where gitleaks isn't found, and git shows its line only
     # when a commit fails. An app started from the desktop may not find a gitleaks that is
     # installed, so say it every time: the scan is what stands between a pasted key and the remote.
-    case "$err" in *"this commit wasn't scanned for secrets"*) echo "note: this commit wasn't scanned for secrets, because gitleaks wasn't found. Install it: brew install gitleaks" ;; esac
+    # It is also written down, so no later sync pushes the commit before it has been scanned.
+    case "$err" in
+      *"this commit wasn't scanned for secrets"*)
+        echo "note: this commit wasn't scanned for secrets, because gitleaks wasn't found. Install it: brew install gitleaks"
+        : > "$(sync_unscanned "$repo")" 2>/dev/null || true
+        ;;
+    esac
   else
     echo "nothing to commit in ${root##*/}"
   fi
   [ -n "$(git -C "$repo" remote)" ] || { echo "no remote, so nothing to pull or push"; return 0; }
+  sync_scan_gate "$repo"
   if [ "$(track_remote "$repo")" = new ]; then
     git -C "$repo" push -q -u origin HEAD || die "the first push to origin failed. Check the remote with: $WIKI_CMD setup git"
     # "synced: " is how both MCP servers know a capture was pushed. Keep it on every
@@ -6954,7 +6989,9 @@ update_wikis() {
     [ -z "$k" ] || upgrade_changed "${k%%"$TAB"*}" "$(printf '%s' "$k" | cut -f 2)"
     if in_git_repo "$f" && [ -n "$(git -C "$f" remote 2>/dev/null)" ]; then
       ahead="$(git -C "$f" rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)"
-      if [ "$track" = new ]; then
+      if ! (sync_scan_gate "$f") >/dev/null 2>&1; then
+        ui_item warn "not pushed: a commit here wasn't scanned for secrets. Run: $(typed "$WIKI_CMD sync <wiki>"), which says what to do."
+      elif [ "$track" = new ]; then
         git -C "$f" push -q -u origin HEAD </dev/null && ui_item ok "pushed to origin for the first time" || ui_item warn "the first push failed. Check the remote with: $(typed "$WIKI_CMD setup git")"
       elif [ "${ahead:-0}" -gt 0 ]; then
         git -C "$f" push -q </dev/null && ui_item ok "pushed $ahead commit(s)" || ui_item warn "the push failed. Run: $(typed "git -C $(tilde "$f") pull --no-rebase && git -C $(tilde "$f") push")"

@@ -7,7 +7,7 @@ Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title i
 ## 2027-01-15: the Obsidian plugin scans what it syncs, and its count moves nothing
 
 - A sync from the plugin now finds gitleaks when Obsidian was opened from the Dock. Before, such a sync was pushed with no scan for secrets.
-- `wiki sync` says so, every time, when a commit went through with no scan.
+- `wiki sync` no longer pushes a commit that wasn't scanned for secrets. It keeps it here, says so, and pushes it once gitleaks is found and passes it.
 - The status bar's count no longer takes notes out of an inbox, so a note you are still typing stays put.
 - Do: run `wiki obsidian --plugin` again to get the new plugin, then restart Obsidian.
 
