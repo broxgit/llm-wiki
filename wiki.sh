@@ -252,6 +252,7 @@ Usage: $WIKI_CMD <command> [options]
   journal              Show the work journal's settings and today's entry count.
   journal on | off     Turn the journal on or off. It is on by default.
   journal set <key> <value>  Change a setting. See $(tilde "$WIKIS_DIR")/journal/config.
+  journal depth        How deep your repositories go, and the depth setting that reaches them all.
   journal keep         Keep every journal setting as it is, so setup doesn't ask about each.
   journal note [--day DATE] [--at HH:MM] <project> <text>
                        Add one line to today's journal, or a past day's.
@@ -7117,9 +7118,10 @@ cmd_journal() {
       ;;
     note) cmd_journal_note "$@" ;;
     backfill) journal_backfill "$@" ;;
+    depth) cmd_journal_depth "$@" ;;
     path) journal_file_for "$(journal_today)"; printf '\n' ;;
     prune) journal_prune ;;
-    *) die "journal commands: show, on, off, set <key> <value>, note [--day DATE] [--at HH:MM] <project> <text>, backfill [--since X] [--until DATE], path, prune" ;;
+    *) die "journal commands: show, on, off, set <key> <value>, depth, note [--day DATE] [--at HH:MM] <project> <text>, backfill [--since X] [--until DATE], path, prune" ;;
   esac
 }
 
@@ -7177,6 +7179,66 @@ find_repos() {
     # and under pipefail its failure would end every command that asks for the map.
     find "$d" -maxdepth "$depth" -name .git -prune -print 2>/dev/null || true
   done | sed 's#/\.git$##' | LC_ALL=C sort -u
+}
+
+# journal_depths: "<depth>\t<folder>" for each repository under code_dirs, where depth is
+# the depth setting that would reach it. It looks ten levels down, far past any setting
+# in use, and not into folders that hold other people's code. A repository inside another
+# (a worktree, a submodule, a copy someone vendored) isn't counted: reaching those is not
+# what the setting is for, and they would push the answer to the limit.
+JOURNAL_DEPTH_LOOK=10
+journal_depths() {
+  local dirs d
+  dirs="$(journal_get code_dirs)"
+  local IFS=:
+  for d in $dirs; do
+    # shellcheck disable=SC2088  # the setting is stored with a ~, and is opened out here
+    case "$d" in "~/"*) d="$HOME/${d:2}" ;; "~") d="$HOME" ;; esac
+    d="${d%/}"
+    [ -d "$d" ] || continue
+    { find "$d" -maxdepth "$JOURNAL_DEPTH_LOOK" \( -name node_modules -o -name .venv -o -name Library \) -prune -o -name .git -prune -print 2>/dev/null || true; } |
+      sed 's#/\.git$##' | LC_ALL=C sort -u |
+      awk -v n="${#d}" 'kept != "" && index($0, kept "/") == 1 { next } { kept = $0; p = substr($0, n + 2); print gsub("/", "/", p) + 2 "\t" $0 }'
+  done | LC_ALL=C sort -u
+}
+
+# journal_depth_line: one plain line on what the depth setting reaches, for setup's
+# question and the guide. Nothing when no repository was found.
+journal_depth_line() {
+  local all cur total deep where out
+  all="$(journal_depths)"
+  [ -n "$all" ] || return 0
+  cur="$(journal_get depth)"
+  total="$(printf '%s\n' "$all" | wc -l | tr -d ' ')"
+  deep="$(printf '%s\n' "$all" | sort -rn | head -n 1)"
+  where="${deep#*	}"
+  deep="${deep%%	*}"
+  out="$(printf '%s\n' "$all" | awk -F '\t' -v c="$cur" '$1 > c' | wc -l | tr -d ' ')"
+  if [ "$out" -eq 0 ]; then
+    echo "depth $cur reaches all $total repositories found. The deepest needs $deep: $(tilde "$where")"
+  else
+    echo "depth $cur misses $out of $total repositories found. The deepest needs $deep: $(tilde "$where")"
+  fi
+}
+
+# cmd_journal_depth: what journal depth prints. The setting is hard to answer in the
+# abstract: this says what it reaches on this machine, and the value that reaches everything.
+cmd_journal_depth() {
+  local line deep
+  [ $# -eq 0 ] || die_usage "usage: $WIKI_CMD journal depth"
+  line="$(journal_depth_line)"
+  if [ -z "$line" ]; then
+    ui_item warn "No repository found under $(journal_get code_dirs), $JOURNAL_DEPTH_LOOK folders down. Set where your code is: $(typed "$WIKI_CMD journal set code_dirs <folders>")"
+    return 0
+  fi
+  case "$line" in
+    *" misses "*)
+      deep="${line#*The deepest needs }"
+      ui_item warn "$line"
+      ui_detail "To reach them all: $(typed "$WIKI_CMD journal set depth ${deep%%:*}")"
+      ;;
+    *) ui_item ok "$line" ;;
+  esac
 }
 
 cmd_standup() {
@@ -10942,6 +11004,8 @@ setup_journal_key() {
     *) hint="" ;;
   esac
   printf '\n%s\n' "$desc"
+  # What the number means on this machine, so it isn't a guess.
+  if [ "$key" = depth ]; then desc="$(journal_depth_line)"; [ -z "$desc" ] || printf '  Now, %s\n' "$desc"; fi
   while :; do
     ask "  $key${hint:+ ($hint)}" "$cur"
     val="$ANSWER"
@@ -11444,7 +11508,8 @@ guide_entry() {
         */*) type="${type//\//|}" ;;
         since) type="range" ;;
       esac
-      printf '%s Change: %s journal set %s <%s>\n' "$(journal_field "${id#journal.}" 5)" "$c" "${id#journal.}" "$type"
+      case "$id" in journal.depth) type="$type>. Don't guess a number: $c journal depth says what reaches every repository" ;; *) type="$type>" ;; esac
+      printf '%s Change: %s journal set %s <%s\n' "$(journal_field "${id#journal.}" 5)" "$c" "${id#journal.}" "$type"
       ;;
     *) echo "Terminal only: $c setup $id" ;;
   esac
