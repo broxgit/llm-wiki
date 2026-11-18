@@ -660,13 +660,23 @@ def notes_of(folder, iid):
     """The newest comments people wrote on a merge request, newest first, or None when they couldn't be read. GitLab's
     own lines (\"added 2 commits\") are left out. Every field is checked: the text is kept as it came, and is only
     ever printed by show_note, line by line and marked."""
-    budget()
-    rows = glab_json(f"projects/:id/merge_requests/{int(iid)}/notes?sort=desc&order_by=created_at&per_page={MAX_NOTES * 3}",
-                     f"read the comments on !{iid}", cwd=folder, soft=True)
-    if not isinstance(rows, list):
-        return None
     out = []
-    # Three times as many rows as are kept: GitLab's own lines are among them, and a push adds several.
+    # Three times as many rows as are kept on a page: GitLab's own lines are among them, and a push adds several. When
+    # a whole page is full and there are still too few comments from people, up to two more pages are read.
+    for page in (1, 2, 3):
+        budget()
+        more = f"&page={page}" if page > 1 else ""
+        rows = glab_json(f"projects/:id/merge_requests/{int(iid)}/notes?sort=desc&order_by=created_at&per_page={MAX_NOTES * 3}{more}",
+                         f"read the comments on !{iid}", cwd=folder, soft=True)
+        if not isinstance(rows, list):
+            return None if page == 1 else out
+        _read_notes(rows, out)
+        if len(rows) < MAX_NOTES * 3 or len(out) >= MAX_NOTES:
+            break
+    return out
+
+
+def _read_notes(rows, out):
     for r in rows[:MAX_NOTES * 3]:
         if len(out) >= MAX_NOTES:
             break
@@ -684,7 +694,6 @@ def notes_of(folder, iid):
                     "path": (path if PATH_OK.fullmatch(path) else "a file") if isinstance(path, str) and path else "",
                     "line": line if line is not None else int_or_none(pos.get("old_line")),
                     "resolved": r.get("resolvable") is True and r.get("resolved") is True})
-    return out
 
 
 def comment_key(iid):
