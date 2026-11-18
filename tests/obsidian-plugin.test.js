@@ -140,6 +140,17 @@ async function seen(re) {
 }
 // How many calls were made, leaving out the count for the status bar, which follows an
 // action a moment later and would make a before-and-after comparison a matter of luck.
+// The status bar's text, once it reads as wanted, for up to ten seconds. A count that is
+// already under way makes refresh() return at once, so awaiting refresh() is not enough:
+// that made this check fail now and then.
+async function status(plugin, want) {
+  for (let i = 0; i < 200; i++) {
+    if (plugin.status.text === want) return true;
+    if (!plugin.polling) await plugin.refresh();
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return false;
+}
 function callCount() {
   return allCalls().filter((c) => !/\narg=pending\n/.test(c)).length;
 }
@@ -177,8 +188,7 @@ function callCount() {
 
   check("only real wikis are found: a folder with a handbook and an index, and a proper name", JSON.stringify(await p.wikis()) === '["demo"]', JSON.stringify(await p.wikis()));
 
-  await p.refresh();
-  check("the status bar counts the notes that wait, across wikis", p.status.text === "wiki: 3 waiting", p.status.text);
+  check("the status bar counts the notes that wait, across wikis", await status(p, "wiki: 3 waiting"), p.status.text);
   check("with one read-only command, on this vault, with style off", await seen(/dir=.*vault with a space\nstyle=off\narg=pending\n/), lastCall());
 
   await cmd("save-note");
@@ -242,8 +252,7 @@ function callCount() {
   fs.writeFileSync(commandFile, path.join(scratch, "nowhere", "wiki") + "\n");
   r = await p.run(["status"]);
   check("a command that isn't there says how to fix it", r.code === 127 && r.text.includes("wiki obsidian --plugin"), JSON.stringify(r));
-  await p.refresh();
-  check("and the status bar says the command isn't set up", p.status.text === "wiki: command not set up", p.status.text);
+  check("and the status bar says the command isn't set up", await status(p, "wiki: command not set up"), p.status.text);
   fs.writeFileSync(commandFile, fake + "\n");
 
   // What is in the editor is what is saved, even before Obsidian writes it to disk.

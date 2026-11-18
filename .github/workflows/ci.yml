@@ -12,9 +12,10 @@ on:
   workflow_dispatch:
 
 jobs:
-  # Whether the change needs the suite. A change to files nothing reads, such as ROADMAP.md,
-  # doesn't: scripts/ci-changes.sh has the list and says why it is short. When it can't
-  # tell what changed, the suite runs.
+  # Whether the change needs the suite. A change to files nothing reads, such as the roadmap,
+  # the README and the guides in docs/, doesn't: scripts/ci-changes.sh has the list, and
+  # tests/smoke.sh checks nothing reads what is on it. When it can't tell what changed, the
+  # suite runs.
   changes:
     runs-on: ubuntu-latest
     outputs:

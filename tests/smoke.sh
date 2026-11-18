@@ -11165,7 +11165,13 @@ RS="docs/rese""arch"
 [ "$(cic "$RM")" = false ] && ok "a change to the roadmap alone needs no suite" || bad "a change to the roadmap alone needs no suite" "$(cic "$RM")"
 [ "$(cic "$RM" "$RS/notes/a.md")" = false ] && ok "nor one to the roadmap and the research folder" || bad "nor one to the roadmap and the research folder"
 [ "$(cic "$RM" wiki.sh)" = true ] && ok "one file that is read, among those that aren't, needs it" || bad "one file that is read, among those that aren't, needs it"
-for f in NEWS.md CHANGELOG.md README.md AGENTS.md template/AGENTS.md docs/using.md docs/maintaining.md tests/smoke.sh .github/workflows/ci.yml scripts/ci-changes.sh "sub/$RM" "${RS}x/a.md" "$RS"; do
+# The guides are words for people: nothing here opens them, so a change to them alone needs no suite.
+for f in README.md LICENSE docs/using.md docs/maintaining.md docs/troubleshooting.md docs/teams.md docs/claude-code.md docs/other-agents.md docs/a-guide-not-written-yet.md; do
+  [ "$(cic "$f")" = false ] && ok "$f alone needs no suite" || bad "$f alone needs no suite" "$(cic "$f")"
+done
+[ "$(cic README.md docs/using.md docs/troubleshooting.md "$RM")" = false ] && ok "nor do several of them together" || bad "nor do several of them together"
+[ "$(cic README.md docs/extensions.md)" = true ] && ok "a guide a test reads, among those none does, needs it" || bad "a guide a test reads, among those none does, needs it"
+for f in NEWS.md CHANGELOG.md AGENTS.md template/AGENTS.md template/rules/open.md docs/conventions.md docs/extensions.md docs/notes.txt docs/x.md/wiki.sh docs/guide.md.sh README.md.bak sub/README.md tests/smoke.sh .github/workflows/ci.yml scripts/ci-changes.sh obsidian-plugin/main.js "sub/$RM" "${RS}x/a.md" "$RS"; do
   [ "$(cic "$f")" = true ] && ok "$f needs the suite" || bad "$f needs the suite" "$(cic "$f")"
 done
 [ "$(printf '' | "$REPO/scripts/ci-changes.sh")" = true ] && ok "no files at all is not a reason to skip" || bad "no files at all is not a reason to skip"
@@ -11174,6 +11180,15 @@ done
 # The list is only right while nothing reads those files.
 check "no command, hook, script or other test reads the roadmap or the research folder" bash -c "! grep -l -e '$RM' -e '$RS' '$REPO/wiki.sh' '$REPO/ui.sh' '$REPO'/hooks/* '$REPO/scripts/gallery.sh' '$REPO/scripts/helper.sh' '$REPO/scripts/migrate-to-plugin.sh' '$REPO/tests/budget.sh' '$REPO/tests/ui-lint.sh' '$REPO/tests/smoke-parts.sh' '$REPO/mcp/server.py' 2>/dev/null | grep -q ."
 check "nor does the compiled helper" bash -c "! grep -rl -e '$RM' -e '$RS' '$REPO/cmd' '$REPO/internal' 2>/dev/null | grep -q ."
+# The same for the guides. A test opens a file of this checkout as \$REPO/<path>, so that is
+# what is looked for: the only guides opened are the two the script keeps, and never the
+# README, the licence or docs/ as a whole. A test that opens another guide fails here, and
+# the fix is to take that guide off the script's list.
+CIREAD="$(grep -h -o -E '\$REPO"?/(docs/[A-Za-z0-9_./*-]*|README\.md|LICENSE)' "$REPO/tests/smoke.sh" "$REPO/tests/budget.sh" "$REPO/tests/ui-lint.sh" "$REPO/tests/smoke-parts.sh" "$REPO/scripts/gallery.sh" "$REPO/scripts/helper.sh" "$REPO/wiki.sh" "$REPO/ui.sh" "$REPO"/hooks/* "$REPO/mcp/server.py" 2>/dev/null | sed 's/"//; s/^\$REPO\///' | sort -u | tr '\n' ' ')"
+check "the only guides a test, command or hook opens are the two the script keeps" test "$CIREAD" = "docs/conventions.md docs/extensions.md "
+for f in $CIREAD; do
+  [ "$(cic "$f")" = true ] && ok "and $f, which is opened, needs the suite" || bad "and $f, which is opened, needs the suite"
+done
 # The workflow uses it, runs once for a pull request's commit, and can't pass a suite that was needed and didn't run.
 CIY="$REPO/.github/workflows/ci.yml"
 check "CI asks the script what a change needs" grep -q 'scripts/ci-changes.sh)' "$CIY"
