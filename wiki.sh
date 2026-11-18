@@ -580,6 +580,16 @@ scaffold() {
     echo "exists:  $(tilde "$root") (left alone)"
     return 0
   fi
+  # At the top of a collection, inbox/ is where typed notes are taken from and journal/ is
+  # the work journal. A wiki made in either would have its own files taken as notes. Compared
+  # without case, as a Mac's file system compares names.
+  case "$(printf '%s' "${root##*/}" | LC_ALL=C tr 'A-Z' 'a-z')" in
+    inbox | journal)
+      if [ "${root%/*}" = "${WIKIS_DIR%/}" ] || [ "${root%/*}" -ef "$WIKIS_DIR" ]; then
+        die "a wiki can't be called ${root##*/}: that folder of a collection is used for something else. Do: pick another name"
+      fi
+      ;;
+  esac
   mkdir -p "$root"
   copy_missing "$root"
   [ -f "$root/index.md" ] || printf '# Index\n' > "$root/index.md"
@@ -1904,7 +1914,7 @@ inbox_take_one() {
 # then one line for each note taken and for each left, with why. Never a failure. Only files
 # that end .md are looked at, so a folder of pictures doesn't keep a note waiting.
 inbox_take() {
-  local say="${1:-}" wiki dir f got dirs n=0 seen held other show
+  local say="${1:-}" wiki dir f got dirs n=0 seen looked held other show
   INBOX_TAKEN=0
   dirs="$(inbox_dirs 2>/dev/null || true)"
   [ -n "$dirs" ] || return 0
@@ -1912,22 +1922,30 @@ inbox_take() {
     [ -n "$dir" ] && [ -d "$dir" ] && [ ! -L "$dir" ] || continue
     inbox_recover "$dir" || true
     seen=0
+    looked=0
     for f in "$dir"/*.md; do
       [ -e "$f" ] || [ -L "$f" ] || continue
       # A folder is never taken, so it doesn't use up the run's count: enough of them would
       # keep every later note waiting for ever.
       if [ -d "$f" ] && [ ! -L "$f" ]; then continue; fi
-      seen=$((seen + 1))
-      if [ "$seen" -gt "$INBOX_FILES" ]; then
-        [ -z "$say" ] || ui_item warn "the rest of $wiki's inbox waits for the next run" "more than $INBOX_FILES notes"
+      # Only a note that is taken uses up the run's count. A file that never can be, such as
+      # an empty one, would otherwise use it up every time and keep each later note waiting
+      # for ever. What is looked at has a far higher limit of its own, so a run still ends.
+      looked=$((looked + 1))
+      if [ "$seen" -ge "$INBOX_FILES" ] || [ "$looked" -gt $((INBOX_FILES * 50)) ]; then
+        [ -z "$say" ] || [ "$looked" -gt $((INBOX_FILES + 1)) ] || ui_item warn "the rest of $wiki's inbox waits for the next run" "more than $INBOX_FILES notes"
         break
       fi
+      # Past the first two hundred, a note that is left is no longer named, one by one:
+      # thousands of lines would bury the ones that matter. Said once, and the looking goes on.
+      [ -z "$say" ] || [ "$looked" -ne $((INBOX_FILES + 1)) ] || ui_item warn "the rest of $wiki's inbox waits for the next run" "more than $INBOX_FILES notes"
       show="$(inbox_show "${f##*/}")"
       if ! inbox_ready "$f"; then
-        [ -z "$say" ] || ui_item warn "left: $show, in $wiki's inbox" "$INBOX_WHY"
+        [ -z "$say" ] || [ "$looked" -gt "$INBOX_FILES" ] || ui_item warn "left: $show, in $wiki's inbox" "$INBOX_WHY"
         continue
       fi
       if got="$(inbox_take_one "$wiki" "$f" || true)" && [ -n "$got" ]; then
+        seen=$((seen + 1))
         n=$((n + 1))
         [ -z "$say" ] || ui_item ok "taken: $show" "now $wiki/$got"
       else
@@ -3142,7 +3160,14 @@ sync_do() {
           case "$HISTORY_SAVED" in
             1) echo "saved: a snapshot of your wikis, on this machine.$(history_by)" ;;
             2) echo "The snapshot couldn't be saved this time, so the last one is still the newest. Another session may be saving one: if it happens again, run $WIKI_CMD history to see the last." ;;
-            *) echo "nothing new to save since the last snapshot.$(history_by)" ;;
+            *)
+              # Releasing the compile lock saved these changes already, under "compiled: <wiki>".
+              # This sync's message is what says why they were made, so that snapshot takes it.
+              if [ -n "$msg" ] && [ "$(history_git log -n 1 --format=%s 2>/dev/null || true)" = "compiled: ${root##*/}" ]; then
+                history_git commit -q --amend --allow-empty -m "$(printf '%s (compiled: %s)' "$msg" "${root##*/}" | LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C cut -c 1-200)" >/dev/null 2>&1 || true
+              fi
+              echo "nothing new to save since the last snapshot.$(history_by)"
+              ;;
           esac
           [ "$HISTORY_LEFT" = 0 ] || [ "$HISTORY_SAVED" = 2 ] || echo "note: something in the folder couldn't be read or saved, and was left out of the snapshot."
           return 0
@@ -6413,6 +6438,12 @@ obsidian_cmd_path() {
   local c="$WIKI_CMD"
   case "$c" in /*) ;; *) c="$(command -v "$c" 2>/dev/null || true)" ;; esac
   case "$c" in /*) if [ -x "$c" ]; then printf '%s' "$c"; return 0; fi ;; esac
+  # From the Claude Code plugin, this script sits in a folder named for one version, which an
+  # update removes. The command in the plugin's data folder stays where it is.
+  if from_plugin; then
+    c="$(plugin_cmd)"
+    if [ -x "$c" ]; then printf '%s' "$c"; return 0; fi
+  fi
   printf '%s' "$REPO/wiki.sh"
 }
 
@@ -6420,7 +6451,7 @@ obsidian_cmd_path() {
 # from .obsidian/plugins/llm-wiki once community plugins are on, which only the person can
 # do, in Obsidian. It is copied, not linked: a link would follow this checkout's branch.
 obsidian_plugin() {
-  local src="$REPO/obsidian-plugin" dest="$WIKIS_DIR/.obsidian/plugins/llm-wiki" c list="$WIKIS_DIR/.obsidian/community-plugins.json" listed=0
+  local src="$REPO/obsidian-plugin" dest="$WIKIS_DIR/.obsidian/plugins/llm-wiki" c f list="$WIKIS_DIR/.obsidian/community-plugins.json" listed=0
   # Read by the plugin, which Obsidian starts with no XDG variables of yours: always under the home folder.
   local cf="$HOME/.config/llm-wiki/obsidian-command"
   [ -f "$WIKIS_DIR/WIKIS.md" ] || die "$(tilde "$WIKIS_DIR") isn't a wiki collection, so the plugin isn't put there. It goes only in the vault that holds your wikis. Run: $WIKI_CMD setup"
@@ -6432,6 +6463,10 @@ obsidian_plugin() {
   case "$c" in *[[:cntrl:]]*) die "the wiki command's path holds a character that can't be kept on one line, so the plugin can't be told where it is: $(tilde "$c" | LC_ALL=C tr -d '\000-\037\177')" ;; esac
   case "$c" in "$WIKIS_DIR"/*) die "the wiki command is inside the wikis' folder, at $(tilde "$c"), and the plugin never runs anything from there. Do: run this from where llm-wiki is installed" ;; esac
   mkdir -p "$dest" 2>/dev/null || die "$(cant_write "$dest")"
+  # The files too: moved onto a link to a folder, the new file would land inside that folder.
+  for f in "$dest/main.js" "$dest/manifest.json"; do
+    if [ -L "$f" ] || { [ -e "$f" ] && [ ! -f "$f" ]; }; then die "$(tilde "$f") isn't a plain file, so the plugin isn't put there. Do: remove it, then run this again"; fi
+  done
   cp "$src/main.js" "$dest/main.js.$$" 2>/dev/null && mv -f "$dest/main.js.$$" "$dest/main.js" 2>/dev/null || die "$(cant_write "$dest/main.js")"
   cp "$src/manifest.json" "$dest/manifest.json.$$" 2>/dev/null && mv -f "$dest/manifest.json.$$" "$dest/manifest.json" 2>/dev/null || die "$(cant_write "$dest/manifest.json")"
   # Where the wiki command is: Obsidian is started from the Dock and has no PATH of yours. It is
