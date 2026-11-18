@@ -453,6 +453,27 @@ if command -v gitleaks >/dev/null 2>&1; then
   printf 'Captured: 2026-01-01\n\nDeploy token: [REDACTED]\n' > "$WIKIS_DIR/demo/raw/leak.md"
   git -C "$WIKIS_DIR" add demo/raw/leak.md
   check "the redacted commit goes through" git -C "$WIKIS_DIR" commit -qm redacted
+  # A .gitleaks.toml in the wikis folder replaces gitleaks' rules, and one that came in from a
+  # remote could switch the scan off. The scan is given llm-wiki's own rules by name instead.
+  "$W" setup git --yes </dev/null >/dev/null 2>&1 || "$W" upgrade --all </dev/null >/dev/null 2>&1 || true
+  check "the scan's rules are installed beside the hook" cmp -s "$REPO/hooks/llm-wiki-gitleaks.toml" "$WIKIS_DIR/.git/hooks/llm-wiki-gitleaks.toml"
+  printf 'title = "no rules at all"\n' > "$WIKIS_DIR/.gitleaks.toml"
+  printf 'Captured: 2026-01-01\n\nDeploy token: %s\n' "$token" > "$WIKIS_DIR/demo/raw/leak2.md"
+  git -C "$WIKIS_DIR" add .gitleaks.toml demo/raw/leak2.md
+  expect "a rules file in the wikis folder that finds nothing doesn't switch the scan off" "commit refused" git -C "$WIKIS_DIR" commit -qm leak2
+  git -C "$WIKIS_DIR" rm -q -f --cached .gitleaks.toml demo/raw/leak2.md
+  unlink "$WIKIS_DIR/.gitleaks.toml"; unlink "$WIKIS_DIR/demo/raw/leak2.md"
+  # A .gitattributes that calls every file binary leaves git no diff to show the scan.
+  if GIT_ATTR_SOURCE=4b825dc642cb6eb9a060e54bf8d69288fbee4904 git -C "$WIKIS_DIR" check-attr diff -- x >/dev/null 2>&1 && [ "$(printf '%s\n' "$(git --version | sed 's/[^0-9.]//g')" 2.40 | sort -t. -k1,1n -k2,2n | head -n 1)" = 2.40 ]; then
+    printf '* -diff\n' > "$WIKIS_DIR/.gitattributes"
+    printf 'Captured: 2026-01-01\n\nDeploy token: %s\n' "$token" > "$WIKIS_DIR/demo/raw/leak3.md"
+    git -C "$WIKIS_DIR" add .gitattributes demo/raw/leak3.md
+    expect "nor does a .gitattributes that hides every diff" "commit refused" git -C "$WIKIS_DIR" commit -qm leak3
+    git -C "$WIKIS_DIR" rm -q -f --cached .gitattributes demo/raw/leak3.md
+    unlink "$WIKIS_DIR/.gitattributes"; unlink "$WIKIS_DIR/demo/raw/leak3.md"
+  else
+    skipped "a .gitattributes that hides diffs (needs git 2.40)"
+  fi
 else
   skipped "secret scan (gitleaks isn't installed)"
 fi
@@ -500,7 +521,8 @@ else
   unlink "$SS/leak"
   out="$(ssw env PATH="$SS/bin:$SSP" "$W" sync demo 2>&1)"
   case "$out" in *"scanned: the commits that were made with no scan."*"synced: pushed"*) ok "one that passes is pushed, and sync says it was scanned first" ;; *) bad "one that passes is pushed, and sync says it was scanned first" "$out" ;; esac
-  check "the commits on no remote were scanned, on every branch, from the repository where its ignore file is" grep -q -- "/home/wikis: git --log-opts=--branches --not --remotes=origin " "$SS/gl-calls"
+  check "with llm-wiki's own rules, not the folder's" grep -q -- " --config $REPO/hooks/llm-wiki-gitleaks.toml " "$SS/gl-calls"
+  check "the commits on no remote were scanned, on every branch, from the repository where its ignore file is" grep -q -- "/home/wikis: git --config .* --log-opts=--branches --not --remotes=origin --text " "$SS/gl-calls"
   ssis "the remote has the commit now" "$(git -C "$SS/home/wikis" rev-parse HEAD)" "$(ssrem)"
   ssnow="$(ssrem)"
   check "and the mark is gone" test ! -e "$SS/home/wikis/.git/llm-wiki-unscanned"
@@ -535,7 +557,7 @@ else
   out="$(ssw env PATH="$SS/bin:$SSP" "$W" sync demo 2>&1)"
   case "$out" in *"scanned: the commits"*) bad "one that says yes is pushed, with nothing said of a mark there never was" "$out" ;; *"synced: pushed"*) ok "one that says yes is pushed, with nothing said of a mark there never was" ;; *) bad "one that says yes is pushed, with nothing said of a mark there never was" "$out" ;; esac
   if git -C "$SS/home/wikis" log --remerge-diff --max-count=0 >/dev/null 2>&1; then
-    check "the scan is asked to read what settled a merge" bash -c "tail -n 1 '$SS/gl-calls' | grep -q -- '--log-opts=--branches --not --remotes=origin --remerge-diff '"
+    check "the scan is asked to read what settled a merge" bash -c "tail -n 1 '$SS/gl-calls' | grep -q -- '--log-opts=--branches --not --remotes=origin --text --remerge-diff '"
   else
     skipped "the scan of a merge (this git has no --remerge-diff)"
   fi
@@ -597,6 +619,12 @@ if command -v gitleaks >/dev/null 2>&1 && git log --remerge-diff --max-count=0 >
   [ "$code" = 1 ] && case "$out" in *"not pushed: a commit that wasn't scanned holds what looks like a secret"*) true ;; *) false ;; esac && ok "a token typed in to settle a merge is found, and nothing is pushed" || bad "a token typed in to settle a merge is found, and nothing is pushed" "exit $code: $out"
   case "$(git --git-dir="$SM/remote.git" for-each-ref --format='%(objectname)' refs/heads | head -n 1)" in "$smat") ok "the remote is as it was" ;; *) bad "the remote is as it was" "moved" ;; esac
   case "$out" in *ghp_a1B2*) bad "and the token isn't printed" "$out" ;; *) ok "and the token isn't printed" ;; esac
+  # A hook from an earlier version, with no rules beside it, is brought up to date by the next sync.
+  printf '#!/bin/sh\n# llm-wiki secret scan. An old one.\nexit 0\n' > "$SM/home/wikis/.git/hooks/pre-commit"; chmod +x "$SM/home/wikis/.git/hooks/pre-commit"
+  unlink "$SM/home/wikis/.git/hooks/llm-wiki-gitleaks.toml"
+  smw "$W" sync demo >/dev/null 2>&1 || true
+  check "sync replaces an old hook of ours" cmp -s "$REPO/hooks/pre-commit" "$SM/home/wikis/.git/hooks/pre-commit"
+  check "and puts the rules beside it" cmp -s "$REPO/hooks/llm-wiki-gitleaks.toml" "$SM/home/wikis/.git/hooks/llm-wiki-gitleaks.toml"
 else
   skipped "a secret in a merge (needs gitleaks, and a git with --remerge-diff)"
 fi

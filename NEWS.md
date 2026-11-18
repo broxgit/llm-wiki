@@ -8,6 +8,7 @@ Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title i
 
 - In a wikis folder with no llm-wiki hook, such as a fresh clone, `wiki sync` now scans before it pushes, and keeps the commit here when gitleaks isn't found.
 - A secret typed in while settling a merge conflict is now found by that scan.
+- The scan uses llm-wiki's own rules: a `.gitleaks.toml` in the wikis folder is no longer read, so one from a remote can't switch it off.
 
 ## 2027-01-15: the Obsidian plugin scans what it syncs, and its count moves nothing
 
