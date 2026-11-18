@@ -252,10 +252,19 @@ function callCount() {
   check("sync and compile need a page of a wiki in view, and run nothing without one", callCount() === n);
 
   // A page being compiled.
-  fs.writeFileSync(path.join(vault, "demo", ".compile-lock"), "held abc someone 2026-11-18T00:00:00Z\n");
+  const stamp = (msAgo) => new Date(Date.now() - msAgo).toISOString().replace(/\.\d+Z$/, "Z");
+  fs.writeFileSync(path.join(vault, "demo", ".compile-lock"), "held abc " + stamp(60 * 1000) + "\nby: session 1 x\n");
   notices.length = 0;
   await p.warnIfCompiling(file("demo/wiki/My Page!.md"));
   check("opening a page of a wiki that is being compiled says so", notices.some((x) => x.includes("demo is being compiled right now")));
+  fs.writeFileSync(path.join(vault, "demo", ".compile-lock"), "held abc " + stamp(31 * 60 * 1000) + "\n");
+  notices.length = 0;
+  await p.warnIfCompiling(file("demo/wiki/My Page!.md"));
+  check("a lock left over 30 minutes ago by a session that died says nothing", notices.length === 0, notices.join(" | "));
+  fs.writeFileSync(path.join(vault, "demo", ".compile-lock"), "held abc sometime\n");
+  notices.length = 0;
+  await p.warnIfCompiling(file("demo/wiki/My Page!.md"));
+  check("a lock whose time can't be read counts as held", notices.length === 1);
   fs.writeFileSync(path.join(vault, "demo", ".compile-lock"), "free\n");
   notices.length = 0;
   await p.warnIfCompiling(file("demo/wiki/My Page!.md"));
