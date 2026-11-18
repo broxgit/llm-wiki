@@ -28,8 +28,9 @@
   lint <wiki>... | --all  The mechanical lint checks. Reports, changes nothing.
   harvest [--dry-run]  Copy Claude Code's own memory notes into the wikis, where every
                        repo and teammate can use them.
-  pending [<wiki>] [--show]
+  pending [<wiki>] [--show] [--keep-inbox]
                        Notes waiting to be compiled. --show prints a wiki's in one go.
+                       --keep-inbox counts without taking the notes in an inbox.
   seed [<repo>] [--wiki NAME] [--max N] [--dry-run]
                        Start a wiki from a repository's own docs: README, agent
                        instructions, skills, docs/, decision records.

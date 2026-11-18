@@ -167,8 +167,9 @@ Usage: $WIKI_CMD <command> [options]
   lint <wiki>... | --all  The mechanical lint checks. Reports, changes nothing.
   harvest [--dry-run]  Copy Claude Code's own memory notes into the wikis, where every
                        repo and teammate can use them.
-  pending [<wiki>] [--show]
+  pending [<wiki>] [--show] [--keep-inbox]
                        Notes waiting to be compiled. --show prints a wiki's in one go.
+                       --keep-inbox counts without taking the notes in an inbox.
   seed [<repo>] [--wiki NAME] [--max N] [--dry-run]
                        Start a wiki from a repository's own docs: README, agent
                        instructions, skills, docs/, decision records.
@@ -2758,6 +2759,8 @@ HISTORY_MARK=".llm-wiki-history"
 HISTORY_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/llm-wiki/history"
 # 0 nothing had changed, 1 a snapshot was saved, 2 one was wanted and couldn't be made.
 HISTORY_SAVED=0
+# 1 when the last snapshot left out a file that couldn't be read.
+HISTORY_LEFT=0
 
 # history_own_git: the collection is itself a git repository, which keeps its own history.
 # A repository above it, such as a home folder kept in git, is not that.
@@ -2814,8 +2817,9 @@ history_git() {
 # history_snap <why>: save what the collection holds now, when history is on and anything
 # changed. It never fails the command that called it, and says nothing.
 history_snap() {
-  local store d rel why="${1:-update}"
+  local store d rel err n=0 why="${1:-update}"
   HISTORY_SAVED=0
+  HISTORY_LEFT=0
   history_on || return 0
   HISTORY_SAVED=2
   command -v git >/dev/null 2>&1 || return 0
@@ -2830,18 +2834,47 @@ history_snap() {
   # What is kept: every file, whatever a .gitignore in the collection says (-f), but never a
   # hidden file or folder at any depth (Obsidian's settings, the trash, locks, a note half
   # taken, this marker), and never a folder that is a git repository of its own, which keeps
-  # its own history and which git would refuse or record as one line.
-  set -- add -A -f -- . ':(glob,exclude).*' ':(glob,exclude).*/**' ':(glob,exclude)**/.*' ':(glob,exclude)**/.*/**'
+  # its own history and which git would refuse or record as one line. Only a real one: a
+  # .git folder with a HEAD, or the .git file a worktree or a submodule has. Anything else
+  # called .git, an empty file included, would leave a whole wiki out and say nothing.
+  # The search runs from inside the collection, so a wikis folder that is a link, or one
+  # set with a slash at its end, gives the same paths.
+  set -- add -A -f --ignore-errors -- . ':(glob,exclude).*' ':(glob,exclude).*/**' ':(glob,exclude)**/.*' ':(glob,exclude)**/.*/**'
   while IFS= read -r d; do
     [ -n "$d" ] || continue
-    rel="${d#"$WIKIS_DIR"/}"
+    rel="${d#./}"
     rel="${rel%/.git}"
-    case "$rel" in "" | /* | .git) continue ;; esac
+    case "$rel" in "" | /* | .git | .GIT | ./*) continue ;; esac
+    d="$WIKIS_DIR/$d"
+    if [ -d "$d" ]; then
+      [ -f "$d/HEAD" ] || continue
+    elif [ -f "$d" ] && [ ! -L "$d" ] && [ -r "$d" ]; then
+      case "$(head -c 8 "$d" 2>/dev/null || true)" in "gitdir: "*) ;; *) continue ;; esac
+    else
+      # A .git that can't be looked at: a pipe, a link, a file with no leave to read. git
+      # would stop on it or take the folder for a repository, so the folder is left out, and said.
+      HISTORY_LEFT=1
+    fi
+    n=$((n + 1))
+    [ "$n" -le 200 ] || break
     set -- "$@" ":(literal,exclude)$rel"
   done <<HISTEOF
-$(find "$WIKIS_DIR" -mindepth 2 -maxdepth 5 -name .git -prune 2>/dev/null | head -n 200 || true)
+$(cd "$WIKIS_DIR" 2>/dev/null && find . -mindepth 2 -maxdepth 5 -iname .git -prune 2>/dev/null | head -n 2000 || true)
 HISTEOF
-  history_git "$@" >/dev/null 2>&1 || return 0
+  # A file that can't be read is left out and the rest is saved: one such file, anywhere,
+  # must not stop every snapshot. Anything else that fails, such as another session holding
+  # the store's lock, saves nothing this time.
+  # git says a folder it couldn't open and still ends well, so what it said is read either way.
+  if err="$(LC_ALL=C history_git "$@" 2>&1 >/dev/null)"; then
+    case "$err" in *"Permission denied"*) HISTORY_LEFT=1 ;; esac
+  else
+    case "$err" in
+      # The store itself, which no file in the collection can name: locked by another session, or not writable.
+      *"$store"*) return 0 ;;
+      *"Permission denied"* | *"unable to index file"* | *"invalid path"* | *"adding files failed"* | *"does not have a commit checked out"*) HISTORY_LEFT=1 ;;
+      *) return 0 ;;
+    esac
+  fi
   if history_git rev-parse -q --verify HEAD >/dev/null 2>&1 && history_git diff --cached --quiet 2>/dev/null; then
     HISTORY_SAVED=0
     return 0
@@ -3038,6 +3071,7 @@ sync_do() {
             2) echo "The snapshot couldn't be saved this time, so the last one is still the newest. Another session may be saving one: if it happens again, run $WIKI_CMD history to see the last." ;;
             *) echo "nothing new to save since the last snapshot.$(history_by)" ;;
           esac
+          [ "$HISTORY_LEFT" = 0 ] || [ "$HISTORY_SAVED" = 2 ] || echo "note: something in the folder couldn't be read or saved, and was left out of the snapshot."
           return 0
         fi
         ;;
@@ -3078,6 +3112,10 @@ sync_do() {
       die "the commit was refused. If the secret scan stopped it, redact the secret as the handbook says, then sync again."
     fi
     echo "committed: $msg"
+    # The hook lets a commit through where gitleaks isn't found, and git shows its line only
+    # when a commit fails. An app started from the desktop may not find a gitleaks that is
+    # installed, so say it every time: the scan is what stands between a pasted key and the remote.
+    case "$err" in *"this commit wasn't scanned for secrets"*) echo "note: this commit wasn't scanned for secrets, because gitleaks wasn't found. Install it: brew install gitleaks" ;; esac
   else
     echo "nothing to commit in ${root##*/}"
   fi
@@ -3526,15 +3564,18 @@ unlisted() {
 
 # pending [<wiki>] [--show]
 cmd_pending() {
-  local wiki="" show=0 root f size total=0 n=0 left=0 d
+  local wiki="" show=0 take=1 root f size total=0 n=0 left=0 d
   while [ $# -gt 0 ]; do
     case "$1" in
       --show) show=1; shift ;;
-      -*) die_usage "pending options: --show" ;;
+      --keep-inbox) take=0; shift ;;
+      -*) die_usage "pending options: --show, --keep-inbox" ;;
       *) wiki="$1"; shift ;;
     esac
   done
-  inbox_take >/dev/null 2>&1 || true
+  # --keep-inbox is for a count that must change nothing, such as a status bar's: a note
+  # someone is still writing in an inbox stays where it is.
+  [ "$take" = 0 ] || inbox_take >/dev/null 2>&1 || true
   if [ -z "$wiki" ]; then
     [ "$show" = 0 ] || die "pending --show needs a wiki name"
     left=0
