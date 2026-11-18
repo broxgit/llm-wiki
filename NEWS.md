@@ -8,6 +8,13 @@ Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title i
 
 - `wiki journal depth` says how many of your repositories the depth setting reaches, and the value that reaches them all.
 - Setup's depth question shows the same line, so the number isn't a guess.
+
+## 2027-01-08: Jenkins setup says why a sign-in fails
+
+- Setting up Jenkins now tests the sign-in and says in its summary whether it works, and as whom.
+- It looks at what you saved as the token first. A wrong paste is caught there, with a chance to paste again, and is never sent to Jenkins.
+- When Jenkins refuses the sign-in and the user isn't an email address, it says that may be the cause.
+
 ## 2027-01-07: the guided setup, after a real run
 
 - Where your agent can show a question with answers to pick from, as Claude Code can, the guided setup asks that way, with its own pick first.
