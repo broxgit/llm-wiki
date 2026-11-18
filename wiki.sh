@@ -218,9 +218,14 @@ Usage: $WIKI_CMD <command> [options]
   mcp [--print]        A local MCP server over the wikis, for sessions with no file
                        access. An MCP client starts it. --print gives its config entry.
   news [--all]         What's new in llm-wiki since you last looked.
-  obsidian [--no-open] Browse the wikis in Obsidian: write the vault's starter settings and open it.
+  obsidian [--no-open | --plugin]
+                       Browse the wikis in Obsidian: write the vault's starter settings and open it.
+                       --plugin puts llm-wiki's commands inside Obsidian.
   inbox                Take the notes you typed into an inbox folder, in Obsidian or any editor,
                        into the wikis. A session does it when it starts.
+  history [on [<app>] | off | <snapshot> | show <snapshot> <file>]
+                       For wikis with no git, such as a vault Obsidian Sync carries: keep
+                       every earlier version on this machine, and look at one.
   extensions [path | add <name> | remove <name> | setup <name> | settings <name> | set <name> <key> <value> | log <name> | tick | every ... | offer <name> yes|no|never|again | certs [<https://address>]]
                        Commands of your own: $WIKI_CMD <name> runs an executable named
                        wiki-<name> in the extensions folder. Lists them, or prints the folder.
@@ -1495,6 +1500,8 @@ cmd_start() {
   helper_auto >/dev/null 2>&1 || true
   # Notes the user typed into an inbox become waiting notes before anything is counted.
   inbox_take >/dev/null 2>&1 || true
+  # Where the collection has no git and keeps a history: what it held before this session.
+  history_snap "session start"
   if [ -n "$repo" ]; then w="$(which_wiki "$repo")"; [ -z "$w" ] || wiki="$WIKIS_DIR/$w"; fi
   # Not in a repository: the wikis of the clones in this folder, when it holds any.
   if [ -z "$repo" ] && [ -d "$arg" ] && placeable "$arg"; then
@@ -2285,6 +2292,7 @@ cmd_lock() {
     release)
       printf 'free\n' 2>/dev/null > "$f" || die "$(cant_write "$f")"
       echo "released: $(tilde "$root")"
+      history_snap "compiled: ${root##*/}"
       ;;
     renew)
       case "$line" in held\ *) ;; *) die "the lock on $(tilde "$root") isn't held" ;; esac
@@ -2735,6 +2743,265 @@ sync_default_wiki() {
 
 # sync <wiki> [-m MSG]: what sync_do does, and then the sync event for extensions,
 # when the wiki's files are not what they were. The lock goes first: an extension may sync.
+# ---- history: a collection that has no git ------------------------------------------
+# Some people's wikis are an Obsidian vault that Obsidian Sync or a cloud drive carries to
+# their other devices: no git, and nothing for them to learn. What they lose without git is
+# every earlier version, so `wiki history on` keeps one, on this machine: a snapshot at
+# session start, after a compile and at each sync. It is a git repository kept OUTSIDE the
+# collection, under the state folder, so no sync service ever carries or corrupts it, and
+# nothing of it shows in the vault. The collection holds one small hidden file that says it
+# is on, with an id that names the store. Nothing here pushes, pulls or sends anything.
+#
+# The collection is a folder some other program writes to, so everything in it is data: the
+# marker, a .gitignore, a .gitattributes, a .git folder inside it, and every file's name.
+HISTORY_MARK=".llm-wiki-history"
+HISTORY_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/llm-wiki/history"
+# 0 nothing had changed, 1 a snapshot was saved, 2 one was wanted and couldn't be made.
+HISTORY_SAVED=0
+
+# history_own_git: the collection is itself a git repository, which keeps its own history.
+# A repository above it, such as a home folder kept in git, is not that.
+history_own_git() {
+  local top
+  top="$(git -C "$WIKIS_DIR" rev-parse --show-toplevel 2>/dev/null)" || return 1
+  [ "$top" = "$(cd "$WIKIS_DIR" 2>/dev/null && pwd -P)" ]
+}
+
+# history_plain <file>: a plain file, not a link, a folder or anything else.
+history_plain() { [ -f "$1" ] && ! [ -L "$1" ]; }
+
+# history_read <file> <key>: a value from a marker. One line, no control characters, not long.
+history_read() {
+  history_plain "$1" || return 0
+  # No early exit in the pipe: with pipefail a reader that stops first ends the script.
+  { LC_ALL=C awk -v k="$2=" '!got && index($0, k) == 1 { print substr($0, length(k) + 1); got = 1 }' "$1" 2>/dev/null || true; } | LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C cut -c 1-60 || true
+}
+
+# history_id_ok <id>: what `history on` makes, and nothing else: 8 to 40 of 0-9 and a-f.
+# Written out, because a range such as a-f takes in other letters in some locales.
+history_id_ok() {
+  case "$1" in '' | *[!0123456789abcdef]*) return 1 ;; esac
+  [ "${#1}" -ge 8 ] && [ "${#1}" -le 40 ]
+}
+
+# history_store: the folder that holds this collection's history, or fail.
+history_store() {
+  local id
+  id="$(history_read "$WIKIS_DIR/$HISTORY_MARK" id)"
+  history_id_ok "$id" || return 1
+  printf '%s/%s.git' "$HISTORY_DIR" "$id"
+}
+
+# On: a marker that names a store, in a collection that isn't its own git repository.
+history_on() { history_plain "$WIKIS_DIR/$HISTORY_MARK" && history_store >/dev/null && ! history_own_git; }
+
+# history_git <args>...: git on the store, with the collection as its files. Nothing of the
+# user's own git applies: no settings, no hooks, no signing, no name of theirs, and nothing
+# from the environment of whoever called. Attributes are read from an empty tree, so a
+# .gitattributes in the collection can't change what is kept.
+history_git() {
+  local store
+  store="$(history_store)" || return 1
+  env -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY -u GIT_COMMON_DIR -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_TEMPLATE_DIR -u GIT_NAMESPACE \
+    -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_AUTHOR_DATE -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL -u GIT_COMMITTER_DATE \
+    -u GIT_CONFIG_PARAMETERS -u GIT_CONFIG_COUNT -u GIT_CONFIG -u GIT_ATTR_SOURCE -u GIT_EXTERNAL_DIFF -u GIT_PAGER \
+    GIT_DIR="$store" GIT_WORK_TREE="$WIKIS_DIR" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_ATTR_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 \
+    git -C "$WIKIS_DIR" -c user.name=llm-wiki -c user.email=llm-wiki@localhost -c commit.gpgsign=false -c core.hooksPath=/dev/null \
+    -c core.autocrlf=false -c core.quotePath=true -c core.fsmonitor=false -c core.attributesFile=/dev/null \
+    -c attr.tree=4b825dc642cb6eb9a060e54bf8d69288fbee4904 -c diff.renames=false -c gc.auto=0 "$@"
+}
+
+# history_snap <why>: save what the collection holds now, when history is on and anything
+# changed. It never fails the command that called it, and says nothing.
+history_snap() {
+  local store d rel why="${1:-update}"
+  HISTORY_SAVED=0
+  history_on || return 0
+  HISTORY_SAVED=2
+  command -v git >/dev/null 2>&1 || return 0
+  store="$(history_store)" || return 0
+  if [ ! -f "$store/HEAD" ]; then
+    mkdir -p "$HISTORY_DIR" 2>/dev/null || return 0
+    chmod 700 "$HISTORY_DIR" 2>/dev/null || true
+    history_git init -q --template= >/dev/null 2>&1 || return 0
+  fi
+  # A snapshot cut off part way leaves git's lock behind, and every later one would fail on it.
+  if [ -f "$store/index.lock" ] && [ -n "$(find "$store/index.lock" -mmin +15 2>/dev/null || true)" ]; then unlink "$store/index.lock" 2>/dev/null || true; fi
+  # What is kept: every file, whatever a .gitignore in the collection says (-f), but never a
+  # hidden file or folder at any depth (Obsidian's settings, the trash, locks, a note half
+  # taken, this marker), and never a folder that is a git repository of its own, which keeps
+  # its own history and which git would refuse or record as one line.
+  set -- add -A -f -- . ':(glob,exclude).*' ':(glob,exclude).*/**' ':(glob,exclude)**/.*' ':(glob,exclude)**/.*/**'
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    rel="${d#"$WIKIS_DIR"/}"
+    rel="${rel%/.git}"
+    case "$rel" in "" | /* | .git) continue ;; esac
+    set -- "$@" ":(literal,exclude)$rel"
+  done <<HISTEOF
+$(find "$WIKIS_DIR" -mindepth 2 -maxdepth 5 -name .git -prune 2>/dev/null | head -n 200 || true)
+HISTEOF
+  history_git "$@" >/dev/null 2>&1 || return 0
+  if history_git rev-parse -q --verify HEAD >/dev/null 2>&1 && history_git diff --cached --quiet 2>/dev/null; then
+    HISTORY_SAVED=0
+    return 0
+  fi
+  history_git commit -q --allow-empty -m "$(printf '%s' "$why" | LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C cut -c 1-200)" >/dev/null 2>&1 || return 0
+  HISTORY_SAVED=1
+}
+
+# history_app <text>: an app's name as it may be kept and printed: letters, digits, spaces,
+# dots, dashes and underscores. The marker can arrive from another device, and what it
+# names is printed where an agent reads it.
+history_app() { printf '%s' "$1" | LC_ALL=C tr -cd 'A-Za-z0-9 ._-' | LC_ALL=C cut -c 1-30 | sed 's/^[ .-]*//; s/ *$//' || true; }
+
+# What carries the folder to the user's other devices, with a space in front, or nothing.
+history_by() {
+  local by
+  by="$(history_app "$(history_read "$WIKIS_DIR/$HISTORY_MARK" carried)")"
+  [ -z "$by" ] || printf ' %s carries them to your other devices.' "$by"
+}
+
+# history_shown <text>: a file's name or a snapshot's reason, fit to print on one line.
+history_shown() { printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C cut -c 1-300 || true; }
+
+cmd_history() {
+  local id store by n f tmp
+  case "${1:-}" in
+    -h | --help)
+      cat <<EOF
+Usage: $WIKI_CMD history
+       $WIKI_CMD history on [<what carries the folder>]
+       $WIKI_CMD history off
+       $WIKI_CMD history <snapshot>
+       $WIKI_CMD history show <snapshot> <file>
+
+For wikis that have no git, such as an Obsidian vault that Obsidian Sync, iCloud or
+another app carries to your other devices. Git keeps every earlier version of a page.
+Without it, this does: a snapshot of the wikis at session start, after a compile and at
+each sync, kept on this machine, outside the folder, where no app carries it away.
+Nothing is sent anywhere.
+
+  With nothing   list the snapshots, newest first.
+  on             start keeping them. Name the app that carries the folder, such as
+                 "Obsidian Sync", and $WIKI_CMD sync and setup stop asking about git.
+                 Each computer keeps its own: where the app doesn't carry hidden
+                 files, as Obsidian Sync doesn't, run this once on each.
+  off            stop. What was kept stays where it is.
+  <snapshot>     the files that changed in it.
+  show           print a file as it was in a snapshot, such as
+                 $WIKI_CMD history show 3f2a91c global/wiki/conventions.md
+
+Hidden files are never kept, and neither is a folder that is a git repository of its
+own. Two things to know. Use one app to carry the folder, never two. And computers
+can't see each other's compile in progress: let one session finish before another
+starts elsewhere.
+EOF
+      return 0
+      ;;
+    on)
+      shift
+      [ -d "$WIKIS_DIR" ] || die "no wikis at $(tilde "$WIKIS_DIR"). Run: $WIKI_CMD setup"
+      command -v git >/dev/null 2>&1 || die "the history is kept with git, which isn't on this machine. Do: install git. You never have to use it yourself"
+      if history_own_git; then die "$(tilde "$WIKIS_DIR") is a git repository, which already keeps every version. There is nothing to turn on."; fi
+      case "${1:-}" in -*) die_usage "usage: $WIKI_CMD history on [<what carries the folder>]" ;; esac
+      by="$(history_app "$*")"
+      f="${WIKIS_DIR:?}/${HISTORY_MARK:?}"
+      for tmp in "$f" "$f-off"; do
+        if [ -e "$tmp" ] || [ -L "$tmp" ]; then
+          history_plain "$tmp" || die "$(tilde "$tmp") isn't a plain file, so it is left alone. Do: look at it and remove it, then run this again"
+        fi
+      done
+      # The same store as before, when it was on before: from the marker, or the one set aside by off.
+      id="$(history_read "$f" id)"
+      history_id_ok "$id" || id="$(history_read "$f-off" id)"
+      history_id_ok "$id" || id="$(LC_ALL=C od -An -N8 -tx1 /dev/urandom 2>/dev/null | LC_ALL=C tr -cd '0123456789abcdef' || true)"
+      history_id_ok "$id" || die "couldn't make an id for the history. Do: run it again"
+      # The folder is one another program writes to: the new file is made only where nothing
+      # is, never through a link someone left under its name.
+      tmp="$f.new.$$"
+      if ! (set -C; { printf '# llm-wiki keeps a history of this folder on this machine. wiki history says more.\n'
+        printf 'id=%s\n' "$id"
+        [ -z "$by" ] || printf 'carried=%s\n' "$by"; } > "$tmp") 2>/dev/null || ! mv -f "$tmp" "$f" 2>/dev/null; then
+        ! history_plain "$tmp" || unlink "$tmp" 2>/dev/null || true
+        die "$(cant_write "$f")"
+      fi
+      history_snap "history turned on"
+      if ! history_git rev-parse -q --verify HEAD >/dev/null 2>&1; then
+        unlink "$f" 2>/dev/null || true
+        die "the history couldn't be started in $(tilde "$HISTORY_DIR"), so it is left off. Do: check that folder is yours to write and has room, then run this again"
+      fi
+      ! history_plain "$f-off" || unlink "$f-off" 2>/dev/null || true
+      setup_mark git
+      store="$(history_store)"
+      ui_item ok "A history of $(tilde "$WIKIS_DIR") is kept on this machine, in $(tilde "$store"). Nothing in it is sent anywhere."
+      [ -z "$by" ] || ui_detail "$by carries the folder to your other devices. Each computer keeps its own history: where the app doesn't carry hidden files, run this once on each."
+      ui_detail "A snapshot is saved at session start, after a compile and at each sync. To see them: $(typed "$WIKI_CMD history")"
+      return 0
+      ;;
+    off)
+      [ $# -eq 1 ] || die_usage "history off takes nothing more"
+      f="${WIKIS_DIR:?}/${HISTORY_MARK:?}"
+      if [ ! -e "$f" ] && [ ! -L "$f" ]; then
+        ui_item ok "The history is already off."
+        return 0
+      fi
+      history_plain "$f" || die "$(tilde "$f") isn't a plain file, so it is left alone. Do: look at it and remove it yourself"
+      store="$(history_store 2>/dev/null || true)"
+      # Kept under another name, so turning it on again finds the same store. Only where that
+      # name is free or a plain file: never moved into a folder or through a link.
+      if { [ ! -e "$f-off" ] && [ ! -L "$f-off" ]; } || history_plain "$f-off"; then
+        mv -f "$f" "$f-off" 2>/dev/null || unlink "$f" 2>/dev/null || die "$(cant_write "$f")"
+      else
+        unlink "$f" 2>/dev/null || die "$(cant_write "$f")"
+      fi
+      ui_item ok "off: no more snapshots are saved."
+      [ -z "$store" ] || [ ! -d "$store" ] || ui_detail "What was kept is still in $(tilde "$store"). Do: remove that folder to delete it"
+      return 0
+      ;;
+  esac
+  if ! history_on; then
+    if history_own_git; then
+      ui_detail "$(tilde "$WIKIS_DIR") is a git repository, which keeps every version itself. This history is for wikis without git."
+    else
+      ui_detail "No history is kept of $(tilde "$WIKIS_DIR"). To start, where an app such as Obsidian Sync carries the folder: $(typed "$WIKI_CMD history on \"Obsidian Sync\"")"
+    fi
+    return 0
+  fi
+  history_git rev-parse -q --verify HEAD >/dev/null 2>&1 || { ui_detail "The history is on, and nothing is saved yet. The next session start saves the first snapshot."; return 0; }
+  case "${1:-}" in
+    "")
+      n="$(history_git rev-list --count HEAD 2>/dev/null || echo 0)"
+      ui_stage HISTORY "$n snapshot$([ "$n" = 1 ] || echo s) of $(tilde "$WIKIS_DIR")" "on this machine only"
+      { history_git log -n 30 --date=format:'%Y-%m-%d %H:%M' --format='%h%x09%ad%x09%s' 2>/dev/null || true; } | while IFS="$TAB" read -r id by f; do
+        ui_detail "$id" "$by" "$(history_shown "$f")"
+      done
+      [ "$n" -le 30 ] || ui_detail "and $((n - 30)) older"
+      ui_detail "What changed in one: $(typed "$WIKI_CMD history <snapshot>"). A file as it was: $(typed "$WIKI_CMD history show <snapshot> <file>")"
+      ;;
+    show)
+      [ $# -eq 3 ] || die_usage "usage: $WIKI_CMD history show <snapshot> <file>"
+      history_id_ok "0000000$2" && [ "${#2}" -ge 4 ] || die_usage "$(history_shown "$2") isn't a snapshot. $WIKI_CMD history lists them."
+      history_git cat-file -e "$2^{commit}" 2>/dev/null || die "there is no snapshot $2. $WIKI_CMD history lists them."
+      f="${3#./}"
+      case "$f" in "" | /* | -* | .. | ../* | */../* | */..) die_usage "name the file from the top of the collection, such as global/wiki/conventions.md" ;; esac
+      [ "$(history_git cat-file -t "$2:$f" 2>/dev/null || true)" = blob ] || die "$(history_shown "$f") wasn't a file in snapshot $2. $WIKI_CMD history $2 lists what changed in it."
+      history_git cat-file blob "$2:$f"
+      ;;
+    *)
+      [ $# -eq 1 ] || die_usage "usage: $WIKI_CMD history [on [<app>] | off | <snapshot> | show <snapshot> <file>]"
+      history_id_ok "0000000$1" && [ "${#1}" -ge 4 ] || die_usage "$(history_shown "$1") isn't a snapshot or a history command. $WIKI_CMD history --help has them."
+      history_git cat-file -e "$1^{commit}" 2>/dev/null || die "there is no snapshot $1. $WIKI_CMD history lists them."
+      ui_stage HISTORY "$(history_shown "$(history_git log -n 1 --date=format:'%Y-%m-%d %H:%M' --format='%h · %ad · %s' "$1" -- 2>/dev/null || true)")"
+      # Names come out quoted by git where they hold anything odd, so each is one line.
+      { history_git show --format= --name-status --no-renames "$1" -- 2>/dev/null || true; } | while IFS="$TAB" read -r id f; do
+        case "$id" in A) id=added ;; D) id=removed ;; *) id=changed ;; esac
+        ui_detail "$id" "$(history_shown "$f")"
+      done
+      ;;
+  esac
+}
+
 cmd_sync() {
   SYNC_REPO=""
   SYNC_LOCK=""
@@ -2760,12 +3027,26 @@ sync_do() {
   elif [ -n "$top" ] && [ -f "$WIKIS_DIR/WIKIS.md" ] && [ "$top" = "$(cd "$WIKIS_DIR" && pwd -P)" ]; then
     repo="$WIKIS_DIR"; path="${root##*/}"
   else
+    # No git of its own, on purpose: an app carries the folder, and a history is kept on this machine.
+    here="$(cd "$root" && pwd -P)"; coll="$(cd "$WIKIS_DIR" 2>/dev/null && pwd -P || true)"
+    case "$here" in
+      "${coll:-/nowhere}"/*)
+        if history_on; then
+          history_snap "${msg:-${root##*/}: update}"
+          case "$HISTORY_SAVED" in
+            1) echo "saved: a snapshot of your wikis, on this machine.$(history_by)" ;;
+            2) echo "The snapshot couldn't be saved this time, so the last one is still the newest. Another session may be saving one: if it happens again, run $WIKI_CMD history to see the last." ;;
+            *) echo "nothing new to save since the last snapshot.$(history_by)" ;;
+          esac
+          return 0
+        fi
+        ;;
+    esac
     if [ -z "$top" ]; then
       # No git at all: a person who never set it up, and may not know the word. One line,
       # because the MCP servers pass on the last one. The command is offered only where it
       # reaches: a wiki really inside the collection, with the collection named when it
       # isn't the default. Real paths, so a link in or out of the collection doesn't fool it.
-      here="$(cd "$root" && pwd -P)"; coll="$(cd "$WIKIS_DIR" 2>/dev/null && pwd -P || true)"
       how=""
       case "$here" in
         "${coll:-/nowhere}"/*)
@@ -5990,14 +6271,68 @@ obsidian_url() {
 
 # obsidian [--no-open]: write the vault's starter settings, unless it has its own,
 # and open the collection in Obsidian.
+# The wiki command as a full path, for a program that doesn't see the shell's PATH.
+obsidian_cmd_path() {
+  local c="$WIKI_CMD"
+  case "$c" in /*) ;; *) c="$(command -v "$c" 2>/dev/null || true)" ;; esac
+  case "$c" in /*) if [ -x "$c" ]; then printf '%s' "$c"; return 0; fi ;; esac
+  printf '%s' "$REPO/wiki.sh"
+}
+
+# obsidian_plugin: put the plugin in the wikis' vault, and in no other. Obsidian loads it
+# from .obsidian/plugins/llm-wiki once community plugins are on, which only the person can
+# do, in Obsidian. It is copied, not linked: a link would follow this checkout's branch.
+obsidian_plugin() {
+  local src="$REPO/obsidian-plugin" dest="$WIKIS_DIR/.obsidian/plugins/llm-wiki" c list="$WIKIS_DIR/.obsidian/community-plugins.json" listed=0
+  # Read by the plugin, which Obsidian starts with no XDG variables of yours: always under the home folder.
+  local cf="$HOME/.config/llm-wiki/obsidian-command"
+  [ -f "$WIKIS_DIR/WIKIS.md" ] || die "$(tilde "$WIKIS_DIR") isn't a wiki collection, so the plugin isn't put there. It goes only in the vault that holds your wikis. Run: $WIKI_CMD setup"
+  [ -f "$src/main.js" ] && [ -f "$src/manifest.json" ] || die "the plugin's files aren't in $(tilde "$src"), so this copy of llm-wiki is incomplete. Run: $WIKI_CMD update"
+  for c in "$WIKIS_DIR/.obsidian" "$WIKIS_DIR/.obsidian/plugins" "$dest"; do
+    [ ! -L "$c" ] || die "$(tilde "$c") is a link, so nothing is put through it. Do: make it a real folder, then run this again"
+  done
+  c="$(obsidian_cmd_path)"
+  case "$c" in *[[:cntrl:]]*) die "the wiki command's path holds a character that can't be kept on one line, so the plugin can't be told where it is: $(tilde "$c" | LC_ALL=C tr -d '\000-\037\177')" ;; esac
+  case "$c" in "$WIKIS_DIR"/*) die "the wiki command is inside the wikis' folder, at $(tilde "$c"), and the plugin never runs anything from there. Do: run this from where llm-wiki is installed" ;; esac
+  mkdir -p "$dest" 2>/dev/null || die "$(cant_write "$dest")"
+  cp "$src/main.js" "$dest/main.js.$$" 2>/dev/null && mv -f "$dest/main.js.$$" "$dest/main.js" 2>/dev/null || die "$(cant_write "$dest/main.js")"
+  cp "$src/manifest.json" "$dest/manifest.json.$$" 2>/dev/null && mv -f "$dest/manifest.json.$$" "$dest/manifest.json" 2>/dev/null || die "$(cant_write "$dest/manifest.json")"
+  # Where the wiki command is: Obsidian is started from the Dock and has no PATH of yours. It is
+  # kept in the home folder, never in the vault, where a sync service could put another in its place.
+  [ ! -L "$HOME/.config/llm-wiki" ] && [ ! -L "$cf" ] || die "$(tilde "$cf") is reached through a link, so it isn't written. Do: make it a real file in a real folder, then run this again"
+  mkdir -p "$HOME/.config/llm-wiki" 2>/dev/null || die "$(cant_write "$cf")"
+  if ! printf '%s\n' "$c" > "$cf.$$" 2>/dev/null || ! mv -f "$cf.$$" "$cf" 2>/dev/null; then die "$(cant_write "$cf")"; fi
+  if [ ! -e "$list" ] && [ ! -L "$list" ]; then
+    if printf '[\n  "llm-wiki"\n]\n' > "$list" 2>/dev/null; then listed=1; fi
+  elif [ -f "$list" ] && ! [ -L "$list" ] && grep -q '"llm-wiki"' "$list" 2>/dev/null; then
+    listed=1
+  fi
+  ui_item ok "The plugin is in $(tilde "$dest")."
+  ui_detail "It runs $(tilde "$c"), which is written in $(tilde "$cf"): on this computer, not in the vault."
+  ui_detail "It is in this vault only, and it runs the wiki command on this vault only."
+  ui_turn
+  ui_step 1 "In Obsidian, open Settings, then Community plugins, and choose Turn on community plugins" "once for this vault"
+  if [ "$listed" = 1 ]; then ui_step 2 "Check that llm-wiki is switched on in the list there" "it is already listed"
+  else ui_step 2 "Switch llm-wiki on in the list there" "your own list of plugins was left as it is"; fi
+  ui_step 3 "Open the command palette and type llm-wiki" "save a note, the inbox, find, what needs attention, compile, sync"
+  ui_next "after an update of llm-wiki, run $WIKI_CMD obsidian --plugin again, then restart Obsidian"
+}
+
 cmd_obsidian() {
   local open=1 f="$WIKIS_DIR/.obsidian/app.json" dir
   while [ $# -gt 0 ]; do
     case "$1" in
       --no-open) open=0 ;;
+      --plugin)
+        [ $# -eq 1 ] || die_usage "obsidian --plugin takes nothing more"
+        [ -d "$WIKIS_DIR" ] || die "no wikis at $(tilde "$WIKIS_DIR")"
+        obsidian_plugin
+        return 0
+        ;;
       -h | --help)
         cat <<EOF
 Usage: $WIKI_CMD obsidian [--no-open]
+       $WIKI_CMD obsidian --plugin
 
 Browse the wikis in Obsidian, as one vault over $(tilde "$WIKIS_DIR"). Writes the vault's
 starter settings, unless it has settings of its own, then opens it. The settings make
@@ -6007,10 +6342,14 @@ to change. To add something yourself, type a note in the inbox folder it makes: 
 session takes it into the shared wiki's notes ($WIKI_CMD inbox --help).
 
   --no-open  Write the settings and stop.
+  --plugin   Put the llm-wiki plugin in this vault: commands in Obsidian for saving a
+             note, the inbox, finding across wikis, what needs attention, compiling
+             and syncing. It runs the wiki command, so it works on a computer, not a
+             phone. You turn community plugins on in Obsidian yourself.
 EOF
         return 0
         ;;
-      *) die_usage "obsidian options: --no-open" ;;
+      *) die_usage "obsidian options: --no-open, --plugin" ;;
     esac
     shift
   done
@@ -6029,6 +6368,9 @@ EOF
   [ ! -f "$WIKIS_DIR/.gitignore" ] || ignore_obsidian "$WIKIS_DIR/.gitignore"
   if [ ! -e "$WIKIS_DIR/inbox" ] && is_wiki "$WIKIS_DIR/$SHARED" && mkdir "$WIKIS_DIR/inbox" 2>/dev/null; then
     echo "inbox: made $(tilde "$WIKIS_DIR/inbox"). A note you type there is taken into the $SHARED wiki's notes by the next session."
+  fi
+  if ! history_own_git && ! history_on; then
+    echo "history: this folder has no git, so no earlier version of a page is kept. If an app such as Obsidian Sync carries it to your other devices, keep them on this machine: $WIKI_CMD history on \"Obsidian Sync\""
   fi
   [ "$open" = 1 ] || return 0
   dir="$(obsidian_dir)"
@@ -9425,7 +9767,7 @@ cmd_extensions() {
 # Tab completion. `completion zsh|bash` prints a small script for the shell, which
 # asks `__complete` for candidates on every Tab. The candidates live here, so a
 # plugin update can't leave completion stale.
-COMMANDS="setup uninstall init new update start collections deps permissions seed harvest capture inbox lock compile helper log sync index lint pending cover workflows which list status find stale patterns open pages skills tips report stats feedback news obsidian extensions tour mcp delegation upgrade unlock claude link journal standup completion"
+COMMANDS="setup uninstall init new update start collections deps permissions seed harvest capture inbox history lock compile helper log sync index lint pending cover workflows which list status find stale patterns open pages skills tips report stats feedback news obsidian extensions tour mcp delegation upgrade unlock claude link journal standup completion"
 RANGES="lastworkday yesterday today week lastweek 7d 14d 30d"
 
 wiki_names() {
@@ -9471,6 +9813,9 @@ cmd_complete() {
     lint) wiki_names; echo --all ;;
     open) [ "$i" -eq 2 ] && echo --data; [ "$i" -eq 3 ] && wiki_names ;;
     pages) [ "$i" -eq 2 ] && wiki_names; echo --data ;;
+    history)
+      [ "$i" -ne 2 ] || printf 'on\noff\nshow\n'
+      ;;
     extensions)
       [ "$i" -eq 2 ] && printf 'path\nadd\nremove\nsetup\nsettings\nset\nlog\ntick\nevery\nschedule\noffer\ncerts\n'
       if [ "$i" -eq 3 ] && { [ "${2:-}" = log ] || [ "${2:-}" = every ] || [ "${2:-}" = setup ] || [ "${2:-}" = settings ] || [ "${2:-}" = set ]; }; then extension_names; return 0; fi
@@ -9493,7 +9838,7 @@ cmd_complete() {
     tips) printf -- '--mute\n--unmute\n' ;;
     report) printf -- '--since\n' ;;
     news) printf -- '--all\n' ;;
-    obsidian) printf -- '--no-open\n' ;;
+    obsidian) printf -- '--no-open\n--plugin\n' ;;
     stats) printf '%s\n' $RANGES ;;
     delegation)
       if [ "$i" -eq 2 ]; then printf 'off\nask\nauto\nlog\n'
@@ -10761,6 +11106,23 @@ setup_git() {
     if in_git_repo "$WIKIS_DIR"; then
       ui_item ok "The collection is a git repo. Agents commit and push their wiki changes to it."
     else
+      if history_on; then
+        ui_item ok "A history of your wikis is kept on this machine.$(history_by) Git isn't needed."
+        setup_mark git
+        return 0
+      fi
+      # Asked only where the wikis are already an Obsidian vault: such a person may never have heard of git.
+      if [ "$(obsidian_state)" != none ]; then
+        ui_detail "Your wikis are an Obsidian vault. If an app such as Obsidian Sync or iCloud already carries that folder to your"
+        ui_detail "other devices, git isn't needed: llm-wiki keeps every earlier version on this machine instead, and sends nothing anywhere."
+        if ask_yn "Does an app carry this folder to your other devices?" n; then
+          ask "Which one" "Obsidian Sync"
+          # In a subshell: a history that can't be started must not end setup.
+          if (cmd_history on "$(history_app "$ANSWER")") | sed 's/^/  /'; then return 0; fi
+          ui_item warn "The history wasn't turned on. Do: fix what it said, then run $(typed "$WIKI_CMD history on")"
+          return 0
+        fi
+      fi
       ui_detail "Git is a free tool that keeps every earlier version of your notes, so a change can be undone and nothing is lost."
       ui_detail "It is also how notes reach your other computers or a team. Saying yes sends nothing anywhere: it all stays on this computer."
       if ask_yn "Keep a history of your wikis with git?" y; then
@@ -11569,7 +11931,7 @@ guide_entry() {
       else echo "The wikis get a folder of their own, $(tilde "$WIKIS_DIR"), apart from the folders the user works in. It doesn't exist yet, and nothing else can be set without it. With the user's yes, create it: $c init. Then run $c setup --guide again: the other topics appear once it exists"; fi
       ;;
     workflows) echo "Where conversations that start outside a project's own folder belong. Ask where the user usually starts: one project's folder (nothing to record), a folder for each task or ticket that holds copies of projects, or one folder for everything. Then ask whether they also work another way. Change, by answer: task folders, $c workflows add '<folder>/*' inside. One folder, $c workflows add '<folder>' <wiki>|none, no /* at the end. A project's folder, $c workflows skip. Then try it: $c workflows check <folder>" ;;
-    git) echo "Whether the collection is a git repo with a remote, so it syncs. Terminal only: $c setup git" ;;
+    git) echo "Whether the collection is a git repo with a remote, so it syncs. Terminal only: $c setup git. With no git, where an app such as Obsidian Sync carries the folder, a history kept on this machine takes its place: $c history on \"<the app>\"" ;;
     git.identity) echo "The name and email on commits in the collection. Terminal only: $c setup git.identity" ;;
     claude) echo "The wiki line in ~/.claude/CLAUDE.md. Terminal only: $c setup claude" ;;
     permissions) echo "Claude Code allow rules, so wiki commands that write don't prompt. Terminal only: $c setup permissions" ;;
@@ -11819,8 +12181,8 @@ $(un_collections)
 UNEOF
   if un_inside "$REPO" "$d"; then printf 'this copy of llm-wiki is in it'; return 0; fi
   case "$2" in
-    settings) set -- setup extensions-on collections theme palette tips completion.zsh completion.bash helper github gitlab jenkins jira confluence delegation compile feedback extensions-tick harvested atlassian trusted-certs.pem ;;
-    state) set -- notices offers extensions compile recall reminders news-seen feedback schedule.log ;;
+    settings) set -- setup extensions-on collections theme palette tips completion.zsh completion.bash helper github gitlab jenkins jira confluence delegation compile feedback extensions-tick harvested atlassian trusted-certs.pem obsidian-command ;;
+    state) set -- notices offers extensions compile recall reminders news-seen feedback schedule.log history ;;
     *) set -- helper extensions ;;
   esac
   for n in "$@"; do
@@ -12844,6 +13206,7 @@ case "$cmd" in
   compile) cmd_compile "$@"; exit 0 ;;
   helper) cmd_helper "$@"; exit 0 ;;
   obsidian) cmd_obsidian "$@"; exit 0 ;;
+  history) cmd_history "$@"; exit 0 ;;
   extensions) cmd_extensions "$@"; exit 0 ;;
   log) cmd_log "$@"; exit 0 ;;
   sync) cmd_sync "$@"; exit 0 ;;

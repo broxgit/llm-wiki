@@ -1,0 +1,9 @@
+{
+  "id": "llm-wiki",
+  "name": "llm-wiki",
+  "version": "0.1.0",
+  "minAppVersion": "1.4.0",
+  "description": "Buttons for your llm-wiki wikis: save a note, take in the inbox, search every wiki, see what needs attention, compile and sync. It runs the wiki command on this computer.",
+  "author": "llm-wiki",
+  "isDesktopOnly": true
+}

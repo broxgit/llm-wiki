@@ -4,6 +4,20 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2027-01-14: llm-wiki's commands inside Obsidian
+
+- `wiki obsidian --plugin` puts a plugin in your wikis' vault: save a note, take in the inbox, find, see what needs attention, compile, sync.
+- The status bar shows how many notes wait, and a page says so when an agent is compiling its wiki.
+- It runs the `wiki` command on this computer, on that vault only, so it works on a computer and not on a phone.
+- Do: run `wiki obsidian --plugin`, then in Obsidian turn on community plugins and switch llm-wiki on. Run it again after an update.
+
+## 2027-01-13: wikis without git, for a vault that Obsidian Sync carries
+
+- `wiki history on "Obsidian Sync"` keeps every earlier version of your wikis on this machine, for a folder that an app carries and git doesn't.
+- `wiki sync` then saves a snapshot and stops saying the wikis have no backup, and `wiki setup` stops asking about git.
+- `wiki history` lists the snapshots, and `wiki history show <snapshot> <file>` prints a page as it was.
+- Do: run `wiki history on` once on each computer. The history never leaves the machine it is on.
+
 ## 2027-01-12: Jira, Confluence and Jenkins behind a company proxy
 
 - When a company proxy's certificate is refused, Jira, Confluence and Jenkins now say why, and name the command that fixes it.
