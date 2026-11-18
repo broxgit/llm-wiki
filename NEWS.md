@@ -4,6 +4,11 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2027-01-19: files that look like a git repository can't hijack a sync
+
+- Git repository files pushed into a wiki (`HEAD`, `objects/`, `refs/`, `config`) could run a command at `wiki sync` and redirect the push. Not any more.
+- Git is now asked about the collection, not the wiki, and is told to take a repository only where it is pointed at one.
+
 ## 2027-01-18: a wiki can't be called inbox, and an inbox of junk no longer blocks a note
 
 - `wiki new inbox` and `wiki new journal` are refused: a wiki made in those folders had its own files taken as notes.

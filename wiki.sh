@@ -7,6 +7,52 @@ set -euo pipefail
 # script partway (reproduced: 10 of 40 runs, none with a heredoc). Empty output gives one
 # blank line, so a loop needs its own guard. A smoke test keeps the form out.
 
+# Git never takes a folder for a repository it wasn't pointed at. A folder that holds HEAD,
+# objects/ and refs/ is one to git, which then reads the config beside them, and a config can
+# name a command to run and a remote to push to. Those are ordinary file names, so a push can
+# carry them into a wiki. safe.bareRepository=explicit (git 2.38 on) makes git refuse such a
+# folder unless it is named with --git-dir or GIT_DIR. It goes to every git this script
+# starts, and to what it starts in turn, through the environment, after whatever is there.
+git_safe_n="${GIT_CONFIG_COUNT:-0}"
+case "$git_safe_n" in '' | *[!0-9]*) git_safe_n=0 ;; esac
+# As git reads it, in base ten: 010 is ten, and bash would take it for eight.
+git_safe_n=$((10#$git_safe_n))
+# Ours has to be the last word: a later setting of the same key wins, and so does one in a
+# file a later include names. So it is added unless it is already the last one there, which
+# it is when one wiki command starts another.
+git_safe_have=0
+if [ "$git_safe_n" -gt 0 ]; then
+  git_safe_k="GIT_CONFIG_KEY_$((git_safe_n - 1))"; git_safe_v="GIT_CONFIG_VALUE_$((git_safe_n - 1))"
+  if [ "$(printf '%s' "${!git_safe_k:-}" | LC_ALL=C tr 'A-Z' 'a-z')" = safe.barerepository ] && [ "${!git_safe_v:-}" = explicit ]; then git_safe_have=1; fi
+fi
+if [ "$git_safe_have" = 0 ]; then
+  export "GIT_CONFIG_KEY_$git_safe_n=safe.bareRepository" "GIT_CONFIG_VALUE_$git_safe_n=explicit"
+  export GIT_CONFIG_COUNT=$((git_safe_n + 1))
+fi
+unset git_safe_n git_safe_have git_safe_k git_safe_v
+
+# A git older than 2.38 doesn't know that setting, and something this script starts may drop
+# the environment. So this script also looks for itself before it asks git about a folder:
+# git_planted <folder> is true where git, starting there and walking up, would come to a
+# folder that holds HEAD, objects/ and refs/ before it came to one with a real .git. Git is
+# then not asked, and the folder reads as being in no repository.
+git_planted() {
+  local d
+  d="$(cd "$1" 2>/dev/null && pwd -P)" || return 1
+  while :; do
+    if [ -f "$d/.git" ] || [ -f "$d/.git/HEAD" ]; then return 1; fi
+    if [ -e "$d/HEAD" ] && [ -d "$d/objects" ] && [ -d "$d/refs" ]; then return 0; fi
+    case "$d" in / | '') return 1 ;; esac
+    d="${d%/*}"
+    [ -n "$d" ] || d=/
+  done
+}
+# Every `git -C <folder>` below goes through this. 128 is what git itself gives for no repository.
+git() {
+  if [ "${1:-}" = -C ] && [ $# -ge 2 ] && git_planted "$2"; then return 128; fi
+  command git "$@"
+}
+
 # Follow symlinks, such as ~/.local/bin/wiki, to the real script: template/ sits beside it.
 src="${BASH_SOURCE[0]}"
 while [ -L "$src" ]; do
@@ -3145,8 +3191,21 @@ sync_do() {
   done
   [ -n "$wiki" ] || wiki="$(sync_default_wiki)"
   root="$(wiki_root "$wiki")"
-  top="$(git -C "$root" rev-parse --show-toplevel 2>/dev/null || true)"
-  if [ -n "$top" ] && [ "$top" = "$(cd "$root" && pwd -P)" ]; then
+  # Which repository a wiki is in is asked of the collection, not of the wiki: then nothing
+  # among the wiki's own files, which a push can bring, has a say in it. A wiki that is a
+  # repository of its own has a real .git, which a push can't carry, and that is found with
+  # a file test before git is asked anything from inside it. So is a wiki kept somewhere else.
+  here="$(cd "$root" && pwd -P)"; coll="$(cd "$WIKIS_DIR" 2>/dev/null && pwd -P || true)"
+  case "$here" in
+    "${coll:-/nowhere}"/*)
+      top=""
+      # A real one: a .git folder with a HEAD, or the .git file a worktree or a submodule has.
+      if [ -f "$root/.git" ] || [ -f "$root/.git/HEAD" ]; then top="$(git -C "$root" rev-parse --show-toplevel 2>/dev/null || true)"; fi
+      [ -n "$top" ] || top="$(git -C "$WIKIS_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+      ;;
+    *) top="$(git -C "$root" rev-parse --show-toplevel 2>/dev/null || true)" ;;
+  esac
+  if [ -n "$top" ] && [ "$top" = "$here" ]; then
     repo="$root"; path="."
   elif [ -n "$top" ] && [ -f "$WIKIS_DIR/WIKIS.md" ] && [ "$top" = "$(cd "$WIKIS_DIR" && pwd -P)" ]; then
     repo="$WIKIS_DIR"; path="${root##*/}"
