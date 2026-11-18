@@ -3,9 +3,12 @@
 # Everything runs in a temp folder with its own HOME, so real wikis and settings are
 # never touched. Works with the bash that ships on macOS (3.2) and on Linux.
 #
-#   tests/smoke.sh              the whole suite
-#   tests/smoke.sh --part <n>   one part of it, as CI runs it: one job per part
-#   tests/smoke.sh --list       which part each section is in
+#   tests/smoke.sh                     the whole suite
+#   tests/smoke.sh --section <name>    one section, and the sections it uses. Before a commit,
+#                                      run the ones that cover what you changed: CI runs the rest.
+#                                      Give it more than once for several.
+#   tests/smoke.sh --part <n>          one part of it, as CI runs it: one job per part
+#   tests/smoke.sh --list              which part each section is in
 #
 # SMOKE_TIMES=1 prints how long each section took, for balancing the parts.
 # tests/smoke-parts.sh checks that the parts add up to the whole suite.
@@ -80,6 +83,7 @@ read -r -d '' PARTS <<'TABLE' || true
 3 | Size budget |
 3 | Uninstall | Collection
 3 | What CI skips |
+2 | The suite itself |
 3 | Obsidian plugin |
 2 | History without git |
 2 | Trusted certificates |
@@ -87,14 +91,24 @@ read -r -d '' PARTS <<'TABLE' || true
 4 | The released helper | Session hook
 TABLE
 PART=""
-case "${1:-}" in
-  "") ;;
-  --part) PART="${2:-}" ;;
-  --list) printf '%s\n' "$PARTS" | awk -F ' *[|] *' 'NF >= 2 { print $1 "\t" $2 }'; exit 0 ;;
-  *) printf 'usage: tests/smoke.sh [--part <n> | --list]\n' >&2; exit 2 ;;
-esac
+# The sections asked for by name, each ended by a |, which no name holds: it divides the table.
+ONLY=""
+SMOKE_USAGE='usage: tests/smoke.sh [--section <name>]... | --part <n> | --list'
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --part) [ $# -ge 2 ] && [ -z "$ONLY" ] || { printf '%s\n' "$SMOKE_USAGE" >&2; exit 2; }; PART="$2"; shift 2 ;;
+    --section)
+      [ $# -ge 2 ] && [ -n "$2" ] && [ -z "$PART" ] || { printf '%s\n' "$SMOKE_USAGE" >&2; exit 2; }
+      case "$2" in *"|"*) printf 'no section called "%s". tests/smoke.sh --list names them\n' "$2" >&2; exit 2 ;; esac
+      ONLY="$ONLY$2|"
+      shift 2
+      ;;
+    --list) printf '%s\n' "$PARTS" | awk -F ' *[|] *' 'NF >= 2 { print $1 "\t" $2 }'; exit 0 ;;
+    *) printf '%s\n' "$SMOKE_USAGE" >&2; exit 2 ;;
+  esac
+done
 # Each section's mode in this run: run, setup or skip. A use must name an earlier section.
-PLAN="$(printf '%s\n' "$PARTS" | awk -F ' *[|] *' -v part="$PART" '
+PLAN="$(printf '%s\n' "$PARTS" | awk -F ' *[|] *' -v part="$PART" -v only="$ONLY" '
   function use(s,   i, k, a) {
     k = split(uses[s], a, / *, */)
     for (i = 1; i <= k; i++) if (!(a[i] in mode)) { mode[a[i]] = "setup"; use(a[i]) }
@@ -102,11 +116,16 @@ PLAN="$(printf '%s\n' "$PARTS" | awk -F ' *[|] *' -v part="$PART" '
   NF >= 2 { n++; name[n] = $2; p[$2] = $1; uses[$2] = $3; at[$2] = n; if ($1 == part) found = 1 }
   END {
     if (part != "" && !found) { print "no part " part " in the table at the top of tests/smoke.sh" > "/dev/stderr"; exit 2 }
+    k = split(only, want, /[|]/)
+    for (i = 1; i <= k; i++) if (want[i] != "") {
+      if (!(want[i] in at)) { print "no section called \"" want[i] "\". tests/smoke.sh --list names them" > "/dev/stderr"; exit 2 }
+      asked[want[i]] = 1; some = 1
+    }
     for (i = 1; i <= n; i++) {
       k = split(uses[name[i]], a, / *, */)
       for (j = 1; j <= k; j++) if (!(a[j] in at) || at[a[j]] >= i) { print name[i] " uses \"" a[j] "\", which isn'"'"'t a section before it" > "/dev/stderr"; exit 2 }
     }
-    for (i = 1; i <= n; i++) if (part == "" || p[name[i]] == part) { mode[name[i]] = "run"; use(name[i]) }
+    for (i = 1; i <= n; i++) if (some ? (name[i] in asked) : (part == "" || p[name[i]] == part)) { mode[name[i]] = "run"; use(name[i]) }
     for (i = 1; i <= n; i++) print (name[i] in mode ? mode[name[i]] : "skip") "\t" name[i]
   }')" || exit 2
 
@@ -173,20 +192,49 @@ clock() { perl -MTime::HiRes=time -e 'printf "%.1f", time'; }
 # __pycache__ folders, a built helper in bin/, an editor's folder. Copying the folder as it
 # stood, with tar, read those while another part of the suite was writing them, and four
 # checks of `wiki update` in a clone failed now and then when parts ran side by side.
+#
+# A file git doesn't know yet is copied too, so new work is tested before it is added. But
+# not something that only happens to sit in the checkout: a file over COPY_FILE_KB, or a
+# folder git knows nothing in that holds more than COPY_DIR_FILES files. A download left in
+# a checkout (400 MB, 32,000 files) was copied seven times a run before this.
+COPY_FILE_KB=2048
+COPY_DIR_FILES=300
+# copy_list <file>: the files copy_repo copies from $REPO, each ended by a NUL, written once.
+copy_list() {
+  local out="$1" f n
+  (
+    cd "$REPO" || exit 1
+    git ls-files -c -z
+    # --directory gives a folder git knows nothing in as one entry, so a huge one costs one line.
+    git ls-files -o --exclude-standard --directory -z | while IFS= read -r -d '' f; do
+      case "$f" in
+        */)
+          n="$(find "$f" -type f 2>/dev/null | head -n "$((COPY_DIR_FILES + 1))" | wc -l | tr -d ' ')"
+          [ "$n" -le "$COPY_DIR_FILES" ] || continue
+          git ls-files -o --exclude-standard -z -- "$f" | while IFS= read -r -d '' n; do
+            [ -n "$(find "$n" -prune -size +"$COPY_FILE_KB"k 2>/dev/null)" ] || printf '%s\0' "$n"
+          done
+          ;;
+        *) [ -n "$(find "$f" -prune -size +"$COPY_FILE_KB"k 2>/dev/null)" ] || printf '%s\0' "$f" ;;
+      esac
+    done
+  ) > "$out"
+}
 copy_repo() {
-  local dest="$1" f x
+  local dest="$1" f x list="$T/copy-list.${REPO##*/}"
   shift
   mkdir -p "$dest" || return 1
   if ! git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     (cd "$REPO" && tar cf - --exclude .git --exclude tests .) | (cd "$dest" && tar xf -)
     return
   fi
-  (cd "$REPO" && git ls-files -co --exclude-standard -z | while IFS= read -r -d '' f; do
+  [ -s "$list" ] || copy_list "$list"
+  (cd "$REPO" && while IFS= read -r -d '' f; do
     case "$f" in tests/*) continue ;; esac
     for x in "$@"; do case "$f" in "$x"/*) continue 2 ;; esac; done
     [ -e "$f" ] || [ -L "$f" ] || continue
     printf '%s\0' "$f"
-  done | tar cf - --null -T -) | (cd "$dest" && tar xf -)
+  done < "$list" | tar cf - --null -T -) | (cd "$dest" && tar xf -)
 }
 
 # section_time: how long the section that just ended took, with SMOKE_TIMES=1.
@@ -205,7 +253,7 @@ section() {
       section_mode=run
       printf '\n# %s\n' "$1"
       bad "the section has a part in the table at the top of tests/smoke.sh"
-      [ -z "$PART" ] || return 1
+      [ -z "$PART$ONLY" ] || return 1
       ;;
   esac
 }
@@ -10796,6 +10844,46 @@ else
   skipped "trusting an authority against a server (openssl isn't installed)"
 fi
 rm -f "$TRUSTED"
+fi
+
+if section "The suite itself"; then
+# What the suite copies of this checkout, and running one section of it.
+SU="$T/suite-self"
+mkdir -p "$SU/repo/src" "$SU/repo/tests" "$SU/repo/new" "$SU/repo/download/deep"
+git -C "$SU/repo" init -q
+printf 'a\n' > "$SU/repo/src/known.txt"
+printf 't\n' > "$SU/repo/tests/t.sh"
+git -C "$SU/repo" add -A >/dev/null 2>&1
+git -C "$SU/repo" commit -q -m first >/dev/null 2>&1
+printf 'n\n' > "$SU/repo/new/work.txt"
+printf 'n\n' > "$SU/repo/src/also-new.txt"
+printf 'x\n' > "$SU/repo/.ignored-by-nothing"
+i=0; while [ "$i" -lt 320 ]; do printf 'x\n' > "$SU/repo/download/deep/f$i"; i=$((i + 1)); done
+dd if=/dev/zero of="$SU/repo/big.bin" bs=1024 count=3000 2>/dev/null
+dd if=/dev/zero of="$SU/repo/new/big-too.bin" bs=1024 count=3000 2>/dev/null
+printf 'ignored/\n' > "$SU/repo/.gitignore"
+mkdir -p "$SU/repo/ignored" && printf 'x\n' > "$SU/repo/ignored/i.txt"
+(REPO="$SU/repo"; copy_repo "$SU/copy")
+check "a copy of the checkout holds what git knows" test -f "$SU/copy/src/known.txt"
+check "and new work git doesn't know yet, in a folder it knows and in a new one" bash -c "test -f '$SU/copy/src/also-new.txt' && test -f '$SU/copy/new/work.txt'"
+check "but not a folder of hundreds of files that only sits in the checkout" test ! -e "$SU/copy/download"
+check "nor a large file, at the top or in a new folder" bash -c "! test -e '$SU/copy/big.bin' && ! test -e '$SU/copy/new/big-too.bin'"
+check "nor the tests, nor what git ignores" bash -c "! test -e '$SU/copy/tests' && ! test -e '$SU/copy/ignored'"
+(REPO="$SU/repo"; copy_repo "$SU/copy2" new)
+check "a path named to leave out is left out" bash -c "test -f '$SU/copy2/src/known.txt' && ! test -e '$SU/copy2/new'"
+dd if=/dev/zero of="$SU/repo/src/known.txt" bs=1024 count=3000 2>/dev/null
+(REPO="$SU/repo"; rm -f "$T/copy-list.repo"; copy_repo "$SU/copy3")
+check "a large file git knows is still copied: only what git doesn't know is weighed" test -s "$SU/copy3/src/known.txt"
+# One section by name.
+out="$("$REPO/tests/smoke.sh" --section "What moved to llm-relay" 2>&1)"; code=$?
+[ "$code" = 0 ] && [ "$(printf '%s\n' "$out" | grep -c '^# ')" = 1 ] && case "$out" in *"# What moved to llm-relay"*" passed, 0 failed"*) true ;; *) false ;; esac && ok "--section runs that section and no other" || bad "--section runs that section and no other" "exit $code: $(printf '%s\n' "$out" | grep '^# \|passed')"
+out="$("$REPO/tests/smoke.sh" --section "What moved to llm-relay" --section "News" 2>&1 | grep '^# ' | tr '\n' ' ')"
+check "given twice, it runs both, in the suite's order" test "$out" = "# News # What moved to llm-relay "
+out="$("$REPO/tests/smoke.sh" --section "Nothing Like This" 2>&1)"; code=$?
+[ "$code" = 2 ] && case "$out" in *'no section called "Nothing Like This". tests/smoke.sh --list names them'*) true ;; *) false ;; esac && ok "a name that is no section exits 2 and says how to list them" || bad "a name that is no section exits 2 and says how to list them" "exit $code: $out"
+check "--section with no name exits 2" bash -c "'$REPO/tests/smoke.sh' --section >/dev/null 2>&1; [ \$? = 2 ]"
+check "--section and --part together exit 2" bash -c "'$REPO/tests/smoke.sh' --part 2 --section News >/dev/null 2>&1; [ \$? = 2 ]"
+check "an option it doesn't know exits 2" bash -c "'$REPO/tests/smoke.sh' --bogus >/dev/null 2>&1; [ \$? = 2 ]"
 fi
 
 if section "History without git"; then
