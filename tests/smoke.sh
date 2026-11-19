@@ -11468,18 +11468,22 @@ h4g a remote add origin "$H4/team.git"
 h4plant "$H4/a/wikis/demo" "$H4/PROOF"
 h4plant "$H4/a/wikis/demo/wiki/deep/down" "$H4/PROOF-DEEP"
 printf 'A private page of the team.\n' > "$H4/a/wikis/demo/wiki/private.md"
-h4g a add -A && h4g a commit -q --no-verify -m all && h4g a push -q -u origin HEAD 2>/dev/null
+h4g a add -A
+out="$(h4g a commit -q -m all 2>&1)"; code=$?
+[ "$code" != 0 ] && case "$out" in *"commit refused. demo holds HEAD, objects/ and refs/"*) true ;; *) false ;; esac && ok "the collection's hook refuses a commit that adds the files of a repository" || bad "the collection's hook refuses a commit that adds the files of a repository" "exit $code: $out"
+# Someone who goes round the hook, or has none, still gets them to the remote.
+h4g a commit -q --no-verify -m all && h4g a push -q -u origin HEAD 2>/dev/null
 env HOME="$H4/b" git clone -q "$H4/team.git" "$H4/b/wikis" 2>/dev/null
 check "the second machine has the wiki, with the planted files in it" test -f "$H4/b/wikis/demo/config"
 rm -f "$H4/PROOF" "$H4/PROOF-DEEP"
 printf 'A note.\n' | h4w b capture demo a-note >/dev/null 2>&1
-out="$(h4w b sync demo -m "demo: capture 1 note" 2>&1)"
+out="$(h4w b sync demo -m "demo: capture 1 note" 2>&1)"; code=$?
 check "sync runs no command that a pushed config names" test ! -e "$H4/PROOF"
 check "nor one planted two folders down in the wiki" test ! -e "$H4/PROOF-DEEP"
-case "$out" in *"committed: demo: capture 1 note"*"synced: "*) ok "the note is committed and pushed" ;; *) bad "the note is committed and pushed" "$out" ;; esac
-check "to the team's remote, which is the collection's" bash -c "git --git-dir='$H4/team.git' ls-tree -r --name-only HEAD | grep -q 'demo/raw/.*a-note'"
+[ "$code" = 1 ] && case "$out" in *"nothing was synced. demo holds HEAD, objects/ and refs/"*"Do: look at who added them, and remove them"*) true ;; *) false ;; esac && ok "sync refuses the wiki, names the files and says what to do" || bad "sync refuses the wiki, names the files and says what to do" "exit $code: $out"
+check "the note stays here, uncommitted" bash -c "! git --git-dir='$H4/team.git' ls-tree -r --name-only HEAD | grep -q 'a-note'"
 check "and nothing went to the remote the planted config names" test -z "$(git --git-dir="$H4/elsewhere.git" for-each-ref | head -n 1)"
-lacks "the wiki isn't taken for a repository of its own" "to origin for the first time" printf '%s\n' "$out"
+expect "status names the wiki and the files" "git files: demo holds HEAD, objects/ and refs/" h4w b status
 # The other commands, from the Bash and from the helper where there is one.
 for c in "start demo" "status" "pending" "find note" "lint demo" "index demo --check"; do
   # shellcheck disable=SC2086
@@ -11527,14 +11531,24 @@ printf '#!/bin/sh\nunset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 GI
 h4old() { PATH="$H4/oldgit:$PATH" h4w "$@"; }
 rm -f "$H4/PROOF" "$H4/PROOF-DEEP"
 printf 'Another note.\n' | h4old b capture demo b-note >/dev/null 2>&1
-out="$(h4old b sync demo -m "demo: capture another" 2>&1)"
-case "$out" in *"committed: demo: capture another"*"synced: "*) ok "with a git that doesn't know the setting, the note still goes to the team's remote" ;; *) bad "with a git that doesn't know the setting, the note still goes to the team's remote" "$out" ;; esac
+h4old b sync demo -m "demo: capture another" >/dev/null 2>&1 || true
 h4old b upgrade --all >/dev/null 2>&1 || true
 h4old b status >/dev/null 2>&1 || true
 (cd "$H4/b/wikis/demo" && h4old b which >/dev/null 2>&1) || true
 (cd "$H4/b/wikis/demo/wiki/deep/down" && LLM_WIKI_NO_GO=1 h4old b which >/dev/null 2>&1) || true
 check "and nothing planted ran: not at sync, upgrade or status, nor from inside the wiki" bash -c "! test -e '$H4/PROOF' && ! test -e '$H4/PROOF-DEEP'"
 check "no hook was put among the wiki's planted files" test ! -e "$H4/b/wikis/demo/hooks/pre-commit"
+# With the top ones gone, the ones two folders down are found and named. With those gone, it syncs.
+rm -rf "$H4/b/wikis/demo/HEAD" "$H4/b/wikis/demo/objects" "$H4/b/wikis/demo/refs" "$H4/b/wikis/demo/config"
+out="$(h4old b sync demo -m "demo: two notes" 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"nothing was synced. demo/wiki/deep/down holds HEAD"*) true ;; *) false ;; esac && ok "files planted two folders down are named where they are" || bad "files planted two folders down are named where they are" "exit $code: $out"
+rm -rf "$H4/b/wikis/demo/wiki/deep"
+out="$(h4old b sync demo -m "demo: two notes" 2>&1)"
+case "$out" in *"committed: demo: two notes"*"synced: "*) ok "with them removed, the notes are committed and pushed" ;; *) bad "with them removed, the notes are committed and pushed" "$out" ;; esac
+check "to the team's remote, which is the collection's" bash -c "git --git-dir='$H4/team.git' ls-tree -r --name-only HEAD | grep -q 'demo/raw/.*a-note'"
+lacks "the wiki was never taken for a repository of its own" "to origin for the first time" printf '%s\n' "$out"
+check "and still nothing went to the remote the planted config named" test -z "$(git --git-dir="$H4/elsewhere.git" for-each-ref | head -n 1)"
+lacks "status has nothing more to say of it" "git files:" h4w b status
 # A stray .git that is no repository, in a wiki of a collection kept in git, doesn't cut the wiki off.
 : > "$H4/b/wikis/global/.git"
 printf '# G\n' > "$H4/b/wikis/global/wiki/g.md"
@@ -11548,6 +11562,86 @@ h4w c new own --git >/dev/null 2>&1
 printf '# Own\n' > "$H4/c/wikis/own/wiki/own.md"
 out="$(h4w c sync own -m "own: a page" 2>&1)"
 case "$out" in *"committed: own: a page"*) ok "a wiki with a .git of its own still syncs as its own repository" ;; *) bad "a wiki with a .git of its own still syncs as its own repository" "$out" ;; esac
+# The second door: a collection kept without git, which an app carries, with a history. A .git
+# folder that the app brings in is data there, not a repository.
+mkdir -p "$H4/d"
+h4w d init >/dev/null 2>&1
+h4w d new demo >/dev/null 2>&1
+h4w d history on "A Cloud Drive" >/dev/null 2>&1
+printf 'One.\n' | h4w d capture demo one >/dev/null 2>&1
+h4w d sync demo >/dev/null 2>&1
+env HOME="$H4/d" git init -q "$H4/planted" 2>/dev/null
+rm -rf "$H4/planted/.git/hooks"
+printf '[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tfsmonitor = "touch %s; false"\n' "$H4/PROOF2" > "$H4/planted/.git/config"
+cp -R "$H4/planted/.git" "$H4/d/wikis/.git"
+printf 'Two.\n' | h4w d capture demo two >/dev/null 2>&1
+out="$(h4w d sync demo 2>&1)"
+check "a .git copied into a collection that keeps a history runs nothing at sync" test ! -e "$H4/PROOF2"
+case "$out" in *"note: a .git has appeared in "*"It is left alone and nothing in it is run."*"saved: a snapshot"*) ok "sync says it appeared, and the history keeps saving" ;; *) bad "sync says it appeared, and the history keeps saving" "$out" ;; esac
+expect "session start says so too" "git: a .git has appeared in" h4w d start demo
+expect "and status, with how to choose" "If you set git up there yourself and mean to use it, run " h4w d status
+expect "wiki history still lists the snapshots" "snapshot" h4w d history
+lacks "and doesn't say the collection is a git repository" "is a git repository" h4w d history
+(cd "$H4/d/wikis/demo" && h4w d which >/dev/null 2>&1) || true
+h4w d upgrade --all >/dev/null 2>&1 || true
+PATH="$H4/oldgit:$PATH" h4w d sync demo >/dev/null 2>&1 || true
+check "nothing in it ran at start, status, history, which or upgrade, nor with a git that doesn't know the setting" test ! -e "$H4/PROOF2"
+out="$(h4w d init --git 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"history off first"*) true ;; *) false ;; esac && ok "git isn't set up there while the history is on: it says to turn the history off first" || bad "git isn't set up there while the history is on: it says to turn the history off first" "exit $code: $out"
+rm -rf "$H4/d/wikis/.git"
+lacks "with the .git removed, sync says nothing of it" "a .git has appeared" h4w d sync demo
+# The same .git brought into a wiki of that collection, not its top.
+cp -R "$H4/planted/.git" "$H4/d/wikis/demo/.git"
+printf 'Three.\n' | h4w d capture demo three >/dev/null 2>&1
+out="$(h4w d sync demo 2>&1)"
+PATH="$H4/oldgit:$PATH" h4w d sync demo >/dev/null 2>&1 || true
+(cd "$H4/d/wikis/demo" && h4w d status >/dev/null 2>&1) || true
+check "a .git brought into a wiki there runs nothing either" test ! -e "$H4/PROOF2"
+case "$out" in *"note: a .git has appeared in "*"/wikis/demo, in a collection where a history is kept"*) ok "and sync names the wiki it is in" ;; *) bad "and sync names the wiki it is in" "$out" ;; esac
+rm -rf "$H4/d/wikis/demo/.git"
+# How the files are told from others: as git reads them.
+mkdir -p "$H4/e"
+h4w e init --git >/dev/null 2>&1
+h4w e new demo >/dev/null 2>&1
+E="$H4/e/wikis/demo"
+mkdir -p "$E/wiki/notrepo/HEAD" "$E/wiki/notrepo/objects" "$E/wiki/notrepo/refs"
+printf '# P\n' > "$E/wiki/p.md"
+out="$(h4w e sync demo -m "demo: a page" 2>&1)"
+case "$out" in *"committed: demo: a page"*) ok "a folder called HEAD beside objects and refs is no repository to git, and doesn't stop a sync" ;; *) bad "a folder called HEAD beside objects and refs is no repository to git, and doesn't stop a sync" "$out" ;; esac
+rm -rf "$E/wiki/notrepo"
+mkdir -p "$E/wiki/low/objects" "$E/wiki/low/refs"
+ln -s refs/heads/nothing "$E/wiki/low/HEAD"
+out="$(h4w e sync demo 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"demo/wiki/low holds HEAD"*) true ;; *) false ;; esac && ok "a HEAD that is a link to nothing counts, as it does to git" || bad "a HEAD that is a link to nothing counts, as it does to git" "exit $code: $out"
+unlink "$E/wiki/low/HEAD"; printf 'ref: refs/heads/main\n' > "$E/wiki/low/head"
+if [ -e "$E/wiki/low/HEAD" ]; then
+  out="$(h4w e sync demo 2>&1)"; code=$?
+  [ "$code" = 1 ] && case "$out" in *"demo/wiki/low holds HEAD"*) true ;; *) false ;; esac && ok "on a file system that reads head as HEAD, a file called head counts" || bad "on a file system that reads head as HEAD, a file called head counts" "exit $code: $out"
+else
+  skipped "a file called head (this file system tells it from HEAD)"
+fi
+rm -rf "$E/wiki/low"
+# The hook, when the three arrive in separate commits.
+mkdir -p "$E/wiki/two"
+printf 'ref: refs/heads/main\n' > "$E/wiki/two/HEAD"
+h4g e add -A && h4g e commit -q -m "only a file called HEAD" >/dev/null 2>&1
+check "a file called HEAD alone is an ordinary file, and commits" bash -c "git -C '$H4/e/wikis' log -n 1 --format=%s | grep -q 'only a file called HEAD'"
+mkdir -p "$E/wiki/two/objects" "$E/wiki/two/refs"; : > "$E/wiki/two/objects/keep"; : > "$E/wiki/two/refs/keep"
+h4g e add -A
+out="$(h4g e commit -q -m "the rest" 2>&1)"; code=$?
+[ "$code" != 0 ] && case "$out" in *"commit refused. demo/wiki/two holds HEAD"*) true ;; *) false ;; esac && ok "the hook refuses the commit that completes the three, when HEAD went in earlier" || bad "the hook refuses the commit that completes the three, when HEAD went in earlier" "exit $code: $out"
+h4g e reset -q 2>/dev/null; rm -rf "$E/wiki/two"
+# The files at the top of the collection itself, where it has no .git: said, not passed over in silence.
+mkdir -p "$H4/f"
+h4w f init >/dev/null 2>&1
+h4w f new demo >/dev/null 2>&1
+h4plant "$H4/f/wikis" "$H4/PROOF3"
+expect "status names repository files at the top of a collection" "git files: " h4w f status
+out="$(h4w f init --git 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"git can't be set up in"*"holds HEAD, objects/ and refs/"*) true ;; *) false ;; esac && ok "and git isn't set up on top of them: it says why" || bad "and git isn't set up on top of them: it says why" "exit $code: $out"
+out="$(h4w f sync demo 2>&1)"; code=$?
+[ "$code" = 1 ] && ok "nor is a wiki there synced" || bad "nor is a wiki there synced" "exit $code: $out"
+check "and nothing ran" test ! -e "$H4/PROOF3"
 fi
 
 if section "What CI skips"; then
