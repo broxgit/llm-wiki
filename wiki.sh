@@ -37,19 +37,36 @@ unset git_safe_n git_safe_have git_safe_k git_safe_v
 # folder that holds HEAD, objects/ and refs/ before it came to one with a real .git. Git is
 # then not asked, and the folder reads as being in no repository.
 git_planted() {
-  local d
+  local d e
   d="$(cd "$1" 2>/dev/null && pwd -P)" || return 1
   while :; do
-    if [ -f "$d/.git" ] || [ -f "$d/.git/HEAD" ]; then return 1; fi
-    if [ -e "$d/HEAD" ] && [ -d "$d/objects" ] && [ -d "$d/refs" ]; then return 0; fi
+    # As git reads them: HEAD is a file or a link, even a link to nothing, and never a folder.
+    if [ -f "$d/.git" ] || [ -f "$d/.git/HEAD" ] || [ -L "$d/.git/HEAD" ]; then
+      # A collection that keeps a history has said it has no git. A .git that appears in it,
+      # at its top or in a wiki, as an app that carries the folder can bring one, is data:
+      # git isn't asked there. The marker counts where it names a store, as history_on has it.
+      e="$d"
+      while :; do
+        if [ -f "$e/.llm-wiki-history" ] && [ ! -L "$e/.llm-wiki-history" ] && LC_ALL=C grep -Eq '^id=[0123456789abcdef]{8,40}$' "$e/.llm-wiki-history" 2>/dev/null; then return 0; fi
+        case "$e" in / | '') break ;; esac
+        e="${e%/*}"
+        [ -n "$e" ] || e=/
+      done
+      return 1
+    fi
+    if { [ -f "$d/HEAD" ] || [ -L "$d/HEAD" ]; } && [ -d "$d/objects" ] && [ -d "$d/refs" ]; then return 0; fi
     case "$d" in / | '') return 1 ;; esac
     d="${d%/*}"
     [ -n "$d" ] || d=/
   done
 }
-# Every `git -C <folder>` below goes through this. 128 is what git itself gives for no repository.
+# Every git below that works on a folder goes through this: `git -C <folder>`, and the
+# commands that work on the folder they are run in. 128 is what git gives for no repository.
 git() {
-  if [ "${1:-}" = -C ] && [ $# -ge 2 ] && git_planted "$2"; then return 128; fi
+  case "${1:-}" in
+    -C) if [ $# -ge 2 ] && git_planted "$2"; then return 128; fi ;;
+    rev-parse | status | config | remote | log | diff | add | commit | push | pull | fetch | ls-files | init) if git_planted "$PWD"; then return 128; fi ;;
+  esac
   command git "$@"
 }
 
@@ -1559,6 +1576,7 @@ cmd_start() {
   inbox_take >/dev/null 2>&1 || true
   # Where the collection has no git and keeps a history: what it held before this session.
   history_snap "session start"
+  ! history_stray_git || echo "git: $(history_stray_text). Tell the user."
   if [ -n "$repo" ]; then w="$(which_wiki "$repo")"; [ -z "$w" ] || wiki="$WIKIS_DIR/$w"; fi
   # Not in a repository: the wikis of the clones in this folder, when it holds any.
   if [ -z "$repo" ] && [ -d "$arg" ] && placeable "$arg"; then
@@ -2871,8 +2889,50 @@ history_store() {
   printf '%s/%s.git' "$HISTORY_DIR" "$id"
 }
 
-# On: a marker that names a store, in a collection that isn't its own git repository.
-history_on() { history_plain "$WIKIS_DIR/$HISTORY_MARK" && history_store >/dev/null && ! history_own_git; }
+# On: a marker that names a store. The marker is what says the collection has no git, so a
+# .git that turns up beside it doesn't turn the history off: see history_stray_git.
+history_on() { history_plain "$WIKIS_DIR/$HISTORY_MARK" && history_store >/dev/null; }
+
+# history_stray_git: a .git has appeared at the top of a collection that keeps a history.
+# It isn't used, and no git is run there, until the person says which it is to be.
+# Sets HISTORY_STRAY to where: the collection's top, or the first wiki that holds one.
+HISTORY_STRAY=""
+history_stray_git() {
+  local d
+  HISTORY_STRAY=""
+  history_on || return 1
+  for d in "$WIKIS_DIR" "$WIKIS_DIR"/*/; do
+    d="${d%/}"
+    if [ -e "$d/.git" ] || [ -L "$d/.git" ]; then HISTORY_STRAY="$d"; return 0; fi
+  done
+  return 1
+}
+history_stray_text() {
+  printf 'a .git has appeared in %s, in a collection where a history is kept and git is not used. It is left alone and nothing in it is run. Do: if you did not put it there, remove it. If you set git up there yourself and mean to use it, run %s history off' "$(tilde "$HISTORY_STRAY")" "$WIKI_CMD"
+}
+
+# wiki_planted <wiki root>: the first folder in a wiki, the wiki itself or one under it, that
+# holds HEAD, objects/ and refs/ together: the files of a git repository, which a push can
+# carry and a wiki has no use for. Printed as it is to be shown; nothing when there is none.
+# The name is matched in any case, since a Mac's file system reads head as HEAD.
+wiki_planted() {
+  local f d
+  # The wiki's own top first, so the place named is the one nearest the top.
+  if { [ -f "$1/HEAD" ] || [ -L "$1/HEAD" ]; } && [ -d "$1/objects" ] && [ -d "$1/refs" ]; then printf '%s' "${1##*/}"; return 0; fi
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    d="${f%/*}"
+    if [ -d "$1/$d/objects" ] && [ -d "$1/$d/refs" ]; then
+      [ "$d" = . ] && printf '%s' "${1##*/}" || printf '%s/%s' "${1##*/}" "${d#./}"
+      return 0
+    fi
+  done <<PLANTEOF
+$(cd "$1" 2>/dev/null && find . -name .git -prune -o -iname HEAD ! -type d -print 2>/dev/null | head -n 2000 || true)
+PLANTEOF
+}
+wiki_planted_text() {
+  printf '%s holds HEAD, objects/ and refs/: the files of a git repository, which a wiki has no use for and git could be made to run. Someone put them there. Do: look at who added them, and remove them' "$(printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177')"
+}
 
 # history_git <args>...: git on the store, with the collection as its files. Nothing of the
 # user's own git applies: no settings, no hooks, no signing, no name of theirs, and nothing
@@ -3191,6 +3251,12 @@ sync_do() {
   done
   [ -n "$wiki" ] || wiki="$(sync_default_wiki)"
   root="$(wiki_root "$wiki")"
+  err="$(wiki_planted "$root")"
+  [ -z "$err" ] || die "nothing was synced. $(wiki_planted_text "$err"), then sync again"
+  if [ ! -e "$WIKIS_DIR/.git" ] && { [ -f "$WIKIS_DIR/HEAD" ] || [ -L "$WIKIS_DIR/HEAD" ]; } && [ -d "$WIKIS_DIR/objects" ] && [ -d "$WIKIS_DIR/refs" ]; then
+    die "nothing was synced. $(wiki_planted_text "$(tilde "$WIKIS_DIR")"), then sync again"
+  fi
+  ! history_stray_git || echo "note: $(history_stray_text)."
   # Which repository a wiki is in is asked of the collection, not of the wiki: then nothing
   # among the wiki's own files, which a push can bring, has a say in it. A wiki that is a
   # repository of its own has a real .git, which a push can't carry, and that is found with
@@ -3200,8 +3266,10 @@ sync_do() {
     "${coll:-/nowhere}"/*)
       top=""
       # A real one: a .git folder with a HEAD, or the .git file a worktree or a submodule has.
-      if [ -f "$root/.git" ] || [ -f "$root/.git/HEAD" ]; then top="$(git -C "$root" rev-parse --show-toplevel 2>/dev/null || true)"; fi
-      [ -n "$top" ] || top="$(git -C "$WIKIS_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+      # Never in a collection that keeps a history: there a .git is something an app brought.
+      if history_on; then :
+      elif [ -f "$root/.git" ] || [ -f "$root/.git/HEAD" ]; then top="$(git -C "$root" rev-parse --show-toplevel 2>/dev/null || true)"; fi
+      [ -n "$top" ] || history_on || top="$(git -C "$WIKIS_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
       ;;
     *) top="$(git -C "$root" rev-parse --show-toplevel 2>/dev/null || true)" ;;
   esac
@@ -3332,6 +3400,9 @@ sync_do() {
       die "the pull failed. If uncommitted changes in another wiki clash with what came in, run $WIKI_CMD sync for that wiki first."
     fi
   fi
+  # What the pull brought is looked at before anything is pushed back out.
+  err="$(wiki_planted "$root")"
+  [ -z "$err" ] || die "the pull brought them in, and nothing was pushed. $(wiki_planted_text "$err"), then sync again"
   if [ "$ahead" = 0 ]; then
     # No "synced: " here: nothing left this machine in this run.
     echo "up to date: pulled $(tilde "$repo"), and there was nothing to push"
@@ -4098,6 +4169,8 @@ init_collection() {
 }
 
 git_init_collection() {
+  if history_on; then die "a history of $(tilde "$WIKIS_DIR") is kept on this machine, in place of git. Do: to use git there, run $WIKI_CMD history off first"; fi
+  if git_planted "$WIKIS_DIR"; then die "git can't be set up in $(tilde "$WIKIS_DIR"): the folder, or one above it, holds HEAD, objects/ and refs/, the files of a git repository that someone put there. Do: look at who added them, and remove them"; fi
   if in_git_repo "$WIKIS_DIR"; then
     echo "git:     $(tilde "$WIKIS_DIR") is already in a repo, skipped"
     install_hook "$WIKIS_DIR"
@@ -4449,6 +4522,17 @@ EOF2
   done <<EOF2
 $r
 EOF2
+  ! history_stray_git || todo_add "git: $(history_stray_text)"
+  if [ ! -e "$WIKIS_DIR/.git" ] && { [ -f "$WIKIS_DIR/HEAD" ] || [ -L "$WIKIS_DIR/HEAD" ]; } && [ -d "$WIKIS_DIR/objects" ] && [ -d "$WIKIS_DIR/refs" ]; then
+    todo_add "git files: $(wiki_planted_text "$(tilde "$WIKIS_DIR")")"
+  fi
+  local pw pd
+  for pd in "$WIKIS_DIR"/*/; do
+    pd="${pd%/}"
+    is_wiki "$pd" || continue
+    pw="$(wiki_planted "$pd")"
+    [ -z "$pw" ] || todo_add "git files: $(wiki_planted_text "$pw")"
+  done
   if in_git_repo "$WIKIS_DIR" && [ -f "$WIKIS_DIR/WIKIS.md" ]; then
     case "$(hook_state "$WIKIS_DIR")" in
       ours) command -v gitleaks >/dev/null 2>&1 || todo_add "secrets: commits aren't scanned, gitleaks isn't installed. Run: brew install gitleaks" ;;

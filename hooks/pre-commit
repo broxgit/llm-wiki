@@ -2,6 +2,37 @@
 # llm-wiki secret scan. Installed by wiki.sh; upgrade replaces it, so edit the copy in the template repo.
 # Agents commit to wikis on their own. This stops a pasted key or token from reaching the remote.
 
+# A folder that holds HEAD, objects/ and refs/ is a repository to git, whose config can name a
+# command to run. A wiki has no use for those files, and a commit would hand them to every
+# other machine. Refused whether or not gitleaks is here.
+# Every staged path is looked at, whatever was done to it, since the three can arrive in
+# separate commits: a file called HEAD in any case, or anything under objects/ or refs/,
+# names a folder, and that folder is refused when it has all three, staged or on disk.
+has() { [ -e "$1" ] || [ -L "$1" ] || [ -n "$(git ls-files --cached -- "$1" 2>/dev/null | head -n 1)" ]; }
+# In a function: a case inside $( ) trips the parser of an older sh, such as the Mac's.
+planted_dirs() {
+  git -c core.quotePath=false diff --cached --name-only --diff-filter=ACMR 2>/dev/null | while IFS= read -r f; do
+    case "$f" in
+      */objects/* | objects/*) d="${f%%objects/*}" ;;
+      */refs/* | refs/*) d="${f%%refs/*}" ;;
+      *) case "$(basename "$f" | LC_ALL=C tr 'A-Z' 'a-z')" in head) d="$(dirname "$f")/" ;; *) continue ;; esac ;;
+    esac
+    d="${d%/}"; [ -n "$d" ] || d=.
+    if has "$d/HEAD" && has "$d/objects" && has "$d/refs"; then printf '%s\n' "$d"; fi
+  done
+}
+planted="$(planted_dirs | head -n 1)"
+if [ -n "$planted" ]; then
+  cat >&2 <<EOF
+
+llm-wiki: commit refused. $planted holds HEAD, objects/ and refs/: the files of a
+git repository, which git could be made to run on every machine this reaches.
+- A wiki has no use for them. Look at who added them, and remove them.
+- Never bypass this with --no-verify.
+EOF
+  exit 1
+fi
+
 if ! command -v gitleaks >/dev/null 2>&1; then
   # Leave a mark, so wiki sync scans this commit before it pushes anything.
   mark="$(git rev-parse --git-path llm-wiki-unscanned 2>/dev/null)" && [ -n "$mark" ] && : > "$mark" 2>/dev/null
