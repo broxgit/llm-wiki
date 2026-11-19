@@ -4,6 +4,13 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v41 (2026-11-19)
+
+The handbook now says how to finish a merge when a page was changed on two machines.
+
+- `rules/sync.md` has a new section. `wiki sync` joins what needs no judgment and otherwise stops and names the files. The handbook used to say "stop and ask the user" and nothing more: it now has the six steps that follow the answer, since `wiki sync` can't finish a merge that is under way.
+- Do: run `wiki upgrade --all`.
+
 ## v40 (2026-11-19)
 
 Agents now record which repository uses which, so the wikis start to show how your services and libraries fit together.

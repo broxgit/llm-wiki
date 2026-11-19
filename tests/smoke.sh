@@ -1460,6 +1460,18 @@ check "and takes no lock" test ! -f "$BG/.compile-lock"
 printf 'agent=%s\n' "$T/bin/fake-agent" > "$BGC"
 out="$("$W" compile bg 2>&1)"
 case "$out" in *"compiled: bg, 2 of 2 note(s)"*", ok."*) ok "compile runs the agent and reports" ;; *) bad "compile runs the agent and reports" "$out" ;; esac
+lacks "a compile whose sync went through says nothing more" "Not synced" printf '%s\n' "$out"
+# The compile ends with a sync. When that fails, the run's last lines say so: it was only in the log.
+if git -C "$WIKIS_DIR" rev-parse -q --verify HEAD >/dev/null 2>&1; then
+  bg_note 9
+  git -C "$WIKIS_DIR" rev-parse HEAD > "$WIKIS_DIR/.git/MERGE_HEAD"
+  out="$("$W" compile bg 2>&1)"
+  unlink "$WIKIS_DIR/.git/MERGE_HEAD"
+  case "$out" in *"compiled: bg, "*"Not synced: "*"is in the middle of a merge"*) ok "a compile whose sync failed says so, with the reason" ;; *) bad "a compile whose sync failed says so, with the reason" "$out" ;; esac
+  "$W" sync bg >/dev/null 2>&1 || true
+else
+  skipped "a compile whose sync fails (the collection here has no commit)"
+fi
 case "$out" in *Terminated*) bad "stopping its timer prints nothing" "$out" ;; *) ok "stopping its timer prints nothing" ;; esac
 check "the agent is told which wiki, and that nobody is watching" grep -q "wiki at $BG, unattended" "$T/fake-prompt"
 check "and that the lock is already its own" grep -q "lock is already held for you" "$T/fake-prompt"
@@ -12139,6 +12151,51 @@ tcg d commit -q -am "d: a page" 2>/dev/null
 expect "session start settles such a clash, and says the pull went through" "pull: up to date with the remote" tcw d start demo
 check "with both edits in the page" bash -c "grep -q 'once more from c' '$TC2/d/wikis/$RP' && grep -q 'once more from d' '$TC2/d/wikis/$RP'"
 tcw d sync demo >/dev/null 2>&1
+# What a real compile does, from the trial of 2026-11-19: each machine appends a paragraph at
+# the end of the same page. Two additions at one spot are kept, this machine's first.
+level
+rpage c 2026-07-01 '[raw/a.md, raw/d.md, raw/c.md]' 'agreed' 'The start.' 'The end.'
+tcw c sync demo >/dev/null 2>&1; level
+printf '\nA paragraph the first machine added at the end.\n' >> "$TC2/c/wikis/$RP"
+tcw c sync demo >/dev/null 2>&1
+printf '\nA paragraph the second machine added at the end.\n' >> "$TC2/d/wikis/$RP"
+out="$(tcw d sync demo 2>&1)"
+case "$out" in *"synced: "*) true ;; *) false ;; esac && [ "$(tail -n 3 "$TC2/d/wikis/$RP" | tr '\n' '|')" = 'A paragraph the second machine added at the end.||A paragraph the first machine added at the end.|' ] && ok "two machines that each append a paragraph to a page keep both, with a blank line between" || bad "two machines that each append a paragraph to a page keep both, with a blank line between" "$out
+$(tail -n 6 "$TC2/d/wikis/$RP")"
+check "and no marker is left in it" bash -c "! grep -q '<<<<\|>>>>\|||||\|^====' '$TC2/d/wikis/$RP'"
+# A page that holds a line git's own markers could be taken for is not guessed at.
+level
+RULE="$(printf '=%.0s' 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50)"
+printf -- '---\ntitle: Ruled\nupdated: 2026-01-01\n---\n\nA heading\n%s\n\nText.\n' "$RULE" > "$TC2/c/wikis/demo/wiki/ruled.md"
+tcw c sync demo >/dev/null 2>&1; level
+printf '\nAdded by c.\n' >> "$TC2/c/wikis/demo/wiki/ruled.md"; tcw c sync demo >/dev/null 2>&1
+printf '\nAdded by d.\n' >> "$TC2/d/wikis/demo/wiki/ruled.md"
+out="$(tcw d sync demo 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"demo/wiki/ruled.md was changed here and on another machine"*) true ;; *) false ;; esac && ok "a page with a long rule of equals signs, which could pass for a marker, is undone and named" || bad "a page with a long rule of equals signs, which could pass for a marker, is undone and named" "exit $code: $out"
+tcg d reset -q --hard '@{u}' 2>/dev/null; rm -f "$TC2/d/wikis/.git/llm-wiki-conflict"
+# One side adds where the other changed what was there: a real clash still.
+level
+sed -i.bak 's/^The end\.$/The end, reworded by c./' "$TC2/c/wikis/$RP"; rm -f "$TC2/c/wikis/$RP.bak"
+tcw c sync demo >/dev/null 2>&1
+sed -i.bak 's/^The end\.$/The end, reworded by d./' "$TC2/d/wikis/$RP"; rm -f "$TC2/d/wikis/$RP.bak"
+out="$(tcw d sync demo 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"$RP was changed here and on another machine"*) true ;; *) false ;; esac && ok "the same line reworded on both machines is still a clash" || bad "the same line reworded on both machines is still a clash" "exit $code: $out"
+tcg d reset -q --hard '@{u}' 2>/dev/null; rm -f "$TC2/d/wikis/.git/llm-wiki-conflict"
+# index.md is joined by git a line at a time. Two machines that changed one page's summary left
+# two lines for the page. After a merge the index is made again from the pages.
+level
+tcw d index demo >/dev/null 2>&1; tcw d sync demo >/dev/null 2>&1; level
+printf -- '---\ntitle: Summed\nsummary: as it was\nupdated: 2026-01-01\n---\n\nOne.\n\nTwo.\n\nThree.\n' > "$TC2/c/wikis/demo/wiki/concepts/summed.md"
+tcw c index demo >/dev/null 2>&1; tcw c sync demo >/dev/null 2>&1; level
+sed -i.bak 's/^summary: as it was$/summary: as the first machine has it/' "$TC2/c/wikis/demo/wiki/concepts/summed.md"; rm -f "$TC2/c/wikis/demo/wiki/concepts/summed.md.bak"
+tcw c index demo >/dev/null 2>&1; tcw c sync demo >/dev/null 2>&1
+printf -- '---\ntitle: Other\nsummary: another page\nupdated: 2026-01-01\n---\n\nAnother page.\n' > "$TC2/d/wikis/demo/wiki/other.md"
+sed -i.bak 's/as it was/as it was, with a word the second machine put in the index by hand/' "$TC2/d/wikis/demo/index.md"; rm -f "$TC2/d/wikis/demo/index.md.bak"
+out="$(tcw d sync demo 2>&1)"
+case "$out" in *"index: made again from the pages"*"synced: "*) ok "after a merge that left the index out of step with the pages, sync makes it again and says so" ;; *) bad "after a merge that left the index out of step with the pages, sync makes it again and says so" "$out
+$(cat "$TC2/d/wikis/demo/index.md")" ;; esac
+check "the page has one line in the index, with the summary the page has" test "$(grep -c 'concepts/summed.md' "$TC2/d/wikis/demo/index.md")" = 1
+check "and the index matches the pages" tcw d index demo --check
 # The ledger of open items is joined an entry at a time. git's own union merge works a line
 # at a time, and wove two entries waiting on the same person into one heading with nothing
 # under it and one with both (2026-11-19).
@@ -13863,6 +13920,7 @@ check "and AGENTS.md points to it" grep -q 'rules/workflows.md' "$REPO/template/
 # What an agent may do with an extension: read by itself, send outside or choose only on the user's word, never sign in.
 check "the extensions rule ships in the template" bash -c "grep -q 'Being signed in is not a request' '$REPO/template/rules/extensions.md' && grep -q 'Never set, change or clear an address, a user name, a token' '$REPO/template/rules/extensions.md'"
 check "and AGENTS.md points to it" grep -q 'rules/extensions.md' "$REPO/template/AGENTS.md"
+check "the sync rule says how to finish a merge the user has settled" bash -c "grep -q '^## A page changed on two machines' '$REPO/template/rules/sync.md' && grep -q 'commit --no-edit' '$REPO/template/rules/sync.md' && sed -n '/^## v41 /,/^## v40 /p' '$REPO/CHANGELOG.md' | grep -q 'rules/sync.md'"
 # What uses what: the rule that joins the wikis, one link at a time.
 check "the dependencies rule ships in the template, with the line's form" grep -qF 'Uses: <the repository that uses> -> <the repository used> | <how>' "$REPO/template/rules/dependencies.md"
 check "AGENTS.md points to it from its table, and says when to add the line" bash -c "grep -q '| .rules/dependencies.md. |' '$REPO/template/AGENTS.md' && grep -q 'add a .Uses:. line to your next capture' '$REPO/template/AGENTS.md'"

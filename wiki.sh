@@ -2658,7 +2658,7 @@ note_age_hours() {
 # so the limit stays under that.
 COMPILE_LOCK=""
 compile_run() {
-  local root="$1" name n left start secs rc=0 result out oldest pid wd limit before after f last="" nl=$'\n' by
+  local root="$1" name n left start secs rc=0 result out oldest pid wd limit before after f last="" nl=$'\n' by synced
   name="${root##*/}"
   COMPILE_LOCK="$root/.compile-lock"
   trap '[ -z "$COMPILE_LOCK" ] || printf "free\n" > "$COMPILE_LOCK" 2>/dev/null' EXIT
@@ -2714,11 +2714,15 @@ EOF
   COMPILE_LOCK=""
   # Sync even after a failure. What a run wrote would otherwise sit uncommitted until
   # another session's sync swept it in, with nothing to say where it came from.
-  WIKIS_DIR="$WIKIS_DIR" "$REPO/wiki.sh" sync "$root" -m "$name: background compile, $((n - left)) of $n note(s), $result" >> "$out" 2>&1 || true
+  synced=1
+  WIKIS_DIR="$WIKIS_DIR" "$REPO/wiki.sh" sync "$root" -m "$name: background compile, $((n - left)) of $n note(s), $result" >> "$out" 2>&1 || synced=0
   [ -f "$COMPILE_DIR/runs.csv" ] || echo "date,wiki,notes,left,seconds,oldest_hours,result,agent" > "$COMPILE_DIR/runs.csv"
   printf '%s,%s,%s,%s,%s,%s,%s,%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$name" "$n" "$left" "$secs" "$oldest" "$result" "$(compile_agent | awk '{ sub(/.*\//, "", $1); print $1 }')" >> "$COMPILE_DIR/runs.csv"
   echo "compiled: $name, $((n - left)) of $n note(s) in ${secs}s, $result. Output: $(tilde "$out")"
   [ -z "$last" ] || echo "Its last line: $last"
+  # What was compiled is committed here either way. That it didn't leave this machine was
+  # only in the run's log, under a line that said ok.
+  [ "$synced" = 1 ] || echo "Not synced: $({ LC_ALL=C grep -a '^error: ' "$out" 2>/dev/null || LC_ALL=C grep -a . "$out" 2>/dev/null || true; } | tail -n 1 | sed 's/^error: //' | LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C cut -c 1-400 || true)"
   [ "$result" = ok ]
 }
 
@@ -3165,6 +3169,44 @@ def merge_field(key, o, t, eol):
         return [key + b":" + eol] + [prefix + x + eol for x in both]
     raise GiveUp
 
+MARK = 48
+
+def both_added(merged, eol):
+    """git's merge of a body, with each clash that is two additions at one spot settled by
+    keeping both, this machine's first. A compile that adds a fact to a page appends a
+    paragraph at its end, and two machines that each did had a clash (the trial, 2026-11-19).
+    A clash where either side changed or removed lines that were there is no such thing."""
+    start, mid, sep, end = (c * MARK for c in (b"<", b"|", b"=", b">"))
+    out, part, mine, base, theirs = [], None, [], [], []
+    for line in merged.splitlines(keepends=True):
+        bare = strip_eol(line)
+        if part is None:
+            if bare == start + b" o":
+                part, mine, base, theirs = "o", [], [], []
+            elif bare[:MARK] in (start, mid, sep, end) and bare[MARK:MARK + 1] in (b"", b" "):
+                raise GiveUp
+            else:
+                out.append(line)
+        elif part == "o" and bare == mid + b" b":
+            part = "b"
+        elif part == "b" and bare == sep:
+            part = "t"
+        elif part == "t" and bare == end + b" t":
+            if base or not mine or not theirs:
+                raise GiveUp
+            if not mine[-1].endswith(b"\n"):
+                mine[-1] += eol
+            # A blank line between the two, where neither brings one: they are paragraphs.
+            if strip_eol(mine[-1]).strip() and strip_eol(theirs[0]).strip():
+                mine.append(eol)
+            out.extend(mine + theirs)
+            part = None
+        else:
+            {"o": mine, "b": base, "t": theirs}[part].append(line)
+    if part is not None:
+        raise GiveUp
+    return b"".join(out)
+
 def later(o, t):
     a, b = value(o), value(t)
     return a is not None and b is not None and DATE.match(a) and DATE.match(b)
@@ -3268,16 +3310,27 @@ def settle(path):
             got = merge_field(key, o, t, eol)
         if got:
             out.extend(got)
+    # A line in the page that could pass for one of git's markers, such as a long rule of
+    # equals signs: the clashes couldn't be told from the text, so nothing is guessed.
+    for data in (obody, bbody, tbody):
+        for line in data.split(b"\n"):
+            if len(line) >= MARK and line[:1] in (b"<", b"|", b"=", b">") and line[:MARK] == line[:1] * MARK:
+                raise GiveUp
     with tempfile.TemporaryDirectory() as d:
         names = []
         for name, data in (("ours", obody), ("base", bbody), ("theirs", tbody)):
             names.append(os.path.join(d, name))
             with open(names[-1], "wb") as f:
                 f.write(data)
-        r = subprocess.run(["git", "merge-file", "-p", *names], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    if r.returncode != 0:
+        r = subprocess.run(["git", "merge-file", "-p", "--diff3", "--marker-size=%d" % MARK, "-L", "o", "-L", "b", "-L", "t", *names],
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    if r.returncode < 0 or r.returncode > 127:
         raise GiveUp
-    return b"---" + eol + b"".join(out) + oclose + r.stdout
+    # Only a body git couldn't merge is read for its clashes: one it could is taken as it is.
+    body = r.stdout if r.returncode == 0 else both_added(r.stdout, eol)
+    page = b"---" + eol + b"".join(out) + oclose + body
+    line_end(page)
+    return page
 
 paths = sorted({l.split(b"\t", 1)[1].decode("utf-8", "surrogateescape") for l in git("ls-files", "-u", "-z").split(b"\0") if l})
 if not paths:
@@ -3380,6 +3433,39 @@ sync_settled() {
   local f
   f="$(sync_conflict_file "$1" || true)"
   [ -z "$f" ] || [ ! -f "$f" ] || unlink "$f" 2>/dev/null || true
+}
+
+# sync_index_after_merge <repo> <path> <wiki root> <head before the pull>: index.md is merged
+# by git a line at a time, keeping both sides' lines. When two machines changed one page's
+# summary, that left two lines for the page, one from each, and nothing said so (the trial,
+# 2026-11-19). The index is made from the pages, so after a pull that merged it is made
+# again where it is out of step, and committed, before anything is pushed.
+sync_index_after_merge() {
+  local repo="$1" path="$2" root="$3" before="$4" idx
+  command -v python3 >/dev/null 2>&1 || return 0
+  # Only after a merge this pull made: HEAD has two parents, and the first is where this
+  # machine was. A pull that only moved forward onto someone else's merge is not that.
+  [ -n "$before" ] && [ "$(git -C "$repo" rev-parse -q --verify 'HEAD^1' 2>/dev/null || true)" = "$before" ] || return 0
+  git -C "$repo" rev-parse -q --verify 'HEAD^2' >/dev/null 2>&1 || return 0
+  if [ "$path" = . ]; then idx=index.md; else idx="$path/index.md"; fi
+  # A plain file, never a link: making it again would write through one.
+  [ -f "$root/index.md" ] && [ ! -L "$root/index.md" ] || return 0
+  # And only where the merge joined two versions of it: an index that came through as one
+  # side had it, a person's own included, is left as it is.
+  ! git -C "$repo" diff --quiet 'HEAD^1' HEAD -- "$idx" 2>/dev/null || return 0
+  ! git -C "$repo" diff --quiet 'HEAD^2' HEAD -- "$idx" 2>/dev/null || return 0
+  ! (cmd_index "$root" --check) >/dev/null 2>&1 || return 0
+  (cmd_index "$root") >/dev/null 2>&1 || { git -C "$repo" checkout -q -- "$idx" >/dev/null 2>&1 || true; return 0; }
+  git -C "$repo" diff --quiet -- "$idx" 2>/dev/null && return 0
+  if git -C "$repo" add -- "$idx" >/dev/null 2>&1 \
+    && git -C "$repo" commit -q -m "${root##*/}: index made again after a merge" -- "$idx" >/dev/null 2>&1; then
+    echo "index: made again from the pages, after a merge left it with lines that no longer matched them."
+  else
+    # Refused, as by the secret scan: nothing is left staged, and the file is as the merge left it.
+    git -C "$repo" reset -q -- "$idx" >/dev/null 2>&1 || true
+    git -C "$repo" checkout -q -- "$idx" >/dev/null 2>&1 || true
+  fi
+  return 0
 }
 
 # sync <wiki> [-m MESSAGE]: commit this wiki's changes, pull, and push.
@@ -3985,6 +4071,7 @@ sync_do() {
   fi
   # A merge, never a rebase or a stash: a rebase refuses to run while another
   # wiki has uncommitted notes, and a merge doesn't mind them.
+  SYNC_PULLED_FROM="$(git -C "$repo" rev-parse -q --verify HEAD 2>/dev/null || true)"
   if ! collection_pull "$repo"; then
     err="$PULL_ERR"
     case "$PULL" in
@@ -4034,14 +4121,14 @@ ASIDEEOF
       die "the pull failed. If uncommitted changes in another wiki clash with what came in, run $WIKI_CMD sync for that wiki first."
     fi
   fi
-  if [ -n "$PULL_SETTLED" ]; then
-    echo "merged: $PULL_SETTLED file(s) changed here and on another machine, joined by rule: the later date, the sources of both, and every open item."
-    # The merge's commit went through the hook too. If no scan read it, none of it is pushed.
-    sync_scan_gate "$repo"
-  fi
+  [ -z "$PULL_SETTLED" ] || echo "merged: $PULL_SETTLED file(s) changed here and on another machine, joined by rule: the later date, the sources of both, two additions at one spot, and every open item."
   # What the pull brought is looked at before anything is pushed back out.
   err="$(wiki_planted "$root")"
   [ -z "$err" ] || die "the pull brought them in, and nothing was pushed. $(wiki_planted_text "$err"), then sync again"
+  sync_index_after_merge "$repo" "$path" "$root" "$SYNC_PULLED_FROM"
+  # A merge's commit, and the index's, went through the hook too. If no scan read them,
+  # nothing is pushed.
+  sync_scan_gate "$repo"
   if [ "$ahead" = 0 ]; then
     # No "synced: " here: nothing left this machine in this run.
     echo "up to date: pulled $(tilde "$repo"), and there was nothing to push"
@@ -4049,6 +4136,7 @@ ASIDEEOF
   fi
   if ! git -C "$repo" push -q 2>/dev/null; then
     # Someone pushed in between: pull and push once more.
+    SYNC_PULLED_FROM="$(git -C "$repo" rev-parse -q --verify HEAD 2>/dev/null || true)"
     if ! collection_pull "$repo"; then
       case "$PULL" in
         conflict) die "$(sync_clash_error "$PULL_FILES" "$repo")" ;;
@@ -4057,6 +4145,8 @@ ASIDEEOF
       printf '%s\n' "$PULL_ERR"
       die "the push was rejected, and the pull that should follow it failed. Ask the user."
     fi
+    sync_index_after_merge "$repo" "$path" "$root" "$SYNC_PULLED_FROM"
+    sync_scan_gate "$repo"
     git -C "$repo" push -q || die "the push was rejected twice. Ask the user."
   fi
   sync_settled "$repo"
