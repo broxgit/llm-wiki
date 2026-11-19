@@ -7305,10 +7305,14 @@ journal_check() {
   type="$(journal_field "$key" 2)"
   [ -n "$type" ] || { echo "unknown journal setting: $key. Settings: $JOURNAL_KEYS"; return 1; }
   case "$val" in *$'\n'*) echo "value must be one line"; return 1 ;; esac
+  # No setting here takes a path with backslashes, and what reads them later was never
+  # checked for one. A control character has no place in a line of a settings file.
+  case "$val" in *\\* | *[[:cntrl:]]*) echo "value can't hold a backslash or a control character"; return 1 ;; esac
   case "$type" in
     yesno) case "$val" in yes | no) ;; *) echo "$key takes yes or no"; return 1 ;; esac ;;
     number) case "$val" in '' | *[!0-9]*) echo "$key takes a number"; return 1 ;; esac ;;
-    time) case "$val" in [0-2][0-9]:[0-5][0-9]) ;; *) echo "$key takes a time like 04:00"; return 1 ;; esac ;;
+    # 00:00 to 23:59. 29:59 was taken, and every day then counted as the one before.
+    time) case "$val" in [01][0-9]:[0-5][0-9] | 2[0-3]:[0-5][0-9]) ;; *) echo "$key takes a time like 04:00"; return 1 ;; esac ;;
     days) case "$val" in '' | *[!1-7]*) echo "$key takes digits 1 to 7, such as 12345"; return 1 ;; esac ;;
     since) since_ok "$val" || { echo "$key takes lastworkday, yesterday, today, week, lastweek, a number of days like 7d, or a date"; return 1; } ;;
     text) ;;
@@ -7404,7 +7408,12 @@ journal_set() {
   err="$(journal_check "$key" "$val")" || die "$err"
   write_journal_config >/dev/null
   tmp="$JOURNAL_CFG.tmp"
-  awk -v k="$key" -v v="$val" 'BEGIN{done=0} $0 ~ "^"k"=" {print k"="v; done=1; next} {print} END{if(!done) print k"="v}' "$JOURNAL_CFG" > "$tmp"
+  # Through the environment: awk -v reads backslash sequences, so a value that held \n was
+  # written as two lines, and the second was a setting of its own (2026-11-16). index, not a
+  # match, so the key is compared as text and never read as a pattern.
+  K="$key" V="$val" awk 'BEGIN { k = ENVIRON["K"]; v = ENVIRON["V"] }
+    index($0, k "=") == 1 { print k "=" v; done = 1; next } { print }
+    END { if (!done) print k "=" v }' "$JOURNAL_CFG" > "$tmp"
   mv "$tmp" "$JOURNAL_CFG"
   echo "journal: $key=$val"
   [ "$key" = commit ] && apply_journal_commit
@@ -7550,9 +7559,11 @@ cmd_journal_note() {
     esac
   done
   case "$day" in '' | [0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]) ;; *) die_usage "--day takes a date like 2026-10-21" ;; esac
-  case "$at" in '' | [0-2][0-9]:[0-5][0-9]) ;; *) die_usage "--at takes a time like 14:05" ;; esac
+  case "$at" in '' | [01][0-9]:[0-5][0-9] | 2[0-3]:[0-5][0-9]) ;; *) die_usage "--at takes a time like 14:05" ;; esac
   if [ -n "$day" ] && [[ "$day" > "$(journal_today)" ]]; then die "--day can't be in the future"; fi
   [ $# -ge 2 ] || die_usage "usage: $WIKI_CMD journal note [--day DATE] [--at HH:MM] <project> <text>"
+  # The project is written inside the entry's line: a line break in it began a second entry.
+  case "$1" in '' | *[[:cntrl:]]* | *\[* | *\]*) die_usage "a project's name is one line, with no [ or ] in it" ;; esac
   journal_note "$1" "$(shift; printf '%s ' "$@" | sed 's/ $//')" "$day" "$at"
 }
 
