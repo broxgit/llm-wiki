@@ -85,6 +85,7 @@ read -r -d '' PARTS <<'TABLE' || true
 3 | What CI skips |
 2 | A wiki that passes for a repository |
 2 | A folder that only looks like a wiki |
+2 | Two clones change one page |
 2 | The suite itself |
 3 | Obsidian plugin |
 2 | History without git |
@@ -11918,6 +11919,128 @@ out="$(grep -n 'AGENTS\.md' "$REPO"/internal/*/*.go "$REPO/mcp/server.py" "$REPO
 if [ -z "$out" ]; then ok "no other copy tests for AGENTS.md by its name alone"; else bad "no other copy tests for AGENTS.md by its name alone" "$out"; fi
 fi
 
+if section "Two clones change one page"; then
+# Two machines change the same page and both sync. The second sync's pull hits a conflict.
+# Before, that left the whole collection in the middle of a merge: the page held git's
+# markers, a sync of any other wiki failed with "cannot do a partial commit during a merge",
+# and start and status gave other reasons or none (2026-11-15).
+TC2="$T/two"
+mkdir -p "$TC2/a" "$TC2/b" "$TC2/bin"
+command -v gitleaks >/dev/null 2>&1 || { printf '#!/bin/sh\nexit 0\n' > "$TC2/bin/gitleaks"; chmod +x "$TC2/bin/gitleaks"; }
+tcw() { local h="$1"; shift; env HOME="$TC2/$h" WIKIS_DIR="$TC2/$h/wikis" PATH="$PATH:$TC2/bin" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com "$W" "$@"; }
+tcg() { local h="$1"; shift; env HOME="$TC2/$h" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com git -C "$TC2/$h/wikis" "$@"; }
+env HOME="$TC2/a" git init -q --bare "$TC2/remote.git"
+tcw a init --git >/dev/null 2>&1
+tcw a new demo >/dev/null 2>&1
+tcw a new other >/dev/null 2>&1
+mkdir -p "$TC2/a/wikis/demo/wiki/concepts"
+printf -- '---\ntitle: Limits\nsummary: the limits\n---\n\nThe limit is 5.\n' > "$TC2/a/wikis/demo/wiki/concepts/limits.md"
+tcg a add -A && tcg a commit -q -m first && tcg a remote add origin "$TC2/remote.git" && tcg a push -q -u origin HEAD 2>/dev/null
+env HOME="$TC2/b" git clone -q "$TC2/remote.git" "$TC2/b/wikis" 2>/dev/null
+cp "$REPO/hooks/pre-commit" "$TC2/b/wikis/.git/hooks/pre-commit"; cp "$REPO/hooks/llm-wiki-gitleaks.toml" "$TC2/b/wikis/.git/hooks/" 2>/dev/null; chmod +x "$TC2/b/wikis/.git/hooks/pre-commit"
+PG="demo/wiki/concepts/limits.md"
+printf -- '---\ntitle: Limits\nsummary: the limits\n---\n\nThe limit is 8, says the first machine.\n' > "$TC2/a/wikis/$PG"
+tcw a sync demo -m "demo: eight" >/dev/null 2>&1
+printf -- '---\ntitle: Limits\nsummary: the limits\n---\n\nThe limit is 6, says the second machine.\n' > "$TC2/b/wikis/$PG"
+# Loose work in another wiki, which nothing here may touch.
+printf 'a loose note\n' > "$TC2/b/wikis/other/raw/loose.md"; printf '\nan unsaved edit\n' >> "$TC2/b/wikis/other/index.md"
+cksum "$TC2/b/wikis/other/raw/loose.md" "$TC2/b/wikis/other/index.md" > "$TC2/loose.before"
+tcremote() { git --git-dir="$TC2/remote.git" for-each-ref --format='%(objectname)' refs/heads | head -n 1; }
+tcat="$(tcremote)"
+out="$(tcw b sync demo -m "demo: six" 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"error: not pushed. $PG was changed here and on another machine, and git can't merge the two. The pull was undone: every page is as this machine had it, and your changes are committed here. Ask the user which version to keep. Then do: git -C "*" pull --no-rebase, edit the page, git add it, git commit --no-edit, and sync again."*) true ;; *) false ;; esac && ok "the second machine's sync stops, names the page, and says what was done and what to do" || bad "the second machine's sync stops, names the page, and says what was done and what to do" "exit $code: $out"
+check "no merge is left in progress, and no file is unmerged" bash -c "! test -e '$TC2/b/wikis/.git/MERGE_HEAD' && [ -z \"\$(git -C '$TC2/b/wikis' ls-files -u)\" ]"
+check "the page holds this machine's text, with none of git's markers" bash -c "grep -q 'says the second machine' '$TC2/b/wikis/$PG' && ! grep -q '^<<<<<<<\|^>>>>>>>' '$TC2/b/wikis/$PG'"
+check "this machine's commit is there, one ahead of the remote" test "$(git -C "$TC2/b/wikis" rev-list --count '@{u}..HEAD')" = 1
+check "nothing reached the remote" test "$(tcremote)" = "$tcat"
+cksum "$TC2/b/wikis/other/raw/loose.md" "$TC2/b/wikis/other/index.md" > "$TC2/loose.after"
+check "a loose note and an unsaved edit in another wiki are as they were" cmp -s "$TC2/loose.before" "$TC2/loose.after"
+# Every other command gives the same reason.
+out="$(tcw b sync other -m "other: notes" 2>&1)"; code=$?
+case "$out" in *"partial commit"* | *"secret scan"*) bad "a sync of another wiki commits its notes and gives the same reason" "exit $code: $out" ;; *"committed: other: notes"*"$PG was changed here and on another machine"*) ok "a sync of another wiki commits its notes and gives the same reason" ;; *) bad "a sync of another wiki commits its notes and gives the same reason" "exit $code: $out" ;; esac
+out="$(tcw b start demo 2>&1)"; code=$?
+[ "$code" = 0 ] && case "$out" in *"pull: undone. $PG was changed here and on another machine, so nothing can be pushed from this machine until that is settled. Tell the user in your first reply."*) true ;; *) false ;; esac && ok "session start says the pull was undone, and goes on" || bad "session start says the pull was undone, and goes on" "exit $code: $(printf '%s\n' "$out" | grep '^pull')"
+check "and leaves no merge behind either" test ! -e "$TC2/b/wikis/.git/MERGE_HEAD"
+for go in "" 1; do
+  expect "status says the sync is blocked, since when and by what$([ -z "$go" ] || echo ', from the Bash too')" "sync: blocked since $(date -u +%Y-%m-%d). $PG was changed here and on another machine. Ask an agent: \"settle the sync conflict in $PG\"" env LLM_WIKI_NO_GO="$go" HOME="$TC2/b" WIKIS_DIR="$TC2/b/wikis" "$W" status
+done
+out="$(tcw b update --wikis-only </dev/null 2>&1)" || true
+case "$out" in *"the pull was undone: $PG was changed here and on another machine"*) ok "wiki update says the same, and goes on" ;; *) bad "wiki update says the same, and goes on" "$out" ;; esac
+check "with still no merge left open" test ! -e "$TC2/b/wikis/.git/MERGE_HEAD"
+# Settled by hand, as the error says: the next sync pushes without pulling, and the line goes.
+tcg b pull -q --no-rebase --no-edit >/dev/null 2>&1
+printf -- '---\ntitle: Limits\nsummary: the limits\n---\n\nThe limit is 8. Both machines agree now.\n' > "$TC2/b/wikis/$PG"
+tcg b add "$PG" && tcg b commit -q --no-edit 2>/dev/null
+check "the clash is on record until then" test -f "$TC2/b/wikis/.git/llm-wiki-conflict"
+tcg b push -q 2>/dev/null
+lacks "settled and pushed by hand, with no sync at all: status no longer says the sync is blocked" "sync: blocked" tcw b status
+check "and the record is gone" test ! -e "$TC2/b/wikis/.git/llm-wiki-conflict"
+printf 'one more page\n' > "$TC2/b/wikis/demo/wiki/more.md"
+expect "and the next sync goes through" "synced: " tcw b sync demo
+# A merge already in progress, which sync didn't start: nothing is staged, nothing is touched.
+tcg a pull -q --no-rebase --no-edit >/dev/null 2>&1
+printf -- '---\ntitle: Limits\nsummary: the limits\n---\n\nThe limit is 9, says the first machine.\n' > "$TC2/a/wikis/$PG"
+tcw a sync demo >/dev/null 2>&1
+printf -- '---\ntitle: Limits\nsummary: the limits\n---\n\nThe limit is 7, says the second machine.\n' > "$TC2/b/wikis/$PG"
+tcg b commit -q -am "seven" 2>/dev/null
+tcg b pull -q --no-rebase --no-edit >/dev/null 2>&1
+printf 'a second note\n' > "$TC2/b/wikis/demo/raw/second.md"
+tcg b status --porcelain > "$TC2/merge.before"
+out="$(tcw b sync demo 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"is in the middle of a merge this command didn't start, in $PG. Nothing was committed. Do: finish it (edit the file, git add, git commit --no-edit), or undo it (git -C "*" merge --abort). Then sync again."*) true ;; *) false ;; esac && ok "with a merge already in progress, sync stops before it stages anything" || bad "with a merge already in progress, sync stops before it stages anything" "exit $code: $out"
+tcg b status --porcelain > "$TC2/merge.after"
+check "the merge and the index are as they were" bash -c "cmp -s '$TC2/merge.before' '$TC2/merge.after' && test -e '$TC2/b/wikis/.git/MERGE_HEAD'"
+expect "session start says a merge is open, in one line" "pull: skipped. " tcw b start demo
+expect "and so does status" "sync: blocked. " tcw b status
+out="$(tcw b update --wikis-only </dev/null 2>&1)" || true
+case "$out" in *"not pulled and not upgraded: "*"is in the middle of a merge"*) ok "wiki update upgrades nothing into the middle of a merge" ;; *) bad "wiki update upgrades nothing into the middle of a merge" "$out" ;; esac
+tcg b status --porcelain > "$TC2/merge.after2"
+check "and the merge is still as it was" cmp -s "$TC2/merge.before" "$TC2/merge.after2"
+tcg b merge --abort 2>/dev/null
+tcg b reset -q --hard '@{u}' 2>/dev/null; rm -f "$TC2/b/wikis/demo/raw/second.md"
+# A refused commit leaves nothing staged, so the next wiki's sync can still merge (M17).
+printf '#!/bin/sh\necho "llm-wiki: commit refused. A staged file holds what looks like a secret." >&2\nexit 1\n' > "$TC2/b/wikis/.git/hooks/pre-commit"
+printf 'Captured: 2026-01-01\n\nA note the scan refuses.\n' > "$TC2/b/wikis/demo/raw/refused.md"
+out="$(tcw b sync demo 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"the commit was refused"*) true ;; *) false ;; esac && ok "a commit the scan refuses stops the sync" || bad "a commit the scan refuses stops the sync" "exit $code: $out"
+check "nothing is left staged, and the note is still on disk" bash -c "[ -z \"\$(git -C '$TC2/b/wikis' diff --cached --name-only)\" ] && test -f '$TC2/b/wikis/demo/raw/refused.md'"
+cp "$REPO/hooks/pre-commit" "$TC2/b/wikis/.git/hooks/pre-commit"; chmod +x "$TC2/b/wikis/.git/hooks/pre-commit"
+printf 'a page from the first machine\n' > "$TC2/a/wikis/other/wiki/from-a.md"
+tcw a sync other >/dev/null 2>&1
+printf 'a page from the second\n' > "$TC2/b/wikis/other/wiki/from-b.md"
+expect "so a sync of another wiki that has to merge still goes through" "synced: " tcw b sync other -m "other: a page"
+# A file staged by hand that an incoming change would write over: named, and no merge left.
+printf 'the first machine changed this\n' > "$TC2/a/wikis/other/wiki/from-a.md"
+tcw a sync other >/dev/null 2>&1
+printf 'staged here by hand\n' > "$TC2/b/wikis/other/wiki/from-a.md"
+tcg b add other/wiki/from-a.md
+printf 'something for demo\n' > "$TC2/b/wikis/demo/wiki/d.md"
+out="$(tcw b sync demo 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"the pull didn't start: other/wiki/from-a.md has changes here that what came in would write over. Nothing was merged."*) true ;; *) false ;; esac && ok "a pull git won't start names the file in the way, and says what to do" || bad "a pull git won't start names the file in the way, and says what to do" "exit $code: $out"
+check "and leaves no merge" test ! -e "$TC2/b/wikis/.git/MERGE_HEAD"
+tcg b reset -q -- other/wiki/from-a.md; tcg b checkout -q -- other/wiki/from-a.md
+# A copy here of a file that is coming in, not yet tracked: set aside for the pull, and put
+# back when that pull then hits a clash and is undone.
+printf 'the same note on both machines\n' > "$TC2/a/wikis/other/raw/same.md"
+printf -- '---\ntitle: Limits\nsummary: the limits\n---\n\nThe limit is 12, says the first machine.\n' > "$TC2/a/wikis/$PG"
+tcg a pull -q --no-rebase --no-edit >/dev/null 2>&1
+tcg a add -A && tcg a commit -q -m "twelve, and a note" && tcg a push -q 2>/dev/null
+printf 'the same note on both machines\n' > "$TC2/b/wikis/other/raw/same.md"
+printf -- '---\ntitle: Limits\nsummary: the limits\n---\n\nThe limit is 13, says the second machine.\n' > "$TC2/b/wikis/$PG"
+out="$(tcw b sync demo 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"$PG was changed here and on another machine"*) true ;; *) false ;; esac && ok "a clash found after an identical untracked copy was set aside is still undone and named" || bad "a clash found after an identical untracked copy was set aside is still undone and named" "exit $code: $out"
+check "and the copy is back where it was" grep -qx 'the same note on both machines' "$TC2/b/wikis/other/raw/same.md"
+check "with nothing left over in the git folder" bash -c "! ls '$TC2/b/wikis/.git' | grep -q aside"
+tcg b reset -q --hard '@{u}' 2>/dev/null; rm -f "$TC2/b/wikis/other/raw/same.md" "$TC2/b/wikis/.git/llm-wiki-conflict"; tcg b pull -q --no-rebase --no-edit >/dev/null 2>&1
+# Session start waits a moment for a sync in progress, then goes on without its pull.
+mkdir "$TC2/b/wikis/.git/llm-wiki-sync.lock"
+out="$(tcw b start demo 2>&1)"; code=$?
+rmdir "$TC2/b/wikis/.git/llm-wiki-sync.lock" 2>/dev/null
+[ "$code" = 0 ] && case "$out" in *"pull: skipped, because another session is syncing this collection."*) true ;; *) false ;; esac && ok "with another session's sync in progress, start skips its pull and says so" || bad "with another session's sync in progress, start skips its pull and says so" "exit $code: $(printf '%s\n' "$out" | grep '^pull')"
+tcw b start demo >/dev/null 2>&1
+check "start gives the lock back when it is done" test ! -e "$TC2/b/wikis/.git/llm-wiki-sync.lock"
+fi
+
 if section "What CI skips"; then
 # scripts/ci-changes.sh says whether a change needs this suite. It says no only for files
 # nothing reads, and yes whenever it can't be sure.
@@ -11994,6 +12117,8 @@ check "journal depth counts from / when that is the code folder" bash -c "
 check "a push runs CI only on main, so a pull request's commit runs it once" bash -c "sed -n '/^on:/,/^jobs:/p' '$CIY' | tr -d ' \n' | grep -q 'push:branches:\[main\]pull_request:'"
 check "the suite's jobs wait for that answer" bash -c "[ \"\$(grep -c \"if: needs.changes.outputs.suite == 'true'\" '$CIY')\" = 3 ]"
 check "the required check passes only when the suite passed, or wasn't needed and was skipped" bash -c "grep -q 'if \[ \"\$SMOKE\" = success \]; then exit 0; fi' '$CIY' && grep -q '\[ \"\$CHANGES\" = success \] && \[ \"\$SUITE\" = false \] && \[ \"\$SMOKE\" = skipped \]' '$CIY'"
+# The data-flow analysis of the shell linter took about 14 GB on this file, and a runner has 16.
+check "CI lints without shellcheck's data-flow analysis, which the runner has no room for" grep -q 'run: shellcheck --extended-analysis=false -S warning wiki.sh ' "$CIY"
 check "lint is never skipped: it waits for nothing and has no condition" bash -c "! sed -n '/^  lint:/,/^  go:/p' '$CIY' | grep -q 'needs:\|^    if:'"
 fi
 
