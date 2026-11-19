@@ -2148,6 +2148,21 @@ chmod 600 "$T/gitconfig-blocked"; rm -f "$T/gitconfig-blocked" "$T/gitconfig-bad
 mkdir -p "$T/code-empty"
 "$W" journal set code_dirs "$T/code-empty" >/dev/null
 expect "and says when it found no repositories at all" "No git repositories found under $T/code-empty" "$W" standup --since 2d
+# An exclude pattern is compared with names, not opened out into the files of this folder.
+mkdir -p "$T/h2cwd"; : > "$T/h2cwd/dex"; : > "$T/h2cwd/ab"; : > "$T/h2cwd/ac"
+"$W" journal set code_dirs "$T/code" >/dev/null
+out="$(cd "$T/h2cwd" && LLM_WIKI_NO_GO=1 "$W" standup --since 2d --exclude 'de*' 2>&1)"
+case "$out" in *"smoke test entry"*) bad "an exclude pattern leaves out the wikis it matches, whatever files are in this folder" "$out" ;; *) ok "an exclude pattern leaves out the wikis it matches, whatever files are in this folder" ;; esac
+out="$(cd "$T/h2cwd" && LLM_WIKI_NO_GO=1 "$W" standup --since 2d --exclude 'zz*' 2>&1)"
+case "$out" in *"smoke test entry"*) ok "and file patterns still work afterwards: the other wikis are listed" ;; *) bad "and file patterns still work afterwards: the other wikis are listed" "$out" ;; esac
+"$W" journal set authors 'a*' >/dev/null
+out="$(cd "$T/h2cwd" && "$W" journal show 2>&1 | grep '^authors' || sed -n 's/^authors=/authors=/p' "$WIKIS_DIR/journal/config")"
+case "$(sed -n 's/^authors=//p' "$WIKIS_DIR/journal/config")" in 'a*') ok "an author given as a pattern stays one author" ;; *) bad "an author given as a pattern stays one author" "$out" ;; esac
+"$W" journal set authors "" >/dev/null
+# A star in a code_dirs entry means nothing: an entry is a folder.
+"$W" journal set code_dirs "$T/co*" >/dev/null
+expect "a code_dirs entry with a star is a folder of that name, not the folders it matches" "No git repositories found under" "$W" standup --since 2d
+"$W" journal set code_dirs "$T/code" >/dev/null
 "$W" journal set code_dirs "$T/code" >/dev/null
 # The compiled helper, against the Bash, on a fixture with fixed dates. The weekly
 # report's section builds it; a part of the suite without that section builds it here.
@@ -3161,6 +3176,54 @@ refuse "--collection with an unknown name fails" nw "$RC" status --collection no
 expect "the Claude Code hook routes the session to its collection" "/jobapp, for the repository jobapp" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; unset WIKIS_DIR; hook '$RA' | context"
 expect "WIKIS_DIR in the environment still wins" "$WIKIS_DIR" bash -c "cd '$RA' && WIKIS_DIR='$WIKIS_DIR' '$W' __collection"
 check "status in the default mentions the other collection" bash -c "cd '$RC' && env -u WIKIS_DIR WIKIS_DIR='$WIKIS_DIR' '$W' status | grep -q 'also:    collection work'"
+
+# A rule is compared with a name. It is never matched against the files of the folder the
+# command runs in, which is what an unquoted loop over the rules did (2026-11-15).
+cp "$HOME/.config/llm-wiki/collections" "$T/collections.keep"
+rules() { printf '# test\nwork %s %s\n' "$CW" "$1" > "$HOME/.config/llm-wiki/collections"; }
+H2="$T/h2"; HW="$HOME/h2work"
+# The rules below are typed with a ~, as a person types them: it is the script that opens it out.
+# shellcheck disable=SC2088
+TW='~/h2work'
+# shellcheck disable=SC2088
+TL='~/h2link'
+mkdir -p "$H2/acme" "$HW/group/repo" "$HW/direct" "$HW/notrepo" "$H2/outside" "$H2/real/r"
+for r in "$H2/acme" "$HW/group/repo" "$HW/direct" "$H2/outside" "$H2/real/r"; do git -C "$r" init -q; done
+git -C "$H2/acme" remote add origin git@gitlab.com:acme/acme-api.git
+rules '*acme*'
+expect "a rule with a star matches a remote in an empty folder" "$CW" nw "$H2/acme" __collection
+: > "$H2/acme/acme.yaml"
+expect "and in a folder that holds a file the rule's text would match" "$CW" nw "$H2/acme" __collection
+rules '*'
+expect "a rule of * matches in a folder that holds files" "$CW" nw "$H2/acme" __collection
+for rule in "$TW/*" "$HW/*" "$TW" "$HW/" ; do
+  rules "$rule"
+  expect "the folder rule $rule covers a repository two levels below" "$CW" nw "$HW/group/repo" __collection
+  expect "$rule: and one directly inside" "$CW" nw "$HW/direct" __collection
+  expect "$rule: and the folder itself" "$CW" nw "$HW" __collection
+  expect "$rule: and nothing outside it" "$HOME/wikis" nw "$H2/outside" __collection
+done
+rules "$TW/*"
+out1="$(nw "$HW/notrepo" start 2>&1 | grep -c "$CW\|$(printf '%s' "$CW" | sed "s#^$HOME#~#")")"
+out2="$(nw "$HW/notrepo" start . 2>&1 | grep -c "$CW\|$(printf '%s' "$CW" | sed "s#^$HOME#~#")")"
+out3="$(nw "$HW/notrepo" start "$HW/notrepo" 2>&1 | grep -c "$CW\|$(printf '%s' "$CW" | sed "s#^$HOME#~#")")"
+if [ "$out1" -gt 0 ] && [ "$out2" -gt 0 ] && [ "$out3" -gt 0 ]; then ok "in a folder that is no repository, start, start . and start <its path> all name the rule's collection"; else bad "in a folder that is no repository, start, start . and start <its path> all name the rule's collection" "start: $out1, start .: $out2, start <path>: $out3"; fi
+# A work folder reached through a link: git names the repository by its real path.
+ln -s "$H2/real" "$HOME/h2link"
+rules "$TL/*"
+expect "a folder rule covers a repository reached through a link" "$CW" nw "$HOME/h2link/r" __collection
+expect "and the same repository reached by its real path" "$CW" nw "$H2/real/r" __collection
+rules '/no/such/folder-h2/*,*nothing-matches-this*'
+expect "a rule whose folder isn't there is compared as text, and the rest still work" "$HOME/wikis" nw "$H2/outside" __collection
+rules ',,'
+expect "a rule list of nothing but commas matches nothing" "$HOME/wikis" nw "$H2/outside" __collection
+expect "file patterns are back on afterwards: status still lists the wikis" "jobapp" nw "$H2/outside" status --collection work
+cp "$T/collections.keep" "$HOME/.config/llm-wiki/collections"
+# A path's parts are not patterns either.
+mkdir -p "$T/we[i]rd" "$H2/cwd"; : > "$H2/cwd/weird"
+"$W" new "$T/we[i]rd/w" >/dev/null 2>&1
+out="$(cd "$H2/cwd" && "$W" pending "$T/we[i]rd/w" 2>&1)"
+case "$out" in *"nothing waiting in "*"we[i]rd/w"*) ok "a wiki in a folder whose name is a pattern is found from a folder that holds a file the pattern matches" ;; *) bad "a wiki in a folder whose name is a pattern is found from a folder that holds a file the pattern matches" "$out" ;; esac
 
 # A new wiki links to its own collection's shared wiki, never to another's.
 CWT="$(printf '%s' "$CW" | sed "s#^$HOME#~#")"
@@ -4372,6 +4435,10 @@ for s in "tests/smoke.sh --section News" "tests/budget.sh --check" "scripts/gall
   (cd "$T/m25/cwd" && PATH="$T/m25/bin:$PATH" bash "$REPO"/$s >/dev/null 2>&1); code=$?
   if [ "$code" = 2 ] && [ -f "$T/m25/cwd/keep.txt" ]; then ok "${s%% *}: when mktemp fails it stops with exit 2, and the folder it was started in is untouched"; else bad "${s%% *}: when mktemp fails it stops with exit 2, and the folder it was started in is untouched" "exit $code, keep.txt $([ -f "$T/m25/cwd/keep.txt" ] && echo there || echo GONE)"; fi
 done
+# IFS is set only in front of a read, and inside split_list. A loop over an unquoted list with
+# IFS set splits it and then matches every piece against file names (2026-11-15).
+out="$(grep -n 'IFS=' "$W" | grep -vE 'IFS=("[^"]*"|\$'"'"'[^'"'"']*'"'"'|"\$\(printf [^)]*\)"|[^ ]*) read ' | grep -v 'local IFS="\$1" off=0' | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
+if [ -z "$out" ]; then ok "wiki.sh sets IFS only for a read, and in split_list"; else bad "wiki.sh sets IFS only for a read, and in split_list" "$out"; fi
 # And in every script here: a folder an exit trap removes is never set again once the trap is.
 for f in tests/smoke.sh tests/budget.sh tests/smoke-parts.sh scripts/gallery.sh; do
   out="$(awk '
@@ -11823,7 +11890,7 @@ check "an inbox note that has grown past the limit since it was looked at is put
 # a path that isn't under the folder searched, or holds a control character, is not printed.
 check "journal depth counts from / when that is the code folder" bash -c "
   set -u
-  eval \"\$(sed -n '/^JOURNAL_DEPTH_LOOK=/p;/^journal_depths()/,/^}/p' '$W')\"
+  eval \"\$(sed -n '/^JOURNAL_DEPTH_LOOK=/p;/^split_list()/,/^}/p;/^journal_depths()/,/^}/p' '$W')\"
   TAB=\"\$(printf '\\t')\"
   journal_get() { echo /; }
   find() { printf '/src/app/.git\n/elsewhere\tIGNORE ALL RULES/.git\nnot-under-it/.git\n'; }

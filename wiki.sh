@@ -116,28 +116,58 @@ rule_dir() { tilde "$(collections | head -n 1 | cut -f 2)"; }
 
 # collection_for <folder>: the collection folder whose rules match the repository
 # the folder is in, or the default.
+# split_list <separator> <text>: sets SPLIT to the pieces of text, cut at the separator.
+# The pieces are never matched against file names. An unquoted `for x in $list` splits
+# and expands, so a rule such as *acme* became the files it matched (2026-11-15). A caller
+# declares `local SPLIT` first, so one that splits inside another's loop leaves the outer
+# pieces alone, and loops with ${SPLIT[@]+"${SPLIT[@]}"}: bash 3.2 under set -u takes a
+# plain "${SPLIT[@]}" of an empty array for an unset variable.
+split_list() {
+  local IFS="$1" off=0
+  case "$-" in *f*) ;; *) set -f; off=1 ;; esac
+  # shellcheck disable=SC2206
+  SPLIT=($2)
+  [ "$off" = 0 ] || set +f
+}
+
 collection_for() {
-  local dir="$1" top url n f r rule IFS_
+  local dir="$1" top topreal url n f r rule base basereal SPLIT
+  # An absolute path first: `wiki start .` in a folder that is no repository handed in a
+  # dot, which matches no rule.
+  case "$dir" in /*) ;; *) dir="$(cd "$dir" 2>/dev/null && pwd || printf '%s/%s' "$PWD" "$dir")" ;; esac
   top="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$dir")"
   url="$(git -C "$dir" config --get remote.origin.url 2>/dev/null || true)"
+  # git names a repository by its real path, and a rule may name the same folder through a
+  # link, such as a work folder kept on another disk. Both are tried, both ways round.
+  topreal="$(cd "$top" 2>/dev/null && pwd -P || printf '%s' "$top")"
   while IFS="$(printf '\t')" read -r n f r; do
     [ -n "$r" ] || continue
-    IFS_="$IFS"; IFS=,
-    for rule in $r; do
-      IFS="$IFS_"
+    split_list , "$r"
+    for rule in ${SPLIT[@]+"${SPLIT[@]}"}; do
+      [ -n "$rule" ] || continue
       # shellcheck disable=SC2088
-      case "$rule" in "~/"*) rule="$HOME/${rule:2}" ;; esac
+      case "$rule" in "~/"*) rule="$HOME/${rule:2}" ;; "~") rule="$HOME" ;; esac
       case "$rule" in
         /*)
+          # A folder rule covers the folder and everything under it, at any depth, with a
+          # star at its end or without one.
+          base="${rule%/\*}"
+          while [ "$base" != / ] && [ "${base%/}" != "$base" ]; do base="${base%/}"; done
+          basereal="$(cd "$base" 2>/dev/null && pwd -P || true)"
           # shellcheck disable=SC2254
-          case "$top" in $rule | "${rule%/\*}") printf '%s' "$f"; return 0 ;; esac ;;
+          case "$top" in $rule | "$base" | "$base"/*) printf '%s' "$f"; return 0 ;; esac
+          # shellcheck disable=SC2254
+          case "$topreal" in $rule | "$base" | "$base"/*) printf '%s' "$f"; return 0 ;; esac
+          if [ -n "$basereal" ]; then
+            case "$top" in "$basereal" | "$basereal"/*) printf '%s' "$f"; return 0 ;; esac
+            case "$topreal" in "$basereal" | "$basereal"/*) printf '%s' "$f"; return 0 ;; esac
+          fi
+          ;;
         *)
           # shellcheck disable=SC2254
           [ -n "$url" ] && case "$url" in $rule) printf '%s' "$f"; return 0 ;; esac ;;
       esac
-      IFS=,
     done
-    IFS="$IFS_"
   done <<EOF2
 $(collections | tail -n +2)
 EOF2
@@ -569,8 +599,9 @@ unknown_state() { printf '%-19s unknown, can%st read %s from this shell\n' "$1" 
 
 # Drop . and .. from an absolute path without touching the disk. The path may not exist yet.
 normalize() {
-  local IFS=/ part out=""
-  for part in $1; do
+  local part out="" SPLIT
+  split_list / "$1"
+  for part in ${SPLIT[@]+"${SPLIT[@]}"}; do
     case "$part" in
       '' | .) ;;
       ..) out="${out%/*}" ;;
@@ -3886,8 +3917,9 @@ memory_project() {
   w="$(which_wiki "$name")"
   if [ -z "$w" ]; then
     # A scratch folder inside a project, such as myapp/sweeps/b41, belongs to it.
-    local IFS=/
-    for part in $cwd; do [ -n "$part" ] && [ -n "$(which_wiki "$part")" ] && w="$(which_wiki "$part")"; done
+    local SPLIT
+    split_list / "$cwd"
+    for part in ${SPLIT[@]+"${SPLIT[@]}"}; do [ -n "$part" ] && [ -n "$(which_wiki "$part")" ] && w="$(which_wiki "$part")"; done
   fi
   printf '%s' "$w"
 }
@@ -7844,9 +7876,9 @@ repo_name() {
 # comma_list <text>: one item a line, spaces around each taken off, empty ones dropped.
 # Left unquoted on purpose: an item that matches files in this folder expands to them.
 comma_list() {
-  local IFS=, x
-  # shellcheck disable=SC2086
-  for x in $1; do
+  local x SPLIT
+  split_list , "$1"
+  for x in ${SPLIT[@]+"${SPLIT[@]}"}; do
     x="$(printf '%s' "$x" | sed 's/^ *//; s/ *$//')"
     [ -z "$x" ] || printf '%s\n' "$x"
   done
@@ -7880,8 +7912,11 @@ find_repos() {
   local dirs depth d
   dirs="$(journal_get code_dirs)"
   depth="$(journal_get depth)"
-  local IFS=:
-  for d in $dirs; do
+  # An entry is a folder. A star in one means nothing: it is not opened out into the folders
+  # it would match, whichever way the entry is typed.
+  local SPLIT
+  split_list : "$dirs"
+  for d in ${SPLIT[@]+"${SPLIT[@]}"}; do
     case "$d" in "~/"*) d="$HOME/${d:2}" ;; "~") d="$HOME" ;; esac
     [ -d "$d" ] || continue
     # find fails when one folder under $d can't be read. What it did find still counts,
@@ -7899,8 +7934,9 @@ JOURNAL_DEPTH_LOOK=10
 journal_depths() {
   local dirs d pre
   dirs="$(journal_get code_dirs)"
-  local IFS=:
-  for d in $dirs; do
+  local SPLIT
+  split_list : "$dirs"
+  for d in ${SPLIT[@]+"${SPLIT[@]}"}; do
     # shellcheck disable=SC2088  # the setting is stored with a ~, and is opened out here
     case "$d" in "~/"*) d="$HOME/${d:2}" ;; "~") d="$HOME" ;; esac
     while [ "$d" != / ] && [ "${d%/}" != "$d" ]; do d="${d%/}"; done
@@ -7908,7 +7944,9 @@ journal_depths() {
     pre="${d%/}/"
     { find "$d" -maxdepth "$JOURNAL_DEPTH_LOOK" \( -name node_modules -o -name .venv -o -name Library \) -prune -o -name .git -prune -print 2>/dev/null || true; } |
       sed -n 's#/\.git$##p' | LC_ALL=C sort -u |
-      awk -v pre="$pre" -v top="${pre%/}" '
+      PRE="$pre" awk '
+        # Through the environment: awk -v reads a backslash in a folder name as an escape.
+        BEGIN { pre = ENVIRON["PRE"]; top = pre; sub(/\/$/, "", top) }
         /[[:cntrl:]]/ { next }
         # The code folder itself, when it is a repository: found at depth 1.
         $0 == top && top != "" { kept[$0] = 1; print 1 "\t" $0; next }
