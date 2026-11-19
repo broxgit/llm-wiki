@@ -4,6 +4,14 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v42 (2026-11-19)
+
+A page changed on two machines no longer stops a sync.
+
+- When `wiki sync` can't join the two versions of a page, it keeps the other machine's and saves yours as a note in `raw/`, named `...-sync-conflict-<page>.md`. The next compile folds it back in, and flags what the two versions say differently.
+- `rules/sync.md` and `rules/compile.md` say what that note is and how to compile it. The steps for settling a clash by hand stay, for the few it still leaves: a page removed on one machine and edited on the other, or a file that is not a page.
+- Do: run `wiki upgrade --all`.
+
 ## v41 (2026-11-19)
 
 The handbook now says how to finish a merge when a page was changed on two machines.

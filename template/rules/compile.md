@@ -54,6 +54,8 @@ One file at a time means rewriting the same topic page once per file, and a sess
 4. Steps 4 to 8 above still apply to every file: conflicts, `Feedback:` lines, `Verified:` lines, open items, and `Uses:` lines.
 5. Finish as below: `index.md` once, and one `log.md` entry per file.
 
+Files named `*-sync-conflict-*` came from `wiki sync`: this machine's version of a page that another machine changed too, set aside when the two couldn't be joined. The page already holds the other machine's version. Fold in what this one adds, and treat what the two say differently as `rules/conflicts.md` says. Don't put the page back as this file has it. Each such file is a source of its own: one never supersedes another, whatever their names.
+
 Files named `*-seed-*` came from `wiki seed`: a repository's own docs, as its authors wrote them. Read the `seed-00-manifest` note first. It says which repository and commit they came from. Their claims about code are unchecked, so don't stamp `commit` from them, and where two of them disagree, the code decides once you check it.
 
 Last, before you release the lock, count the `ingest` entries in `log.md` that come after the most recent `lint` entry. At 10 or more, read `rules/lint.md` and lint now.

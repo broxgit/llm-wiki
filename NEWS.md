@@ -4,6 +4,12 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2027-01-28: a page two machines changed no longer stops a sync
+
+- Where `wiki sync` can't join the two versions of a page, it keeps the other machine's and saves yours as a note, which the next compile folds back in.
+- It says `set aside:` and names the page and the note. Nothing waits on a person, and nothing is lost.
+- A few clashes still stop and name the file: a page one machine removed, one open item changed two ways, a file that is not a page.
+
 ## 2027-01-27: what a trial with two machines showed, fixed
 
 - Two machines that each add a paragraph at the same place in a page, such as its end, now keep both. That is what a compile does, and it clashed.

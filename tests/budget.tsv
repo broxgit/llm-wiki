@@ -28,7 +28,7 @@ start: a ticket folder with pages that mention it	1342
 start: a ticket folder, the Jira extension set up	1441
 start: a ticket folder, two wikis, no pattern	1466
 template/AGENTS.md	16039
-template/rules/compile.md	10957
+template/rules/compile.md	11408
 template/rules/conflicts.md	1581
 template/rules/delegation.md	4985
 template/rules/dependencies.md	3612
@@ -39,6 +39,6 @@ template/rules/lint.md	3170
 template/rules/open.md	3384
 template/rules/patterns.md	9611
 template/rules/peers.md	5989
-template/rules/sync.md	3286
+template/rules/sync.md	4334
 template/rules/workflows.md	3741
 workflows: one pattern recorded	362
