@@ -4,6 +4,13 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2027-01-22: collection rules match the same in every folder
+
+- A rule with a star, such as `*acme*`, no longer depends on which files are in the folder you run from.
+- A folder rule covers every repository under the folder, however it is typed: `~/work`, `~/work/*` or the full path.
+- An `exclude` pattern and a `code_dirs` entry are taken as written: a star in `code_dirs` no longer opens out into folders.
+- Do: if you have a collections file, look in the default collection for a wiki that belongs to a work repository, and move it.
+
 ## 2027-01-21: the chat connector can't be led out of a wiki by a loop of links
 
 - `wiki_read` refused a link that led out of a wiki, but a path through a link that pointed at itself got past the check. It is refused now.
