@@ -61,6 +61,27 @@ READ_TOOLS = ("read_file", "view_file")  # Gemini's, in Antigravity
 SAFE = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
 
 
+def is_wiki(path):
+    """wiki.sh's is_wiki: an index.md, and an AGENTS.md that is the handbook, which its
+    "Handbook version N." line says. A handbook that can't be read counts, as it does there.
+    The same test is in wiki.sh, internal/routing, hooks/session-start.sh, mcp/server.py and
+    extensions/wiki-confluence: change them together."""
+    agents = os.path.join(path, "AGENTS.md")
+    if not (os.path.isfile(agents) and os.path.isfile(os.path.join(path, "index.md"))):
+        return False
+    try:
+        with open(agents, "rb") as f:
+            data = f.read()
+    except OSError:
+        return True
+    for line in data.split(b"\n"):
+        # A line ends at a NUL byte, as bash 3.2 reads it.
+        line = line.split(b"\0", 1)[0]
+        if line.startswith(b"Handbook version ") and line[17:18].isdigit():
+            return True
+    return False
+
+
 def glob(text, pattern):
     """Whether the whole text fits the pattern. Only * is special: [ and ? are
     themselves, since a shell command is full of them."""
@@ -173,7 +194,7 @@ def collections():
 
 def wiki_of_page(path):
     """(collection folder, wiki name) when the path is a .md file under
-    <collection>/<wiki>/wiki/ of a wiki (a folder with AGENTS.md and index.md), else None.
+    <collection>/<wiki>/wiki/ of a wiki (as is_wiki has it), else None.
     A page that isn't there, such as one the agent guessed at, isn't a lookup."""
     if not isinstance(path, str) or not path.endswith(".md") or not os.path.isfile(path):
         return None
@@ -186,7 +207,7 @@ def wiki_of_page(path):
                 parts = candidate[len(prefix):].split("/")
                 if len(parts) >= 3 and parts[1] == "wiki":
                     wiki = os.path.join(root, parts[0])
-                    if os.path.isfile(os.path.join(wiki, "AGENTS.md")) and os.path.isfile(os.path.join(wiki, "index.md")):
+                    if is_wiki(wiki):
                         return root, parts[0]
     return None
 

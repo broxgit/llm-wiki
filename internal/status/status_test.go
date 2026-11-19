@@ -77,7 +77,7 @@ func collection(t *testing.T) string {
 	wiki(t, root, "caf\xc3\xa9-wiki", "28")
 	wiki(t, root, "a-wiki-with-a-name-longer-than-the-column", "28")
 	write(t, root+"/notawiki/index.md", "# Index\n")
-	write(t, root+"/.hidden/AGENTS.md", "x\n")
+	write(t, root+"/.hidden/AGENTS.md", "Handbook version 1.\n")
 	write(t, root+"/.hidden/index.md", "x\n")
 	return root
 }
@@ -93,10 +93,11 @@ func TestRun(t *testing.T) {
 		rows[strings.Fields(line)[0]] = line
 	}
 	for name, want := range map[string]string{
-		"Beta":      "Beta                       v28       0        free",
-		"behind":    "behind                     v27       0        free  <- behind template v28",
-		"ahead":     "ahead                      v29       0        free  <- ahead of your template v28",
-		"nover":     "nover                      v?        0        free  <- behind template v28",
+		"Beta":   "Beta                       v28       0        free",
+		"behind": "behind                     v27       0        free  <- behind template v28",
+		"ahead":  "ahead                      v29       0        free  <- ahead of your template v28",
+		// A handbook with no version line is not a wiki's: the folder is in no row.
+		"nover":     "",
 		"locked":    "locked                     v28       0        held by s-1 since 2026-01-01",
 		"freelock":  "freelock                   v28       0        free",
 		"due":       "due                        v028      5        free  <- compile due",
@@ -118,7 +119,7 @@ func TestRun(t *testing.T) {
 	for _, line := range r.Rows[1:] {
 		order = append(order, strings.Fields(line)[0])
 	}
-	if want := "Beta a-wiki-with-a-name-longer-than-the-column ahead alpha behind caf\xc3\xa9-wiki covers-nl covers due freelock lint locked nover pat"; strings.Join(order, " ") != want {
+	if want := "Beta a-wiki-with-a-name-longer-than-the-column ahead alpha behind caf\xc3\xa9-wiki covers-nl covers due freelock lint locked pat"; strings.Join(order, " ") != want {
 		t.Errorf("order: %q", order)
 	}
 	if _, ok := rows["notawiki"]; ok {
@@ -130,7 +131,7 @@ func TestRun(t *testing.T) {
 		`lint: lint due, 11 ingests since the last. Ask an agent: "lint lint"`,
 		`pat: 2 repeated pattern(s) ready for a fix. Ask an agent: "propose the ready patterns in pat"`,
 		`pat: 1 accepted fix(es) seen again, so not working. Ask an agent: "look again at the patterns marked AGAIN in pat"`,
-		"2 wikis' handbooks behind template v28 (behind nover). Run: wiki upgrade --all",
+		"behind: handbook behind template v28. Run: wiki upgrade behind",
 	}
 	if !reflect.DeepEqual(r.Todos, want) {
 		t.Errorf("todos:\n%q\nwant\n%q", r.Todos, want)

@@ -145,12 +145,12 @@ func TestLookupLikeProject(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write("app/AGENTS.md", "")
+	write("app/AGENTS.md", "Handbook version 1.\n")
 	write("app/index.md", "")
-	write("big/AGENTS.md", "")
+	write("big/AGENTS.md", "Handbook version 1.\n")
 	write("big/index.md", "")
 	write("big/repos.md", "- svc-a\n- svc-b \n-svc-c\n")
-	write("half/AGENTS.md", "") // no index.md, so not a project
+	write("half/AGENTS.md", "Handbook version 1.\n") // no index.md, so not a project
 	n, err := newNames(wikis)
 	if err != nil {
 		t.Fatal(err)

@@ -1388,7 +1388,7 @@ def cmd_publish(args):
     wiki = rest[0]
     wikis_dir = os.environ.get("WIKIS_DIR") or die("WIKIS_DIR isn't set. Run this as: wiki confluence")
     root = os.path.join(wikis_dir, wiki)
-    if "/" in wiki or not (os.path.isfile(os.path.join(root, "AGENTS.md")) and os.path.isfile(os.path.join(root, "index.md"))):
+    if not is_wiki(wiki):
         die(f"no wiki called {wiki}")
     conf = settings()
     need_sign_in(conf)
@@ -1535,8 +1535,32 @@ def cmd_config(args):
 
 
 def is_wiki(name):
-    root = os.path.join(os.environ.get("WIKIS_DIR", ""), name)
-    return "/" not in name and os.path.isfile(os.path.join(root, "AGENTS.md")) and os.path.isfile(os.path.join(root, "index.md"))
+    """A wiki of this collection, by name. An extension is one file and can import no other,
+    so this is a copy of wiki.sh's is_wiki, with the others it names."""
+    if "/" in name:
+        return False
+    return wiki_folder(os.path.join(os.environ.get("WIKIS_DIR", ""), name))
+
+
+def wiki_folder(path):
+    """wiki.sh's is_wiki: an index.md, and an AGENTS.md that is the handbook, which its
+    "Handbook version N." line says. A handbook that can't be read counts, as it does there.
+    The same test is in wiki.sh, internal/routing, hooks/reminders.py, hooks/session-start.sh,
+    mcp/server.py and extensions/wiki-confluence: change them together."""
+    agents = os.path.join(path, "AGENTS.md")
+    if not (os.path.isfile(agents) and os.path.isfile(os.path.join(path, "index.md"))):
+        return False
+    try:
+        with open(agents, "rb") as f:
+            data = f.read()
+    except OSError:
+        return True
+    for line in data.split(b"\n"):
+        # A line ends at a NUL byte, as bash 3.2 reads it.
+        line = line.split(b"\0", 1)[0]
+        if line.startswith(b"Handbook version ") and line[17:18].isdigit():
+            return True
+    return False
 
 
 def auto_wikis(conf):

@@ -18,12 +18,12 @@ func wiki(t *testing.T) (Options, string) {
 		t.Fatal(err)
 	}
 	for _, f := range []string{"AGENTS.md", "index.md"} {
-		if err := os.WriteFile(filepath.Join(root, f), nil, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(root, f), []byte("Handbook version 1.\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
 	at := time.Date(2026, 1, 2, 23, 4, 5, 999, time.FixedZone("west", -7*3600))
-	return Options{Wikis: filepath.Join(home, "wikis"), Home: home, Pwd: home, Now: func() time.Time { return at }}, root
+	return Options{Wikis: filepath.Join(home, "wikis"), Home: home, Pwd: home, WikiCmd: "wiki", Now: func() time.Time { return at }}, root
 }
 
 func TestSlug(t *testing.T) {
@@ -142,7 +142,7 @@ func TestRunRefuses(t *testing.T) {
 	}{
 		{"a terminal", []string{"demo", "slug"}, true, "capture reads the note from stdin, or from a file with --file NOTE"},
 		{"no wiki", nil, false, "name a wiki"},
-		{"not a wiki", []string{"other", "slug"}, false, "~/wikis/other is not a wiki"},
+		{"not a wiki", []string{"other", "slug"}, false, "~/wikis/other is not a wiki. Run: wiki status"},
 		{"no slug", []string{"demo"}, false, "capture needs a short slug for the name, such as decided-postgres"},
 		{"an empty note", []string{"demo", "slug"}, false, "capture got an empty note"},
 		{"no value", []string{"demo", "--copy"}, false, "--copy needs a value"},

@@ -23,13 +23,16 @@ func write(t *testing.T, path, text string) {
 func collection(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
+	write(t, root+"/demo/AGENTS.md", "Handbook version 1.\n")
 	write(t, root+"/demo/index.md", "# Index\n\n## Canary pages\n- [Deploy flow](wiki/howto/deploy.md): canary first, then the rest\n- [Other](wiki/other.md): nothing here")
 	write(t, root+"/demo/wiki/howto/deploy.md", "---\ntitle: Deploy\n---\nThe canary goes first.\n")
 	write(t, root+"/demo/wiki/other.md", "---\ntitle: Canary in the title only\n---\nNo mention.\n")
 	write(t, root+"/demo/wiki/notes.md", "# Notes\n\n  \t The CANARY host is canary-1.\n")
+	write(t, root+"/zeta/AGENTS.md", "Handbook version 1.\n")
 	write(t, root+"/zeta/index.md", "# Index\n")
 	write(t, root+"/zeta/wiki/a.md", "A canary here.\n")
 	write(t, root+"/stray/readme.md", "canary, but no index\n")
+	write(t, root+"/.hidden/AGENTS.md", "Handbook version 1.\n")
 	write(t, root+"/.hidden/index.md", "- canary in a hidden folder\n")
 	write(t, root+"/stats.csv", "canary\n")
 	return root
@@ -65,6 +68,7 @@ func TestSearchNothing(t *testing.T) {
 // The word is a fixed string: no character of a regular expression means anything.
 func TestSearchFixedString(t *testing.T) {
 	root := t.TempDir()
+	write(t, root+"/w/AGENTS.md", "Handbook version 1.\n")
 	write(t, root+"/w/index.md", "- has a.c in it\n- has abc in it\n- costs $5 (.*) [x] ^#\n")
 	for word, want := range map[string]string{
 		"a.c":  "w:\n  - has a.c in it\n",
@@ -83,6 +87,7 @@ func TestSearchFixedString(t *testing.T) {
 // text is shown as it is written.
 func TestSearchCase(t *testing.T) {
 	root := t.TempDir()
+	write(t, root+"/w/AGENTS.md", "Handbook version 1.\n")
 	write(t, root+"/w/index.md", "- Has UPPER and Mixed Case\n")
 	write(t, root+"/w/wiki/p.md", "Some SHOUTING Here\n")
 	for word, want := range map[string]string{
@@ -100,6 +105,7 @@ func TestSearchCase(t *testing.T) {
 // isn't UTF-8 is a byte like any other.
 func TestSearchBytes(t *testing.T) {
 	root := t.TempDir()
+	write(t, root+"/w/AGENTS.md", "Handbook version 1.\n")
 	write(t, root+"/w/index.md", "- École normale\n- caf\xe9 in Latin-1\n")
 	for word, want := range map[string]string{
 		"École":   "w:\n  - École normale\n",
@@ -115,6 +121,7 @@ func TestSearchBytes(t *testing.T) {
 
 func TestPages(t *testing.T) {
 	root := t.TempDir()
+	write(t, root+"/w/AGENTS.md", "Handbook version 1.\n")
 	write(t, root+"/w/index.md", "# Index\n")
 	// The 120th byte is the second of the arrow's three.
 	long := strings.Repeat("x", 112) + " word → " + strings.Repeat("y", 100)
@@ -155,6 +162,7 @@ func TestPages(t *testing.T) {
 		t.Errorf("frontmatter that never ends: %q", got)
 	}
 	// A line of nothing but space is the first to mention a space, and shows nothing.
+	write(t, root+"/v/AGENTS.md", "Handbook version 1.\n")
 	write(t, root+"/v/index.md", "#\n")
 	write(t, root+"/v/wiki/p.md", " \nreal text\n")
 	if got, _, _ := Search(Options{Wikis: root + "/v/..", Word: " "}); strings.Contains(got, "v:") {

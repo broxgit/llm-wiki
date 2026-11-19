@@ -147,7 +147,8 @@ func isFile(path string) bool {
 }
 
 func isWiki(dir string) bool {
-	return isFile(dir+"/AGENTS.md") && isFile(dir+"/index.md")
+	ok, err := routing.IsWiki(dir)
+	return err == nil && ok
 }
 
 // wikisIn is the wikis of a collection, by name, in the order of their bytes.

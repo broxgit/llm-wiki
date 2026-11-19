@@ -84,6 +84,7 @@ read -r -d '' PARTS <<'TABLE' || true
 3 | Uninstall | Collection
 3 | What CI skips |
 2 | A wiki that passes for a repository |
+2 | A folder that only looks like a wiki |
 2 | The suite itself |
 3 | Obsidian plugin |
 2 | History without git |
@@ -2185,7 +2186,7 @@ if [ -x "$T/bin/llm-wiki" ]; then
   J="$WIKIS_DIR/journal/2026-01-15.md"; mkdir -p "$WIKIS_DIR/journal"
   printf '# 2026-01-15\n\n- 10:00 [plain] a day of work\nnot a bullet\n- 11:00 [branch] more [work] here\n- no brackets at all\n-no space\n' > "$J"
   Z="$WIKIS_DIR/Zeta"; mkdir -p "$Z/raw" "$Z/wiki/sub" "$WIKIS_DIR/notawiki/raw" "$WIKIS_DIR/.hidden/raw"
-  : > "$Z/AGENTS.md"; : > "$Z/index.md"
+  printf 'Handbook version 1.\n' > "$Z/AGENTS.md"; : > "$Z/index.md"
   printf '# A title: with colon\r\n\nbody\n' > "$Z/raw/2026-01-15-120000-titled.md"
   printf 'no heading\n' > "$Z/raw/2026-01-15-120001-untitled.md"
   printf '# \n\n# second\n' > "$Z/raw/2026-01-15-120002-empty-title.md"
@@ -2201,7 +2202,7 @@ if [ -x "$T/bin/llm-wiki" ]; then
   printf '```\n> **Check:** fenced\n```\n> **Check:** a one\n> **Other:** no\n' > "$Z/wiki/a.md"
   printf '> **Check:** sub one\n> **Check:** sub two\n> **Check:** sub three\n' > "$Z/wiki/sub/c.md"
   printf '> **Check:** a.b one\n' > "$Z/wiki/a.b.md"
-  printf '# hidden\n' > "$WIKIS_DIR/.hidden/raw/2026-01-15-120000-x.md"; : > "$WIKIS_DIR/.hidden/AGENTS.md"; : > "$WIKIS_DIR/.hidden/index.md"
+  printf '# hidden\n' > "$WIKIS_DIR/.hidden/raw/2026-01-15-120000-x.md"; printf 'Handbook version 1.\n' > "$WIKIS_DIR/.hidden/AGENTS.md"; : > "$WIKIS_DIR/.hidden/index.md"
   printf '# not a wiki\n' > "$WIKIS_DIR/notawiki/raw/2026-01-15-120000-x.md"
   SP=(--since 2026-01-10 --until 2026-01-20)
   sbash="$(LLM_WIKI_NO_GO=1 "$W" standup "${SP[@]}" 2>&1)"
@@ -2785,7 +2786,7 @@ m="$(cd "$FB" && echo *-a-docs-note.md)"; m="${m%.md}"
 expect "in notes mode, send refuses" "sharing is off" bash -c "printf 'y\n' | LLM_WIKI_TEST_TTY=1 '$W' feedback send '$m'"
 lacks "and start doesn't ask agents to point the user at it" "wait for the user to read" "$W" start web
 # Another collection's wiki names are private too, wherever this runs from.
-mkdir -p "$T/other-coll/client-secret-wiki" && touch "$T/other-coll/client-secret-wiki/AGENTS.md" "$T/other-coll/client-secret-wiki/index.md"
+mkdir -p "$T/other-coll/client-secret-wiki" && printf 'Handbook version 1.\n' > "$T/other-coll/client-secret-wiki/AGENTS.md" && touch "$T/other-coll/client-secret-wiki/index.md"
 printf 'other %s\n' "$T/other-coll" > "$HOME/.config/llm-wiki/collections"
 printf 'Hit this in the client-secret-wiki wiki.\n' | "$W" feedback add bug "a note naming another collection" >/dev/null
 m="$(cd "$FB" && echo *-a-note-naming-another-collection.md)"; m="${m%.md}"
@@ -3318,7 +3319,7 @@ if [ -x "$T/bin/llm-wiki" ]; then
   # wno <folder> [which's arguments]: which with the Bash alone, both streams.
   wno() { (cd "$1" && shift && env -u WIKIS_DIR LLM_WIKI_NO_GO=1 "$W" which ${1+"$@"} 2>&1); }
   # fake_wiki <folder> [index line]: the two files that make a folder a wiki.
-  fake_wiki() { mkdir -p "$1" && printf '# Handbook\n' > "$1/AGENTS.md" && printf '# Index\n%s\n' "${2:-}" > "$1/index.md"; }
+  fake_wiki() { mkdir -p "$1" && printf '# Handbook\n\nHandbook version 1.\n' > "$1/AGENTS.md" && printf '# Index\n%s\n' "${2:-}" > "$1/index.md"; }
   CWT="$(printf '%s' "$CW" | sed "s#^$HOME#~#")"
   WIKIS_DIR="$CW" "$W" cover jobapp jobapp-web jobapp-api >/dev/null 2>&1
   fake_wiki "$CW/payroll"
@@ -3430,11 +3431,11 @@ if [ -x "$T/bin/llm-wiki" ]; then
   # Beta sorts before alpha by byte and after it in most other orders. notes has an
   # index and no handbook, and stray has neither.
   mkdir -p "$FD/Beta" "$FD/notes" "$FD/stray" "$FD/alpha/wiki/howto" "$FD/alpha/wiki/a-b" "$FD/alpha/wiki/a" "$FD/alpha/wiki/.hid" "$FD/alpha/wiki/sources" "$FD/alpha/wiki/sub/sources"
-  printf '# Handbook\n' > "$FD/Beta/AGENTS.md"
+  printf '# Handbook\n\nHandbook version 1.\n' > "$FD/Beta/AGENTS.md"
   printf '# Index\n- [Canary](wiki/c.md): the canary of Beta\n' > "$FD/Beta/index.md"
   printf -- '- canary, in a folder with an index and no handbook\n' > "$FD/notes/index.md"
   printf 'canary, in a folder with no index\n' > "$FD/stray/readme.md"
-  printf '# Handbook\n' > "$FD/alpha/AGENTS.md"
+  printf '# Handbook\n\nHandbook version 1.\n' > "$FD/alpha/AGENTS.md"
   printf '# Index\n\n## Canary pages\n- [Deploy flow](wiki/howto/deploy.md): canary first, then the rest\n- [Costs](wiki/costs.md): a.c is not abc, and $5 (.*) [x] ^# is no pattern\n- [School](wiki/school.md): \303\211cole normale, and caf\351 in Latin-1' > "$FD/alpha/index.md"
   printf -- '---\ntitle: Deploy\n---\nThe canary goes first.\n' > "$FD/alpha/wiki/howto/deploy.md"
   printf 'canary in a-b\n' > "$FD/alpha/wiki/a-b/x.md"
@@ -3470,8 +3471,6 @@ alpha:
     wiki/a/x.md: canary in a
     wiki/crlf.md: canary with a carriage return$cr
     wiki/long.md: $(printf '%0111d' 0) canary:
-notes:
-  - canary, in a folder with an index and no handbook
 exit 0
 stats:
 date,wiki,result,word
@@ -3499,10 +3498,8 @@ exit 0" frun "$T/bin/llm-wiki" "$RC" wholechar
   [ -z "$w" ] && ok "what find prints of UTF-8 pages is UTF-8, from the helper and the Bash" || bad "what find prints of UTF-8 pages is UTF-8, from the helper and the Bash" "not UTF-8: find $w"
   # The MCP server reads find through Python as text, in whatever locale it was started.
   aspy() { (cd "$RC" && env -u WIKIS_DIR -u LC_ALL -u LC_CTYPE -u LANG "$@" python3 -c 'import subprocess, sys; print(subprocess.run([sys.argv[1], "find", sys.argv[2]], capture_output=True, text=True).stdout)' "$W" canary 2>&1); }
-  expect "Python reads the helper's find as text with no locale set" "wiki/long.md: $(printf '%0111d' 0) canary:
-notes:" aspy LLM_WIKI_NO_GO= LLM_WIKI_GO="$T/bin/llm-wiki"
-  expect "and the Bash's" "wiki/long.md: $(printf '%0111d' 0) canary:
-notes:" aspy LLM_WIKI_NO_GO=1
+  expect "Python reads the helper's find as text with no locale set" "wiki/long.md: $(printf '%0111d' 0) canary:" aspy LLM_WIKI_NO_GO= LLM_WIKI_GO="$T/bin/llm-wiki"
+  expect "and the Bash's" "wiki/long.md: $(printf '%0111d' 0) canary:" aspy LLM_WIKI_NO_GO=1
   fsame "find, helper and Bash: a line that ends in a Latin-1 letter loses it" helper latinend
   expect "and the helper shows the rest" "wiki/end-latin.md: latinend, a line that ends in Latin-1: caf
 exit 0" frun "$T/bin/llm-wiki" "$RC" latinend
@@ -3542,7 +3539,7 @@ exit 0"*) ok "and they are the newest five, .md only, without the compiled and t
   rm -rf "$FD/alpha/raw" "$FD/Beta/raw"
   # Found by an independent review of the two copies: cases where the Bash was wrong
   # and the helper right. fwiki <name>: a wiki with a handbook, an index and a raw/.
-  fwiki() { mkdir -p "$FD/$1/raw" "$FD/$1/wiki"; printf '# Handbook\n' > "$FD/$1/AGENTS.md"; printf '# Index\n' > "$FD/$1/index.md"; }
+  fwiki() { mkdir -p "$FD/$1/raw" "$FD/$1/wiki"; printf '# Handbook\n\nHandbook version 1.\n' > "$FD/$1/AGENTS.md"; printf '# Index\n' > "$FD/$1/index.md"; }
   # A log.md with no final newline: its last source ran into the next line of
   # compiled_stems' output, and no note counted as waiting.
   fwiki gamma
@@ -3653,7 +3650,7 @@ $(date -u +%Y-%m-%d),jobapp,search-found,canary" frun "$T/bin/llm-wiki" "$RC" ca
   # llm/, and the first with a result is the one the search is logged against.
   for w in covers covers-nl llm llm-wiki; do
     mkdir -p "$FD/$w"
-    printf '# Handbook\n' > "$FD/$w/AGENTS.md"
+    printf '# Handbook\n\nHandbook version 1.\n' > "$FD/$w/AGENTS.md"
     printf '# Index\n- the dashword of %s\n' "$w" > "$FD/$w/index.md"
   done
   printf -- '- the llmword of llm\n' >> "$FD/llm/index.md"; printf -- '- the llmword of llm-wiki\n' >> "$FD/llm-wiki/index.md"
@@ -3692,9 +3689,11 @@ goes"
   ln -s ../zlast.md "$FD/alpha/wiki/a/link.md"
   fsame "find, helper and Bash: a page that is a link" bash canary
   rm -f "$FD/alpha/wiki/a/link.md"
+  # In a wiki: the folder with an index and no handbook is no longer searched at all.
+  printf 'Handbook version 1.\n' > "$FD/notes/AGENTS.md"
   ln -s "$FD/alpha/wiki" "$FD/notes/wiki"
   fsame "find, helper and Bash: a wiki/ folder that is a link" bash canary
-  rm -f "$FD/notes/wiki"
+  rm -f "$FD/notes/wiki" "$FD/notes/AGENTS.md"
   if [ "$(id -u)" != 0 ]; then
     chmod 000 "$FD/alpha/wiki/a/x.md"
     fsame "find, helper and Bash: a page that can't be read" bash canary
@@ -4202,8 +4201,7 @@ PY
   check "a long word is logged cut at 60 bytes and not inside a character, by the helper's server" grep -E -q ",global,search-none,x($(printf '\303\251')){29}\$" "$FD/stats.csv"
   check "and each search is logged once" bash -c "[ \"\$(grep -c ',search-found,twobyte$' '$FD/stats.csv')\" = 1 ] && [ \"\$(grep -c ',search-none,twobyte$' '$CW/stats.csv')\" = 1 ] && grep -qx \"used:find $(date -u +%Y-%m-%d)\" '$MTIPS'"
   # What a client is owed, whatever the two servers agree on.
-  expect "the helper's search cuts a line before a character the 120th byte falls in" "    wiki/long.md: $(printf '%0111d' 0) canary:
-notes:" python3 "$MS" text "$T/mcp.go.out" search-canary
+  expect "the helper's search cuts a line before a character the 120th byte falls in" "    wiki/long.md: $(printf '%0111d' 0) canary:" python3 "$MS" text "$T/mcp.go.out" search-canary
   expect "and names each collection" "Collection work:
 jobapp:
   also in pages:
@@ -10631,7 +10629,7 @@ check "the code that puts back an old claim puts it back under a name of its own
   [ \"\$(cat '$IBW/demo/inbox/recovered-x.md')\" = 'taken name' ] && [ \"\$(cat '$IBW/demo/inbox/recovered-x-2.md')\" = 'Claimed, then the run died.' ] && [ ! -e '$IBW/demo/inbox/.taking-99999-0.md' ]"
 rm -rf "$IBW/demo/inbox"; mkdir -p "$IBW/demo/inbox"
 # A wiki that is a link to a folder elsewhere has no inbox here.
-mkdir -p "$IB/outside/linked/inbox"; printf '# H\n' > "$IB/outside/linked/AGENTS.md"; printf '# I\n' > "$IB/outside/linked/index.md"
+mkdir -p "$IB/outside/linked/inbox"; printf '# H\n\nHandbook version 1.\n' > "$IB/outside/linked/AGENTS.md"; printf '# I\n' > "$IB/outside/linked/index.md"
 printf 'In a wiki that is a link.\n' > "$IB/outside/linked/inbox/l.md"
 ln -s "$IB/outside/linked" "$IBW/linked"
 ibnow "$W" inbox >/dev/null 2>&1
@@ -10720,7 +10718,7 @@ unmake() {
   : > "$UNH/Library/LaunchAgents/io.github.llm-wiki.tick.plist"
   : > "$UNH/Library/LaunchAgents/com.example.other.plist"
   printf 'a page\n' > "$UNW/global/page.md"
-  printf '# Handbook\n' > "$UNW/global/AGENTS.md"; printf '# Index\n' > "$UNW/global/index.md"
+  printf '# Handbook\n\nHandbook version 1.\n' > "$UNW/global/AGENTS.md"; printf '# Index\n' > "$UNW/global/index.md"
 }
 unsum() { (cd "$UNW" && find . -type f -exec cksum {} + | sort); }
 unmake
@@ -10809,7 +10807,7 @@ check "and the other two folders were still moved" bash -c "[ ! -e '$UNH/.config
 # A wiki in one of its folders that no list of collections names is found by looking.
 unmake
 mkdir -p "$UNH/.local/state/llm-wiki/My Wikis/notes"
-printf '# H\n' > "$UNH/.local/state/llm-wiki/My Wikis/notes/AGENTS.md"; printf '# I\n' > "$UNH/.local/state/llm-wiki/My Wikis/notes/index.md"
+printf '# H\n\nHandbook version 1.\n' > "$UNH/.local/state/llm-wiki/My Wikis/notes/AGENTS.md"; printf '# I\n' > "$UNH/.local/state/llm-wiki/My Wikis/notes/index.md"
 out="$(printf 'y\n' | LLM_WIKI_TEST_TTY=1 unw uninstall 2>&1)"
 case "$out" in *"~/.local/state/llm-wiki: left where it is, because there is a wiki in it."*) ok "a folder with a wiki in it that no collection names is still left, and it says why" ;; *) bad "a folder with a wiki in it that no collection names is still left, and it says why" "$out" ;; esac
 check "that wiki is where it was" test -f "$UNH/.local/state/llm-wiki/My Wikis/notes/index.md"
@@ -10880,7 +10878,7 @@ unagents() {
   rm -rf "$UNH/.codex" "$UNH/.gemini" "$UNH/.cursor" "$UNDESK" "$UN/codex.calls"
   mkdir -p "$UNH/.codex/llm-wiki/plugins/llm-wiki" "$UNH/.codex/skills/wiki-status" "$UNH/.codex/skills/wiki-mine" "$UNH/.codex/skills/own" \
     "$UNH/.gemini/config/plugins/llm-wiki/rules" "$UNH/.gemini/config/plugins/other" "$UNH/.cursor/skills" "$UNDESK"
-  printf '# H\n' > "$UNW/global/AGENTS.md"; printf '# I\n' > "$UNW/global/index.md"
+  printf '# H\n\nHandbook version 1.\n' > "$UNW/global/AGENTS.md"; printf '# I\n' > "$UNW/global/index.md"
   mkdir -p "$UNH/.codex/llm-wiki/.agents/plugins" "$UNH/.codex/llm-wiki/plugins/llm-wiki/.codex-plugin"
   printf '{}\n' > "$UNH/.codex/llm-wiki/.agents/plugins/marketplace.json"; printf '{}\n' > "$UNH/.codex/llm-wiki/plugins/llm-wiki/.codex-plugin/plugin.json"
   printf '{}\n' > "$UNH/.gemini/config/plugins/llm-wiki/plugin.json"; printf '{}\n' > "$UNH/.gemini/config/plugins/llm-wiki/hooks.json"
@@ -11822,6 +11820,104 @@ out="$(h4w f sync demo 2>&1)"; code=$?
 check "and nothing ran" test ! -e "$H4/PROOF3"
 fi
 
+if section "A folder that only looks like a wiki"; then
+# A wiki is a folder whose AGENTS.md is the handbook. AGENTS.md is also the usual name for a
+# code repository's own instructions, and a docs site has an index.md at its top. With only
+# the two names to go by, `wiki sync` on such a site committed and pushed all of it, an
+# untracked .env.local included, `wiki index` rewrote its home page, and `wiki upgrade`
+# replaced its AGENTS.md (2026-11-15).
+LK="$T/look"
+mkdir -p "$LK/home" "$LK/site"
+lw() { env HOME="$LK/home" WIKIS_DIR="$LK/home/wikis" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com "$W" "$@"; }
+lg() { env HOME="$LK/home" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com git "$@"; }
+lw init >/dev/null 2>&1
+lw new demo >/dev/null 2>&1
+lg init -q --bare "$LK/site.git"
+lg -C "$LK/site" init -q
+printf '# Instructions for agents\n\nRun the tests before you commit.\n' > "$LK/site/AGENTS.md"
+printf '# Our docs\n\n- [Start](start.md)\n- [API](api.md)\n' > "$LK/site/index.md"
+lg -C "$LK/site" add -A && lg -C "$LK/site" commit -q -m site && lg -C "$LK/site" remote add origin "$LK/site.git" && lg -C "$LK/site" push -q -u origin HEAD 2>/dev/null
+printf 'API_KEY=not-for-the-remote\n' > "$LK/site/.env.local"; printf 'a draft\n' > "$LK/site/draft.txt"
+looks() { (cd "$LK/site" && find . -name .git -prune -o -type f -print | LC_ALL=C sort | while IFS= read -r f; do printf '%s %s\n' "$f" "$(cksum < "$f")"; done; git status --porcelain; git rev-parse HEAD; git --git-dir="$LK/site.git" for-each-ref --format='%(objectname)'); }
+looks > "$LK/before"
+out="$(lw sync "$LK/site" 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"/look/site is not a wiki: its AGENTS.md is not the llm-wiki handbook. Nothing was changed. Run: "*" status"*) true ;; *) false ;; esac && ok "sync refuses a repository that only has a wiki's two file names, and says why" || bad "sync refuses a repository that only has a wiki's two file names, and says why" "exit $code: $out"
+for c in "index" "upgrade" "lock" "log" "lint" "pending" "cover" "pages" "compile" "unlock" "open --data"; do
+  # shellcheck disable=SC2086
+  case "$c" in
+    log) out="$(lw log "$LK/site" ingest "x" 2>&1)"; code=$? ;;
+    cover) out="$(lw cover "$LK/site" somerepo 2>&1)"; code=$? ;;
+    "open --data") out="$(lw open --data "$LK/site" 2>&1)"; code=$? ;;
+    *) out="$(lw $c "$LK/site" </dev/null 2>&1)"; code=$? ;;
+  esac
+  [ "$code" != 0 ] && case "$out" in *"is not a wiki"*) true ;; *) false ;; esac && ok "so does $c" || bad "so does $c" "exit $code: $out"
+done
+out="$(printf 'A note.\n' | lw capture "$LK/site" a-note 2>&1)"; code=$?
+out2="$(printf 'A note.\n' | LLM_WIKI_NO_GO=1 lw capture "$LK/site" a-note 2>&1)"
+[ "$code" != 0 ] && [ "$out" = "$out2" ] && case "$out" in *"is not a wiki: its AGENTS.md is not the llm-wiki handbook"*) true ;; *) false ;; esac && ok "capture refuses it in the same words with the helper and without" || bad "capture refuses it in the same words with the helper and without" "exit $code: $out
+without the helper: $out2"
+out="$(lw new "$LK/site" 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"has its own AGENTS.md, and a wiki's AGENTS.md is its handbook. A wiki needs a folder of its own. Run: "*" new site"*) true ;; *) false ;; esac && ok "wiki new refuses a folder that has its own AGENTS.md, and says where a wiki goes" || bad "wiki new refuses a folder that has its own AGENTS.md, and says where a wiki goes" "exit $code: $out"
+looks > "$LK/after"
+if cmp -s "$LK/before" "$LK/after"; then ok "after all of that every file is as it was, nothing is staged, and the remote has no new commit"; else bad "after all of that every file is as it was, nothing is staged, and the remote has no new commit" "$(diff "$LK/before" "$LK/after")"; fi
+# The same folder inside a collection: in no table and no list, and named once with the fix.
+mkdir -p "$LK/home/wikis/lookalike/wiki"
+printf '# Our own notes\n' > "$LK/home/wikis/lookalike/AGENTS.md"; printf '# Index\n\n- zebracrossing here\n' > "$LK/home/wikis/lookalike/index.md"
+for go in "" 1; do
+  who="$([ -z "$go" ] && echo "with the helper" || echo "with the Bash")"
+  out="$(LLM_WIKI_NO_GO="$go" lw status 2>&1)"
+  case "$out" in *"not a wiki: lookalike has AGENTS.md and index.md, but its AGENTS.md is not the handbook, so no command reads it. Do: if it is a wiki, add the line \"Handbook version 0.\" to its AGENTS.md, then run: "*" upgrade lookalike"*) ok "$who, status names a look-alike folder in a collection, with the fix" ;; *) bad "$who, status names a look-alike folder in a collection, with the fix" "$out" ;; esac
+  case "$(printf '%s\n' "$out" | grep -c '^lookalike ')" in 0) ok "$who, it has no row in the table" ;; *) bad "$who, it has no row in the table" "$out" ;; esac
+  out="$(LLM_WIKI_NO_GO="$go" lw find zebracrossing 2>&1)"
+  case "$out" in *lookalike*) bad "$who, find doesn't search it" "$out" ;; *) ok "$who, find doesn't search it" ;; esac
+done
+lacks "session start doesn't list it" "lookalike" lw start demo
+out="$(lw new lookalike 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"has an AGENTS.md that is not the handbook. Do: move that file away, or choose another name"*) true ;; *) false ;; esac && ok "wiki new on it says to move the file or pick another name, not to run wiki new again" || bad "wiki new on it says to move the file or pick another name, not to run wiki new again" "exit $code: $out"
+check "and adds nothing to it" test ! -e "$LK/home/wikis/lookalike/log.md"
+# The fix status gives works.
+printf '\nHandbook version 0.\n' >> "$LK/home/wikis/lookalike/AGENTS.md"
+lw upgrade lookalike >/dev/null 2>&1
+check "with the line added, upgrade makes it a wiki with the handbook" bash -c "grep -q '^Handbook version [1-9]' '$LK/home/wikis/lookalike/AGENTS.md'"
+lacks "and status no longer names it" "not a wiki: lookalike" lw status
+# A handbook that can't be read is still a wiki's: nothing can be told, as inside a sandbox.
+if [ "$(id -u)" != 0 ]; then
+  chmod 000 "$LK/home/wikis/demo/AGENTS.md"
+  out="$(LLM_WIKI_NO_GO=1 lw status 2>&1)"
+  chmod 644 "$LK/home/wikis/demo/AGENTS.md"
+  case "$out" in *"not a wiki: demo"* | *"Permission denied"*) bad "a wiki whose handbook can't be read is still a wiki, with nothing from the shell" "$out" ;; *"demo "*) ok "a wiki whose handbook can't be read is still a wiki, with nothing from the shell" ;; *) bad "a wiki whose handbook can't be read is still a wiki, with nothing from the shell" "$out" ;; esac
+  # And it is not written over: with no version to read, upgrade would take it for the oldest.
+  chmod 000 "$LK/home/wikis/demo/AGENTS.md"
+  out="$(lw upgrade demo 2>&1)"; code=$?
+  chmod 644 "$LK/home/wikis/demo/AGENTS.md"
+  [ "$code" = 1 ] && case "$out" in *"can't be read, so it is left as it is"*) true ;; *) false ;; esac && ok "upgrade leaves a handbook it can't read as it is, and says so" || bad "upgrade leaves a handbook it can't read as it is, and says so" "exit $code: $out"
+  mkdir -p "$LK/closed"; printf 'Private.\n' > "$LK/closed/AGENTS.md"; chmod 000 "$LK/closed/AGENTS.md"
+  out="$(lw new "$LK/closed" 2>&1)"; code=$?
+  chmod 644 "$LK/closed/AGENTS.md"
+  [ "$code" = 1 ] && [ ! -e "$LK/closed/index.md" ] && ok "wiki new makes nothing in a folder whose AGENTS.md it can't read" || bad "wiki new makes nothing in a folder whose AGENTS.md it can't read" "exit $code: $out"
+else
+  skipped "a handbook that can't be read (running as root)"
+fi
+mkdir -p "$LK/linked" "$LK/elsewhere"; ln -s "$LK/elsewhere/target.md" "$LK/linked/AGENTS.md"
+out="$(lw new "$LK/linked" 2>&1)"; code=$?
+[ "$code" = 1 ] && [ ! -e "$LK/elsewhere/target.md" ] && [ ! -e "$LK/linked/index.md" ] && ok "wiki new writes no handbook through an AGENTS.md that is a link" || bad "wiki new writes no handbook through an AGENTS.md that is a link" "exit $code: $out"
+# A byte that is no character on the version line: the number is still read, in any locale.
+printf '# H\n\nHandbook version 7. caf\351\n' > "$LK/home/wikis/demo/AGENTS.md.odd"
+out="$(LC_ALL=en_US.UTF-8 bash -c "eval \"\$(sed -n '/^handbook_version()/,/^}/p;/^version_of()/p' '$W')\"; version_of '$LK/home/wikis/demo/AGENTS.md.odd'" 2>&1)"
+unlink "$LK/home/wikis/demo/AGENTS.md.odd"
+case "$out" in 7) ok "a handbook's version is read by byte, whatever the locale" ;; *) bad "a handbook's version is read by byte, whatever the locale" "$out" ;; esac
+# A wiki in a repository of its own, outside any collection, still syncs.
+lw new "$LK/own" --git >/dev/null 2>&1
+printf '# Own\n' > "$LK/own/wiki/own.md"
+expect "a real wiki outside any collection still commits with wiki sync <path>" "committed: " lw sync "$LK/own" -m "own: a page"
+# The test is written in six places. Each has to ask for the version line.
+for f in wiki.sh internal/routing/routing.go mcp/server.py hooks/reminders.py hooks/session-start.sh extensions/wiki-confluence; do
+  check "$f asks for the handbook's version line where it decides what a wiki is" grep -q 'Handbook version ' "$REPO/$f"
+done
+out="$(grep -n 'AGENTS\.md' "$REPO"/internal/*/*.go "$REPO/mcp/server.py" "$REPO/hooks/reminders.py" "$REPO/extensions/wiki-confluence" | grep -v '_test\.go:' | grep -E 'isFile|is_file|isfile|IsFile' | grep -v 'internal/routing/routing.go\|internal/tokens/\|agents = \|agents)' || true)"
+if [ -z "$out" ]; then ok "no other copy tests for AGENTS.md by its name alone"; else bad "no other copy tests for AGENTS.md by its name alone" "$out"; fi
+fi
+
 if section "What CI skips"; then
 # scripts/ci-changes.sh says whether a change needs this suite. It says no only for files
 # nothing reads, and yes whenever it can't be sure.
@@ -12703,7 +12799,7 @@ wiki/how-to/c d.md${TB}${TB}${TB}c d"
 expect "pages without it is a list for people" "Quoted: a title" dw pages alpha
 refuse "pages needs a wiki" dw pages
 refuse "that is there" dw pages nosuch --data
-expect "and says how to see which wikis there are" "status lists the wikis here." dw pages nosuch --data
+expect "and says how to see which wikis there are" "is not a wiki. Run: " dw pages nosuch --data
 expect "a wiki with no pages says so to a person" "No pages yet." dw pages beta
 lacks "and nothing to a program" "." dw pages beta --data
 expect "open --data with no collection says how to make one" "Run: " env WIKIS_DIR="$T/nowikis" "$W" open --data

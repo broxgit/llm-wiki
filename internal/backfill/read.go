@@ -2,6 +2,7 @@ package backfill
 
 import (
 	"encoding/json"
+	"github.com/broxgit/llm-wiki/internal/routing"
 	"os"
 	"path/filepath"
 	"sort"
@@ -397,7 +398,7 @@ func newNames(wikis string) (*names, error) {
 				}
 			}
 		}
-		if isFile(filepath.Join(dir, "AGENTS.md")) && isFile(filepath.Join(dir, "index.md")) {
+		if ok, err := routing.IsWiki(dir); err == nil && ok {
 			n.known[e.Name()] = true
 		}
 	}

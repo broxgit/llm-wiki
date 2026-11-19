@@ -4,6 +4,12 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2027-01-23: a wiki is a folder whose AGENTS.md is the handbook
+
+- Commands refuse a folder that only has a wiki's two file names: `wiki sync` on a repository with its own `AGENTS.md` pushed all of it.
+- `wiki new` refuses a folder that already has its own `AGENTS.md`.
+- A folder in your wikis with an `AGENTS.md` that isn't the handbook is no longer listed or searched. `wiki status` names it, with the fix.
+
 ## 2027-01-22: collection rules match the same in every folder
 
 - A rule with a star, such as `*acme*`, no longer depends on which files are in the folder you run from.
