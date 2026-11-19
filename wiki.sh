@@ -1655,7 +1655,7 @@ cmd_list() {
 }
 
 cmd_start() {
-  local arg="${1:-$PWD}" repo="" top w="" wiki="" note="" out sshc tv v line sname spath d n hinted="" extras="" more="" tkey tfind tline thits
+  local arg="${1:-$PWD}" repo="" top w="" wiki="" note="" out sshc slock tv v line sname spath d n hinted="" extras="" more="" tkey tfind tline thits
   if [ -d "$arg" ]; then
     if top="$(git -C "$arg" rev-parse --show-toplevel 2>/dev/null)"; then repo="$(repo_name "$top")"; fi
   else
@@ -1714,9 +1714,21 @@ cmd_start() {
     sshc="${GIT_SSH_COMMAND:-$(git -C "$WIKIS_DIR" config --get core.sshCommand 2>/dev/null || echo ssh)}"
     if [ "$(GIT_SSH_COMMAND="$sshc -o ConnectTimeout=10 -o BatchMode=yes" track_remote "$WIKIS_DIR")" = new ]; then
       echo "pull: the remote has nothing yet. The next $WIKI_CMD sync pushes this collection to it."
-    elif out="$(GIT_SSH_COMMAND="$sshc -o ConnectTimeout=10 -o BatchMode=yes" git -C "$WIKIS_DIR" pull -q --no-rebase --no-edit 2>&1 </dev/null)"; then
+    elif ! slock="$(git -C "$WIKIS_DIR" rev-parse --absolute-git-dir 2>/dev/null)/llm-wiki-sync.lock" || ! sync_lock_try "$slock" 5; then
+      # Another session is in the middle of a sync: a pull beside it could land in its merge.
+      echo "pull: skipped, because another session is syncing this collection. Pages may be behind other machines: pull before your first write."
+    elif GIT_SSH_COMMAND="$sshc -o ConnectTimeout=10 -o BatchMode=yes" collection_pull "$WIKIS_DIR"; then
+      sync_lock_back
       echo "pull: up to date with the remote"
+    elif [ "$PULL" = conflict ]; then
+      sync_lock_back
+      echo "pull: undone. $(sync_clash "$PULL_FILES"), so nothing can be pushed from this machine until that is settled. Tell the user in your first reply."
+    elif [ "$PULL" = merging ]; then
+      sync_lock_back
+      echo "pull: skipped. $(tilde "$WIKIS_DIR") is in the middle of a merge${PULL_FILES:+, in $PULL_FILES}, so nothing can be pulled or pushed until it is finished or undone. Tell the user in your first reply."
     else
+      sync_lock_back
+      out="$PULL_ERR"
       echo "pull: failed, so pages may be behind other machines. Carry on, and pull before your first write. git said: $(printf '%s' "$out" | head -n 1)"
       case "$out" in
         *"Operation not permitted"*) echo "pull: that looks like an agent's sandbox blocking $(tilde "$WIKIS_DIR")/.git. Rerun $WIKI_CMD start outside the sandbox, or ask the user to allow it." ;;
@@ -2877,6 +2889,121 @@ sync_lock() {
   trap "rmdir '$d' 2>/dev/null || true" EXIT
 }
 
+# sync_lock_try <dir> <seconds>: take the sync lock for a moment, as session start and
+# update do around their pull, or fail when another session still holds it after that long.
+# The caller gives it back with rmdir.
+sync_lock_try() {
+  local d="$1" n=0
+  SYNC_TRY_LOCK=""
+  [ -n "$d" ] && [ "$d" != /llm-wiki-sync.lock ] || return 0
+  while ! mkdir "$d" 2>/dev/null; do
+    n=$((n + 1))
+    [ "$n" -le "$2" ] || return 1
+    # Can't be made at all, where .git isn't writable: there is nothing to hold, and git
+    # says so itself. Looked at again a moment later, in case it was only just given back.
+    if [ ! -d "$d" ]; then
+      mkdir "$d" 2>/dev/null && break
+      [ -d "$d" ] || return 0
+    fi
+    if [ -n "$(find "$d" -maxdepth 0 -mmin +5 2>/dev/null)" ]; then rmdir "$d" 2>/dev/null || true; fi
+    sleep 1
+  done
+  # Given back at exit too, if this run ends before it gets there. Only a lock this run made.
+  SYNC_TRY_LOCK="$d"
+  trap '[ -z "$SYNC_TRY_LOCK" ] || rmdir "$SYNC_TRY_LOCK" 2>/dev/null || true' EXIT
+}
+SYNC_TRY_LOCK=""
+sync_lock_back() {
+  [ -z "$SYNC_TRY_LOCK" ] || rmdir "$SYNC_TRY_LOCK" 2>/dev/null || true
+  SYNC_TRY_LOCK=""
+}
+
+# Two machines changed one page, and git can't merge the two. Before, the pull that found it
+# left the whole collection in the middle of a merge: the page held git's markers, a sync of
+# any other wiki failed with "cannot do a partial commit during a merge", and no command gave
+# the true reason (2026-11-15). Now the pull is undone on the spot and written down here, in
+# the repository's git folder, so sync, start and status all say the same thing.
+sync_conflict_file() {
+  local g
+  g="$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null)" || return 1
+  printf '%s/llm-wiki-conflict' "$g"
+}
+# sync_merging <repo>: a merge is in progress there.
+sync_merging() {
+  local g
+  g="$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null)" || return 1
+  # Unmerged files with no MERGE_HEAD count too: a stash that didn't apply, a cherry-pick.
+  [ -f "$g/MERGE_HEAD" ] || [ -n "$(git -C "$1" ls-files -u 2>/dev/null | head -n 1)" ]
+}
+# sync_unmerged <repo>: the files git couldn't merge, on one line, three at most by name.
+# The names come from a remote, so each is cut down before it is printed: one line, no control
+# character, no quote, 120 bytes. With -z a name is given as it is, and ends at a NUL.
+sync_unmerged() {
+  git -C "$1" ls-files -u -z 2>/dev/null | LC_ALL=C tr '\n' ' ' | LC_ALL=C tr '\000' '\n' | LC_ALL=C sed "s/^[^$TAB]*$TAB//" |
+    LC_ALL=C tr -d '\000-\011\013-\037\177' | LC_ALL=C tr '"`' "''" | LC_ALL=C cut -c 1-120 | LC_ALL=C sort -u |
+    awk 'NF && NR <= 3 { out = out (out != "" ? ", " : "") $0 } END { if (NR > 3) out = out " and " NR - 3 " more"; print out }' || true
+}
+# sync_clash <names>: "<file> was changed here and on another machine", for one or several.
+sync_clash() {
+  case "$1" in *", "* | *" and "*) printf '%s were changed here and on another machine' "$1" ;; *) printf '%s was changed here and on another machine' "$1" ;; esac
+}
+# The two lines sync dies with. One line each, because the MCP servers show the last line first.
+sync_clash_error() {
+  printf 'not pushed. %s, and git can'"'"'t merge the two. The pull was undone: every page is as this machine had it, and your changes are committed here. Ask the user which version to keep. Then do: git -C %s pull --no-rebase, edit the page, git add it, git commit --no-edit, and sync again.' "$(sync_clash "$1")" "$(tilde "$2")"
+}
+# sync_merging_error <files> <repo> [after]: before anything was staged, or, with a third
+# word, after this sync's own commit.
+sync_merging_error() {
+  if [ -z "${3:-}" ]; then
+    printf '%s is in the middle of a merge this command didn'"'"'t start%s. Nothing was committed. Do: finish it (edit the file, git add, git commit --no-edit), or undo it (git -C %s merge --abort). Then sync again.' "$(tilde "$2")" "${1:+, in $1}" "$(tilde "$2")"
+  else
+    printf 'not pushed. %s is in the middle of a merge%s, which could not be undone. Do: finish it (edit the file, git add, git commit --no-edit), or undo it (git -C %s merge --abort). Then sync again.' "$(tilde "$2")" "${1:+, in $1}" "$(tilde "$2")"
+  fi
+}
+
+# collection_pull <repo>: every pull of a collection, by sync, session start and update.
+# The caller holds the sync lock. Sets PULL to how it went, PULL_FILES to the files a clash
+# is in, and PULL_ERR to what git said.
+#   ok        pulled. The record of an earlier clash is removed.
+#   merging   a merge was in progress already. This didn't start it, so nothing is touched.
+#   conflict  the pull hit a conflict. It was undone, and the files are written down.
+#   failed    git wouldn't start, or couldn't reach the remote. Nothing to undo.
+collection_pull() {
+  local repo="$1" f
+  PULL=ok PULL_FILES="" PULL_ERR=""
+  f="$(sync_conflict_file "$repo" || true)"
+  if sync_merging "$repo"; then
+    PULL=merging; PULL_FILES="$(sync_unmerged "$repo")"
+    return 1
+  fi
+  if PULL_ERR="$(git -C "$repo" pull -q --no-rebase --no-edit 2>&1 </dev/null)"; then
+    [ -z "$f" ] || [ ! -f "$f" ] || unlink "$f" 2>/dev/null || true
+    return 0
+  fi
+  if sync_merging "$repo"; then
+    PULL_FILES="$(sync_unmerged "$repo")"
+    if git -C "$repo" merge --abort >/dev/null 2>&1 && ! sync_merging "$repo"; then
+      # With no file in conflict, the merge itself was clean and its commit was refused: a
+      # hook, a signature, no name to commit as. That is a pull that failed, with git's words.
+      if [ -z "$PULL_FILES" ]; then PULL=failed; return 1; fi
+      PULL=conflict
+      [ -z "$f" ] || printf '%s\t%s\n' "$(date -u +%Y-%m-%d)" "$PULL_FILES" > "$f" 2>/dev/null || true
+    else
+      PULL=merging
+    fi
+    return 1
+  fi
+  PULL=failed
+  return 1
+}
+# sync_settled <repo>: a push went through, so whatever clash was written down is over.
+# Someone who settles one by hand has merged already, and the next sync pushes without pulling.
+sync_settled() {
+  local f
+  f="$(sync_conflict_file "$1" || true)"
+  [ -z "$f" ] || [ ! -f "$f" ] || unlink "$f" 2>/dev/null || true
+}
+
 # sync <wiki> [-m MESSAGE]: commit this wiki's changes, pull, and push.
 # track_remote <dir>: make the branch track origin's branch of the same name. Setup's
 # `git remote add` never set that, so a bare pull failed with "no tracking
@@ -3335,7 +3462,7 @@ sync_scan_gate() {
 }
 
 sync_do() {
-  local wiki="" msg="" root repo path top err ahead here coll how cname
+  local wiki="" msg="" root repo path top err ahead here coll how cname nl=$'\n'
   while [ $# -gt 0 ]; do
     case "$1" in
       -m) need_value "$@"; msg="${2:-}"; shift 2 ;;
@@ -3421,6 +3548,8 @@ sync_do() {
   # working tree broke a pull (Codex and Cursor, 2026-10-30).
   SYNC_LOCK="$(git -C "$repo" rev-parse --absolute-git-dir 2>/dev/null)/llm-wiki-sync.lock"
   sync_lock "$SYNC_LOCK"
+  # Before anything is staged: staging a page full of git's markers would mark it settled.
+  ! sync_merging "$repo" || die "$(sync_merging_error "$(sync_unmerged "$repo")" "$repo")"
   SYNC_REPO="$repo"; SYNC_PATH="$path"; SYNC_ROOT="$root"
   SYNC_BEFORE="$(git -C "$repo" rev-parse -q --verify HEAD 2>/dev/null || true)"
   # A hook of ours from an earlier version is brought up to date first, with the rules beside
@@ -3431,6 +3560,11 @@ sync_do() {
   if ! git -C "$repo" diff --cached --quiet -- "$path"; then
     if ! err="$(git -C "$repo" commit -q -m "$msg" -- "$path" 2>&1)"; then
       printf '%s\n' "$err"
+      # Nothing is left staged: git won't start a merge while anything is, so one wiki's
+      # refused commit stopped every other wiki's sync as soon as it had to merge. The
+      # files stay on disk as they were.
+      # reset has no HEAD to go by in a repository with no commit yet.
+      git -C "$repo" reset -q -- "$path" >/dev/null 2>&1 || git -C "$repo" rm -r -q --cached -- "$path" >/dev/null 2>&1 || true
       die "the commit was refused. If the secret scan stopped it, redact the secret as the handbook says, then sync again."
     fi
     echo "committed: $msg"
@@ -3451,6 +3585,7 @@ sync_do() {
   sync_scan_gate "$repo"
   if [ "$(track_remote "$repo")" = new ]; then
     git -C "$repo" push -q -u origin HEAD || die "the first push to origin failed. Check the remote with: $WIKI_CMD setup git"
+    sync_settled "$repo"
     # "synced: " is how both MCP servers know a capture was pushed. Keep it on every
     # ending that pushed, and off the ones that didn't.
     echo "synced: pushed $(tilde "$repo") to origin for the first time"
@@ -3462,27 +3597,47 @@ sync_do() {
   # A count we can't read is taken as something to push.
   ahead="$(git -C "$repo" rev-list --count '@{u}..HEAD' 2>/dev/null || echo 1)"
   if [ "$ahead" != 0 ] && git -C "$repo" push -q 2>/dev/null; then
+    sync_settled "$repo"
     echo "synced: pushed $(tilde "$repo")"
     return 0
   fi
   # A merge, never a rebase or a stash: a rebase refuses to run while another
   # wiki has uncommitted notes, and a merge doesn't mind them.
-  if ! err="$(git -C "$repo" pull -q --no-rebase --no-edit 2>&1)"; then
-    if [ -n "$(git -C "$repo" ls-files -u)" ]; then
-      git -C "$repo" ls-files -u | awk '{ print $4 }' | sort -u | sed 's/^/  conflict: /'
-      die "the pull hit a merge conflict. index.md and log.md merge on their own; for a page, stop and ask the user."
-    fi
+  if ! collection_pull "$repo"; then
+    err="$PULL_ERR"
+    case "$PULL" in
+      conflict) die "$(sync_clash_error "$PULL_FILES" "$repo")" ;;
+      merging) die "$(sync_merging_error "$PULL_FILES" "$repo" after)" ;;
+    esac
     # Files that came in and also sit here uncommitted: drop a local copy only when
     # it's identical to the incoming one, then pull again. Never reset: other
     # sessions' notes would be lost.
     if printf '%s' "$err" | grep -q "untracked working tree files would be overwritten"; then
-      local f same=1
+      local f same=1 aside moved=""
+      # Set aside, not removed: if the pull then doesn't go through, each is put back, so
+      # this machine's files are as they were whatever happens.
+      aside="$(mktemp -d "${SYNC_LOCK%/*}/llm-wiki-aside.XXXXXX" 2>/dev/null)" || aside=""
       for f in $(printf '%s\n' "$err" | sed -n 's/^[[:space:]]\{1,\}\([^[:space:]].*\)$/\1/p' | grep -v '^Please\|^Aborting'); do
-        if [ -f "$repo/$f" ] && git -C "$repo" show "FETCH_HEAD:$f" 2>/dev/null | cmp -s - "$repo/$f"; then rm -f "$repo/$f"; else same=0; fi
+        if [ -n "$aside" ] && [ -f "$repo/$f" ] && git -C "$repo" show "FETCH_HEAD:$f" 2>/dev/null | cmp -s - "$repo/$f" \
+          && mkdir -p "$aside/$(dirname "$f")" && mv "$repo/$f" "$aside/$f"; then moved="$moved$f$nl"
+        else same=0; fi
       done
-      if [ "$same" = 1 ] && err="$(git -C "$repo" pull -q --no-rebase --no-edit 2>&1)"; then
+      if [ "$same" = 1 ] && collection_pull "$repo"; then
+        [ -z "$aside" ] || rm -rf "${aside:?}"
         echo "pulled after setting aside local copies identical to what came in"
       else
+        while IFS= read -r f; do
+          [ -n "$f" ] || continue
+          [ -e "$repo/$f" ] || { mkdir -p "$repo/$(dirname "$f")" && mv "$aside/$f" "$repo/$f"; } || true
+        done <<ASIDEEOF
+$moved
+ASIDEEOF
+        [ -z "$aside" ] || rm -rf "${aside:?}"
+        case "$PULL" in
+          conflict) die "$(sync_clash_error "$PULL_FILES" "$repo")" ;;
+          merging) die "$(sync_merging_error "$PULL_FILES" "$repo" after)" ;;
+        esac
+        [ "$same" = 0 ] || err="$PULL_ERR"
         printf '%s\n' "$err"
         die "the pull would overwrite uncommitted files that differ from what came in. Ask the user; never reset or delete them, they may be another session's notes."
       fi
@@ -3490,6 +3645,9 @@ sync_do() {
       printf '%s\n' "$err"
       if printf '%s' "$err" | grep -q "Operation not permitted"; then
         die "the pull couldn't write to $(tilde "$repo")/.git. If this runs in an agent's sandbox, run $WIKI_CMD sync outside it, or allow writes there."
+      fi
+      if printf '%s' "$err" | grep -q "would be overwritten by merge"; then
+        die "the pull didn't start: $(printf '%s\n' "$err" | sed -n 's/^[[:space:]]\{1,\}\([^[:space:]].*\)$/\1/p' | head -n 3 | LC_ALL=C tr -d '\000-\011\013-\037\177' | tr '\n' ' ' | sed 's/ $//') has changes here that what came in would write over. Nothing was merged. Do: run $WIKI_CMD sync for the wiki that file is in, then sync this one again."
       fi
       die "the pull failed. If uncommitted changes in another wiki clash with what came in, run $WIKI_CMD sync for that wiki first."
     fi
@@ -3504,8 +3662,17 @@ sync_do() {
   fi
   if ! git -C "$repo" push -q 2>/dev/null; then
     # Someone pushed in between: pull and push once more.
-    git -C "$repo" pull -q --no-rebase --no-edit && git -C "$repo" push -q || die "the push was rejected twice. Ask the user."
+    if ! collection_pull "$repo"; then
+      case "$PULL" in
+        conflict) die "$(sync_clash_error "$PULL_FILES" "$repo")" ;;
+        merging) die "$(sync_merging_error "$PULL_FILES" "$repo" after)" ;;
+      esac
+      printf '%s\n' "$PULL_ERR"
+      die "the push was rejected, and the pull that should follow it failed. Ask the user."
+    fi
+    git -C "$repo" push -q || die "the push was rejected twice. Ask the user."
   fi
+  sync_settled "$repo"
   echo "synced: pulled and pushed $(tilde "$repo")"
 }
 
@@ -4618,6 +4785,23 @@ EOF2
 $r
 EOF2
   ! history_stray_git || todo_add "git: $(history_stray_text)"
+  # A pull that was undone because two machines changed one page, and a merge left open.
+  if in_git_repo "$WIKIS_DIR"; then
+    local cf cday cfiles
+    cf="$(sync_conflict_file "$WIKIS_DIR" || true)"
+    # Settled and pushed by hand, with no sync to remove the record: nothing waits to be
+    # pushed and no merge is open, so it is over.
+    if [ -n "$cf" ] && [ -f "$cf" ] && [ ! -L "$cf" ] && ! sync_merging "$WIKIS_DIR" && [ "$(git -C "$WIKIS_DIR" rev-list --count '@{u}..HEAD' 2>/dev/null || echo 1)" = 0 ]; then
+      unlink "$cf" 2>/dev/null || true
+    fi
+    if [ -n "$cf" ] && [ -f "$cf" ] && [ ! -L "$cf" ]; then
+      IFS="$TAB" read -r cday cfiles < "$cf" || true
+      cday="$(printf '%s' "${cday:-}" | LC_ALL=C tr -cd '0-9-' | cut -c 1-10)"
+      cfiles="$(printf '%s' "${cfiles:-a page}" | LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C tr '"`' "''" | cut -c 1-400)"
+      todo_add "sync: blocked since ${cday:-an earlier day}. $(sync_clash "$cfiles"). Ask an agent: \"settle the sync conflict in $cfiles\""
+    fi
+    ! sync_merging "$WIKIS_DIR" || todo_add "sync: blocked. $(tilde "$WIKIS_DIR") is in the middle of a merge. Do: finish it (edit the file, git add, git commit --no-edit), or undo it: git -C $(tilde "$WIKIS_DIR") merge --abort"
+  fi
   # A folder that has both files and an AGENTS.md that was read and isn't the handbook is in
   # no table and no list. So that it doesn't vanish without a word, it is named here.
   local nd
@@ -7317,7 +7501,7 @@ except Exception:
 
 # update_wikis: pull, upgrade and push each collection, then new settings and next steps.
 update_wikis() {
-  local n f r ahead track k
+  local n f r ahead track k ulock
   # The helper that goes with this version of the code. Skipped where one is built in
   # the checkout, which is newer than any release.
   if [ -z "${LLM_WIKI_NO_GO:-}" ] && [ -f "$HELPER_LOCK" ] && ! helper_ok "$REPO/bin/llm-wiki"; then
@@ -7330,7 +7514,27 @@ update_wikis() {
     track=""
     if in_git_repo "$f" && [ -n "$(git -C "$f" remote 2>/dev/null)" ]; then
       track="$(track_remote "$f")"
-      [ "$track" = new ] || git -C "$f" pull -q --no-rebase --no-edit </dev/null || ui_item warn "the pull failed; upgrading what's here. Pull and push by hand afterwards."
+      if [ "$track" != new ]; then
+        ulock="$(git -C "$f" rev-parse --absolute-git-dir 2>/dev/null || true)/llm-wiki-sync.lock"
+        if ! sync_lock_try "$ulock" 5; then
+          ui_item warn "not pulled: another session is syncing this collection. Upgrading what's here."
+        else
+          if ! collection_pull "$f"; then
+            case "$PULL" in
+              conflict) ui_item warn "the pull was undone: $(sync_clash "$PULL_FILES"). Upgrading what's here. Run: $(typed "$WIKI_CMD status"), which says how to settle it." ;;
+              merging)
+                # Nothing is upgraded into the middle of a merge: staging the handbook's files
+                # there would mark a clash in them as settled.
+                ui_item warn "not pulled and not upgraded: $(tilde "$f") is in the middle of a merge. Run: $(typed "$WIKI_CMD status"), which says how to settle it."
+                sync_lock_back
+                continue
+                ;;
+              *) ui_item warn "the pull failed; upgrading what's here. Pull and push by hand afterwards." ;;
+            esac
+          fi
+          sync_lock_back
+        fi
+      fi
     fi
     # The upgrade hands back what it did, which this shows as its own CHANGED stage.
     k="$(LLM_WIKI_UPGRADE_DATA=1 WIKIS_DIR="$f" "$REPO/wiki.sh" upgrade --all </dev/null 2>/dev/null | sed -n 's/^upgraded'"$TAB"'//p' | tail -n 1)"
@@ -7340,9 +7544,9 @@ update_wikis() {
       if ! (sync_scan_gate "$f") >/dev/null 2>&1; then
         ui_item warn "not pushed: a commit here wasn't scanned for secrets. Run: $(typed "$WIKI_CMD sync <wiki>"), which says what to do."
       elif [ "$track" = new ]; then
-        git -C "$f" push -q -u origin HEAD </dev/null && ui_item ok "pushed to origin for the first time" || ui_item warn "the first push failed. Check the remote with: $(typed "$WIKI_CMD setup git")"
+        git -C "$f" push -q -u origin HEAD </dev/null && sync_settled "$f" && ui_item ok "pushed to origin for the first time" || ui_item warn "the first push failed. Check the remote with: $(typed "$WIKI_CMD setup git")"
       elif [ "${ahead:-0}" -gt 0 ]; then
-        git -C "$f" push -q </dev/null && ui_item ok "pushed $ahead commit(s)" || ui_item warn "the push failed. Run: $(typed "git -C $(tilde "$f") pull --no-rebase && git -C $(tilde "$f") push")"
+        git -C "$f" push -q </dev/null && sync_settled "$f" && ui_item ok "pushed $ahead commit(s)" || ui_item warn "the push failed. Run: $(typed "git -C $(tilde "$f") pull --no-rebase && git -C $(tilde "$f") push")"
       fi
     fi
   done <<EOF2
