@@ -10,5 +10,16 @@ This section applies in two cases. One: this folder is the top level of a git re
 - Start commit messages with the wiki's name: `<wiki>: ingest <title>`, `<wiki>: ingest 6 notes`, `<wiki>: capture 3 notes`, `<wiki>: lint`.
 - Push after each commit if the repo has a remote. If the push is rejected, pull and push again, once.
 - On a merge conflict in `index.md` or `log.md`, keep the lines from both sides. On a conflict inside a page, stop and ask the user.
+
+## A page changed on two machines
+
+`wiki.sh sync` joins what needs no judgment by itself: edits to different parts of a page, two additions at one spot, the later date, the sources of both, and every open item. When it can't, it undoes the pull, names the files, and stops. Nothing of it is left half done, your commits are still there, and nothing is pushed from this machine until it is settled. `wiki.sh status` says so until then.
+
+1. Tell the user which files, and ask what to keep: one machine's version, the other's, or both. Don't choose for them, unless they have already said.
+2. Start the merge again: `git -C <the collection> pull --no-rebase`. It stops on the same files.
+3. Edit each file so it reads as the user said, with none of git's markers left. For a page, that means one `summary`, the `sources` of both, and the later `updated`.
+4. Finish the merge by hand: `git -C <the collection> add <those files>`, then `git -C <the collection> commit --no-edit`. `wiki.sh sync` won't run in the middle of a merge, so it can't do this step.
+5. Read `index.md` and `log.md` before you push. Git joins them a line at a time, which can leave two lines for one page, or an entry a line short. Run `wiki.sh index <wiki>`, and mend the log by hand.
+6. `wiki.sh sync <wiki>` pushes it.
 - If a commit is refused because it holds a secret, replace the secret with `[REDACTED]` in that file, even in `raw/`, and commit again. Tell the user. If you think it is not a secret, ask the user before allowing it. Never skip the check with `--no-verify`.
 

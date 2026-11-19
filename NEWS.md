@@ -4,6 +4,12 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2027-01-27: what a trial with two machines showed, fixed
+
+- Two machines that each add a paragraph at the same place in a page, such as its end, now keep both. That is what a compile does, and it clashed.
+- After a merge, `wiki sync` makes `index.md` again from the pages, where git left it with two lines for one page.
+- `wiki compile` says when what it compiled was not pushed. Before, its last line said ok.
+
 ## 2027-01-26: two machines can edit one page without a clash
 
 - When two machines change different parts of a page, a sync joins them: the later `updated` and `verified` dates, and the `sources` and `tags` of both.
