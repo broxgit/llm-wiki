@@ -4,6 +4,15 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v43 (2026-11-19)
+
+A reminder stops the command it names, not a command that mentions it.
+
+- A `bash` reminder is now matched against the commands a call runs. Text in a heredoc, a comment, or a quoted string of several words no longer counts, so a note or a commit message that says "git push" doesn't set off a reminder about pushing. Each word of a pattern has to begin a word of the command: `git*commit` no longer fits `git merge --no-commit`. A `*` stays inside one command.
+- A reminder given once stays given until a compaction or a `/clear`. It used to come back whenever the session-start hook ran again, which in some apps is often.
+- `rules/compile.md` says how a `bash` pattern is matched.
+- Do: if one of your `## Reminders` patterns relied on text inside quotes, such as a commit message, it no longer matches. Name the command instead.
+
 ## v42 (2026-11-19)
 
 A page changed on two machines no longer stops a sync.
