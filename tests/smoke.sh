@@ -2103,6 +2103,34 @@ expect "journal note writes an entry" "journal:" "$W" journal note demo "smoke t
 refuse "journal note refuses a future day" "$W" journal note --day 2999-01-01 demo "too early"
 expect "standup includes the journal entry" "smoke test entry" "$W" standup --since 2d
 refuse "journal set validates values" "$W" journal set format weird
+# A value is data: one that holds \n must never become a second line, which would be a
+# setting of its own. The review's reproduction turned the journal off this way.
+JC="$WIKIS_DIR/journal/config"
+cp "$JC" "$T/journal-config.before"
+out="$("$W" journal set exclude 'scratch\nenabled=no' 2>&1)"; code=$?
+[ "$code" != 0 ] && case "$out" in *"value can't hold a backslash or a control character"*) true ;; *) false ;; esac && ok "a setting's value with a backslash in it is refused" || bad "a setting's value with a backslash in it is refused" "exit $code: $out"
+check "and the settings file is as it was" cmp -s "$JC" "$T/journal-config.before"
+refuse "so is one with a tab in it" "$W" journal set exclude "$(printf 'a\tb')"
+# The same with the check taken out, in a copy: what writes the file keeps the value as typed.
+mkdir -p "$T/m3copy"
+copy_repo "$T/m3copy"
+grep -v "value can't hold a backslash or a control character" "$W" > "$T/m3copy/wiki.sh"; chmod +x "$T/m3copy/wiki.sh"
+"$T/m3copy/wiki.sh" journal set exclude 'scratch\nenabled=no' >/dev/null 2>&1
+check "with the check taken out, the value is still written as one line, as typed" grep -qxF 'exclude=scratch\nenabled=no' "$JC"
+check "and no second setting was planted" test "$(grep -c '^enabled=' "$JC")" = 1
+"$T/m3copy/wiki.sh" journal set exclude 'a.c' >/dev/null 2>&1; "$T/m3copy/wiki.sh" journal set exclude 'abc' >/dev/null 2>&1
+check "a key is compared as text, so the line is replaced and not added again" test "$(grep -c '^exclude=' "$JC")" = 1
+cp "$T/journal-config.before" "$JC"
+# A time is one a clock shows.
+refuse "day_starts 29:59 is refused" "$W" journal set day_starts 29:59
+refuse "and 24:00" "$W" journal set day_starts 24:00
+check "23:59 is taken" "$W" journal set day_starts 23:59
+"$W" journal set day_starts "$(sed -n 's/^day_starts=//p' "$T/journal-config.before")" >/dev/null 2>&1
+refuse "journal note --at 25:00 is refused" "$W" journal note --at 25:00 demo "late"
+# A project's name is written inside the entry's line.
+n="$(cat "$WIKIS_DIR"/journal/*.md 2>/dev/null | wc -l | tr -d ' ')"
+out="$("$W" journal note "$(printf 'demo]\n- 09:00 [other')" "planted" 2>&1)"; code=$?
+[ "$code" = 2 ] && [ "$(cat "$WIKIS_DIR"/journal/*.md 2>/dev/null | wc -l | tr -d ' ')" = "$n" ] && ok "a project name with a line break is refused, and nothing is written" || bad "a project name with a line break is refused, and nothing is written" "exit $code: $out"
 C="$T/code/busy"
 mkdir -p "$C" && git -C "$C" init -q
 for i in 1 2 3 4 5 6 7 8 9 10 11 12; do git -C "$C" commit -q --allow-empty -m "busy commit $i"; done
