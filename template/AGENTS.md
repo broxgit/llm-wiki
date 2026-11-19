@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Handbook version 39.
+Handbook version 40.
 
 This folder is a knowledge base maintained by an LLM agent. Any agent working here follows this file. It needs no vendor features. Plain markdown, plain files.
 
@@ -21,6 +21,7 @@ This file holds what every session needs. The rest is in `rules/`. Read a rules 
 | hand a task to a sub-agent on another model, or suggest doing so | `rules/delegation.md` |
 | are told at session start that the folder matched no pattern, or the user says a pattern is wrong | `rules/workflows.md` |
 | publish with an extension, or choose what one watches, publishes or signs in with | `rules/extensions.md` |
+| learn that one repository uses another, or change something other repositories use | `rules/dependencies.md` |
 
 ## Layout
 
@@ -72,6 +73,8 @@ Capture at stopping points, not as you go. A stopping point is where a piece of 
 **Lint.** Due when the log shows 10 or more ingests since the last lint. Every compile ends by checking, so you don't have to remember.
 
 **Feedback.** The user should never give the same correction twice. When the user corrects your work, you catch a mistake of your own that a rule would have prevented, review comments land on code an agent helped write, or you finish an operational job likely to come up again, such as a release, the first run included, add a `Feedback:` line to your next capture. `rules/patterns.md` has the format and where the note goes. When `patterns.md` shows a pattern is ready, propose a fix at a stopping point: a convention, a note in a library's wiki, a skill, or a small tool.
+
+**What uses what.** When your work shows that one repository imports, calls or reads from another, add a `Uses:` line to your next capture. Before you change something other repositories use, find out who they are. `rules/dependencies.md` has both.
 
 **Open items.** When something can't move until someone acts, or should be looked at on a date, add a `Waiting:` or `Due:` line to your next capture. `rules/open.md` has the format. When a session ends with items waiting on the user, say what they are in your last reply.
 

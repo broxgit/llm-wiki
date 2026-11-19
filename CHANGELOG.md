@@ -4,6 +4,15 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v40 (2026-11-19)
+
+Agents now record which repository uses which, so the wikis start to show how your services and libraries fit together.
+
+- A new file, `rules/dependencies.md`. When a session sees that one repository imports, calls or reads from another, it adds a `Uses:` line to its next note. At compile, each of the two wikis gets a `wiki/dependencies.md` page with a `Uses` and a `Used by` list.
+- Before an agent changes something other repositories use, it looks up who they are, in that page, with `wiki deps` and with `wiki find`, and tells you first.
+- `wiki deps` already maps packages from `go.mod`, `package.json` and `pyproject.toml`. The new lines are for what those can't show: a service called over the network, a queue, a shared database.
+- Do: run `wiki upgrade --all`.
+
 ## v39 (2026-11-18)
 
 The handbook now says what an agent may do with an extension, such as Confluence, Jira or Jenkins.

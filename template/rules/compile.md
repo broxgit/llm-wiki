@@ -40,6 +40,7 @@ For each source:
 5. If it has `Feedback:` lines, add each to `patterns.md` as `rules/patterns.md` says.
 6. If it has `Verified:` lines, set each named page's `verified` to the note's `Captured:` date, and its `commit` when the line gives one. Leave a page whose `verified` is already later. A page in another wiki is stamped when that wiki compiles. A note with only such lines needs no topic page, and still gets its `log.md` entry.
 7. If it has `Waiting:`, `Due:` or `Done:` lines, read `rules/open.md` and update `open.md` as it says.
+8. If it has `Uses:` or `Unused:` lines, read `rules/dependencies.md` and update `wiki/dependencies.md` as it says, here and in the other repository's wiki.
 
 After the last source, update `index.md` once (`wiki.sh index <wiki>`) and append one entry per source to `log.md`, naming the source in it. That entry is what marks the source compiled. Also stamp any page you confirmed against code during this compile. Then report in one line: pages created, pages updated, corrections, conflicts.
 
@@ -50,7 +51,7 @@ One file at a time means rewriting the same topic page once per file, and a sess
 1. Read them together. `wiki.sh pending <wiki> --show` prints them in one go, oldest first, up to about 150KB. If it says more wait, finish this batch, then run it again for the next.
 2. Before writing, plan: group the claims across all the files by topic, and match each topic to an existing page or a new one. A topic only one file touches still goes on a topic page.
 3. Write each topic page once, with every file's claims for it, each cited to its file.
-4. Steps 4 to 7 above still apply to every file: conflicts, `Feedback:` lines, `Verified:` lines, and open items.
+4. Steps 4 to 8 above still apply to every file: conflicts, `Feedback:` lines, `Verified:` lines, open items, and `Uses:` lines.
 5. Finish as below: `index.md` once, and one `log.md` entry per file.
 
 Files named `*-seed-*` came from `wiki seed`: a repository's own docs, as its authors wrote them. Read the `seed-00-manifest` note first. It says which repository and commit they came from. Their claims about code are unchecked, so don't stamp `commit` from them, and where two of them disagree, the code decides once you check it.

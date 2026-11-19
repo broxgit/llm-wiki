@@ -13533,6 +13533,12 @@ check "and AGENTS.md points to it" grep -q 'rules/workflows.md' "$REPO/template/
 # What an agent may do with an extension: read by itself, send outside or choose only on the user's word, never sign in.
 check "the extensions rule ships in the template" bash -c "grep -q 'Being signed in is not a request' '$REPO/template/rules/extensions.md' && grep -q 'Never set, change or clear an address, a user name, a token' '$REPO/template/rules/extensions.md'"
 check "and AGENTS.md points to it" grep -q 'rules/extensions.md' "$REPO/template/AGENTS.md"
+# What uses what: the rule that joins the wikis, one link at a time.
+check "the dependencies rule ships in the template, with the line's form" grep -qF 'Uses: <the repository that uses> -> <the repository used> | <how>' "$REPO/template/rules/dependencies.md"
+check "AGENTS.md points to it from its table, and says when to add the line" bash -c "grep -q '| .rules/dependencies.md. |' '$REPO/template/AGENTS.md' && grep -q 'add a .Uses:. line to your next capture' '$REPO/template/AGENTS.md'"
+check "the compile rule sends an ingest with such a line to it" grep -q 'If it has .Uses:. or .Unused:. lines, read .rules/dependencies.md.' "$REPO/template/rules/compile.md"
+check "it names the command that maps packages, which is a real one" bash -c "grep -q 'wiki.sh deps --write' '$REPO/template/rules/dependencies.md' && '$W' --help | grep -q '^  deps '"
+check "the changelog says what the version brings" bash -c "sed -n '/^## v40 /,/^## v39 /p' '$REPO/CHANGELOG.md' | grep -q 'rules/dependencies.md'"
 check "the changelog has a section for the handbook's version" bash -c "grep -q \"^## v\$(sed -n 's/^Handbook version \\([0-9]*\\)\\.\$/\\1/p' '$REPO/template/AGENTS.md') \" '$REPO/CHANGELOG.md'"
 rm -rf "$PF" "$HOME/notesdir" "$HOME/gone" "$WFILE"
 fi
