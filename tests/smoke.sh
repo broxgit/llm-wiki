@@ -11946,12 +11946,14 @@ env HOME="$TC2/a" git init -q --bare "$TC2/remote.git"
 tcw a init --git >/dev/null 2>&1
 tcw a new demo >/dev/null 2>&1
 tcw a new other >/dev/null 2>&1
-mkdir -p "$TC2/a/wikis/demo/wiki/concepts"
-printf -- '---\ntitle: Limits\nsummary: the limits\n---\n\nThe limit is 5.\n' > "$TC2/a/wikis/demo/wiki/concepts/limits.md"
+# The file they clash in is not a page: a table of the wiki's data, which sync never joins
+# and never sets aside. A page it can't join becomes a note, further down.
+mkdir -p "$TC2/a/wikis/demo/data"
+printf -- '---\ntitle: Limits\nsummary: the limits\n---\n\nThe limit is 5.\n' > "$TC2/a/wikis/demo/data/limits.md"
 tcg a add -A && tcg a commit -q -m first && tcg a remote add origin "$TC2/remote.git" && tcg a push -q -u origin HEAD 2>/dev/null
 env HOME="$TC2/b" git clone -q "$TC2/remote.git" "$TC2/b/wikis" 2>/dev/null
 cp "$REPO/hooks/pre-commit" "$TC2/b/wikis/.git/hooks/pre-commit"; cp "$REPO/hooks/llm-wiki-gitleaks.toml" "$TC2/b/wikis/.git/hooks/" 2>/dev/null; chmod +x "$TC2/b/wikis/.git/hooks/pre-commit"
-PG="demo/wiki/concepts/limits.md"
+PG="demo/data/limits.md"
 printf -- '---\ntitle: Limits\nsummary: the limits\n---\n\nThe limit is 8, says the first machine.\n' > "$TC2/a/wikis/$PG"
 tcw a sync demo -m "demo: eight" >/dev/null 2>&1
 printf -- '---\ntitle: Limits\nsummary: the limits\n---\n\nThe limit is 6, says the second machine.\n' > "$TC2/b/wikis/$PG"
@@ -12067,7 +12069,18 @@ rpage c 2026-01-01 '[raw/a.md]' 'the rule' 'The start.' 'The end.'
 tcg c add -A && tcg c commit -q -m first && tcg c remote add origin "$TC2/remote2.git" && tcg c push -q -u origin HEAD 2>/dev/null
 env HOME="$TC2/d" git clone -q "$TC2/remote2.git" "$TC2/d/wikis" 2>/dev/null
 cp "$REPO/hooks/pre-commit" "$TC2/d/wikis/.git/hooks/pre-commit"; cp "$REPO/hooks/llm-wiki-gitleaks.toml" "$TC2/d/wikis/.git/hooks/" 2>/dev/null; chmod +x "$TC2/d/wikis/.git/hooks/pre-commit"
-level() { tcg c pull -q --no-rebase --no-edit >/dev/null 2>&1; tcg d pull -q --no-rebase --no-edit >/dev/null 2>&1; }
+tcnotes() { find "$TC2/d/wikis/demo/raw" -name '*-sync-conflict-*' 2>/dev/null | wc -l | tr -d ' '; }
+# level: both machines at the same commit. A note that sync set aside is first logged as
+# compiled, as a compile would log it: a page is set aside once at a time, while its note waits.
+level() {
+  local f
+  for f in "$TC2/d/wikis/demo/raw"/*-sync-conflict-*.md; do
+    [ -e "$f" ] || continue
+    grep -qF "raw/${f##*/}" "$TC2/d/wikis/demo/log.md" 2>/dev/null || printf '\n## 2026-01-01 ingest: set aside\n- source: raw/%s\n' "${f##*/}" >> "$TC2/d/wikis/demo/log.md"
+  done
+  tcw d sync demo >/dev/null 2>&1
+  tcg c pull -q --no-rebase --no-edit >/dev/null 2>&1; tcg d pull -q --no-rebase --no-edit >/dev/null 2>&1
+}
 rpage c 2026-02-01 '[raw/a.md, raw/c.md]' 'the rule' 'The start, as the first machine has it.' 'The end.'
 tcw c sync demo >/dev/null 2>&1
 rpage d 2026-03-01 '[raw/a.md, raw/d.md]' 'the rule' 'The start.' 'The end, as the second machine has it.'
@@ -12089,15 +12102,31 @@ printf -- '---\ntitle: List\nsummary: a list\nsources:\n  - raw/a.md\n  - raw/d.
 out="$(tcw d sync demo 2>&1)"
 case "$out" in *"synced: "*) true ;; *) false ;; esac && [ "$(sed -n '/^sources:/,/^updated:/p' "$TC2/d/wikis/demo/wiki/list.md" | tr '\n' '|')" = 'sources:|  - raw/a.md|  - raw/d.md|  - raw/c.md|updated: 2026-02-02|' ] && ok "a list with one item a line is joined, and stays one item a line" || bad "a list with one item a line is joined, and stays one item a line" "$out
 $(cat "$TC2/d/wikis/demo/wiki/list.md")"
-# Where there is no rule, it gives up, and the pull is undone as before.
+# Where there is no rule, sync sets the page aside: the other machine's version stays, since
+# every other machine has it, and this machine's is saved whole as a note for compile.
 level
 rpage c 2026-04-01 '[raw/a.md, raw/d.md, raw/c.md]' 'the rule, says c' 'The start, as the first machine has it.' 'The end, as the second machine has it.'
 tcw c sync demo >/dev/null 2>&1
 rpage d 2026-04-02 '[raw/a.md, raw/d.md, raw/c.md]' 'the rule, says d' 'The start, as the first machine has it.' 'The end, as the second machine has it.'
 out="$(tcw d sync demo 2>&1)"; code=$?
-[ "$code" = 1 ] && case "$out" in *"$RP was changed here and on another machine, and git can't merge the two. The pull was undone"*) true ;; *) false ;; esac && ok "two different summaries have no rule: the pull is undone and the page named" || bad "two different summaries have no rule: the pull is undone and the page named" "exit $code: $out"
-check "and the page is as the second machine had it" grep -qx 'summary: the rule, says d' "$TC2/d/wikis/$RP"
-tcg d reset -q --hard '@{u}' 2>/dev/null; rm -f "$TC2/d/wikis/.git/llm-wiki-conflict"; level
+NOTE="$(find "$TC2/d/wikis/demo/raw" -name '*-sync-conflict-concepts-rule.md' 2>/dev/null | head -n 1)"; NOTE="${NOTE##*/}"
+[ "$code" = 0 ] && [ -n "$NOTE" ] && case "$out" in *"set aside: $RP is the other machine's version. Yours is demo/raw/$NOTE, waiting to be compiled."*"synced: "*) true ;; *) false ;; esac && ok "two different summaries have no rule: the page is set aside, and the sync goes through" || bad "two different summaries have no rule: the page is set aside, and the sync goes through" "exit $code: $out"
+check "the page is the other machine's version, byte for byte" cmp -s "$TC2/c/wikis/$RP" "$TC2/d/wikis/$RP"
+check "this machine's version is in the note, whole, under a Captured line and a line saying what it is" bash -c "head -n 1 '$TC2/d/wikis/demo/raw/$NOTE' | grep -q '^Captured: ' && grep -q 'Sync set this aside: wiki/concepts/rule.md was changed' '$TC2/d/wikis/demo/raw/$NOTE' && grep -qx 'summary: the rule, says d' '$TC2/d/wikis/demo/raw/$NOTE' && grep -qx 'updated: 2026-04-02' '$TC2/d/wikis/demo/raw/$NOTE'"
+expect "the note waits to be compiled, named for the page and the folder it is in" "sync-conflict-concepts-rule.md" tcw d pending demo
+tcw c sync demo >/dev/null 2>&1
+check "and the first machine gets it at its next sync" test -f "$TC2/c/wikis/demo/raw/$NOTE"
+check "nothing is on record as a clash, and no merge is open" bash -c "! test -e '$TC2/d/wikis/.git/llm-wiki-conflict' && ! test -e '$TC2/d/wikis/.git/MERGE_HEAD'"
+# While that note waits, a second clash in the page stops the sync: two machines that each
+# compiled the note would otherwise hand the page back and forth, a note each time.
+n="$(tcnotes)"
+rpage c 2026-04-03 '[raw/a.md, raw/d.md, raw/c.md]' 'the rule, says c again' 'The start, as the first machine has it.' 'The end, as the second machine has it.'
+tcw c sync demo >/dev/null 2>&1
+rpage d 2026-04-04 '[raw/a.md, raw/d.md, raw/c.md]' 'the rule, says d again' 'The start, as the first machine has it.' 'The end, as the second machine has it.'
+out="$(tcw d sync demo 2>&1)"; code=$?
+[ "$code" = 1 ] && [ "$(tcnotes)" = "$n" ] && case "$out" in *"$RP was changed here and on another machine"*) true ;; *) false ;; esac && ok "a second clash in a page whose note still waits stops the sync, with no second note" || bad "a second clash in a page whose note still waits stops the sync, with no second note" "exit $code: $out"
+tcg d reset -q --hard '@{u}' 2>/dev/null; rm -f "$TC2/d/wikis/.git/llm-wiki-conflict"
+level
 # The same summary on both sides is no clash.
 rpage c 2026-05-01 '[raw/a.md, raw/d.md, raw/c.md]' 'agreed' 'The start, as the first machine has it.' 'The end, as the second machine has it.'
 tcw c sync demo >/dev/null 2>&1
@@ -12119,8 +12148,8 @@ for kind in created nofront baddate; do
   esac
   tcw c sync demo >/dev/null 2>&1
   out="$(tcw d sync demo 2>&1)"; code=$?
-  [ "$code" = 1 ] && case "$out" in *"demo/wiki/$kind.md was changed here and on another machine"*) true ;; *) false ;; esac && [ ! -e "$TC2/d/wikis/.git/MERGE_HEAD" ] && ok "a clash the rules don't cover ($kind) is undone and named, with nothing half done" || bad "a clash the rules don't cover ($kind) is undone and named, with nothing half done" "exit $code: $out"
-  tcg d reset -q --hard '@{u}' 2>/dev/null; rm -f "$TC2/d/wikis/.git/llm-wiki-conflict"
+  [ "$code" = 0 ] && case "$out" in *"set aside: demo/wiki/$kind.md is the other machine's version. Yours is demo/raw/"*"-sync-conflict-$kind.md, waiting to be compiled."*"synced: "*) true ;; *) false ;; esac && [ ! -e "$TC2/d/wikis/.git/MERGE_HEAD" ] && ok "a page the rules don't cover ($kind) is set aside as a note, with nothing half done" || bad "a page the rules don't cover ($kind) is set aside as a note, with nothing half done" "exit $code: $out"
+  check "$kind: the page is the first machine's" cmp -s "$TC2/c/wikis/demo/wiki/$kind.md" "$TC2/d/wikis/demo/wiki/$kind.md"
 done
 # Windows line ends are kept.
 level
@@ -12140,8 +12169,7 @@ printf -- '---\ntitle: Q\nsources:\n  - raw/a.md\n  - "raw/c, with a comma.md"\n
 tcw c sync demo >/dev/null 2>&1
 printf -- '---\ntitle: Q\nsources:\n  - raw/a.md\n  - raw/d.md\nupdated: 2026-02-02\n---\n\nOne.\n\nTwo.\n\nThree, d.\n' > "$TC2/d/wikis/demo/wiki/quoted.md"
 out="$(tcw d sync demo 2>&1)"; code=$?
-[ "$code" = 1 ] && case "$out" in *"demo/wiki/quoted.md was changed here and on another machine"*) true ;; *) false ;; esac && ok "a list item with a quote and a comma in it is not guessed at: undone and named" || bad "a list item with a quote and a comma in it is not guessed at: undone and named" "exit $code: $out"
-tcg d reset -q --hard '@{u}' 2>/dev/null; rm -f "$TC2/d/wikis/.git/llm-wiki-conflict"
+[ "$code" = 0 ] && case "$out" in *"set aside: demo/wiki/quoted.md is the other machine's version."*) true ;; *) false ;; esac && ok "a list item with a quote and a comma in it is not guessed at: the page is set aside" || bad "a list item with a quote and a comma in it is not guessed at: the page is set aside" "exit $code: $out"
 # Session start settles such a clash too.
 level
 rpage c 2026-06-01 '[raw/a.md, raw/d.md, raw/c.md]' 'agreed' 'The start, once more from c.' 'The end, as the second machine has it.'
@@ -12171,15 +12199,48 @@ tcw c sync demo >/dev/null 2>&1; level
 printf '\nAdded by c.\n' >> "$TC2/c/wikis/demo/wiki/ruled.md"; tcw c sync demo >/dev/null 2>&1
 printf '\nAdded by d.\n' >> "$TC2/d/wikis/demo/wiki/ruled.md"
 out="$(tcw d sync demo 2>&1)"; code=$?
-[ "$code" = 1 ] && case "$out" in *"demo/wiki/ruled.md was changed here and on another machine"*) true ;; *) false ;; esac && ok "a page with a long rule of equals signs, which could pass for a marker, is undone and named" || bad "a page with a long rule of equals signs, which could pass for a marker, is undone and named" "exit $code: $out"
-tcg d reset -q --hard '@{u}' 2>/dev/null; rm -f "$TC2/d/wikis/.git/llm-wiki-conflict"
+[ "$code" = 0 ] && case "$out" in *"set aside: demo/wiki/ruled.md is the other machine's version."*) true ;; *) false ;; esac && ok "a page with a long rule of equals signs, which could pass for a marker, is not joined: it is set aside" || bad "a page with a long rule of equals signs, which could pass for a marker, is not joined: it is set aside" "exit $code: $out"
 # One side adds where the other changed what was there: a real clash still.
 level
 sed -i.bak 's/^The end\.$/The end, reworded by c./' "$TC2/c/wikis/$RP"; rm -f "$TC2/c/wikis/$RP.bak"
 tcw c sync demo >/dev/null 2>&1
 sed -i.bak 's/^The end\.$/The end, reworded by d./' "$TC2/d/wikis/$RP"; rm -f "$TC2/d/wikis/$RP.bak"
 out="$(tcw d sync demo 2>&1)"; code=$?
-[ "$code" = 1 ] && case "$out" in *"$RP was changed here and on another machine"*) true ;; *) false ;; esac && ok "the same line reworded on both machines is still a clash" || bad "the same line reworded on both machines is still a clash" "exit $code: $out"
+[ "$code" = 0 ] && case "$out" in *"set aside: $RP is the other machine's version."*) true ;; *) false ;; esac && grep -qx 'The end, reworded by c.' "$TC2/d/wikis/$RP" && ok "the same line reworded on both machines is not joined: the page is set aside" || bad "the same line reworded on both machines is not joined: the page is set aside" "exit $code: $out"
+# Session start never sets a page aside: it pushes nothing, so it stops at the undo.
+level
+n="$(tcnotes)"
+rpage c 2026-08-01 '[raw/a.md]' 'c for start' 'One.' 'Two.'
+tcw c sync demo >/dev/null 2>&1
+rpage d 2026-08-02 '[raw/a.md]' 'd for start' 'One.' 'Two.'
+tcg d commit -q -am "d: a summary" 2>/dev/null
+expect "session start on a clash that needs judgment undoes its pull, as before" "pull: undone. $RP was changed here and on another machine" tcw d start demo
+check "and makes no note" test "$(tcnotes)" = "$n"
+# A merge commit the scan refuses: the note this run wrote goes with the undo.
+printf '#!/bin/sh\nif git diff --cached --name-only | grep -q sync-conflict; then echo "llm-wiki: commit refused." >&2; exit 1; fi\nexit 0\n' > "$TC2/d/wikis/.git/hooks/pre-commit"
+out="$(tcw d sync demo 2>&1)"; code=$?
+[ "$code" = 1 ] && [ "$(tcnotes)" = "$n" ] && [ ! -e "$TC2/d/wikis/.git/MERGE_HEAD" ] && ok "when the merge's commit is refused, the note is removed and the merge undone" || bad "when the merge's commit is refused, the note is removed and the merge undone" "exit $code: $out
+$(find "$TC2/d/wikis/demo/raw" -name '*-sync-conflict-*')"
+check "and the page is as this machine had it" grep -qx 'summary: d for start' "$TC2/d/wikis/$RP"
+cp "$REPO/hooks/pre-commit" "$TC2/d/wikis/.git/hooks/pre-commit"; chmod +x "$TC2/d/wikis/.git/hooks/pre-commit"
+out="$(tcw d sync demo 2>&1)"
+case "$out" in *"set aside: $RP"*"synced: "*) true ;; *) false ;; esac && [ "$(tcnotes)" = "$((n + 1))" ] && ok "the next sync sets it aside, with one note and not two" || bad "the next sync sets it aside, with one note and not two" "$out"
+# The conventions page tells agents how to work, so whose version stands is for a person to say.
+level
+n="$(tcnotes)"
+printf -- '---\ntitle: Conventions\nsummary: as c has it\nupdated: 2026-01-01\n---\n\n## For agents\n- from c\n' > "$TC2/c/wikis/demo/wiki/conventions.md"
+tcw c sync demo >/dev/null 2>&1
+printf -- '---\ntitle: Conventions\nsummary: as d has it\nupdated: 2026-01-02\n---\n\n## For agents\n- from d\n' > "$TC2/d/wikis/demo/wiki/conventions.md"
+out="$(tcw d sync demo 2>&1)"; code=$?
+[ "$code" = 1 ] && [ "$(tcnotes)" = "$n" ] && case "$out" in *"demo/wiki/conventions.md was changed here and on another machine"*) true ;; *) false ;; esac && ok "the conventions page is never set aside: the pull is undone and the page named" || bad "the conventions page is never set aside: the pull is undone and the page named" "exit $code: $out"
+tcg d reset -q --hard '@{u}' 2>/dev/null; rm -f "$TC2/d/wikis/.git/llm-wiki-conflict"
+# A page one machine removed and the other edited is never guessed at: undone, and no note.
+level
+n="$(tcnotes)"
+tcg c rm -q demo/wiki/list.md 2>/dev/null; tcg c commit -q -m "c: removes a page" 2>/dev/null; tcg c push -q 2>/dev/null
+printf '\nA line the second machine added.\n' >> "$TC2/d/wikis/demo/wiki/list.md"
+out="$(tcw d sync demo 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"demo/wiki/list.md was changed here and on another machine"*) true ;; *) false ;; esac && [ "$(tcnotes)" = "$n" ] && ok "a page removed on one machine and edited on the other is undone and named, with no note" || bad "a page removed on one machine and edited on the other is undone and named, with no note" "exit $code: $out"
 tcg d reset -q --hard '@{u}' 2>/dev/null; rm -f "$TC2/d/wikis/.git/llm-wiki-conflict"
 # index.md is joined by git a line at a time. Two machines that changed one page's summary left
 # two lines for the page. After a merge the index is made again from the pages.
@@ -13920,6 +13981,7 @@ check "and AGENTS.md points to it" grep -q 'rules/workflows.md' "$REPO/template/
 # What an agent may do with an extension: read by itself, send outside or choose only on the user's word, never sign in.
 check "the extensions rule ships in the template" bash -c "grep -q 'Being signed in is not a request' '$REPO/template/rules/extensions.md' && grep -q 'Never set, change or clear an address, a user name, a token' '$REPO/template/rules/extensions.md'"
 check "and AGENTS.md points to it" grep -q 'rules/extensions.md' "$REPO/template/AGENTS.md"
+check "the handbook says what a set-aside note is, to sync and to compile" bash -c "grep -q 'sync-conflict-<page>.md' '$REPO/template/rules/sync.md' && grep -q 'Files named .\*-sync-conflict-\*. came from .wiki sync.' '$REPO/template/rules/compile.md' && sed -n '/^## v42 /,/^## v41 /p' '$REPO/CHANGELOG.md' | grep -q 'sync-conflict'"
 check "the sync rule says how to finish a merge the user has settled" bash -c "grep -q '^## A page changed on two machines' '$REPO/template/rules/sync.md' && grep -q 'commit --no-edit' '$REPO/template/rules/sync.md' && sed -n '/^## v41 /,/^## v40 /p' '$REPO/CHANGELOG.md' | grep -q 'rules/sync.md'"
 # What uses what: the rule that joins the wikis, one link at a time.
 check "the dependencies rule ships in the template, with the line's form" grep -qF 'Uses: <the repository that uses> -> <the repository used> | <how>' "$REPO/template/rules/dependencies.md"
