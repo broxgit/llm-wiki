@@ -4337,6 +4337,7 @@ def front(path):
     return fm
 
 pages = {}   # index path -> (title, summary, category)
+long = []    # (path, length) of each summary lint would refuse
 wroot = os.path.join(root, "wiki")
 for d, dirs, files in os.walk(wroot):
     rel = os.path.relpath(d, wroot)
@@ -4353,6 +4354,8 @@ for d, dirs, files in os.walk(wroot):
             cat = CATS.get(top, top.replace("-", " ").capitalize())
         fm = front(os.path.join(d, f))
         pages[path] = (fm.get("title", ""), fm.get("summary", ""), cat)
+        if len(fm.get("summary", "")) > 120:
+            long.append((path, len(fm["summary"])))
 sroot = os.path.join(root, "skills")
 if os.path.isdir(sroot):
     for name in sorted(os.listdir(sroot)):
@@ -4416,6 +4419,9 @@ if any("was:" in c for c in changes):
     print("  If a line's old text was better, put it in that page's summary, then run index again.")
 for p in sorted(set(nofront)):
     print(f"  no title or summary in frontmatter: {p}")
+# Said here, while the page is still in hand: lint says it too, but after the compile.
+for p, n in sorted(long):
+    print(f"  summary over 120 characters, at {n}: {p}")
 n = sum(1 for l in out if entry.match(l))
 if n > 300:
     print(f"  {n} lines: past 300, split the index by category, as rules/compile.md says")
@@ -7139,12 +7145,19 @@ feedback_private() {
 
 # feedback_scrub: stdin to stdout with home paths, private names, emails, git
 # remotes other than llm-wiki's own, and token-like strings replaced.
+# A project named for a word the handbook itself uses, such as time, turn or sync, is
+# replaced only where it stands as a name: in a path, or before :wiki/. A note about
+# llm-wiki is written in those words, and one came out as "1 <private>(s)".
+# With --left, it prints those names instead, the ones the text holds, one per line.
 feedback_scrub() {
-  local names
+  local names words
   names="$(feedback_private | grep -v -x -e '' -e llm-wiki -e "$SHARED" | sort -u)"
-  FB_NAMES="$names" FB_HOME="$HOME" FB_REPO="$(feedback_repo)" python3 -c '
+  words="$(cat "$TEMPLATE/AGENTS.md" "$TEMPLATE"/rules/*.md 2>/dev/null | LC_ALL=C tr 'A-Z' 'a-z' | LC_ALL=C tr -cs 'a-z' '\n' | sort -u)"
+  FB_NAMES="$names" FB_WORDS="$words" FB_LEFT="${1:-}" FB_HOME="$HOME" FB_REPO="$(feedback_repo)" python3 -c '
 import os, re, sys
 t = sys.stdin.read()
+words = set(os.environ["FB_WORDS"].split())
+left = []
 home, keep = os.environ["FB_HOME"], os.environ["FB_REPO"]
 t = t.replace(home, "~")
 t = re.sub(r"/(Users|home)/[^/\s]+", "~", t)
@@ -7157,16 +7170,25 @@ for n in sorted(os.environ["FB_NAMES"].split("\n"), key=len, reverse=True):
     if not n:
         continue
     e = re.escape(n)
-    if len(n) >= 4:
+    plain = n.isascii() and n.isalpha() and n.lower() in words
+    if plain and re.search(r"(?<![\w/~-])" + e + r"(?![\w-]|:wiki/)", t):
+        left.append(n)
+    if len(n) >= 4 and not plain:
         t = re.sub(r"(?<![\w-])" + e + r"(?![\w-])", "<private>", t)
     else:
         # Short names are often plain words: only where they are clearly names.
         t = re.sub(r"(?<=[/~])" + e + r"(?=[/:\s]|$)|(?<![\w-])" + e + r"(?=:wiki/)", "<private>", t)
-sys.stdout.write(t.replace("\0KEEP\0", keep))'
+sys.stdout.write("".join(n + "\n" for n in sorted(left)) if os.environ["FB_LEFT"] else t.replace("\0KEEP\0", keep))'
 }
 
 # feedback_draft <note>: the issue text, scrubbed: title on the first line.
 feedback_draft() {
+  local f="$1"
+  feedback_text "$f" | feedback_scrub
+}
+
+# feedback_text <note>: the issue text as it stands before scrubbing.
+feedback_text() {
   local f="$1"
   {
     printf '[%s] %s\n' "$(feedback_field Kind "$f")" "$(feedback_field Summary "$f")"
@@ -7176,7 +7198,7 @@ feedback_draft() {
     printf '**Seen:** %s time(s)\n\n' "$(feedback_field Seen "$f")"
     sed '1,/^$/d' "$f"
     printf '\n---\nFiled with `wiki feedback send` after the user read it. An agent wrote the note; paths and private names are scrubbed.\n'
-  } | feedback_scrub
+  }
 }
 
 cmd_feedback() {
@@ -7322,7 +7344,7 @@ EOF
 }
 
 feedback_send() {
-  local f draft title body repo url
+  local f draft title body repo url left
   f="$(feedback_find "${1:-}")"
   [ "$(feedback_mode)" = share ] || die "sharing is off, so nothing is sent from here. To turn it on, run: $WIKI_CMD setup feedback"
   [ -t 0 ] || [ -n "${LLM_WIKI_TEST_TTY:-}" ] || die "feedback send asks before filing, so it needs a terminal. Agents: tell the user to run it."
@@ -7337,6 +7359,8 @@ feedback_send() {
   printf '%s\n' "$draft" | sed 's/^/  /'
   echo
   echo "Paths, emails, remotes and names of your projects and wikis are replaced. Read it for anything else private."
+  left="$(feedback_text "$f" | feedback_scrub --left | tr '\n' ' ')"
+  [ -z "$left" ] || echo "Left as ordinary words, though a project or wiki of yours has the name: ${left% }. If one is a name here, edit the note."
   ask_yn "File it?" n || { echo "Not filed. Edit $(tilde "$f") and send again, or: $WIKI_CMD feedback dismiss ${1}"; return 0; }
   if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
     url="$(printf '%s\n' "$body" | gh issue create --repo "$repo" --title "$title" --body-file - 2>&1)" || die "gh couldn't file it: $url"

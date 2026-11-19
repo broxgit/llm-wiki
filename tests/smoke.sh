@@ -1910,6 +1910,14 @@ check "the hand-made order is kept: zebra stays first" bash -c "grep '^- ' '$L/i
 check "a new how-to gets its own heading" grep -q '^## How-to' "$L/index.md"
 check "YAML quotes don't reach the index" bash -c "grep -q '): Alpha: a summary YAML had to quote.\$' '$L/index.md'"
 expect "a second run changes nothing" "nothing to change" "$W" index lintdemo
+# The limit on a summary was only checked by lint, after the compile (issue 219).
+long="$(printf 'x%.0s' 1 2 3 4 5 6 7 8 9 10 11 12 13)"; long="$long$long$long$long$long$long$long$long$long$long"
+page concepts/long.md Long "$long"
+expect "index names a summary over the limit, with its length" "summary over 120 characters, at 130: wiki/concepts/long.md" "$W" index lintdemo
+expect "and lint agrees" "summary over 120 characters" "$W" lint lintdemo
+page concepts/long.md Long "$(printf '%s' "$long" | cut -c1-120)"
+lacks "one of exactly 120 is fine" "summary over" "$W" index lintdemo
+rm -f "$L/wiki/concepts/long.md"; "$W" index lintdemo >/dev/null
 printf 'Captured: 2026-01-01\n\nWaiting.\n' > "$L/raw/2026-01-01-000000-waiting.md"
 out="$("$W" lint lintdemo 2>&1)"
 for want in "broken link" "broken citation" "not verified in 180 days" "notes waiting"; do
@@ -2805,7 +2813,25 @@ printf 'other %s\n' "$T/other-coll" > "$HOME/.config/llm-wiki/collections"
 printf 'Hit this in the client-secret-wiki wiki.\n' | "$W" feedback add bug "a note naming another collection" >/dev/null
 m="$(cd "$FB" && echo *-a-note-naming-another-collection.md)"; m="${m%.md}"
 lacks "the draft scrubs wiki names from every collection" "client-secret-wiki" "$W" feedback show "$m"
+# A wiki named for a word the handbook itself uses is a name in a path and a word
+# anywhere else. An issue filed from a machine with a project called time read
+# "Seen: 1 <private>(s)".
+for w in time phoenix; do
+  mkdir -p "$T/other-coll/$w" && printf 'Handbook version 1.\n' > "$T/other-coll/$w/AGENTS.md" && touch "$T/other-coll/$w/index.md"
+done
+printf 'This time the phoenix wiki broke, in ~/wikis/time/index.md and time:wiki/a.md.\n' | "$W" feedback add bug "every time it breaks" >/dev/null
+m="$(cd "$FB" && echo *-every-time-it-breaks.md)"; m="${m%.md}"
+out="$("$W" feedback show "$m" 2>&1)"
+case "$out" in "[bug] every time it breaks"*"**Seen:** 1 time(s)"*"This time the <private> wiki broke"*) ok "a wiki named for an ordinary word doesn't scrub the word" ;; *) bad "a wiki named for an ordinary word doesn't scrub the word" "$out" ;; esac
+case "$out" in *phoenix*|*"/time/"*|*"time:wiki"*) bad "but it is scrubbed where it stands as a name, and other names everywhere" "$out" ;; *) ok "but it is scrubbed where it stands as a name, and other names everywhere" ;; esac
+printf 'mode=share\n' > "$HOME/.config/llm-wiki/feedback"
+out="$(printf 'n\n' | LLM_WIKI_TEST_TTY=1 "$W" feedback send "$m" 2>&1)"
+case "$out" in *"Left as ordinary words, though a project or wiki of yours has the name: time. If one is a name here, edit the note."*"Not filed"*) ok "send names the words it left, before it asks" ;; *) bad "send names the words it left, before it asks" "$out" ;; esac
 rm -rf "$T/other-coll" "$HOME/.config/llm-wiki/collections"
+out="$(printf 'n\n' | LLM_WIKI_TEST_TTY=1 "$W" feedback send "$m" 2>&1)"
+case "$out" in *"Left as ordinary words"*) bad "and says nothing of it when no project has such a name" "$out" ;; *"Not filed"*) ok "and says nothing of it when no project has such a name" ;; *) bad "and says nothing of it when no project has such a name" "$out" ;; esac
+printf 'mode=notes\n' > "$HOME/.config/llm-wiki/feedback"
+"$W" feedback dismiss "$m" >/dev/null
 # Two summaries that share a slug, saved in the same second, are two notes.
 printf 'x\n' | "$W" feedback add docs "It broke" >/dev/null; printf 'y\n' | "$W" feedback add docs "It broke!" >/dev/null
 check "two notes whose summaries share a slug never overwrite each other" bash -c "[ \$(ls '$FB' | grep -c -- '-it-broke') -eq 2 ] && grep -lq '^Summary: It broke!' '$FB'/*-it-broke*.md"
