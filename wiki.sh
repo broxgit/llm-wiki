@@ -158,13 +158,18 @@ set_collection() {
 # --collection NAME, anywhere on the command line, picks a collection by name.
 pick=""
 args=()
+took=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --collection) pick="${2:-}"; shift 2 || { echo "error: --collection needs a name" >&2; exit 1; } ;;
-    --collection=*) pick="${1#*=}"; shift ;;
+    --collection) pick="${2:-}"; took=$((took + 2)); shift 2 || { echo "error: --collection needs a name" >&2; exit 1; } ;;
+    --collection=*) pick="${1#*=}"; took=$((took + 1)); shift ;;
     *) args+=("$1"); shift ;;
   esac
 done
+# Tab completion is told which word the cursor is on, counting the words taken off above.
+if [ "${args[0]:-}" = __complete ] && [ "$took" -gt 0 ]; then
+  case "${args[1]:-}" in '' | *[!0-9]*) ;; *) [ "${args[1]}" -lt "$took" ] || args[1]=$((10#${args[1]} - took)) ;; esac
+fi
 set -- ${args[@]+"${args[@]}"}
 if [ -n "$pick" ]; then
   WIKIS_DIR="$(collections | awk -F'\t' -v n="$pick" '$1 == n { print $2; exit }')"
@@ -1572,6 +1577,7 @@ cmd_start() {
   if [ -d "$arg" ] && [ -z "${pick:-}" ] && [ -z "${LLM_WIKI_FIXED_DIR:-}" ]; then set_collection "$(collection_for "$arg")"; fi
   [ -d "$WIKIS_DIR" ] || die "no wikis at $(tilde "$WIKIS_DIR"). Run: $WIKI_CMD setup"
   helper_auto >/dev/null 2>&1 || true
+  completion_refresh
   # Notes the user typed into an inbox become waiting notes before anything is counted.
   inbox_take >/dev/null 2>&1 || true
   # Where the collection has no git and keeps a history: what it held before this session.
@@ -7165,6 +7171,7 @@ cmd_update() {
       *) die_usage "update options: --wikis-only" ;;
     esac
   done
+  completion_refresh
   [ "$wikis_only" = 0 ] || { update_wikis; return 0; }
   ui_stage UPDATE "llm-wiki"
   new="$REPO/wiki.sh"
@@ -8545,7 +8552,8 @@ EOF
 cmd_skills() {
   local wiki name src dest state
   case "${1:-list}" in
-    link) skills_link; return 0 ;;
+    # The Claude Code hook runs this at every session start, and never runs wiki start.
+    link) completion_refresh; skills_link; return 0 ;;
     list) ;;
     *) die "skills commands: list, link" ;;
   esac
@@ -10089,7 +10097,10 @@ RANGES="lastworkday yesterday today week lastweek 7d 14d 30d"
 
 wiki_names() {
   local d
-  for d in "$WIKIS_DIR"/*/; do d="${d%/}"; is_wiki "$d" && printf '%s\n' "${d##*/}"; done
+  # Only a name wiki new would take. A pull can bring a folder of any name, and a name is
+  # offered on Tab to a shell: one that held $(...) ran there (2026-11-16). A wiki with such
+  # a name can still be used by its path. It is only not offered.
+  for d in "$WIKIS_DIR"/*/; do d="${d%/}"; is_wiki "$d" && valid_name "${d##*/}" && printf '%s\n' "${d##*/}"; done
   return 0
 }
 
@@ -10214,12 +10225,30 @@ EOF
       cat <<'EOF'
 # Tab completion for llm-wiki's wiki command. Written by `wiki completion bash`.
 _llm_wiki() {
-  local cur="${COMP_WORDS[COMP_CWORD]}" out
+  local cur="${COMP_WORDS[COMP_CWORD]}" out line dirs=""
   # Set IFS only after this: bash 3.2 joins "${COMP_WORDS[@]:1}" when IFS is a newline.
   out="$("${COMP_WORDS[0]}" __complete "$COMP_CWORD" "${COMP_WORDS[@]:1}" 2>/dev/null)"
-  local IFS=$'\n'
-  if [ "${out%%$'\n'*}" = __dirs__ ]; then COMPREPLY=($(compgen -d -- "$cur")); return; fi
-  COMPREPLY=($(compgen -W "$out" -- "$cur"))
+  COMPREPLY=()
+  if [ "${out%%$'\n'*}" = __dirs__ ]; then
+    # Folder names are quoted for the command line: one with a space would arrive as two words.
+    dirs="$(compgen -d -- "$cur" || true)"
+    case "$out" in *$'\n'*) out="${out#*$'\n'}" ;; *) out="" ;; esac
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      printf -v line '%q' "$line"
+      COMPREPLY[${#COMPREPLY[@]}]="$line"
+    done <<EOF2
+$dirs
+EOF2
+  fi
+  # Matched here, a line at a time, and never handed to a builtin that expands its words:
+  # a candidate that held $(...) ran as a command on Tab (2026-11-16).
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    case "$line" in "$cur"*) COMPREPLY[${#COMPREPLY[@]}]="$line" ;; esac
+  done <<EOF2
+$out
+EOF2
 }
 complete -F _llm_wiki wiki wiki.sh ./wiki.sh
 EOF
@@ -10231,6 +10260,23 @@ EOF
 # The file a shell profile sources for completion. Rewritten on every setup, so
 # it follows updates; the profile line never changes.
 completion_file() { printf '%s/llm-wiki/completion.%s' "${XDG_CONFIG_HOME:-$HOME/.config}" "$1"; }
+
+# completion_refresh: rewrite a completion file that setup wrote when the running code would
+# print a different one. Setup is the only other writer, and people run it once, so a fix to
+# the script would never reach them. Never makes the file: turning completion on is setup's
+# question. Through a temporary file, so a shell sourcing it at that moment never reads half.
+completion_refresh() {
+  local sh f new
+  global_files_ok || return 0
+  for sh in zsh bash; do
+    f="$(completion_file "$sh")"
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    new="$(cmd_completion "$sh" 2>/dev/null)" || continue
+    [ -n "$new" ] && [ "$new" != "$(cat "$f" 2>/dev/null)" ] || continue
+    if printf '%s\n' "$new" > "$f.tmp.$$" 2>/dev/null && mv -f "$f.tmp.$$" "$f" 2>/dev/null; then :; else unlink "$f.tmp.$$" 2>/dev/null || true; fi
+  done
+  return 0
+}
 
 # completion_shell: zsh or bash, from $SHELL, or nothing.
 completion_shell() { case "${SHELL##*/}" in zsh | bash) printf '%s' "${SHELL##*/}" ;; esac; return 0; }

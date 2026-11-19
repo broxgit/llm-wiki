@@ -846,6 +846,48 @@ check "the bash script parses" bash -n <("$W" completion bash)
 "$W" completion bash > "$T/c.bash"
 out="$(bash -c "source '$T/c.bash'; COMP_WORDS=('$W' journal s); COMP_CWORD=2; _llm_wiki; echo \"\${COMPREPLY[*]}\"" 2>&1)"
 case "$out" in "show set") ok "bash completion passes each word on (bash 3.2 joins them otherwise)" ;; *) bad "bash completion passes each word on (bash 3.2 joins them otherwise)" "$out" ;; esac
+# A wiki's folder can arrive by a pull with any name, and a name is offered to a shell on Tab.
+mkdir -p "$WIKIS_DIR/x\$(touch $T/TAB-PROOF)y"
+cp "$WIKIS_DIR/demo/AGENTS.md" "$WIKIS_DIR/demo/index.md" "$WIKIS_DIR/x\$(touch $T/TAB-PROOF)y/" 2>/dev/null
+out="$("$W" __complete 2 capture "" 2>&1)"
+case "$out" in *'$('*) bad "a wiki folder with a name wiki new would refuse isn't offered" "$out" ;; *demo*) ok "a wiki folder with a name wiki new would refuse isn't offered" ;; *) bad "a wiki folder with a name wiki new would refuse isn't offered" "$out" ;; esac
+rm -rf "$WIKIS_DIR/x\$(touch $T/TAB-PROOF)y"
+# The script itself, with a stand-in wiki that offers such a name anyway, as an old copy would.
+mkdir -p "$T/tabdir/plain" "$T/tabdir/sub dir" "$T/tabdir/star*dir"
+printf '#!/bin/sh\ncase "$3" in seed) echo __dirs__; echo --wiki; echo --max; echo --dry-run ;; *) echo demo; printf "%%s\\n" "x\\$(touch %s/TAB-PROOF)y" ;; esac\n' "$T" > "$T/tab-wiki"; chmod +x "$T/tab-wiki"
+tabdo() { /bin/bash -c "set -e; source '$T/c.bash'; cd '$T/tabdir'; COMP_WORDS=($1); COMP_CWORD=$2; _llm_wiki; printf '%s\n' \"\${COMPREPLY[@]}\"; echo still-running" 2>&1; }
+out="$(tabdo "'$T/tab-wiki' capture ''" 2)"
+check "pressing Tab runs nothing that a candidate holds" test ! -e "$T/TAB-PROOF"
+case "$out" in *'x$(touch '*'/TAB-PROOF)y'*) ok "and the candidate is offered as it is written" ;; *) bad "and the candidate is offered as it is written" "$out" ;; esac
+out="$(tabdo "'$T/tab-wiki' seed ''" 2)"
+case "$out" in *'sub\ dir'*) ok "seed offers a folder whose name holds a space as one quoted candidate" ;; *) bad "seed offers a folder whose name holds a space as one quoted candidate" "$out" ;; esac
+case "$out" in *'star\*dir'*) ok "and one whose name holds a star" ;; *) bad "and one whose name holds a star" "$out" ;; esac
+case "$out" in *--wiki*--max*--dry-run*) ok "with seed's options beside them" ;; *) bad "with seed's options beside them" "$out" ;; esac
+out="$(tabdo "'$T/tab-wiki' seed --" 2)"
+case "$out" in "--wiki"*"--max"*"--dry-run"*"still-running") ok "seed -- offers the options" ;; *) bad "seed -- offers the options" "$out" ;; esac
+out="$(tabdo "'$T/tab-wiki' seed zzz-no-such" 2)"
+case "$out" in *still-running*) ok "a word that matches nothing leaves a shell with set -e running" ;; *) bad "a word that matches nothing leaves a shell with set -e running" "$out" ;; esac
+lacks "the bash script never hands candidates to compgen -W, which expands them" "compgen -W" grep -n "compgen -W" "$W"
+# --collection before the command doesn't throw the count of words off.
+# The script file follows the code: setup writes it once, and a fix would never reach it.
+CF="$T/cf-home/.config/llm-wiki"
+mkdir -p "$CF"
+cfw() { env -u WIKIS_DIR -u XDG_CONFIG_HOME HOME="$T/cf-home" LLM_WIKI_DEFAULT_DIR="$WIKIS_DIR" "$W" "$@"; }
+tabwant="$(cfw __complete 2 capture "")"
+if [ -n "$tabwant" ] && [ "$(cfw __complete 4 --collection default capture "")" = "$tabwant" ]; then ok "completion after --collection <name> offers what it offers without"; else bad "completion after --collection <name> offers what it offers without" "$(cfw __complete 4 --collection default capture "" 2>&1)"; fi
+if [ "$(cfw __complete 3 --collection=default capture "")" = "$tabwant" ]; then ok "and after --collection=<name>"; else bad "and after --collection=<name>" "$(cfw __complete 3 --collection=default capture "" 2>&1)"; fi
+cfw start demo >/dev/null 2>&1 || true
+check "with no completion file, a session start makes none" bash -c "! ls '$CF' 2>/dev/null | grep -q '^completion'"
+for how in "start demo" "update --wikis-only" "skills link"; do
+  printf 'an old script\n' > "$CF/completion.bash"; printf 'an old script\n' > "$CF/completion.zsh"
+  # shellcheck disable=SC2086
+  cfw $how </dev/null >/dev/null 2>&1 || true
+  if cmp -s "$CF/completion.bash" <("$W" completion bash) && cmp -s "$CF/completion.zsh" <("$W" completion zsh); then ok "wiki $how rewrites a completion file that is behind the code"; else bad "wiki $how rewrites a completion file that is behind the code" "$(head -n 2 "$CF/completion.bash")"; fi
+done
+check "and leaves no temporary file" bash -c "! ls '$CF' | grep -q tmp"
+printf 'an old script\n' > "$CF/completion.bash"
+env HOME="$T/cf-home" WIKIS_DIR="$WIKIS_DIR" "$W" start demo >/dev/null 2>&1 || true
+check "a one-off run with WIKIS_DIR set leaves the file alone" grep -qx 'an old script' "$CF/completion.bash"
 if command -v zsh >/dev/null 2>&1; then
   check "the zsh script parses" zsh -n <("$W" completion zsh)
 else
