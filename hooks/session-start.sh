@@ -181,8 +181,10 @@ hook_is_wiki "$wiki" || exit 0
 # Reminders: the lines under "## Reminders" in the wikis' conventions pages, which
 # pre-tool-use.sh hands to the session at the tool call each applies to. They're
 # written per session, here, because this hook already knows the session's wiki.
-# A fresh file also forgets which ones were shown, so they come back after a
-# compaction, when the session no longer remembers them.
+# Which ones were shown is forgotten after a compaction or a /clear, when the session
+# no longer remembers them, and at no other time: this hook also runs when a session
+# is resumed, and in some apps more often than that, and a reminder that came back
+# each time stopped the same call over and over.
 sid="$(printf '%s' "$input" | sed -n 's/.*"session_id" *: *"\([A-Za-z0-9_-]*\)".*/\1/p' | head -n 1)"
 if [ -n "$sid" ]; then
   rdir="${XDG_STATE_HOME:-$HOME/.local/state}/llm-wiki/reminders"
@@ -192,7 +194,9 @@ if [ -n "$sid" ]; then
   else
     rm -f "$rdir/$sid.tsv" 2>/dev/null
   fi
-  rm -f "$rdir/$sid.seen" 2>/dev/null
+  case "$input" in
+    *'"source":"compact"'* | *'"source": "compact"'* | *'"source":"clear"'* | *'"source": "clear"'*) rm -f "$rdir/$sid.seen" 2>/dev/null ;;
+  esac
   # Sessions end without telling anyone, so old files are swept here.
   find "$rdir" -type f -mtime +7 -exec rm -f {} + 2>/dev/null
 fi
