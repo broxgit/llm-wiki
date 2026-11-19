@@ -4,6 +4,11 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2027-01-25: a remote that doesn't answer can't hold up a session
+
+- Session start gives the remote 20 seconds, then goes on with the pages that are here and says so. Before, it waited as long as the remote stayed silent.
+- `wiki sync`, session start and `wiki update` no longer wait for a password when no one is at a terminal to type it: they end with git's error.
+
 ## 2027-01-24: one page changed on two machines no longer blocks every wiki
 
 - When a sync can't merge a page, the pull is undone: no page is left with git's markers, and your other wikis keep syncing their commits.

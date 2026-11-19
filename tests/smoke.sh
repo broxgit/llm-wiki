@@ -86,6 +86,7 @@ read -r -d '' PARTS <<'TABLE' || true
 2 | A wiki that passes for a repository |
 2 | A folder that only looks like a wiki |
 2 | Two clones change one page |
+3 | A remote that doesn't answer |
 2 | The suite itself |
 3 | Obsidian plugin |
 2 | History without git |
@@ -12039,6 +12040,90 @@ rmdir "$TC2/b/wikis/.git/llm-wiki-sync.lock" 2>/dev/null
 [ "$code" = 0 ] && case "$out" in *"pull: skipped, because another session is syncing this collection."*) true ;; *) false ;; esac && ok "with another session's sync in progress, start skips its pull and says so" || bad "with another session's sync in progress, start skips its pull and says so" "exit $code: $(printf '%s\n' "$out" | grep '^pull')"
 tcw b start demo >/dev/null 2>&1
 check "start gives the lock back when it is done" test ! -e "$TC2/b/wikis/.git/llm-wiki-sync.lock"
+fi
+
+if section "A remote that doesn't answer"; then
+# A call that reaches the remote must not wait for ever, or for a password nobody is there to
+# type. With an HTTPS remote that never answered, session start was still running after 40
+# seconds, and the hooks that run it have 30 (2026-11-16).
+RN="$T/noanswer"
+mkdir -p "$RN/home"
+cat > "$RN/server.py" <<'PY'
+import http.server, socket, sys, threading
+mode, portfile = sys.argv[1], sys.argv[2]
+if mode == "silent":
+    # Takes the connection and never says a word.
+    s = socket.socket(); s.bind(("127.0.0.1", 0)); s.listen(16)
+    open(portfile, "w").write(str(s.getsockname()[1]))
+    held = []
+    while True:
+        held.append(s.accept()[0])
+else:
+    # Asks for a password.
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(401); self.send_header("WWW-Authenticate", 'Basic realm="x"'); self.send_header("Content-Length", "0"); self.end_headers()
+        do_POST = do_GET
+        def log_message(self, *a): pass
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    open(portfile, "w").write(str(srv.server_address[1]))
+    srv.serve_forever()
+PY
+python3 "$RN/server.py" silent "$RN/silent.port" & RN_SILENT=$!
+python3 "$RN/server.py" auth "$RN/auth.port" & RN_AUTH=$!
+i=0; while { [ ! -s "$RN/silent.port" ] || [ ! -s "$RN/auth.port" ]; } && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+rnw() { env HOME="$RN/home" WIKIS_DIR="$RN/home/wikis" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com GIT_CONFIG_NOSYSTEM=1 "$W" "$@"; }
+rng() { env HOME="$RN/home" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com git -C "$RN/home/wikis" "$@"; }
+# within <seconds> <file> <command>...: the command's output in the file and its seconds on
+# the last line, or "stopped" if the test had to end it.
+within() { local lim="$1" out="$2"; shift 2; python3 - "$lim" "$out" "$@" <<'PY'
+import subprocess, sys, time
+lim, out, cmd = float(sys.argv[1]), sys.argv[2], sys.argv[3:]
+t = time.time()
+with open(out, "w") as f:
+    try:
+        rc = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, timeout=lim).returncode
+        f.write("\nexit %d in %d seconds\n" % (rc, time.time() - t))
+    except subprocess.TimeoutExpired:
+        f.write("\nstopped by the test after %d seconds\n" % lim)
+PY
+}
+rnw init --git >/dev/null 2>&1
+rnw new demo >/dev/null 2>&1
+env HOME="$RN/home" git init -q --bare "$RN/good.git"
+rng add -A; rng commit -q -m first 2>/dev/null; rng remote add origin "$RN/good.git"; rng push -q -u origin HEAD 2>/dev/null
+rng status --porcelain > "$RN/status.before"
+# The remote stops answering.
+rng remote set-url origin "http://127.0.0.1:$(cat "$RN/silent.port")/wikis.git"
+export -f rnw 2>/dev/null || true
+within 45 "$RN/start.out" env HOME="$RN/home" WIKIS_DIR="$RN/home/wikis" GIT_CONFIG_NOSYSTEM=1 "$W" start demo
+out="$(cat "$RN/start.out")"
+secs="$(sed -n 's/^exit 0 in \([0-9]*\) seconds$/\1/p' "$RN/start.out")"
+if [ -n "$secs" ] && [ "$secs" -le 30 ]; then ok "session start gives up on a remote that never answers (in $secs seconds)"; else bad "session start gives up on a remote that never answers" "$(tail -n 3 "$RN/start.out")"; fi
+case "$out" in *"pull: gave up after 20 seconds, so this is what was here already."*"===== "*"/demo/index.md"*) ok "it says so, and still prints the index" ;; *) bad "it says so, and still prints the index" "$out" ;; esac
+rng status --porcelain > "$RN/status.after"
+check "the fetch that was stopped left no lock and no merge, and the files as they were" bash -c "! test -e '$RN/home/wikis/.git/index.lock' && ! test -e '$RN/home/wikis/.git/MERGE_HEAD' && cmp -s '$RN/status.before' '$RN/status.after'"
+check "and the sync lock was given back" test ! -e "$RN/home/wikis/.git/llm-wiki-sync.lock"
+# The same where the branch has no upstream yet, so the first question to the remote is what waits.
+rng branch -q --unset-upstream 2>/dev/null
+within 45 "$RN/start2.out" env HOME="$RN/home" WIKIS_DIR="$RN/home/wikis" GIT_CONFIG_NOSYSTEM=1 "$W" start demo
+secs="$(sed -n 's/^exit 0 in \([0-9]*\) seconds$/\1/p' "$RN/start2.out")"
+if [ -n "$secs" ] && [ "$secs" -le 30 ] && grep -q 'pull: gave up after 20 seconds' "$RN/start2.out"; then ok "and with a branch that tracks nothing yet (in $secs seconds)"; else bad "and with a branch that tracks nothing yet" "$(grep '^pull\|^exit\|^stopped' "$RN/start2.out")"; fi
+# The remote is back: the next session pulls as usual.
+rng remote set-url origin "$RN/good.git"
+expect "with the remote back, the next session start pulls as usual" "pull: up to date with the remote" rnw start demo
+# A remote that wants a password nobody is there to give: git's error, at once, and no question.
+rng remote set-url origin "http://127.0.0.1:$(cat "$RN/auth.port")/wikis.git"
+within 30 "$RN/start3.out" env HOME="$RN/home" WIKIS_DIR="$RN/home/wikis" GIT_CONFIG_NOSYSTEM=1 GIT_ASKPASS= SSH_ASKPASS= "$W" start demo
+if grep -q '^exit 0 in' "$RN/start3.out" && grep -q '^pull: failed' "$RN/start3.out"; then ok "session start doesn't wait for a password: the pull fails, and it goes on"; else bad "session start doesn't wait for a password: the pull fails, and it goes on" "$(grep '^pull\|^exit\|^stopped' "$RN/start3.out")"; fi
+printf 'Captured: 2026-01-01\n\nA note.\n' > "$RN/home/wikis/demo/raw/n.md"
+within 30 "$RN/sync.out" env HOME="$RN/home" WIKIS_DIR="$RN/home/wikis" GIT_CONFIG_NOSYSTEM=1 GIT_ASKPASS= SSH_ASKPASS= GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com "$W" sync demo
+if grep -q '^exit 1 in' "$RN/sync.out" && grep -q 'committed: ' "$RN/sync.out"; then ok "nor does sync: it commits, and ends with an error"; else bad "nor does sync: it commits, and ends with an error" "$(cat "$RN/sync.out")"; fi
+# A healthy remote: sync behaves as before.
+rng remote set-url origin "$RN/good.git"
+expect "with a healthy remote, sync pushes as before" "synced: " rnw sync demo
+kill "$RN_SILENT" "$RN_AUTH" 2>/dev/null || true
+wait "$RN_SILENT" "$RN_AUTH" 2>/dev/null || true
 fi
 
 if section "What CI skips"; then
