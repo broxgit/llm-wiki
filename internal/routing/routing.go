@@ -204,13 +204,55 @@ func Folders(root string) ([]string, error) {
 	return names, nil
 }
 
-// isWiki is wiki.sh's is_wiki.
-func isWiki(dir string) (bool, error) {
+// What a folder is, to WikiState.
+const (
+	Wiki        = iota // index.md, and an AGENTS.md with the handbook's version line
+	Missing            // one of the two files isn't there
+	NotHandbook        // both are, and AGENTS.md was read and has no version line
+	CantTell           // both are, and AGENTS.md can't be read: counted as a wiki
+)
+
+// WikiState is wiki.sh's is_wiki, with its three answers for a folder that has both files.
+// A wiki is a folder whose AGENTS.md is the handbook: two file names alone marked one
+// before, and AGENTS.md is now the usual name for a code repository's own instructions.
+// A file that can't be looked at is an error, so the Bash says what it says. One that is
+// there and can't be opened is CantTell, which the Bash counts as a wiki too: that is the
+// state inside a sandbox that closes the wikis to reading. This is the one copy in Go.
+// The others are is_wiki in wiki.sh, mcp/server.py, hooks/reminders.py,
+// hooks/session-start.sh and extensions/wiki-confluence: change them together.
+func WikiState(dir string) (int, error) {
 	if ok, err := IsFile(dir + "/AGENTS.md"); err != nil || !ok {
-		return false, err
+		return Missing, err
 	}
-	return IsFile(dir + "/index.md")
+	if ok, err := IsFile(dir + "/index.md"); err != nil || !ok {
+		return Missing, err
+	}
+	text, err := os.ReadFile(dir + "/AGENTS.md")
+	if err != nil {
+		return CantTell, nil
+	}
+	// As the shell's read has it: bytes, a line at a time. Bash 3.2, which a Mac has, ends a
+	// line at a NUL byte, so that is the rule here. A newer bash passes the byte over
+	// instead, and so differs on a handbook that holds one, which no real one does.
+	for _, line := range bytes.Split(text, []byte("\n")) {
+		if i := bytes.IndexByte(line, 0); i >= 0 {
+			line = line[:i]
+		}
+		rest, ok := bytes.CutPrefix(line, []byte("Handbook version "))
+		if ok && len(rest) > 0 && rest[0] >= '0' && rest[0] <= '9' {
+			return Wiki, nil
+		}
+	}
+	return NotHandbook, nil
 }
+
+// IsWiki is wiki.sh's is_wiki: whether a command may treat the folder as a wiki.
+func IsWiki(dir string) (bool, error) {
+	st, err := WikiState(dir)
+	return st == Wiki || st == CantTell, err
+}
+
+func isWiki(dir string) (bool, error) { return IsWiki(dir) }
 
 // IsFile is the shell's [ -f path ], except that the shell calls a file it isn't
 // allowed to look at missing. Here that is an error, so the Bash says what it says.

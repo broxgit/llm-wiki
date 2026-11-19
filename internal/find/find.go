@@ -52,7 +52,8 @@ func Search(o Options) (text, first string, err error) {
 	var b strings.Builder
 	for _, name := range names {
 		dir := o.Wikis + "/" + name
-		if ok, err := routing.IsFile(dir + "/index.md"); err != nil {
+		// Only a wiki is searched, by the test every other command uses.
+		if ok, err := routing.IsWiki(dir); err != nil {
 			return "", "", err
 		} else if !ok {
 			continue

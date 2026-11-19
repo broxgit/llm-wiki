@@ -23,7 +23,7 @@ func collection(t *testing.T) Options {
 
 func wiki(t *testing.T, o Options, name, index string) {
 	t.Helper()
-	write(t, o.Wikis+"/"+name+"/AGENTS.md", "# Handbook\n")
+	write(t, o.Wikis+"/"+name+"/AGENTS.md", "# Handbook\n\nHandbook version 1.\n")
 	write(t, o.Wikis+"/"+name+"/index.md", "# Index\n"+index)
 }
 

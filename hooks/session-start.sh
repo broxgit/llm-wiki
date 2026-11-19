@@ -123,6 +123,22 @@ if top="$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null)"; then
   fi
 fi
 
+# hook_is_wiki <folder>: wiki.sh's is_wiki, read in the shell so no process is started. An
+# index.md, and an AGENTS.md with the handbook's "Handbook version N." line. One that can't
+# be opened counts, as it does there. The same test is in wiki.sh, internal/routing,
+# mcp/server.py, hooks/reminders.py and extensions/wiki-confluence: change them together.
+hook_is_wiki() {
+  local l got="" opened=no LC_ALL=C
+  [ -f "$1/index.md" ] && [ -f "$1/AGENTS.md" ] || return 1
+  {
+    opened=yes
+    while IFS= read -r l || [ -n "$l" ]; do
+      case "$l" in "Handbook version "[0-9]*) got=1; break ;; esac
+    done
+  } 2>/dev/null < "$1/AGENTS.md" || true
+  [ -n "$got" ] || [ "$opened" = no ]
+}
+
 wiki=""
 note=""
 if [ -n "$repo" ]; then
@@ -145,14 +161,14 @@ if [ -z "$repo" ]; then
 
 $note"
   fi
-  if [ -n "$p" ] && [ -f "$p/AGENTS.md" ]; then wiki="$p"; fi
+  if [ -n "$p" ] && hook_is_wiki "$p"; then wiki="$p"; fi
   # The note says to ask once. It is handed over again here, so say not to ask twice.
   if [ "$again" = 1 ]; then
     case "$note" in *"No pattern of theirs covers this folder yet."*) note="$note This session was going before this: if you asked already, don't ask again." ;; esac
   fi
 fi
 if [ -z "$wiki" ]; then
-  [ -f "$WIKIS_DIR/global/AGENTS.md" ] || exit 0
+  hook_is_wiki "$WIKIS_DIR/global" || exit 0
   wiki="$WIKIS_DIR/global"
   if [ -n "$repo" ]; then
     note="No wiki covers $repo yet, so the shared wiki is this session's. Create $repo's wiki with \`wiki.sh new $repo\` when there's something to file. Before that, offer once to start it from the repository's own docs with \`wiki.sh seed\`, run in the repository."
@@ -160,7 +176,7 @@ if [ -z "$wiki" ]; then
     note="This session isn't in a repository, so the shared wiki is its wiki. Tell the user so in one line."
   fi
 fi
-[ -f "$wiki/AGENTS.md" ] || exit 0
+hook_is_wiki "$wiki" || exit 0
 
 # Reminders: the lines under "## Reminders" in the wikis' conventions pages, which
 # pre-tool-use.sh hands to the session at the tool call each applies to. They're
@@ -184,7 +200,17 @@ fi
 # What needs doing at session start, so the agent doesn't have to look.
 # wiki.sh decides what counts as compiled, so the two never disagree.
 waiting="$("$WIKI_SH" pending "$wiki" 2>/dev/null | grep -c '^raw/' || true)"
-version_of() { sed -n 's/^Handbook version \([0-9][0-9]*\).*/\1/p' "$1" 2>/dev/null | head -n 1; }
+# Read in the shell, by byte, as wiki.sh's handbook_version reads it: sed stops at a byte
+# that is no character in a UTF-8 locale.
+version_of() {
+  local l LC_ALL=C
+  [ -f "$1" ] || return 0
+  {
+    while IFS= read -r l || [ -n "$l" ]; do
+      case "$l" in "Handbook version "[0-9]*) l="${l#Handbook version }"; printf '%s' "${l%%[!0-9]*}"; break ;; esac
+    done
+  } 2>/dev/null < "$1" || true
+}
 wv="$(version_of "$wiki/AGENTS.md")"
 tv="$(version_of "$ROOT/template/AGENTS.md")"
 

@@ -195,13 +195,8 @@ func waitingIn(root string) (int, error) {
 	return total, nil
 }
 
-// isWiki is wiki.sh's is_wiki.
-func isWiki(dir string) (bool, error) {
-	if ok, err := routing.IsFile(dir + "/AGENTS.md"); err != nil || !ok {
-		return false, err
-	}
-	return routing.IsFile(dir + "/index.md")
-}
+// isWiki is wiki.sh's is_wiki, from the one copy of it.
+func isWiki(dir string) (bool, error) { return routing.IsWiki(dir) }
 
 // number reads a version as the shell's test does, or -1 for "" when that is allowed.
 // One too long for the shell's integers is the Bash's.

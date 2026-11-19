@@ -404,7 +404,7 @@ need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 # Raise GO_PROTOCOL, with the constant in cmd/llm-wiki/main.go, whenever a ported
 # command's arguments or output change. scripts/helper.sh builds releases and writes
 # helper.lock.
-GO_PROTOCOL=22
+GO_PROTOCOL=23
 HELPER_LOCK="$REPO/helper.lock"
 HELPER_DIR="${LLM_WIKI_HELPER_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/llm-wiki/helper}"
 
@@ -635,11 +635,53 @@ name_hint() {
   printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9._-' '-' | sed -e 's/--*/-/g' -e 's/^[.-]*//' -e 's/-$//'
 }
 
-version_of() {
-  sed -n 's/^Handbook version \([0-9][0-9]*\).*/\1/p' "$1" 2>/dev/null | head -n 1
+# handbook_version <file>: sets HB to the number on its "Handbook version N." line, or to
+# nothing, and HB_READ to yes when the file could be opened. No process is started: is_wiki
+# runs in loops over every folder of a collection, and in the session hook. A test of
+# readability beforehand is not enough: in an agent's sandbox it can pass while the open
+# fails. So the group is entered only when the open worked, and that is what sets HB_READ.
+# The redirections are in this order on purpose: with 2>/dev/null second, the shell still
+# prints "Permission denied" for a file it can't open.
+handbook_version() {
+  # By byte: in a UTF-8 locale a byte that is no character stops the shell from cutting the
+  # line down to its number, and [0-9] can take in other digits than these ten.
+  local l LC_ALL=C
+  HB="" HB_READ=no
+  [ -f "$1" ] || return 0
+  {
+    HB_READ=yes
+    while IFS= read -r l || [ -n "$l" ]; do
+      case "$l" in
+        "Handbook version "[0-9]*) l="${l#Handbook version }"; HB="${l%%[!0-9]*}"; break ;;
+      esac
+    done
+  } 2>/dev/null < "$1" || true
+}
+version_of() { handbook_version "$1"; printf '%s' "$HB"; }
+
+# is_wiki <folder>: a wiki is a folder whose AGENTS.md is the handbook, beside an index.md.
+# Two file names alone marked one before, and AGENTS.md is now the usual name for a code
+# repository's own instructions: `wiki sync` on a docs site committed and pushed all of it
+# (2026-11-15). Three answers for a folder that has both files: the version line is there,
+# a wiki; the file was read and has none, not a wiki; the file can't be read, nothing can
+# be told, so it counts as one, as before. That is the state inside a sandbox that closes
+# the wikis to reading, and calling it "not the handbook" would send a person to repair a
+# wiki that is fine. hooks/session-start.sh, mcp/server.py, hooks/reminders.py,
+# extensions/wiki-confluence and internal/routing hold the same test: change them together.
+is_wiki() {
+  [ -f "$1/index.md" ] && [ -f "$1/AGENTS.md" ] || return 1
+  handbook_version "$1/AGENTS.md"
+  [ -n "$HB" ] || [ "$HB_READ" = no ]
 }
 
-is_wiki() { [ -f "$1/AGENTS.md" ] && [ -f "$1/index.md" ]; }
+# not_wiki <folder>: the words for a folder is_wiki refused, with what to do.
+not_wiki() {
+  if [ -f "$1/index.md" ] && [ -f "$1/AGENTS.md" ]; then
+    printf '%s is not a wiki: its AGENTS.md is not the llm-wiki handbook. Nothing was changed. Run: %s status' "$(tilde "$1")" "$WIKI_CMD"
+  else
+    printf '%s is not a wiki. Run: %s status' "$(tilde "$1")" "$WIKI_CMD"
+  fi
+}
 
 in_git_repo() { git -C "$1" rev-parse --is-inside-work-tree >/dev/null 2>&1; }
 
@@ -678,6 +720,21 @@ scaffold() {
   if is_wiki "$root"; then
     echo "exists:  $(tilde "$root") (left alone)"
     return 0
+  fi
+  # A folder with an AGENTS.md of its own that isn't the handbook: copy_missing never
+  # overwrites, so the result was half a wiki that passed for one. Nothing is written.
+  if [ -L "$root/AGENTS.md" ] || { [ -e "$root/AGENTS.md" ] && [ ! -f "$root/AGENTS.md" ]; }; then
+    die "$(tilde "$root/AGENTS.md") is a link or a folder, not a file, so no wiki is made there. Do: move it away, or choose another folder"
+  fi
+  if [ -f "$root/AGENTS.md" ]; then
+    handbook_version "$root/AGENTS.md"
+    [ "$HB_READ" = yes ] || die "$(tilde "$root/AGENTS.md") can't be read, so nothing can be told about it and no wiki is made there. If this runs inside an agent's sandbox, run it outside"
+    if [ -z "$HB" ]; then
+      if [ "${root%/*}" = "${WIKIS_DIR%/}" ] || [ "${root%/*}" -ef "$WIKIS_DIR" ]; then
+        die "$(tilde "$root") has an AGENTS.md that is not the handbook. Do: move that file away, or choose another name"
+      fi
+      die "$(tilde "$root") has its own AGENTS.md, and a wiki's AGENTS.md is its handbook. A wiki needs a folder of its own. Run: $WIKI_CMD new ${root##*/}"
+    fi
   fi
   # At the top of a collection, inbox/ is where typed notes are taken from and journal/ is
   # the work journal. A wiki made in either would have its own files taken as notes. Compared
@@ -1811,7 +1868,7 @@ wiki_root() {
   local root
   [ -n "${1:-}" ] || die "name a wiki"
   root="$(resolve "$1")"
-  is_wiki "$root" || die "$(tilde "$root") is not a wiki"
+  is_wiki "$root" || die "$(not_wiki "$root")"
   printf '%s' "$root"
 }
 
@@ -2173,7 +2230,7 @@ capture_run() {
   # then capture_note answers.
   [ ! -t 0 ] || tty=--tty
   # shellcheck disable=SC2086
-  if bin="$(go_helper)" && out="$("$bin" capture --wikis "$WIKIS_DIR" --home "$HOME" --pwd "$PWD" $tty -- "$@" 2>/dev/null)"; then
+  if bin="$(go_helper)" && out="$("$bin" capture --wikis "$WIKIS_DIR" --home "$HOME" --pwd "$PWD" --wiki-cmd "$WIKI_CMD" $tty -- "$@" 2>/dev/null)"; then
     case "$out" in
       "captured$nl"?*) printf '%s\n' "${out#*"$nl"}"; return 0 ;;
       "refused$nl"?*) die "${out#*"$nl"}" ;;
@@ -3865,7 +3922,7 @@ cmd_pending() {
     return 0
   fi
   root="$(resolve "$wiki")"
-  is_wiki "$root" || die "$(tilde "$root") is not a wiki"
+  is_wiki "$root" || die "$(not_wiki "$root")"
   # A folder the shell can't list looks empty to a glob. Inside Antigravity's
   # sandbox (2026-10-29) that said "nothing waiting" while five notes waited.
   d="$(unlisted "$root")"
@@ -4104,7 +4161,7 @@ cmd_cover() {
   local wiki="$1" root repo owner
   shift
   root="$(resolve "$wiki")"
-  is_wiki "$root" || die "$(tilde "$root") is not a wiki"
+  is_wiki "$root" || die "$(not_wiki "$root")"
   [ $# -ge 1 ] || die "cover needs at least one repository name"
   [ -f "$root/repos.md" ] || printf '# Repositories\n' > "$root/repos.md"
   for repo in "$@"; do
@@ -4561,6 +4618,14 @@ EOF2
 $r
 EOF2
   ! history_stray_git || todo_add "git: $(history_stray_text)"
+  # A folder that has both files and an AGENTS.md that was read and isn't the handbook is in
+  # no table and no list. So that it doesn't vanish without a word, it is named here.
+  local nd
+  for nd in "$WIKIS_DIR"/*/; do
+    nd="${nd%/}"
+    [ -f "$nd/index.md" ] && [ -f "$nd/AGENTS.md" ] || continue
+    is_wiki "$nd" || todo_add "not a wiki: ${nd##*/} has AGENTS.md and index.md, but its AGENTS.md is not the handbook, so no command reads it. Do: if it is a wiki, add the line \"Handbook version 0.\" to its AGENTS.md, then run: $WIKI_CMD upgrade ${nd##*/}"
+  done
   if [ ! -e "$WIKIS_DIR/.git" ] && { [ -f "$WIKIS_DIR/HEAD" ] || [ -L "$WIKIS_DIR/HEAD" ]; } && [ -d "$WIKIS_DIR/objects" ] && [ -d "$WIKIS_DIR/refs" ]; then
     todo_add "git files: $(wiki_planted_text "$(tilde "$WIKIS_DIR")")"
   fi
@@ -4654,7 +4719,8 @@ find_search() {
   local LC_ALL=C
   for d in "$WIKIS_DIR"/*/; do
     d="${d%/}"
-    [ -f "$d/index.md" ] || continue
+    # Only a wiki is searched, by the test every other command uses.
+    is_wiki "$d" || continue
     # Headings like "# Index" and "## Concepts" aren't entries.
     hits="$(LC_ALL=C grep -v '^#' "$d/index.md" | LC_ALL=C grep -i -F -- "$word" || true)"
     pages=""
@@ -4828,7 +4894,11 @@ EOF2
 
 upgrade_one() {
   local root="$1" tv wv f r had_links=1
-  is_wiki "$root" || die "$(tilde "$root") is not a wiki (needs AGENTS.md and index.md)"
+  is_wiki "$root" || die "$(not_wiki "$root")"
+  # A handbook that can't be read counts as a wiki, and has no version to compare: replacing
+  # it would write over a file nobody has looked at.
+  handbook_version "$root/AGENTS.md"
+  [ "$HB_READ" = yes ] || die "$(tilde "$root/AGENTS.md") can't be read, so it is left as it is. If this runs inside an agent's sandbox, run the upgrade outside it"
   tv="$(version_of "$TEMPLATE/AGENTS.md")"
   wv="$(version_of "$root/AGENTS.md")"
   if [ "${wv:-0}" -gt "${tv:-0}" ]; then
@@ -4902,7 +4972,7 @@ cmd_upgrade_all() {
 
 cmd_upgrade_one() {
   local root="$1" behind="" from
-  is_wiki "$root" || die "$(tilde "$root") is not a wiki (needs AGENTS.md and index.md)"
+  is_wiki "$root" || die "$(not_wiki "$root")"
   from="$(version_of "$root/AGENTS.md")"
   if [ "${from:-0}" -lt "$(version_of "$TEMPLATE/AGENTS.md")" ]; then behind=" ${root##*/}:${from:-0}"; fi
   ui_stage UPGRADE "${root##*/}"
@@ -5044,7 +5114,7 @@ EOF2
 
 cmd_unlock() {
   local root="$1"
-  is_wiki "$root" || die "$(tilde "$root") is not a wiki"
+  is_wiki "$root" || die "$(not_wiki "$root")"
   printf 'free\n' > "$root/.compile-lock"
   ui_item ok "unlocked: $(tilde "$root")"
 }
@@ -7654,7 +7724,18 @@ for rp in sorted(Path(wikis).glob("*/repos.md")):  # sorted, as the Go version r
             cover[line[2:].strip()] = rp.parent.name
 
 # Names that count as projects: every wiki, and every repository a wiki covers.
-known = set(cover) | {d.name for d in Path(wikis).iterdir() if (d / "AGENTS.md").is_file() and (d / "index.md").is_file()}
+# is_wiki, as the script has it: the handbook's version line marks a wiki, and a handbook
+# that can't be read counts as one.
+def is_wiki(d):
+    if not ((d / "AGENTS.md").is_file() and (d / "index.md").is_file()):
+        return False
+    try:
+        data = (d / "AGENTS.md").read_bytes()
+    except OSError:
+        return True
+    return any(l.startswith(b"Handbook version ") and l[17:18].isdigit() for l in (x.split(b"\0", 1)[0] for x in data.split(b"\n")))
+
+known = set(cover) | {d.name for d in Path(wikis).iterdir() if is_wiki(d)}
 
 _proj = {}
 def project(cwd):
@@ -8421,7 +8502,7 @@ cmd_pages() {
   done
   [ -n "$wiki" ] || die_usage "usage: $WIKI_CMD pages <wiki> [--data]"
   root="$(resolve "$wiki")"
-  is_wiki "$root" || die "$(tilde "$root") is not a wiki. $WIKI_CMD status lists the wikis here."
+  is_wiki "$root" || die "$(not_wiki "$root")"
   [ "$data" = 0 ] || style_off
   if [ ! -d "$root/wiki" ]; then
     [ "$data" = 1 ] || ui_detail "No pages yet."
@@ -8464,7 +8545,7 @@ cmd_open() {
       [ -d "$WIKIS_DIR" ] || die "no wikis at $(tilde "$WIKIS_DIR"). Run: $WIKI_CMD init"
       if [ -n "${2:-}" ]; then
         d="$(resolve "$2")"
-        is_wiki "$d" || die "$(tilde "$d") is not a wiki. $WIKI_CMD status lists the wikis here."
+        is_wiki "$d" || die "$(not_wiki "$d")"
         open_data "$d"
         return 0
       fi

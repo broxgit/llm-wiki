@@ -324,7 +324,7 @@ func listWikis(root string, f *filter) ([]wiki, error) {
 		if strings.HasPrefix(name, ".") || err != nil || !st.IsDir() {
 			continue
 		}
-		if !isFile(filepath.Join(dir, "AGENTS.md")) || !isFile(filepath.Join(dir, "index.md")) || f.excluded(name) {
+		if ok, err := routing.IsWiki(dir); err != nil || !ok || f.excluded(name) {
 			continue
 		}
 		// The Bash puts the name in a sed replacement, where these mean something.

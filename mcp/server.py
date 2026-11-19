@@ -46,7 +46,24 @@ def collections():
 
 
 def is_wiki(path):
-    return os.path.isfile(os.path.join(path, "AGENTS.md")) and os.path.isfile(os.path.join(path, "index.md"))
+    """wiki.sh's is_wiki: an index.md, and an AGENTS.md that is the handbook, which its
+    "Handbook version N." line says. A handbook that can't be read counts, as it does there.
+    The same test is in wiki.sh, internal/routing, hooks/reminders.py, hooks/session-start.sh,
+    mcp/server.py and extensions/wiki-confluence: change them together."""
+    agents = os.path.join(path, "AGENTS.md")
+    if not (os.path.isfile(agents) and os.path.isfile(os.path.join(path, "index.md"))):
+        return False
+    try:
+        with open(agents, "rb") as f:
+            data = f.read()
+    except OSError:
+        return True
+    for line in data.split(b"\n"):
+        # A line ends at a NUL byte, as bash 3.2 reads it.
+        line = line.split(b"\0", 1)[0]
+        if line.startswith(b"Handbook version ") and line[17:18].isdigit():
+            return True
+    return False
 
 
 def wikis_in(folder):

@@ -6,6 +6,7 @@ package capture
 import (
 	"bytes"
 	"errors"
+	"github.com/broxgit/llm-wiki/internal/routing"
 	"io"
 	"os"
 	"strconv"
@@ -18,6 +19,8 @@ type Options struct {
 	Wikis string // the collection, $WIKIS_DIR
 	Home  string // $HOME
 	Pwd   string // $PWD, for a wiki named by a relative path
+	// WikiCmd is how the person runs wiki.sh, for the lines that name a command to run.
+	WikiCmd string
 	// TTY says stdin is a terminal, where there is no note to read.
 	TTY   bool
 	Args  []string         // the command's own arguments
@@ -76,8 +79,12 @@ func Run(o Options) (string, error) {
 		return "", refuse("name a wiki")
 	}
 	root := o.resolve(wiki)
-	if !isFile(root+"/AGENTS.md") || !isFile(root+"/index.md") {
-		return "", refuse(o.tilde(root) + " is not a wiki")
+	// The words are not_wiki's in wiki.sh.
+	switch st, err := routing.WikiState(root); {
+	case err != nil || st == routing.Missing:
+		return "", refuse(o.tilde(root) + " is not a wiki. Run: " + o.WikiCmd + " status")
+	case st == routing.NotHandbook:
+		return "", refuse(o.tilde(root) + " is not a wiki: its AGENTS.md is not the llm-wiki handbook. Nothing was changed. Run: " + o.WikiCmd + " status")
 	}
 	ext := "md"
 	if copyFrom != "" {
