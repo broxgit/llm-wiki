@@ -3046,6 +3046,268 @@ with_limit() {
 # How long session start gives the remote before it goes on with what is here.
 START_REMOTE_LIMIT=20
 
+# pages_settle <repo>: settle the conflicts of a merge in progress that need no judgment.
+# Any two edits of one page clash, because compile sets `updated:` on every page it touches:
+# git merges the bodies and stops on that one line (2026-11-15). A page under wiki/ whose
+# body merges cleanly, and whose frontmatter clashes only where there is a rule, is written
+# merged and staged: `updated` and `verified` keep the later date, `sources` and `tags` the
+# items of both. Anything else and it gives up, on every file, with nothing written. It works
+# from git's three versions and never from the markers, in bytes, so line ends stay as they
+# were and a person's merge.conflictStyle doesn't matter. Prints how many pages it settled.
+#
+# open.md is settled too, an entry at a time: an entry is its "## " heading and the lines
+# under it, and the entries of both sides are kept. Not with git's union merge, which works
+# a line at a time: two machines that each added an entry waiting on the same person got
+# them woven together, one heading with no lines under it (2026-11-19).
+pages_settle() {
+  local shape=own
+  command -v python3 >/dev/null 2>&1 || return 1
+  [ ! -f "$1/WIKIS.md" ] || shape=collection
+  python3 - "$1" "$shape" <<'PY'
+import os, re, subprocess, sys, tempfile
+repo, shape = sys.argv[1], sys.argv[2]
+
+def git(*a, check=True):
+    r = subprocess.run(["git", "-C", repo, *a], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    if check and r.returncode != 0:
+        raise SystemExit(1)
+    return r.stdout
+
+class GiveUp(Exception):
+    pass
+
+KEY = re.compile(rb"^([A-Za-z_][A-Za-z0-9_-]*):")
+DATE = re.compile(rb"^\d{4}-\d{2}-\d{2}$")
+ODD = re.compile(rb"[\"',\[\]{}#]")
+
+def strip_eol(line):
+    return line.rstrip(b"\r\n")
+
+def fence(line):
+    return strip_eol(line).rstrip(b" \t") == b"---"
+
+def line_end(doc):
+    """The one line end a file uses, or GiveUp when it mixes the two."""
+    crlf = doc.count(b"\r\n")
+    if crlf and crlf != doc.count(b"\n"):
+        raise GiveUp
+    return b"\r\n" if crlf else b"\n"
+
+def split(doc):
+    """(frontmatter lines, closing line, body, line end), or GiveUp when there is no frontmatter."""
+    eol = line_end(doc)
+    lines = doc.split(b"\n")
+    lines = [l + b"\n" for l in lines[:-1]] + ([lines[-1]] if lines[-1] else [])
+    if not lines or not fence(lines[0]):
+        raise GiveUp
+    for i in range(1, len(lines)):
+        if fence(lines[i]):
+            close = lines[i] if lines[i].endswith(b"\n") else lines[i] + eol
+            return lines[1:i], close, b"".join(lines[i + 1:]), eol
+    raise GiveUp
+
+def fields(fm):
+    """key -> its lines, in order. GiveUp on a key twice, or a line that belongs to no key."""
+    out, order, cur = {}, [], None
+    for line in fm:
+        m = KEY.match(line)
+        if m:
+            cur = m.group(1)
+            if cur in out:
+                raise GiveUp
+            out[cur] = [line]
+            order.append(cur)
+        elif cur is not None and line[:1] in b" \t-" and strip_eol(line).strip() and not line.startswith(b"---"):
+            out[cur].append(line)
+        else:
+            # A blank line, a comment, a second fence: nothing here is sure what it belongs to.
+            raise GiveUp
+    return out, order
+
+def value(lines):
+    return strip_eol(lines[0]).split(b":", 1)[1].strip() if len(lines) == 1 else None
+
+def items(lines):
+    """A list in either form the tool reads: on one line, or one item a line."""
+    first = strip_eol(lines[0]).split(b":", 1)[1].strip()
+    rest = [strip_eol(l) for l in lines[1:] if strip_eol(l).strip()]
+    if first:
+        if rest or not (first.startswith(b"[") and first.endswith(b"]")):
+            raise GiveUp
+        inner = first[1:-1]
+        # The commas here are what parts the items.
+        if ODD.search(inner.replace(b",", b"")):
+            raise GiveUp
+        return [x.strip() for x in inner.split(b",") if x.strip()], None
+    got, prefix = [], None
+    for l in rest:
+        m = re.match(rb"^([ \t]*-[ \t]+)(.*)$", l)
+        # An item with a quote, a comma or a bracket in it can't be moved between the two
+        # forms of a list without changing what it says.
+        if not m or not m.group(2).strip() or ODD.search(m.group(2)):
+            raise GiveUp
+        prefix = prefix or m.group(1)
+        got.append(m.group(2).strip())
+    return got, prefix or b"  - "
+
+def merge_field(key, o, t, eol):
+    if key in (b"updated", b"verified"):
+        a, b = value(o), value(t)
+        if a is None or b is None or not DATE.match(a) or not DATE.match(b):
+            raise GiveUp
+        return o if a >= b else t
+    if key in (b"sources", b"tags"):
+        mine, prefix = items(o)
+        theirs, _ = items(t)
+        both = mine + [x for x in theirs if x not in mine]
+        if prefix is None or not both:
+            return [key + b": [" + b", ".join(both) + b"]" + eol]
+        return [key + b":" + eol] + [prefix + x + eol for x in both]
+    raise GiveUp
+
+def later(o, t):
+    a, b = value(o), value(t)
+    return a is not None and b is not None and DATE.match(a) and DATE.match(b)
+
+def kind(path):
+    """page, ledger, or GiveUp: by where the file is in a wiki, never by its name alone."""
+    parts = path.split("/")
+    if any(p.startswith(".") or not p for p in parts):
+        raise GiveUp
+    inside = parts[1:] if shape == "collection" else parts
+    if shape == "collection" and len(parts) < 2:
+        raise GiveUp
+    if inside == ["open.md"]:
+        return "ledger"
+    if len(inside) >= 2 and inside[0] == "wiki" and path.endswith(".md"):
+        return "page"
+    raise GiveUp
+
+def three(path):
+    stages = {}
+    for line in git("--literal-pathspecs", "ls-files", "-u", "-z", "--", path).split(b"\0"):
+        if line:
+            meta = line.split(b"\t", 1)[0].split()
+            # A link, or anything but a plain file, on any side: not for this to join.
+            if meta[0] not in (b"100644", b"100755"):
+                raise GiveUp
+            stages[meta[2]] = meta[1]
+    # No common ancestor is a file both machines created: nothing says how to join them.
+    if set(stages) != {b"1", b"2", b"3"}:
+        raise GiveUp
+    return [git("cat-file", "blob", stages[k].decode()) for k in (b"1", b"2", b"3")]
+
+def entries(doc):
+    """What comes before the first entry, then heading -> the entry's bytes, in order."""
+    lines = doc.split(b"\n")
+    lines = [l + b"\n" for l in lines[:-1]] + ([lines[-1]] if lines[-1] else [])
+    head, out, order, cur = [], {}, [], None
+    for line in lines:
+        if line.startswith(b"## "):
+            cur = strip_eol(line)
+            if cur in out:
+                raise GiveUp
+            out[cur] = []
+            order.append(cur)
+        (out[cur] if cur is not None else head).append(line)
+    return b"".join(head), {k: b"".join(v) for k, v in out.items()}, order
+
+def settle_ledger(path):
+    base, ours, theirs = three(path)
+    eol = line_end(ours)
+    if line_end(base) != eol or line_end(theirs) != eol:
+        raise GiveUp
+    bh, be, _ = entries(base)
+    oh, oe, oorder = entries(ours)
+    th, te, torder = entries(theirs)
+    if oh != th and oh != bh and th != bh:
+        raise GiveUp
+    out = [th if oh == bh else oh]
+    for key in oorder + [k for k in torder if k not in oe]:
+        b, o, t = be.get(key), oe.get(key), te.get(key)
+        # An entry is taken whole. Two machines that changed one entry differently, such as
+        # its status, have a clash nothing here can settle.
+        if o == t or t == b:
+            got = o
+        elif o == b:
+            got = t
+        else:
+            raise GiveUp
+        if got:
+            # An entry that ended a file may lack the line end the next one needs.
+            out.append(got if got.endswith(b"\n") else got + eol)
+    return b"".join(out)
+
+def settle(path):
+    if kind(path) == "ledger":
+        return settle_ledger(path)
+    base, ours, theirs = three(path)
+    bfm, _, bbody, beol = split(base)
+    ofm, oclose, obody, eol = split(ours)
+    tfm, _, tbody, teol = split(theirs)
+    if beol != eol or teol != eol:
+        raise GiveUp
+    bf, _ = fields(bfm)
+    of, oorder = fields(ofm)
+    tf, torder = fields(tfm)
+    out = []
+    for key in oorder + [k for k in torder if k not in of]:
+        b, o, t = bf.get(key), of.get(key), tf.get(key)
+        if o == t:
+            got = o
+        elif key in (b"updated", b"verified") and o is not None and t is not None and later(o, t):
+            # The later date, whichever side moved it: a page is as fresh as its last edit.
+            got = merge_field(key, o, t, eol)
+        elif o == b:
+            got = t
+        elif t == b:
+            got = o
+        elif o is None or t is None:
+            raise GiveUp
+        else:
+            got = merge_field(key, o, t, eol)
+        if got:
+            out.extend(got)
+    with tempfile.TemporaryDirectory() as d:
+        names = []
+        for name, data in (("ours", obody), ("base", bbody), ("theirs", tbody)):
+            names.append(os.path.join(d, name))
+            with open(names[-1], "wb") as f:
+                f.write(data)
+        r = subprocess.run(["git", "merge-file", "-p", *names], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    if r.returncode != 0:
+        raise GiveUp
+    return b"---" + eol + b"".join(out) + oclose + r.stdout
+
+paths = sorted({l.split(b"\t", 1)[1].decode("utf-8", "surrogateescape") for l in git("ls-files", "-u", "-z").split(b"\0") if l})
+if not paths:
+    raise SystemExit(1)
+try:
+    done = [(p, settle(p)) for p in paths]
+except GiveUp:
+    raise SystemExit(1)
+# Only once every file is settled is anything written: a half-settled merge is undone whole.
+# Nothing is written through a link, at the file or at any folder above it.
+root = os.path.realpath(repo)
+for p, _ in done:
+    at = root
+    for part in p.split("/"):
+        at = os.path.join(at, part)
+        if os.path.islink(at):
+            raise SystemExit(1)
+    if not os.path.isfile(at):
+        raise SystemExit(1)
+try:
+    for p, data in done:
+        with open(os.path.join(root, p), "wb") as f:
+            f.write(data)
+except OSError:
+    raise SystemExit(1)
+git("--literal-pathspecs", "add", "--", *[p for p, _ in done])
+print(len(done))
+PY
+}
+
 # collection_pull <repo> [seconds]: every pull of a collection, by sync, session start and update.
 # The caller holds the sync lock. Sets PULL to how it went, PULL_FILES to the files a clash
 # is in, and PULL_ERR to what git said.
@@ -3059,7 +3321,7 @@ START_REMOTE_LIMIT=20
 #             timed, and the merge, which is local, runs only once it has finished.
 collection_pull() {
   local repo="$1" limit="${2:-}" f tmp rc=0 merged=0
-  PULL=ok PULL_FILES="" PULL_ERR=""
+  PULL=ok PULL_FILES="" PULL_ERR="" PULL_SETTLED=""
   f="$(sync_conflict_file "$repo" || true)"
   if sync_merging "$repo"; then
     PULL=merging; PULL_FILES="$(sync_unmerged "$repo")"
@@ -3082,6 +3344,22 @@ collection_pull() {
   fi
   if sync_merging "$repo"; then
     PULL_FILES="$(sync_unmerged "$repo")"
+    # What needs no judgment is settled first, and the merge finished. If anything is left,
+    # or the commit is refused, nothing of it is kept: the undo below takes it all back.
+    if [ -n "$PULL_FILES" ] && PULL_SETTLED="$(pages_settle "$repo" 2>/dev/null)" && [ -n "$PULL_SETTLED" ]; then
+      if PULL_ERR="$(git -C "$repo" commit -q --no-edit 2>&1)" && ! sync_merging "$repo"; then
+        [ -z "$f" ] || [ ! -f "$f" ] || unlink "$f" 2>/dev/null || true
+        PULL_FILES=""
+        return 0
+      fi
+      # Every file was joined, and the merge's commit was refused: a hook, a signature. That
+      # is a pull that failed, with git's words, and not a clash in those files.
+      PULL_SETTLED=""
+      git -C "$repo" merge --abort >/dev/null 2>&1 || git -C "$repo" reset -q --merge >/dev/null 2>&1 || true
+      if sync_merging "$repo"; then PULL=merging; else PULL=failed; fi
+      return 1
+    fi
+    PULL_SETTLED=""
     if git -C "$repo" merge --abort >/dev/null 2>&1 && ! sync_merging "$repo"; then
       # With no file in conflict, the merge itself was clean and its commit was refused: a
       # hook, a signature, no name to commit as. That is a pull that failed, with git's words.
@@ -3755,6 +4033,11 @@ ASIDEEOF
       fi
       die "the pull failed. If uncommitted changes in another wiki clash with what came in, run $WIKI_CMD sync for that wiki first."
     fi
+  fi
+  if [ -n "$PULL_SETTLED" ]; then
+    echo "merged: $PULL_SETTLED file(s) changed here and on another machine, joined by rule: the later date, the sources of both, and every open item."
+    # The merge's commit went through the hook too. If no scan read it, none of it is pushed.
+    sync_scan_gate "$repo"
   fi
   # What the pull brought is looked at before anything is pushed back out.
   err="$(wiki_planted "$root")"
@@ -8704,19 +8987,21 @@ open_ledger() {
     function flush(   state, detail) {
       if (name == "") return
       state = "open"; detail = (kind == "due") ? due : who
-      if (kind != "waiting" && kind != "due") { state = "bad"; detail = "kind is missing or not waiting or due" }
+      # Two status lines, as a merge settled by hand can leave: nothing says which is true.
+      if (nstatus > 1) { state = "bad"; detail = "it has two status lines: keep the one that is true" }
+      else if (kind != "waiting" && kind != "due") { state = "bad"; detail = "kind is missing or not waiting or due" }
       else if (kind == "due" && due !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) { state = "bad"; detail = "a due entry needs a date as YYYY-MM-DD" }
       else if (status ~ /^done [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) state = "done"
       else if (status != "open") { state = "bad"; detail = "status is missing or not open or done YYYY-MM-DD" }
       else if (kind == "due" && due < today) state = "overdue"
       print state "|" kind "|" detail "|" status "|" name
-      name = ""; kind = ""; who = ""; due = ""; status = ""
+      name = ""; kind = ""; who = ""; due = ""; status = ""; nstatus = 0
     }
     /^## / { flush(); name = substr($0, 4); next }
     /^- kind:/ { kind = $3 }
     /^- who:/ { sub(/^- who: */, ""); who = $0 }
     /^- due:/ { due = $3 }
-    /^- status:/ { sub(/^- status: */, ""); status = $0 }
+    /^- status:/ { sub(/^- status: */, ""); status = $0; nstatus++ }
     END { flush() }
   ' "$1/open.md"
 }
