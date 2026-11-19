@@ -25,9 +25,12 @@ case "${1:-}" in
   -h | --help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' && exit 0 ;;
   *) printf 'error: no option %s. Run: scripts/gallery.sh --help\n' "$1" >&2 && exit 2 ;;
 esac
-T="$(mktemp -d)"
-T="$(cd "$T" && pwd -P)"
-trap 'rm -rf "$T"' EXIT
+# The cleanup removes only what mktemp made. If mktemp fails, T would be empty, `cd ""` stays
+# where it is, and the trap would remove the folder this was started from: the working tree.
+T0="$(mktemp -d)" || { echo "can't make a temp folder" >&2; exit 2; }
+case "$T0" in /*) [ -d "$T0" ] || exit 2 ;; *) exit 2 ;; esac
+trap 'rm -rf "$T0"' EXIT
+T="$(cd "$T0" && pwd -P)" || exit 2
 DEST="$OUT"
 [ "$check" = no ] || DEST="$T/gallery"
 rm -rf "$DEST.new" && mkdir -p "$DEST.new"

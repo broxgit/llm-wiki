@@ -132,9 +132,12 @@ PLAN="$(printf '%s\n' "$PARTS" | awk -F ' *[|] *' -v part="$PART" -v only="$ONLY
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 W="$REPO/wiki.sh"
-T="$(mktemp -d)"
-T="$(cd "$T" && pwd -P)"
-trap 'rm -rf "$T"' EXIT
+# The cleanup removes only what mktemp made. If mktemp fails, T would be empty, `cd ""` stays
+# where it is, and the trap would remove the folder this was started from: the working tree.
+T0="$(mktemp -d)" || { echo "can't make a temp folder" >&2; exit 2; }
+case "$T0" in /*) [ -d "$T0" ] || exit 2 ;; *) exit 2 ;; esac
+trap 'rm -rf "$T0"' EXIT
+T="$(cd "$T0" && pwd -P)" || exit 2
 
 export HOME="$T/home"
 # Settings and state live under $HOME. GitHub's Linux runners set XDG_CONFIG_HOME to
@@ -4269,6 +4272,24 @@ rm -f "$HOME/.config/llm-wiki/collections"
 fi
 
 if section "Bash 3.2 safety"; then
+# A script's exit trap removes a folder. That folder must be one mktemp made: with a mktemp
+# that fails, each script stops with exit 2 and removes nothing of the folder it was started in.
+mkdir -p "$T/m25/bin" "$T/m25/cwd"
+printf '#!/bin/sh\nexit 1\n' > "$T/m25/bin/mktemp"; chmod +x "$T/m25/bin/mktemp"
+printf 'uncommitted work\n' > "$T/m25/cwd/keep.txt"
+for s in "tests/smoke.sh --section News" "tests/budget.sh --check" "scripts/gallery.sh --check" "tests/smoke-parts.sh 1"; do
+  # shellcheck disable=SC2086
+  (cd "$T/m25/cwd" && PATH="$T/m25/bin:$PATH" bash "$REPO"/$s >/dev/null 2>&1); code=$?
+  if [ "$code" = 2 ] && [ -f "$T/m25/cwd/keep.txt" ]; then ok "${s%% *}: when mktemp fails it stops with exit 2, and the folder it was started in is untouched"; else bad "${s%% *}: when mktemp fails it stops with exit 2, and the folder it was started in is untouched" "exit $code, keep.txt $([ -f "$T/m25/cwd/keep.txt" ] && echo there || echo GONE)"; fi
+done
+# And in every script here: a folder an exit trap removes is never set again once the trap is.
+for f in tests/smoke.sh tests/budget.sh tests/smoke-parts.sh scripts/gallery.sh; do
+  out="$(awk '
+    match($0, /trap .rm -rf "\$[A-Za-z0-9_]+". EXIT/) { v = $0; sub(/.*rm -rf "\$/, "", v); sub(/".*/, "", v); armed[v] = NR; next }
+    { for (v in armed) if ($0 ~ ("^[ \t]*" v "=")) print FILENAME ":" NR ": " v " is set again after its trap" }
+  ' "$REPO/$f")"
+  if [ -z "$out" ]; then ok "$f: nothing its exit trap removes is set again after the trap"; else bad "$f: nothing its exit trap removes is set again after the trap" "$out"; fi
+done
 lacks "no loop is fed by process substitution, which can end the script on bash 3.2" "done < <(" grep -n "done < <(" "$REPO/wiki.sh" "$REPO/hooks/session-start.sh" "$REPO/hooks/pre-commit" "$REPO/scripts/migrate-to-plugin.sh"
 fi
 

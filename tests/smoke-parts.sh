@@ -17,7 +17,9 @@ D=""
 if [ "${1:-}" = "--logs" ]; then
   D="${2:?--logs needs a folder}"
 else
-  D="$(mktemp -d)"
+  # Only what mktemp made is removed, and a failed mktemp must not send the logs to /.
+  D="$(mktemp -d)" || { echo "can't make a temp folder" >&2; exit 2; }
+  case "$D" in /*) [ -d "$D" ] || exit 2 ;; *) exit 2 ;; esac
   trap 'rm -rf "$D"' EXIT
 fi
 parts="$("$SMOKE" --list | cut -f 1 | sort -un | tail -n 1)"
