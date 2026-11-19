@@ -107,7 +107,8 @@ func links(t *testing.T, root string) {
 	t.Helper()
 	wiki := root + "/home/wikis/demo/wiki"
 	write(t, root+"/secret.md", "very secret\n")
-	for name, to := range map[string]string{"link.md": root + "/secret.md", "inner.md": "deploy.md", "more.md": wiki + "/sub", "broken.md": "nowhere"} {
+	for name, to := range map[string]string{"link.md": root + "/secret.md", "inner.md": "deploy.md", "more.md": wiki + "/sub", "broken.md": "nowhere",
+		"loop": "loop", "ring-a": "ring-b", "ring-b": "ring-a"} {
 		if err := os.Symlink(to, wiki+"/"+name); err != nil {
 			t.Fatal(err)
 		}
@@ -417,6 +418,11 @@ func TestRead(t *testing.T) {
 		{m{"wiki": "demo", "path": "../global/index.md"}, "that path is outside the wiki.", true},
 		{m{"wiki": "demo", "path": "wiki/link.md"}, "that path is outside the wiki.", true},
 		{m{"wiki": "demo", "path": "wiki/.hid/h.md"}, "that path is outside the wiki.", true},
+		// A loop of links makes the real path give up, and .. then comes out as text.
+		{m{"wiki": "demo", "path": "wiki/loop/../link.md"}, "that path is outside the wiki.", true},
+		{m{"wiki": "demo", "path": "wiki/loop/x.md"}, "that path is outside the wiki.", true},
+		{m{"wiki": "demo", "path": "wiki/ring-a/../link.md"}, "that path is outside the wiki.", true},
+		{m{"wiki": "demo", "path": "wiki/ring-a/x.md"}, "that path is outside the wiki.", true},
 		{m{"wiki": "demo", "path": "."}, "that path is outside the wiki.", true},
 		{m{"wiki": "demo", "path": "/etc/hosts"}, "give a path inside the wiki, such as index.md or wiki/conventions.md.", true},
 		{m{"wiki": "demo", "path": "~/x.md"}, "give a path inside the wiki, such as index.md or wiki/conventions.md.", true},

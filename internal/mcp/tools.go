@@ -478,6 +478,16 @@ func (s *Server) wikiRead(a args) (string, error) {
 			return "", toolError("that path is outside the wiki.")
 		}
 	}
+	// The real path gives up on a loop of links and hands the path back as written, and ..
+	// is then taken out as text: wiki/loop/../out.md came back as wiki/out.md, a link nobody
+	// resolved. So nothing in the answer may still be a link.
+	at := pyos.RealPath(root)
+	for _, part := range strings.Split(inside, "/") {
+		at += "/" + part
+		if fi, err := os.Lstat(at); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			return "", toolError("that path is outside the wiki.")
+		}
+	}
 	ok := false
 	for _, end := range readable {
 		ok = ok || strings.HasSuffix(full, end)

@@ -199,6 +199,14 @@ def wiki_read(args):
     # realpath first, so neither .. nor a link gets out of the wiki.
     if inside == ".." or inside.startswith(".." + os.sep) or any(p.startswith(".") for p in inside.split(os.sep)):
         raise ToolError("that path is outside the wiki.")
+    # realpath gives up on a loop of links and hands the path back as written, and .. is then
+    # taken out as text: wiki/loop/../out.md came back as wiki/out.md, a link nobody resolved.
+    # So nothing in the answer may still be a link.
+    at = real_root
+    for p in inside.split(os.sep):
+        at = os.path.join(at, p)
+        if os.path.islink(at):
+            raise ToolError("that path is outside the wiki.")
     if not full.endswith(READABLE):
         raise ToolError("only .md, .csv and .txt files can be read.")
     try:
