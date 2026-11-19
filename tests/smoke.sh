@@ -12040,6 +12040,126 @@ rmdir "$TC2/b/wikis/.git/llm-wiki-sync.lock" 2>/dev/null
 [ "$code" = 0 ] && case "$out" in *"pull: skipped, because another session is syncing this collection."*) true ;; *) false ;; esac && ok "with another session's sync in progress, start skips its pull and says so" || bad "with another session's sync in progress, start skips its pull and says so" "exit $code: $(printf '%s\n' "$out" | grep '^pull')"
 tcw b start demo >/dev/null 2>&1
 check "start gives the lock back when it is done" test ! -e "$TC2/b/wikis/.git/llm-wiki-sync.lock"
+# What needs no judgment is no clash. Any two edits of one page conflict in git, because
+# compile sets `updated:` on every page it touches. Two fresh machines, c and d.
+mkdir -p "$TC2/c" "$TC2/d"
+env HOME="$TC2/c" git init -q --bare "$TC2/remote2.git"
+tcw c init --git >/dev/null 2>&1
+tcw c new demo >/dev/null 2>&1
+mkdir -p "$TC2/c/wikis/demo/wiki/concepts"
+RP="demo/wiki/concepts/rule.md"
+rpage() { # <machine> <updated> <sources> <summary> <first paragraph> <last paragraph>
+  printf -- '---\ntitle: Rule\nsummary: %s\ntags: [one]\nsources: %s\nupdated: %s\nverified: 2026-01-01\n---\n\n%s\n\nThe middle stays as it is.\n\nAnd so does this.\n\n%s\n' "$4" "$3" "$2" "$5" "$6" > "$TC2/$1/wikis/$RP"
+}
+rpage c 2026-01-01 '[raw/a.md]' 'the rule' 'The start.' 'The end.'
+tcg c add -A && tcg c commit -q -m first && tcg c remote add origin "$TC2/remote2.git" && tcg c push -q -u origin HEAD 2>/dev/null
+env HOME="$TC2/d" git clone -q "$TC2/remote2.git" "$TC2/d/wikis" 2>/dev/null
+cp "$REPO/hooks/pre-commit" "$TC2/d/wikis/.git/hooks/pre-commit"; cp "$REPO/hooks/llm-wiki-gitleaks.toml" "$TC2/d/wikis/.git/hooks/" 2>/dev/null; chmod +x "$TC2/d/wikis/.git/hooks/pre-commit"
+level() { tcg c pull -q --no-rebase --no-edit >/dev/null 2>&1; tcg d pull -q --no-rebase --no-edit >/dev/null 2>&1; }
+rpage c 2026-02-01 '[raw/a.md, raw/c.md]' 'the rule' 'The start, as the first machine has it.' 'The end.'
+tcw c sync demo >/dev/null 2>&1
+rpage d 2026-03-01 '[raw/a.md, raw/d.md]' 'the rule' 'The start.' 'The end, as the second machine has it.'
+out="$(tcw d sync demo 2>&1)"; code=$?
+[ "$code" = 0 ] && case "$out" in *"merged: 1 file(s) changed here and on another machine, joined by rule"*"synced: "*) true ;; *) false ;; esac && ok "edits to different parts of a page, each with its own date, sync without a clash" || bad "edits to different parts of a page, each with its own date, sync without a clash" "exit $code: $out"
+check "the page has both edits" bash -c "grep -q 'as the first machine has it' '$TC2/d/wikis/$RP' && grep -q 'as the second machine has it' '$TC2/d/wikis/$RP'"
+check "the later date" grep -qx 'updated: 2026-03-01' "$TC2/d/wikis/$RP"
+check "the sources of both, each once, in order" grep -qx 'sources: \[raw/a.md, raw/d.md, raw/c.md\]' "$TC2/d/wikis/$RP"
+check "and no marker, no merge left, and nothing on record as a clash" bash -c "! grep -q '^<<<<<<<\|^=======\$\|^>>>>>>>' '$TC2/d/wikis/$RP' && ! test -e '$TC2/d/wikis/.git/MERGE_HEAD' && ! test -e '$TC2/d/wikis/.git/llm-wiki-conflict'"
+tcw c sync demo >/dev/null 2>&1
+check "the first machine gets the joined page at its next sync" cmp -s "$TC2/c/wikis/$RP" "$TC2/d/wikis/$RP"
+# A list written one item a line, as Obsidian rewrites it, stays in that form.
+level
+printf -- '---\ntitle: List\nsummary: a list\nsources:\n  - raw/a.md\nupdated: 2026-01-01\n---\n\nOne.\n\nTwo.\n\nThree.\n' > "$TC2/c/wikis/demo/wiki/list.md"
+tcw c sync demo >/dev/null 2>&1; level
+printf -- '---\ntitle: List\nsummary: a list\nsources:\n  - raw/a.md\n  - raw/c.md\nupdated: 2026-02-01\n---\n\nOne, says c.\n\nTwo.\n\nThree.\n' > "$TC2/c/wikis/demo/wiki/list.md"
+tcw c sync demo >/dev/null 2>&1
+printf -- '---\ntitle: List\nsummary: a list\nsources:\n  - raw/a.md\n  - raw/d.md\nupdated: 2026-02-02\n---\n\nOne.\n\nTwo.\n\nThree, says d.\n' > "$TC2/d/wikis/demo/wiki/list.md"
+out="$(tcw d sync demo 2>&1)"
+case "$out" in *"synced: "*) true ;; *) false ;; esac && [ "$(sed -n '/^sources:/,/^updated:/p' "$TC2/d/wikis/demo/wiki/list.md" | tr '\n' '|')" = 'sources:|  - raw/a.md|  - raw/d.md|  - raw/c.md|updated: 2026-02-02|' ] && ok "a list with one item a line is joined, and stays one item a line" || bad "a list with one item a line is joined, and stays one item a line" "$out
+$(cat "$TC2/d/wikis/demo/wiki/list.md")"
+# Where there is no rule, it gives up, and the pull is undone as before.
+level
+rpage c 2026-04-01 '[raw/a.md, raw/d.md, raw/c.md]' 'the rule, says c' 'The start, as the first machine has it.' 'The end, as the second machine has it.'
+tcw c sync demo >/dev/null 2>&1
+rpage d 2026-04-02 '[raw/a.md, raw/d.md, raw/c.md]' 'the rule, says d' 'The start, as the first machine has it.' 'The end, as the second machine has it.'
+out="$(tcw d sync demo 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"$RP was changed here and on another machine, and git can't merge the two. The pull was undone"*) true ;; *) false ;; esac && ok "two different summaries have no rule: the pull is undone and the page named" || bad "two different summaries have no rule: the pull is undone and the page named" "exit $code: $out"
+check "and the page is as the second machine had it" grep -qx 'summary: the rule, says d' "$TC2/d/wikis/$RP"
+tcg d reset -q --hard '@{u}' 2>/dev/null; rm -f "$TC2/d/wikis/.git/llm-wiki-conflict"; level
+# The same summary on both sides is no clash.
+rpage c 2026-05-01 '[raw/a.md, raw/d.md, raw/c.md]' 'agreed' 'The start, as the first machine has it.' 'The end, as the second machine has it.'
+tcw c sync demo >/dev/null 2>&1
+rpage d 2026-05-02 '[raw/a.md, raw/d.md, raw/c.md]' 'agreed' 'The start, as the first machine has it.' 'The end, as the second machine has it.'
+expect "the same new summary on both sides is settled" "synced: " tcw d sync demo
+# A page both machines created, one with no frontmatter, and a date in another form: given up on.
+level
+for kind in created nofront baddate; do
+  level
+  case "$kind" in
+    created)
+      printf -- '---\ntitle: New\nupdated: 2026-01-01\n---\n\nFrom c.\n' > "$TC2/c/wikis/demo/wiki/$kind.md"
+      printf -- '---\ntitle: New\nupdated: 2026-01-02\n---\n\nFrom d.\n' > "$TC2/d/wikis/demo/wiki/$kind.md" ;;
+    *)
+      case "$kind" in nofront) printf 'A page with no frontmatter.\n\nLine.\n' ;; baddate) printf -- '---\ntitle: D\nupdated: 2026-01-01\n---\n\nA.\n\nB.\n\nC.\n' ;; esac > "$TC2/c/wikis/demo/wiki/$kind.md"
+      tcw c sync demo >/dev/null 2>&1; level
+      case "$kind" in nofront) printf 'A page with no frontmatter, says c.\n\nLine.\n' ;; baddate) printf -- '---\ntitle: D\nupdated: March the first\n---\n\nA, c.\n\nB.\n\nC.\n' ;; esac > "$TC2/c/wikis/demo/wiki/$kind.md"
+      case "$kind" in nofront) printf 'A page with no frontmatter, says d.\n\nLine.\n' ;; baddate) printf -- '---\ntitle: D\nupdated: March the second\n---\n\nA.\n\nB.\n\nC, d.\n' ;; esac > "$TC2/d/wikis/demo/wiki/$kind.md" ;;
+  esac
+  tcw c sync demo >/dev/null 2>&1
+  out="$(tcw d sync demo 2>&1)"; code=$?
+  [ "$code" = 1 ] && case "$out" in *"demo/wiki/$kind.md was changed here and on another machine"*) true ;; *) false ;; esac && [ ! -e "$TC2/d/wikis/.git/MERGE_HEAD" ] && ok "a clash the rules don't cover ($kind) is undone and named, with nothing half done" || bad "a clash the rules don't cover ($kind) is undone and named, with nothing half done" "exit $code: $out"
+  tcg d reset -q --hard '@{u}' 2>/dev/null; rm -f "$TC2/d/wikis/.git/llm-wiki-conflict"
+done
+# Windows line ends are kept.
+level
+printf -- '---\r\ntitle: W\r\nupdated: 2026-01-01\r\n---\r\n\r\nOne.\r\n\r\nTwo.\r\n\r\nThree.\r\n' > "$TC2/c/wikis/demo/wiki/crlf.md"
+tcw c sync demo >/dev/null 2>&1; level
+printf -- '---\r\ntitle: W\r\nupdated: 2026-02-01\r\n---\r\n\r\nOne, c.\r\n\r\nTwo.\r\n\r\nThree.\r\n' > "$TC2/c/wikis/demo/wiki/crlf.md"
+tcw c sync demo >/dev/null 2>&1
+printf -- '---\r\ntitle: W\r\nupdated: 2026-02-02\r\n---\r\n\r\nOne.\r\n\r\nTwo.\r\n\r\nThree, d.\r\n' > "$TC2/d/wikis/demo/wiki/crlf.md"
+tcw d sync demo >/dev/null 2>&1
+check "a page with Windows line ends is joined and keeps them on every line" bash -c "grep -q 'One, c' '$TC2/d/wikis/demo/wiki/crlf.md' && grep -q 'Three, d' '$TC2/d/wikis/demo/wiki/crlf.md' && [ \"\$(grep -c \$'\\r\$' '$TC2/d/wikis/demo/wiki/crlf.md')\" = \"\$(wc -l < '$TC2/d/wikis/demo/wiki/crlf.md' | tr -d ' ')\" ]"
+# A list item with a quote in it can't be moved between the two forms of a list unchanged,
+# so nothing is guessed: given up on, and undone.
+level
+printf -- '---\ntitle: Q\nsources:\n  - raw/a.md\nupdated: 2026-01-01\n---\n\nOne.\n\nTwo.\n\nThree.\n' > "$TC2/c/wikis/demo/wiki/quoted.md"
+tcw c sync demo >/dev/null 2>&1; level
+printf -- '---\ntitle: Q\nsources:\n  - raw/a.md\n  - "raw/c, with a comma.md"\nupdated: 2026-02-01\n---\n\nOne, c.\n\nTwo.\n\nThree.\n' > "$TC2/c/wikis/demo/wiki/quoted.md"
+tcw c sync demo >/dev/null 2>&1
+printf -- '---\ntitle: Q\nsources:\n  - raw/a.md\n  - raw/d.md\nupdated: 2026-02-02\n---\n\nOne.\n\nTwo.\n\nThree, d.\n' > "$TC2/d/wikis/demo/wiki/quoted.md"
+out="$(tcw d sync demo 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"demo/wiki/quoted.md was changed here and on another machine"*) true ;; *) false ;; esac && ok "a list item with a quote and a comma in it is not guessed at: undone and named" || bad "a list item with a quote and a comma in it is not guessed at: undone and named" "exit $code: $out"
+tcg d reset -q --hard '@{u}' 2>/dev/null; rm -f "$TC2/d/wikis/.git/llm-wiki-conflict"
+# Session start settles such a clash too.
+level
+rpage c 2026-06-01 '[raw/a.md, raw/d.md, raw/c.md]' 'agreed' 'The start, once more from c.' 'The end, as the second machine has it.'
+tcw c sync demo >/dev/null 2>&1
+rpage d 2026-06-02 '[raw/a.md, raw/d.md, raw/c.md]' 'agreed' 'The start, as the first machine has it.' 'The end, once more from d.'
+tcg d commit -q -am "d: a page" 2>/dev/null
+expect "session start settles such a clash, and says the pull went through" "pull: up to date with the remote" tcw d start demo
+check "with both edits in the page" bash -c "grep -q 'once more from c' '$TC2/d/wikis/$RP' && grep -q 'once more from d' '$TC2/d/wikis/$RP'"
+tcw d sync demo >/dev/null 2>&1
+# The ledger of open items is joined an entry at a time. git's own union merge works a line
+# at a time, and wove two entries waiting on the same person into one heading with nothing
+# under it and one with both (2026-11-19).
+level
+printf '\n## From c\n- kind: waiting\n- who: Sam\n- status: open\n' >> "$TC2/c/wikis/demo/open.md"
+tcw c sync demo >/dev/null 2>&1
+printf '\n## From d\n- kind: waiting\n- who: Sam\n- status: open\n' >> "$TC2/d/wikis/demo/open.md"
+expect "two machines that each add an open item both sync" "synced: " tcw d sync demo
+case "$(tcw d open --data demo 2>&1 | grep -c 'open')" in 2) ok "and both entries are whole: each has its kind, who and status" ;; *) bad "and both entries are whole: each has its kind, who and status" "$(cat "$TC2/d/wikis/demo/open.md"; tcw d open --data demo 2>&1)" ;; esac
+lacks "with nothing for lint to say about them" "open.md" tcw d lint demo
+# Both change one entry's status: a real clash, undone and named.
+level
+sed -i.bak '/^## From c$/,/^## From d$/ s/^- status: open$/- status: done 2026-06-01/' "$TC2/c/wikis/demo/open.md"; rm -f "$TC2/c/wikis/demo/open.md.bak"
+tcw c sync demo >/dev/null 2>&1
+sed -i.bak '/^## From c$/,/^## From d$/ s/^- status: open$/- status: done 2026-06-02/' "$TC2/d/wikis/demo/open.md"; rm -f "$TC2/d/wikis/demo/open.md.bak"
+out="$(tcw d sync demo 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"demo/open.md was changed here and on another machine"*) true ;; *) false ;; esac && ok "two machines that close one item on different days have a real clash: undone and named" || bad "two machines that close one item on different days have a real clash: undone and named" "exit $code: $out"
+tcg d reset -q --hard '@{u}' 2>/dev/null; rm -f "$TC2/d/wikis/.git/llm-wiki-conflict"
+# An entry left with two status lines, as a merge settled by hand can leave it.
+printf '\n## Twice\n- kind: waiting\n- who: Sam\n- status: open\n- status: done 2026-06-03\n' >> "$TC2/d/wikis/demo/open.md"
+expect "an entry with two status lines is named by lint" "it has two status lines" tcw d lint demo
 fi
 
 if section "A remote that doesn't answer"; then
