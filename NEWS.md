@@ -4,6 +4,10 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2027-01-21: the chat connector can't be led out of a wiki by a loop of links
+
+- `wiki_read` refused a link that led out of a wiki, but a path through a link that pointed at itself got past the check. It is refused now.
+
 ## 2027-01-20: git repository files in a wiki are named and refused
 
 - `wiki sync` refuses a wiki that holds `HEAD`, `objects/` and `refs/` together, and `wiki status` names it. Remove them and sync goes on.

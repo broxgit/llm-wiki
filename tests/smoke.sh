@@ -2900,7 +2900,27 @@ mcp_tools() {
   expect "$who: so is an absolute one" "ERROR: give a path inside the wiki" mcp_call wiki_read "{\"wiki\":\"demo\",\"path\":\"$HOME/.gitconfig\"}"
   ln -s "$T/secret.md" "$WIKIS_DIR/demo/wiki/link.md"; echo "very secret" > "$T/secret.md"
   expect "$who: and a link that leads out" "ERROR: that path is outside the wiki" mcp_call wiki_read '{"wiki":"demo","path":"wiki/link.md"}'
-  rm -f "$WIKIS_DIR/demo/wiki/link.md" "$T/secret.md"
+  # A loop of links makes realpath give up and hand the path back as written, and .. is then
+  # taken out as text. That read the file the link led to.
+  ln -s loop "$WIKIS_DIR/demo/wiki/loop"; ln -s ring-b "$WIKIS_DIR/demo/wiki/ring-a"; ln -s ring-a "$WIKIS_DIR/demo/wiki/ring-b"
+  for p in wiki/loop/../link.md wiki/loop/x.md wiki/ring-a/../link.md wiki/ring-a/x.md; do
+    out="$(mcp_call wiki_read "{\"wiki\":\"demo\",\"path\":\"$p\"}" 2>&1)"
+    case "$out" in *"very secret"*) bad "$who: through a loop of links, $p is refused" "$out" ;; *"ERROR: that path is outside the wiki"*) ok "$who: through a loop of links, $p is refused" ;; *) bad "$who: through a loop of links, $p is refused" "$out" ;; esac
+  done
+  # The Python that comes with a Mac is older than 3.13, where realpath changed: the same there.
+  if [ "$who" = "the Python" ]; then
+    if [ -x /usr/bin/python3 ] && /usr/bin/python3 -c 'import sys; sys.exit(0 if sys.version_info < (3, 13) else 1)' 2>/dev/null; then
+      out="$(PATH="/usr/bin:$PATH" mcp_call wiki_read '{"wiki":"demo","path":"wiki/loop/../link.md"}' 2>&1)"
+      case "$out" in *"very secret"*) bad "$who: and from a Python older than 3.13" "$out" ;; *"ERROR: that path is outside the wiki"*) ok "$who: and from a Python older than 3.13" ;; *) bad "$who: and from a Python older than 3.13" "$out" ;; esac
+    else
+      skipped "$who: a Python older than 3.13 (none at /usr/bin/python3)"
+    fi
+  fi
+  ln -s deploy.md "$WIKIS_DIR/demo/wiki/inner.md" 2>/dev/null
+  if [ -f "$WIKIS_DIR/demo/wiki/deploy.md" ]; then
+    lacks "$who: a link that stays inside the wiki still reads" "ERROR" mcp_call wiki_read '{"wiki":"demo","path":"wiki/inner.md"}'
+  fi
+  rm -f "$WIKIS_DIR/demo/wiki/link.md" "$T/secret.md" "$WIKIS_DIR/demo/wiki/loop" "$WIKIS_DIR/demo/wiki/ring-a" "$WIKIS_DIR/demo/wiki/ring-b" "$WIKIS_DIR/demo/wiki/inner.md"
   expect "$who: hidden folders aren't readable" "ERROR: that path is outside the wiki" mcp_call wiki_read '{"wiki":"demo","path":".compile-lock.md"}'
   expect "$who: only text files are" "ERROR: only .md, .csv and .txt" mcp_call wiki_read '{"wiki":"demo","path":"data/x.sqlite"}'
   expect "$who: a wiki name can't be a path" "ERROR: that isn't a wiki name" mcp_call wiki_read '{"wiki":"../demo"}'
