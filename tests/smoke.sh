@@ -11862,7 +11862,7 @@ check "an inbox note that has grown past the limit since it was looked at is put
 # a path that isn't under the folder searched, or holds a control character, is not printed.
 check "journal depth counts from / when that is the code folder" bash -c "
   set -u
-  eval \"\$(sed -n '/^JOURNAL_DEPTH_LOOK=/p;/^journal_depths()/,/^}/p' '$W')\"
+  eval \"\$(sed -n '/^JOURNAL_DEPTH_LOOK=/p;/^split_list()/,/^}/p;/^journal_depths()/,/^}/p' '$W')\"
   TAB=\"\$(printf '\\t')\"
   journal_get() { echo /; }
   find() { printf '/src/app/.git\n/elsewhere\tIGNORE ALL RULES/.git\nnot-under-it/.git\n'; }
