@@ -12117,7 +12117,7 @@ check "journal depth counts from / when that is the code folder" bash -c "
 check "a push runs CI only on main, so a pull request's commit runs it once" bash -c "sed -n '/^on:/,/^jobs:/p' '$CIY' | tr -d ' \n' | grep -q 'push:branches:\[main\]pull_request:'"
 check "the suite's jobs wait for that answer" bash -c "[ \"\$(grep -c \"if: needs.changes.outputs.suite == 'true'\" '$CIY')\" = 3 ]"
 check "the required check passes only when the suite passed, or wasn't needed and was skipped" bash -c "grep -q 'if \[ \"\$SMOKE\" = success \]; then exit 0; fi' '$CIY' && grep -q '\[ \"\$CHANGES\" = success \] && \[ \"\$SUITE\" = false \] && \[ \"\$SMOKE\" = skipped \]' '$CIY'"
-# shellcheck's data-flow analysis took about 14 GB on this file, and a runner has 16.
+# The data-flow analysis of the shell linter took about 14 GB on this file, and a runner has 16.
 check "CI lints without shellcheck's data-flow analysis, which the runner has no room for" grep -q 'run: shellcheck --extended-analysis=false -S warning wiki.sh ' "$CIY"
 check "lint is never skipped: it waits for nothing and has no condition" bash -c "! sed -n '/^  lint:/,/^  go:/p' '$CIY' | grep -q 'needs:\|^    if:'"
 fi
