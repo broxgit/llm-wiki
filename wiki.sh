@@ -1655,7 +1655,7 @@ cmd_list() {
 }
 
 cmd_start() {
-  local arg="${1:-$PWD}" repo="" top w="" wiki="" note="" out sshc slock tv v line sname spath d n hinted="" extras="" more="" tkey tfind tline thits
+  local arg="${1:-$PWD}" repo="" top w="" wiki="" note="" out sshc slock track rstart rleft tv v line sname spath d n hinted="" extras="" more="" tkey tfind tline thits
   if [ -d "$arg" ]; then
     if top="$(git -C "$arg" rev-parse --show-toplevel 2>/dev/null)"; then repo="$(repo_name "$top")"; fi
   else
@@ -1711,15 +1711,27 @@ cmd_start() {
   if in_git_repo "$WIKIS_DIR" && [ -n "$(git -C "$WIKIS_DIR" remote 2>/dev/null)" ]; then
     # Keep the collection's own SSH command (setup may name a key there) and add a
     # timeout, so an unreachable host can't hang the session.
-    sshc="${GIT_SSH_COMMAND:-$(git -C "$WIKIS_DIR" config --get core.sshCommand 2>/dev/null || echo ssh)}"
-    if [ "$(GIT_SSH_COMMAND="$sshc -o ConnectTimeout=10 -o BatchMode=yes" track_remote "$WIKIS_DIR")" = new ]; then
+    remote_env "$WIKIS_DIR"
+    # track_remote reaches the remote too, when the branch has no upstream yet.
+    # One allowance for the whole of it: the two calls together get the 20 seconds, so a
+    # slow first one leaves the second what is left, and a hook's 30 are never passed.
+    sshc="$(mktemp)"; out=0; rstart="$SECONDS"
+    with_limit "$START_REMOTE_LIMIT" "$sshc" track_remote "$WIKIS_DIR" || out=$?
+    track="$(head -n 1 "$sshc" 2>/dev/null || true)"; rm -f "$sshc" "$sshc.timeout"
+    rleft=$((START_REMOTE_LIMIT - (SECONDS - rstart)))
+    if [ "$out" = 124 ] || [ "$rleft" -le 0 ]; then
+      echo "pull: gave up after $START_REMOTE_LIMIT seconds, so this is what was here already. Pages may be behind other machines: pull before your first write."
+    elif [ "$track" = new ]; then
       echo "pull: the remote has nothing yet. The next $WIKI_CMD sync pushes this collection to it."
     elif ! slock="$(git -C "$WIKIS_DIR" rev-parse --absolute-git-dir 2>/dev/null)/llm-wiki-sync.lock" || ! sync_lock_try "$slock" 5; then
       # Another session is in the middle of a sync: a pull beside it could land in its merge.
       echo "pull: skipped, because another session is syncing this collection. Pages may be behind other machines: pull before your first write."
-    elif GIT_SSH_COMMAND="$sshc -o ConnectTimeout=10 -o BatchMode=yes" collection_pull "$WIKIS_DIR"; then
+    elif collection_pull "$WIKIS_DIR" "$rleft"; then
       sync_lock_back
       echo "pull: up to date with the remote"
+    elif [ "$PULL" = timeout ]; then
+      sync_lock_back
+      echo "pull: gave up after $START_REMOTE_LIMIT seconds, so this is what was here already. Pages may be behind other machines: pull before your first write."
     elif [ "$PULL" = conflict ]; then
       sync_lock_back
       echo "pull: undone. $(sync_clash "$PULL_FILES"), so nothing can be pushed from this machine until that is settled. Tell the user in your first reply."
@@ -2961,22 +2973,110 @@ sync_merging_error() {
   fi
 }
 
-# collection_pull <repo>: every pull of a collection, by sync, session start and update.
+# A call that reaches the remote must not be able to wait for ever, or for an answer nobody
+# is there to type. With an HTTPS remote that never answered, session start was still
+# running after 40 seconds, and the hooks that run it have 30 (2026-11-16).
+#
+# remote_env <repo> [ask]: what git's remote calls get from here on in this run. SSH gives
+# up connecting after ten seconds, keeping the collection's own command, where setup may
+# name a key. And nothing asks a question on the terminal: a missing password is an error.
+# With a second word, a person at a terminal may still be asked, as sync can be.
+# What the person set, kept from before this script changed it. One wiki command starts
+# another, which would otherwise take the first one's settings for the person's own.
+if [ -n "${LLM_WIKI_REMOTE_ENV:-}" ]; then
+  REMOTE_SSH_OWN="${LLM_WIKI_SSH_OWN:-}"; REMOTE_PROMPT_OWN="${LLM_WIKI_PROMPT_OWN:-}"
+else
+  REMOTE_SSH_OWN="${GIT_SSH_COMMAND:-}"; REMOTE_PROMPT_OWN="${GIT_TERMINAL_PROMPT:-}"
+fi
+remote_env() {
+  local sshc ask=0
+  # A person can be asked when the errors go to a terminal. Not stdin: update reads its
+  # list of collections there, and git asks on the terminal itself.
+  if [ -n "${2:-}" ] && [ -t 2 ]; then ask=1; fi
+  export LLM_WIKI_REMOTE_ENV=1 LLM_WIKI_SSH_OWN="$REMOTE_SSH_OWN" LLM_WIKI_PROMPT_OWN="$REMOTE_PROMPT_OWN"
+  if [ "$ask" = 1 ]; then
+    if [ -n "$REMOTE_PROMPT_OWN" ]; then export GIT_TERMINAL_PROMPT="$REMOTE_PROMPT_OWN"; else unset GIT_TERMINAL_PROMPT; fi
+  else
+    export GIT_TERMINAL_PROMPT=0
+  fi
+  sshc="${REMOTE_SSH_OWN:-$(git -C "$1" config --get core.sshCommand 2>/dev/null || true)}"
+  # GIT_SSH names a program of the person's own, which may not take ssh's options: left alone.
+  if [ -z "$sshc" ] && [ -n "${GIT_SSH:-}" ]; then return 0; fi
+  sshc="${sshc:-ssh}"
+  case "$sshc" in *ConnectTimeout=*) ;; *) sshc="$sshc -o ConnectTimeout=10" ;; esac
+  if [ "$ask" = 0 ]; then case "$sshc" in *BatchMode=*) ;; *) sshc="$sshc -o BatchMode=yes" ;; esac; fi
+  export GIT_SSH_COMMAND="$sshc"
+}
+
+# with_limit <seconds> <output file> <command>...: run it with its output in the file, and
+# stop it after that long. 124 when it was stopped. The output goes to a file because a
+# watchdog inside $( ) doesn't return until every child has let go of the pipe.
+with_limit() {
+  local limit="$1" out="$2" pid wd rc=0
+  shift 2
+  rm -f "$out.timeout"
+  # Without set -e: what runs here reads a command's exit code itself, as track_remote
+  # does with ls-remote's, and in a background shell a failing command would end it first.
+  ( set +e; "$@" ) > "$out" 2>&1 </dev/null &
+  pid=$!
+  # The watchdog sleeps in the background and waits, so a signal reaches it at once and it
+  # takes its sleep with it: nothing is left to wake later and stop a process that has since
+  # been given the same number. Only a sleep that ran its full time is a timeout. What is
+  # still there two seconds after being asked to stop is stopped without asking.
+  (
+    trap 'kill "$sl" 2>/dev/null; exit 0' TERM
+    sleep "$limit" & sl=$!
+    wait "$sl" || exit 0
+    : > "$out.timeout"
+    kill_tree "$pid"
+    sleep 2
+    kill -9 "$pid" 2>/dev/null
+  ) >/dev/null 2>&1 &
+  wd=$!
+  wait "$pid" 2>/dev/null || rc=$?
+  kill "$wd" 2>/dev/null || true
+  wait "$wd" 2>/dev/null || true
+  # A command that ended well just as the time ran out ended well.
+  if [ -f "$out.timeout" ]; then
+    rm -f "$out.timeout"
+    [ "$rc" = 0 ] || return 124
+  fi
+  return "$rc"
+}
+# How long session start gives the remote before it goes on with what is here.
+START_REMOTE_LIMIT=20
+
+# collection_pull <repo> [seconds]: every pull of a collection, by sync, session start and update.
 # The caller holds the sync lock. Sets PULL to how it went, PULL_FILES to the files a clash
 # is in, and PULL_ERR to what git said.
 #   ok        pulled. The record of an earlier clash is removed.
 #   merging   a merge was in progress already. This didn't start it, so nothing is touched.
 #   conflict  the pull hit a conflict. It was undone, and the files are written down.
 #   failed    git wouldn't start, or couldn't reach the remote. Nothing to undo.
+#   timeout   with a number of seconds: the fetch was stopped after that long. A fetch
+#             that is stopped leaves the files, the index and any merge alone, where a
+#             pull stopped in the middle of its merge may not. So the fetch is what is
+#             timed, and the merge, which is local, runs only once it has finished.
 collection_pull() {
-  local repo="$1" f
+  local repo="$1" limit="${2:-}" f tmp rc=0 merged=0
   PULL=ok PULL_FILES="" PULL_ERR=""
   f="$(sync_conflict_file "$repo" || true)"
   if sync_merging "$repo"; then
     PULL=merging; PULL_FILES="$(sync_unmerged "$repo")"
     return 1
   fi
-  if PULL_ERR="$(git -C "$repo" pull -q --no-rebase --no-edit 2>&1 </dev/null)"; then
+  if [ -n "$limit" ]; then
+    tmp="$(mktemp)" || { PULL=failed; return 1; }
+    with_limit "$limit" "$tmp" git -C "$repo" fetch -q || rc=$?
+    PULL_ERR="$(cat "$tmp" 2>/dev/null || true)"
+    rm -f "$tmp" "$tmp.timeout"
+    if [ "$rc" = 124 ]; then PULL=timeout; return 1; fi
+    if [ "$rc" != 0 ]; then PULL=failed; return 1; fi
+    if PULL_ERR="$(git -C "$repo" merge -q --no-edit '@{u}' 2>&1 </dev/null)"; then merged=1; fi
+  elif PULL_ERR="$(git -C "$repo" pull -q --no-rebase --no-edit 2>&1 </dev/null)"; then
+    merged=1
+  fi
+  if [ "$merged" = 1 ]; then
     [ -z "$f" ] || [ ! -f "$f" ] || unlink "$f" 2>/dev/null || true
     return 0
   fi
@@ -3583,6 +3683,10 @@ sync_do() {
   fi
   [ -n "$(git -C "$repo" remote)" ] || { echo "no remote, so nothing to pull or push"; return 0; }
   sync_scan_gate "$repo"
+  # No hard limit here: someone is waiting for a sync, and a large push can take a while with
+  # nothing on the wire. But SSH gives up connecting, and nothing waits for a password that
+  # no one is there to type.
+  remote_env "$repo" ask
   if [ "$(track_remote "$repo")" = new ]; then
     git -C "$repo" push -q -u origin HEAD || die "the first push to origin failed. Check the remote with: $WIKI_CMD setup git"
     sync_settled "$repo"
@@ -7513,6 +7617,7 @@ update_wikis() {
     ui_stage COLLECTION "$n: $(tilde "$f")"
     track=""
     if in_git_repo "$f" && [ -n "$(git -C "$f" remote 2>/dev/null)" ]; then
+      remote_env "$f" ask
       track="$(track_remote "$f")"
       if [ "$track" != new ]; then
         ulock="$(git -C "$f" rev-parse --absolute-git-dir 2>/dev/null || true)/llm-wiki-sync.lock"
