@@ -4,13 +4,14 @@ that apply to the tool call it is about to make.
 The session-start hook writes each session's reminders to <dir>/<session id>.tsv, one
 per line: when, kind, pattern, rule, wiki. This reads the tool call on stdin and prints
 a hook reply when a reminder matches. Each reminder is given once per session; the
-session-start hook clears that record, so they come back after a compaction.
+session-start hook clears that record after a compaction or a /clear, and only then,
+so they come back when the session no longer remembers them.
 
   before  the call is refused once, with the rule as the reason, so the agent reads
           the rule before acting. The same call made again goes through.
   on      the rule is added as context, and arrives with the call's result.
 
-  bash    the pattern is text the command contains
+  bash    the pattern is text a command the call runs contains: see runs()
   edit    the pattern is a file path, relative to the project folder
   tool    the pattern is a tool's name
 In every pattern, * matches anything.
@@ -88,12 +89,129 @@ def glob(text, pattern):
     return re.fullmatch("(?s)" + ".*".join(re.escape(p) for p in pattern.split("*")), text) is not None
 
 
+SHELLS = ("sh", "bash", "zsh", "dash", "ksh")
+BREAKS = ";&|()\n"
+
+
+def commands_of(text, depth=0):
+    """The command text with what isn't run taken out, so a pattern is matched against
+    commands and not against words about them: the body of a heredoc, a comment, and
+    what is inside a quoted string of several words, such as a commit message, a note
+    or a search pattern. A quoted string of one word is an argument and stays. So does
+    the string a shell is handed with -c, or eval, and a $( ) inside double quotes:
+    those are run. Anything it can't read is left as it is: it only ever takes out."""
+    out, words, word, i, n = [], [], "", 0, len(text)
+    waiting = []  # heredoc ends, to skip from the next line break
+
+    def close():
+        nonlocal word
+        if word:
+            words.append(word)
+            word = ""
+
+    while i < n:
+        c = text[i]
+        if c == "\\" and i + 1 < n:
+            if text[i + 1] == "\n":
+                out.append(" ")
+                close()
+            else:
+                out.append(text[i:i + 2])
+                word += text[i + 1]
+            i += 2
+        elif c == "\n":
+            close()
+            words = []
+            out.append(c)
+            i += 1
+            while waiting:
+                end, tabs = waiting.pop(0)
+                while i < n:
+                    j = text.find("\n", i)
+                    line = text[i:] if j < 0 else text[i:j]
+                    i = n if j < 0 else j + 1
+                    if (line.lstrip("\t") if tabs else line) == end:
+                        break
+        elif c == "#" and not word:
+            j = text.find("\n", i)
+            i = n if j < 0 else j
+        elif text.startswith("<<", i) and not text.startswith("<<<", i):
+            m = re.match(r"<<(-?)[ \t]*(?:'([^'\n]*)'|\"([^\"\n]*)\"|\\?([\w.-]+))", text[i:])
+            if not m:
+                out.append("<<")
+                i += 2
+                continue
+            waiting.append((next(g for g in m.groups()[1:] if g is not None), bool(m.group(1))))
+            close()
+            i += m.end()
+        elif c in "'\"":
+            j = i + 1
+            while j < n and text[j] != c:
+                j += 2 if c == '"' and text[j] == "\\" else 1
+            if j >= n:
+                out.append(text[i:])
+                break
+            inner = text[i + 1:j]
+            first = os.path.basename(words[0]) if words else ""
+            shell = not word and words and depth < 3 and (
+                first == "eval" or (first in SHELLS and re.fullmatch(r"-[a-z]*c", words[-1]) is not None))
+            if shell:
+                out.append(" ; " + commands_of(inner, depth + 1) + " ; ")
+            elif not re.search(r"\s", inner):
+                out.append(text[i:j + 1])
+                word += inner
+            else:
+                out.append(c)
+                if c == '"' and depth < 3:
+                    for sub in re.findall(r"\$\(([^()]*)\)|`([^`]*)`", inner):
+                        out.append(" ; " + commands_of(sub[0] or sub[1], depth + 1) + " ; ")
+                out.append(c)
+                word += "x"
+            i = j + 1
+        elif c in " \t":
+            close()
+            out.append(c)
+            i += 1
+        elif c in BREAKS:
+            close()
+            words = []
+            out.append(c)
+            i += 1
+        else:
+            word += c
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def runs(command, pattern):
+    """Whether a command the call runs fits a bash pattern. Each piece of the pattern
+    that begins with a letter or a digit has to begin a word, so `git*commit` fits
+    `git commit` and not `git merge --no-commit`. A * stays inside one command: it
+    doesn't reach past a ; && || | or a line break, though the pattern's own text may."""
+    try:
+        text = commands_of(command)
+    except Exception:
+        text = command
+    parts = []
+    for number, piece in enumerate(pattern.split("*")):
+        lead = ""
+        if piece[:1].isalnum():
+            # The first piece may be a program named by its path.
+            lead = r"(?<![^\s;&|()/])" if number == 0 else r"(?<![^\s;&|()])"
+        parts.append(lead + re.escape(piece))
+    try:
+        return re.search(r"[^;&|()\n]*".join(parts), text) is not None
+    except re.error:
+        return False
+
+
 def matches(kind, pattern, tool, tool_input, cwd):
     if kind == "tool":
         return glob(tool, pattern)
     if kind == "bash":
         command = tool_input.get("command") if tool == "Bash" else None
-        return isinstance(command, str) and glob(command, "*" + pattern + "*")
+        return isinstance(command, str) and runs(command, pattern)
     if kind == "edit":
         if tool not in EDIT_TOOLS:
             return False

@@ -1717,9 +1717,50 @@ out="$(tool_call 'not json'; echo "rc=$?")"
 [ "$out" = "rc=0" ] && ok "input it can't read is ignored, and the hook still exits 0" || bad "input it can't read is ignored, and the hook still exits 0" "$out"
 out="$(tool_call '{"session_id":"../s-1","tool_name":"Bash","tool_input":{"command":"git push"}}')"
 [ -z "$out" ] && ok "a session id that isn't a plain name is ignored" || bad "a session id that isn't a plain name is ignored" "$out"
+# The session-start hook runs again when a session is resumed, and in some apps more
+# often. A reminder that came back each time stopped the same call on every turn
+# (issue 218).
+hook "$T/projects/rem" '{"session_id":"s-1","source":"resume"}' >/dev/null
+out="$(tool_call "$push")"
+[ -z "$out" ] && ok "a resumed session is not given its reminders again" || bad "a resumed session is not given its reminders again" "$out"
+hook "$T/projects/rem" '{"session_id":"s-1","source":"startup"}' >/dev/null
+out="$(tool_call "$push")"
+[ -z "$out" ] && ok "nor one whose start hook ran again" || bad "nor one whose start hook ran again" "$out"
 hook "$T/projects/rem" '{"session_id":"s-1","source":"compact"}' >/dev/null
 expect "after a compaction the reminders are given again" "make sure the hooks ran" tool_call "$push"
+hook "$T/projects/rem" '{"session_id":"s-1","source":"clear"}' >/dev/null
+expect "and after a clear" "make sure the hooks ran" tool_call "$push"
 hook "$T/projects/rem" '{"session_id":"s-1","source":"resume"}' >/dev/null
+# A pattern is matched against the commands a call runs, not the words in it (issue
+# 216): "never commit" stopped git merge --no-commit, and "never push" stopped a
+# capture whose note mentioned pushing.
+hook "$T/projects/rem" '{"session_id":"s-run","source":"startup"}' >/dev/null
+for c in 'wiki sync rem -m \"then git push it\"' "wiki capture rem x <<'EOF'\\nrun git push later\\nEOF\\ngit status" "grep -n 'git push' a.sh" 'git status # then git push' 'legit push' 'git tag -m \"git push\" v1'; do
+  out="$(tool_call '{"session_id":"s-run","tool_name":"Bash","tool_input":{"command":"'"$c"'"}}')"
+  [ -z "$out" ] && ok "a command that only mentions a push is not stopped: $c" || bad "a command that only mentions a push is not stopped: $c" "$out"
+done
+check "the record of what was shown is still empty" test ! -s "$RD/s-run.seen"
+expect "and a push after a heredoc is" "make sure the hooks ran" tool_call '{"session_id":"s-run","tool_name":"Bash","tool_input":{"command":"wiki capture rem x <<EOF\nnote\nEOF\ngit push"}}'
+check "a pattern fits commands, word by word" python3 -B -c "
+import io, sys
+sys.argv, sys.stdin = ['x', '/nowhere'], io.StringIO('')
+sys.path.insert(0, '$REPO/hooks')
+from reminders import runs
+assert runs('git -C /a commit -F f -- x', 'git*commit'), 'a commit'
+assert not runs('git merge --no-commit x', 'git*commit'), 'an option that ends in the word matched'
+assert not runs('git worktree add ../commit-fix', 'git*commit'), 'a path that holds the word matched'
+assert not runs('git status; echo commit', 'git*commit'), 'a star reached into the next command'
+assert not runs('git log | grep commit', 'git*commit'), 'a star reached past a pipe'
+assert runs('/usr/bin/git push', 'git*push'), 'a program named by its path'
+assert runs('bash -c \\'git push origin\\'', 'git*push'), 'a command handed to a shell'
+assert runs('echo \\'a b\\' \\\"\$(git push 2>&1) done\\\"', 'git*push'), 'a command inside double quotes'
+assert not runs('python3 -c \\'print(1); x = \\\"git push\\\"\\'', 'git*push'), 'a string in another language matched'
+assert runs('cd a/b && make', 'cd * && '), 'the text of a pattern may hold a separator'
+assert runs('git tag v1.2', 'git tag v'), 'a pattern may end inside a word'
+assert runs('kubectl apply -f \\\"prod.yaml\\\"', 'kubectl apply*-f'), 'a quoted argument of one word stays'
+assert runs('git commit -m \\'never closed', 'git*commit'), 'a quote never closed hid the command'
+assert runs('cat <<EOF | git commit -F -\\nmsg\\nEOF', 'git*commit'), 'the rest of a heredoc line is run'
+"
 out="$(printf '%s' "$push" | LLM_WIKI_BACKGROUND=1 CLAUDE_PLUGIN_ROOT="$REPO" sh "$REPO/hooks/pre-tool-use.sh")"
 [ -z "$out" ] && ok "a background compile's session gets no reminders" || bad "a background compile's session gets no reminders" "$out"
 # A read of a wiki page logs itself as a lookup, and a handoff logs its start. Neither

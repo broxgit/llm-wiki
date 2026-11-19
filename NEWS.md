@@ -9,6 +9,11 @@ Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title i
 - `wiki index` names a page whose summary is over 120 characters, with its length. Only `wiki lint` did, after the compile.
 - A feedback draft no longer replaces a word like "time" because a project of yours has that name. `feedback send` lists the words it left.
 
+## 2027-01-29: a reminder stops the command it names, not one that mentions it
+
+- A reminder for `git*commit` no longer stops `git merge --no-commit`, a search for the words, or a note whose text says "commit".
+- A reminder you were given stays given until a compaction or a `/clear`. It no longer comes back when a session is resumed.
+
 ## 2027-01-28: a page two machines changed no longer stops a sync
 
 - Where `wiki sync` can't join the two versions of a page, it keeps the other machine's and saves yours as a note, which the next compile folds back in.
