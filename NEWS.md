@@ -4,6 +4,13 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2027-01-31: open items and patterns are written by commands
+
+- `wiki open add` and `wiki open done` add and close entries in a wiki's `open.md`. `done` changes nothing when its text matches no entry or several.
+- `wiki patterns seen` adds a sighting to an entry in `patterns.md`, or a new entry, and prints its tally.
+- `wiki capture` warns when a `Waiting:`, `Due:` or `Feedback:` line in a note isn't in the handbook's form. The note is still saved.
+- Do: run `wiki upgrade --all`, so compile uses them.
+
 ## 2027-01-30: a long summary is caught at index, and feedback reads better
 
 - `wiki index` names a page whose summary is over 120 characters, with its length. Only `wiki lint` did, after the compile.

@@ -3,8 +3,8 @@
 # downloads the helper and keeps it only if it matches. scripts/helper.sh writes this
 # file: run `scripts/helper.sh lock` after changing anything under cmd/ or internal/.
 toolchain go1.26.3
-source 0379bbaa5970
-darwin-arm64 7fe1eecdf6b5988fc1910252737f7f35ac2c6f48b6f8cc9b2ecd0254a01122a7
-darwin-amd64 e4201d54a60802fef19c2b7c0f5d38c3e42d5b9fb555c8d9d51503350d0bd91f
-linux-amd64 100920279e75b569e3165c0fd55937d0c69d2b9dc33e57aab3e911ec1d041ae3
-linux-arm64 ea81fe1f692b04aa1d385550dc0dfdab2de4ca2e47556e8902240e652cf7d56f
+source 0242623064e4
+darwin-arm64 f19a143e70289a0461244ca606bedbaba2927b3d102415a181136dfa4ffe469e
+darwin-amd64 568af3fdfa302851c3cd5310b0493802ae7f0153f0df14c005b5f32ab6fd7a2b
+linux-amd64 3cd15dbaa817a4cfe69f4f8d0f30881f879e13b2c894d02cc57d9556e0536271
+linux-arm64 31b56ffb97676422f15978b580349bd200a70ec6e85f6b1f1edb867ad45a4ebe

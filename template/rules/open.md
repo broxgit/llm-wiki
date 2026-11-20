@@ -16,6 +16,7 @@ Done: <what>
 - `Due:` is for something to look at on or after a date.
 - `Done:` closes one. Use the entry's heading, or enough of it to pick one open entry.
 - Write the what so it stands alone in a list. Someone who sees only that line should know what to do.
+- `wiki.sh capture` warns about a `Waiting:` or `Due:` line not in this form. Fix the note before it is compiled.
 
 For example, `Done: Confirm the Gemini reminder hook` closes the entry shown below.
 
@@ -35,7 +36,14 @@ Compile does nothing with the line: it stays in the note, and the entry's `from:
 Each wiki keeps `open.md` at its root. Updating it is compile work, done under the lock. For each line you ingest:
 
 1. `Waiting:` or `Due:`: look for an open entry with the same what, worded any way. If there is one, add a `from:` line to it. If there isn't, add an entry.
-2. `Done:`: find the open entry whose heading contains the text, ignoring case. Set its status to `done <the note's date>` and add a `from:` line for the closing note. If it matches no entry, or more than one, say so in your compile report and leave the ledger alone.
+2. `Done:`: find the open entry whose heading contains the text, ignoring case. Of several, take the one whose heading is the text, if one is; if that one is already done, leave the others alone. Set its status to `done <the note's date>` and add a `from:` line for the closing note. If it matches no entry, or more than one, say so in your compile report and leave the ledger alone.
+
+With the script, use its commands for both steps, and don't edit the file by hand. Each writes the entry as shown below and refuses text that would break it.
+
+- `wiki.sh open add <wiki> "<what>" --who <who> --from raw/<note>` for a `Waiting:` line, or `--due <YYYY-MM-DD>` in place of `--who` for a `Due:` line. When an open entry has the same what worded another way, use its heading: the command adds the `from:` line to it, and says when the entry keeps a who or a date other than yours.
+- `wiki.sh open done <wiki> "<text>" --from raw/<note>` for a `Done:` line. It refuses, and changes nothing, when the text matches no open entry or more than one. Put what it says in your compile report.
+
+Both date the entry by the note unless you give `--date`.
 
 A note with only these lines needs no topic page. The ledger is its record. The note still gets its `log.md` entry, which marks it compiled.
 

@@ -62,9 +62,13 @@
                        to the shared wiki's data/dependencies.csv.
   stale [days]         List pages not verified in that many days (default 90), or 50
                        commits behind their repository's clone under code_dirs.
-  patterns             Recurring feedback across wikis, and which patterns are ready to propose.
-  open [--data [<wiki>]]  What is waiting on someone or on a date, in every wiki. --data gives
-                       every entry in a plain form for a program. open --help has more.
+  patterns [seen <wiki> <heading> ...]
+                       Recurring feedback across wikis, and which patterns are ready to propose.
+                       seen tallies a sighting into patterns.md. patterns --help has more.
+  open [--data [<wiki>] | add | done]
+                       What is waiting on someone or on a date, in every wiki. --data gives
+                       every entry in a plain form for a program. add and done write open.md
+                       for compile. open --help has more.
   pages <wiki> [--data]  A wiki's pages and their titles. --data gives path, dates and title,
                        tab separated, for a program.
   skills [link]        Team skills in the wikis, and link them into ~/.claude/skills.

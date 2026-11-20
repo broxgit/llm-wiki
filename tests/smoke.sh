@@ -845,6 +845,11 @@ expect "a choice setting completes its values" "summary" "$W" __complete 4 journ
 expect "tips --mute completes tip names" "share-skill" "$W" __complete 3 tips --mute ""
 expect "upgrade completes wiki names" "demo" "$W" __complete 2 upgrade ""
 expect "seed completes directories" "__dirs__" "$W" __complete 2 seed ""
+expect "open completes add and done" "done" "$W" __complete 2 open ""
+expect "open add completes its options" "--who" "$W" __complete 5 open add demo "Heading" ""
+expect "patterns completes seen" "seen" "$W" __complete 2 patterns ""
+expect "patterns seen --kind completes the kinds" "procedure" "$W" __complete 6 patterns seen demo "Heading" --kind ""
+lacks "and --from offers no folders there" "__dirs__" "$W" __complete 6 patterns seen demo "Heading" --from ""
 check "the bash script parses" bash -n <("$W" completion bash)
 "$W" completion bash > "$T/c.bash"
 out="$(bash -c "source '$T/c.bash'; COMP_WORDS=('$W' journal s); COMP_CWORD=2; _llm_wiki; echo \"\${COMPREPLY[*]}\"" 2>&1)"
@@ -1259,6 +1264,128 @@ printf '\n## No kind here\n- status: open\n\n## Due without a date\n- kind: due\
 expect "lint reports an entry with no kind" "No kind here (kind is missing or not waiting or due)" "$W" lint demo
 expect "and a due entry with no valid date" "Due without a date (a due entry needs a date as YYYY-MM-DD)" "$W" lint demo
 cp "$T/open.bak" "$OPEN"
+# open add and open done write open.md for compile, as rules/open.md has it, in one step.
+ON1="2026-11-09-164228-gemini-check.md"; ON2="2026-11-12-090000-gemini-done.md"
+printf 'Captured: 2026-11-09\n\nWaiting: user | Confirm the Gemini reminder hook fires in Antigravity\n' > "$WIKIS_DIR/demo/raw/$ON1"
+printf 'Captured: 2026-11-12\n\nDone: gemini reminder hook\n' > "$WIKIS_DIR/demo/raw/$ON2"
+expect "open --help describes add and done" "open done <wiki>" "$W" open --help
+out="$("$W" open add demo "Confirm the Gemini reminder hook fires in Antigravity" --who user --from "raw/$ON1" 2>&1)"; rc=$?
+case "$rc:$out" in "0:added: \"Confirm the Gemini reminder hook fires in Antigravity\" to open.md in "*"/demo, waiting on user. 1 open in this wiki.") ok "open add adds an entry and says how many are open" ;; *) bad "open add adds an entry and says how many are open" "$rc: $out" ;; esac
+check "with the lines rules/open.md shows, after a blank line, dated by its note" test "$(tail -n 6 "$OPEN")" = "$(printf '\n## Confirm the Gemini reminder hook fires in Antigravity\n- kind: waiting\n- who: user\n- status: open\n- from: 2026-11-09 raw/%s' "$ON1")"
+expect "and open lists it" "Confirm the Gemini reminder hook fires in Antigravity (waiting on user)" "$W" open
+"$W" open add demo "Read the first week of runs" --due "$SOON" --from "raw/$ON1" --date 2026-11-10 >/dev/null
+check "a due entry has its date, and --date dates its from: line" test "$(tail -n 4 "$OPEN")" = "$(printf -- '- kind: due\n- due: %s\n- status: open\n- from: 2026-11-10 raw/%s' "$SOON" "$ON1")"
+expect "and open lists it as due" "Read the first week of runs (due $SOON)" "$W" open
+expect "an open entry of the same heading, in any case, gets a from: line instead" "added: a from: line for raw/$ON2 to the open entry \"Confirm the Gemini reminder hook fires in Antigravity\"" "$W" open add demo "confirm the gemini reminder hook fires in antigravity" --who user --from "raw/$ON2"
+check "and no second entry" test "$(grep -c '^## Confirm the Gemini' "$OPEN")" = 1
+check "the from: line follows the entry's last line, dated by its note" test "$(grep -A1 -x -- "- from: 2026-11-09 raw/$ON1" "$OPEN" | tail -n 1)" = "- from: 2026-11-12 raw/$ON2"
+cp "$OPEN" "$T/open.now"
+expect "the same note again changes nothing" "unchanged:" "$W" open add demo "Confirm the Gemini reminder hook fires in Antigravity" --who user --from "raw/$ON2"
+check "and the file is as it was" cmp "$OPEN" "$T/open.now"
+out="$("$W" open "done" demo "the" --from "raw/$ON2" 2>&1)"; rc=$?
+case "$rc:$out" in "1:error: \"the\" matches 2 open entries in "*"/demo/open.md: \"Confirm the Gemini reminder hook fires in Antigravity\", \"Read the first week of runs\". Nothing was changed."*) ok "open done refuses text that matches two open entries, and names them" ;; *) bad "open done refuses text that matches two open entries, and names them" "$rc: $out" ;; esac
+check "and changes nothing" cmp "$OPEN" "$T/open.now"
+out="$("$W" open "done" demo "the vendor's reply" --from "raw/$ON2" 2>&1)"; rc=$?
+case "$rc:$out" in "1:error: \"the vendor's reply\" matches no open entry in "*"/demo/open.md. Nothing was changed. Run: "*" open, for the open entries") ok "open done refuses text that matches no open entry" ;; *) bad "open done refuses text that matches no open entry" "$rc: $out" ;; esac
+check "and changes nothing" cmp "$OPEN" "$T/open.now"
+out="$("$W" open "done" demo "GEMINI reminder hook" --from "raw/$ON2" 2>&1)"
+case "$out" in "closed: \"Confirm the Gemini reminder hook fires in Antigravity\" in "*"/demo, done 2026-11-12. 1 open in this wiki.") ok "open done closes the one open entry whose heading contains the text, ignoring case" ;; *) bad "open done closes the one open entry whose heading contains the text, ignoring case" "$out" ;; esac
+check "its status is done on the note's date" grep -qx -- "- status: done 2026-11-12" "$OPEN"
+lacks "and open leaves it out" "Confirm the Gemini" "$W" open
+expect "open --data reads it as done" "$(printf 'demo\tdone\twaiting\tuser')" "$W" open --data demo
+expect "closing it again says it isn't open" "only \"Confirm the Gemini reminder hook fires in Antigravity\", which isn't open" "$W" open "done" demo "gemini reminder hook" --from "raw/$ON2"
+lacks "lint has no finding for what open add and done wrote" "open.md entry not understood" "$W" lint demo
+cp "$OPEN" "$T/open.now"
+refuse "a heading with a line break, which would start a second entry, is refused" "$W" open add demo "$(printf 'One\n## Two')" --who user --from "raw/$ON1"
+refuse "and one with another control character" "$W" open add demo "$(printf 'One\033[31m')" --who user --from "raw/$ON1"
+refuse "and a who with a line break" "$W" open add demo "One" --who "$(printf 'user\n- status: done 2026-01-01')" --from "raw/$ON1"
+refuse "a note that isn't in raw/ is refused" "$W" open add demo "One" --who user --from raw/nope.md
+refuse "and a path out of it" "$W" open add demo "One" --who user --from "raw/../index.md"
+refuse "a due date that isn't YYYY-MM-DD is refused" "$W" open add demo "One" --due "next week" --from "raw/$ON1"
+"$W" open add demo "One" --who user --due "$SOON" --from "raw/$ON1" >/dev/null 2>&1; rc=$?
+check "--who and --due together are a usage error" test "$rc" = 2
+"$W" open add demo "One" --who user >/dev/null 2>&1; rc=$?
+check "and so is no --from" test "$rc" = 2
+check "none of those changed open.md" cmp "$OPEN" "$T/open.now"
+check "nor left a file beside it" bash -c "! compgen -G '$WIKIS_DIR/demo/.open.md.*'"
+mv "$OPEN" "$T/open.real"; ln -s "$T/open.real" "$OPEN"
+refuse "an open.md that is a link is not written through" "$W" open add demo "One" --who user --from "raw/$ON1"
+check "and what it points to is as it was" cmp "$T/open.real" "$T/open.now"
+rm -f "$OPEN"; mv "$T/open.real" "$OPEN"
+# A | splits what open and status read, so a heading or a who can't hold one.
+refuse "a heading with a | is refused" "$W" open add demo "One | two" --who user --from "raw/$ON1"
+refuse "and a who with one" "$W" open add demo "One" --who "user | Dana" --from "raw/$ON1"
+# A byte that isn't UTF-8 doesn't get text past a check, in a UTF-8 locale where there is one.
+ULOC="$(locale -a 2>/dev/null | grep -i -m 1 -e '^en_US.utf-\?8$' -e '^C.utf-\?8$' || true)"
+refuse "a heading with a | and a byte that isn't UTF-8 is refused" env ${ULOC:+LC_ALL="$ULOC"} "$W" open add demo "$(printf 'One | two\377')" --who user --from "raw/$ON1"
+refuse "and a --from with ../ and such a byte" env ${ULOC:+LC_ALL="$ULOC"} "$W" open add demo "One" --who user --from "$(printf 'raw/../outside\377.md')"
+# A note is read where it is, never through a link.
+printf 'Waiting: user | elsewhere\n' > "$T/elsewhere.md"
+ln -s "$T/elsewhere.md" "$WIKIS_DIR/demo/raw/2026-11-10-000000-linked.md"
+refuse "a note in raw/ that is a link is refused" "$W" open add demo "One" --who user --from raw/2026-11-10-000000-linked.md
+rm -f "$WIKIS_DIR/demo/raw/2026-11-10-000000-linked.md"
+mv "$WIKIS_DIR/demo/raw" "$T/raw.real"; ln -s "$T/raw.real" "$WIKIS_DIR/demo/raw"
+refuse "and so is any note when raw/ itself is a link" "$W" open add demo "One" --who user --from "raw/$ON1"
+rm -f "$WIKIS_DIR/demo/raw"; mv "$T/raw.real" "$WIKIS_DIR/demo/raw"
+check "none of those changed open.md" cmp "$OPEN" "$T/open.now"
+# A heading that is the text itself is closed beside longer ones that contain it.
+"$W" open add demo "Release llm-relay" --who user --from "raw/$ON1" >/dev/null
+"$W" open add demo "Release llm-relay to Homebrew" --who user --from "raw/$ON1" >/dev/null
+expect "open done closes the open entry whose heading is the text, beside a longer one" "closed: \"Release llm-relay\" in " "$W" open "done" demo "release LLM-relay" --from "raw/$ON2"
+check "and leaves the longer one open" test "$("$W" open --data demo | awk -F '\t' '$8 == "Release llm-relay to Homebrew" { print $2 }')" = open
+cp "$OPEN" "$T/open.now"
+out="$("$W" open "done" demo "Release llm-relay" --from "raw/$ON2" 2>&1)"; rc=$?
+case "$rc:$out" in "1:error: \"Release llm-relay\" is the heading of \"Release llm-relay\" in "*", which is already closed, so the longer \"Release llm-relay to Homebrew\" was left open. Nothing was changed."*) ok "and the same text again says that one is closed, rather than closing the longer one" ;; *) bad "and the same text again says that one is closed, rather than closing the longer one" "$rc: $out" ;; esac
+check "with open.md unchanged" cmp "$OPEN" "$T/open.now"
+# A line for an open entry that names someone else, or another date, adds its from: line and says the entry kept its own.
+out="$("$W" open add demo "Release llm-relay to Homebrew" --who Dana --from "raw/$ON2" 2>&1)"
+case "$out" in "added: a from: line for raw/$ON2 to the open entry \"Release llm-relay to Homebrew\" in "*". It keeps its own who, user, not Dana. "*) ok "open add says an open entry keeps its own who" ;; *) bad "open add says an open entry keeps its own who" "$out" ;; esac
+check "and it does" test "$("$W" open --data demo | awk -F '\t' '$8 == "Release llm-relay to Homebrew" { print $4 }')" = user
+"$W" open add demo "Read the dashboards" --due 2026-12-01 --from "raw/$ON1" >/dev/null
+expect "and its own due date" "It keeps its own due date, 2026-12-01, not 2026-12-05." "$W" open add demo "Read the dashboards" --due 2026-12-05 --from "raw/$ON2"
+cp "$T/open.bak" "$OPEN"
+# patterns seen tallies a Feedback: line into patterns.md, as rules/patterns.md has it.
+PAT="$WIKIS_DIR/demo/patterns.md"
+cp "$PAT" "$T/patterns.bak"
+expect "patterns --help describes seen" "patterns seen <wiki>" "$W" patterns --help
+out="$("$W" patterns seen demo "Wrap errors with context" --kind correction --from "raw/$ON1" 2>&1)"; rc=$?
+case "$rc:$out" in "1:error: "*"/demo/patterns.md has no entry called \"Wrap errors with context\". Nothing was changed. Do: give --rule"*) ok "patterns seen with no such entry and no --rule says what to give" ;; *) bad "patterns seen with no such entry and no --rule says what to give" "$rc: $out" ;; esac
+check "and changes nothing" cmp "$PAT" "$T/patterns.bak"
+out="$("$W" patterns seen demo "Wrap errors with context" --kind correction --rule 'Wrap returned errors with %w and context. No bare `return err`.' --repo billing-api --from "raw/$ON1" 2>&1)"
+case "$out" in "added: \"Wrap errors with context\" in "*"/demo: correction, seen 1 time(s) in 1 repo(s), watching.") ok "patterns seen adds an entry, watching, and says its tally" ;; *) bad "patterns seen adds an entry, watching, and says its tally" "$out" ;; esac
+check "with the lines rules/patterns.md shows" test "$(tail -n 5 "$PAT")" = "$(printf '## Wrap errors with context\n- kind: correction\n- rule: Wrap returned errors with %%w and context. No bare `return err`.\n- status: watching\n- seen: 2026-11-09 billing-api raw/%s' "$ON1")"
+out="$("$W" patterns seen demo "wrap errors with context" --kind review --repo orders-api --from "raw/$ON2" 2>&1)"
+case "$out" in "tallied: \"Wrap errors with context\" in "*"/demo: review, seen 2 time(s) in 2 repo(s), watching. Ready to propose: rules/patterns.md says how.") ok "a review sighting of it, by heading in any case, makes it ready" ;; *) bad "a review sighting of it, by heading in any case, makes it ready" "$out" ;; esac
+check "its kind is review now, and the seen: line follows the last" test "$(awk '/^## Wrap errors with context$/ { on = 1; next } /^## / { on = 0 } on && /^- kind:/' "$PAT"):$(tail -n 1 "$PAT")" = "- kind: review:- seen: 2026-11-12 orders-api raw/$ON2"
+expect "patterns lists it ready" "READY  Wrap errors with context (review, seen 2, 2 repo(s)): watching" "$W" patterns
+cp "$PAT" "$T/patterns.now"
+expect "the same note again changes nothing" "unchanged:" "$W" patterns seen demo "Wrap errors with context" --kind review --from "raw/$ON2"
+check "and the file is as it was" cmp "$PAT" "$T/patterns.now"
+ON3="2026-11-13-080000-errors-again.md"
+printf 'Captured: 2026-11-13\n\nFeedback: correction | here | Wrap returned errors with context.\n' > "$WIKIS_DIR/demo/raw/$ON3"
+expect "an entry is found by its rule when the heading differs" "tallied: \"Wrap errors with context\"" "$W" patterns seen demo "Errors need context" --kind correction --rule 'wrap returned errors with %w and context. no bare `return err`.' --times 3 --from "raw/$ON3"
+check "and --times counts the line for that many" test "$(tail -n 1 "$PAT")" = "- seen: 2026-11-13 - raw/$ON3 x3"
+expect "which patterns counts" "Wrap errors with context (review, seen 5, 2 repo(s))" "$W" patterns
+cp "$PAT" "$T/patterns.now"
+refuse "a kind that isn't one of the six is refused" "$W" patterns seen demo "New one" --kind nit --rule "A rule." --from "raw/$ON1"
+refuse "and a rule with a line break" "$W" patterns seen demo "New one" --kind lesson --rule "$(printf 'A rule.\n## Injected')" --from "raw/$ON1"
+refuse "and a repository that isn't one word" "$W" patterns seen demo "New one" --kind lesson --rule "A rule." --repo "two words" --from "raw/$ON1"
+"$W" patterns seen demo "New one" --kind lesson --rule "A rule." >/dev/null 2>&1; rc=$?
+check "no --from is a usage error" test "$rc" = 2
+"$W" patterns sideways >/dev/null 2>&1; rc=$?
+check "and so is a word patterns doesn't take" test "$rc" = 2
+refuse "a heading with a | and a byte that isn't UTF-8 is refused" env ${ULOC:+LC_ALL="$ULOC"} "$W" patterns seen demo "$(printf 'New | one\377')" --kind lesson --rule "A rule." --from "raw/$ON1"
+refuse "and a --repo with a space and such a byte" env ${ULOC:+LC_ALL="$ULOC"} "$W" patterns seen demo "New one" --kind lesson --rule "A rule." --repo "$(printf 'two words\377')" --from "raw/$ON1"
+refuse "and --times with such a byte" env ${ULOC:+LC_ALL="$ULOC"} "$W" patterns seen demo "New one" --kind lesson --rule "A rule." --times "$(printf '3\377')" --from "raw/$ON1"
+check "none of those changed patterns.md" cmp "$PAT" "$T/patterns.now"
+# A --repo that looks like a note is a repository's name: that note still counts as not tallied.
+ON4="2026-11-14-080000-errors-later.md"
+printf 'Captured: 2026-11-14\n\nFeedback: correction | here | Wrap returned errors with context.\n' > "$WIKIS_DIR/demo/raw/$ON4"
+"$W" patterns seen demo "Pin versions" --kind correction --rule "Pin versions." --repo "raw/$ON4" --from "raw/$ON3" >/dev/null
+expect "a seen: line whose repository names a note doesn't count as that note's sighting" "tallied: \"Pin versions\"" "$W" patterns seen demo "Pin versions" --kind correction --from "raw/$ON4"
+rm -f "$WIKIS_DIR/demo/raw/$ON4" "$T/elsewhere.md"
+cp "$T/patterns.bak" "$PAT"
+rm -f "$WIKIS_DIR/demo/raw/$ON1" "$WIKIS_DIR/demo/raw/$ON2" "$WIKIS_DIR/demo/raw/$ON3" "$T/open.now" "$T/patterns.now"
 # Transcripts this shell can't read, as in an agent's sandbox, used to read as a week
 # with no sessions.
 if [ "$(id -u)" != 0 ]; then
@@ -1298,6 +1425,20 @@ printf 'From a file.\n' > "$T/note.md"
 expect "capture --file reads the note from a file" "captured: raw/" "$W" capture demo from-file --file "$T/note.md"
 check "and adds the Captured line" bash -c "head -n 1 \"\$(ls '$WIKIS_DIR'/demo/raw/*-from-file.md)\" | grep -q '^Captured: '"
 refuse "capture --file needs the file to exist" "$W" capture demo nope --file "$T/nope.md"
+# A Waiting:, Due: or Feedback: line compile can't read is warned about on stderr. The note is
+# saved all the same, and capture still succeeds.
+printf 'Waiting: Dana | Reply to the vendor\nWaiting: user check the hook\nDue: next week | Read the runs\nDue: 2026-12-01 Read the runs\nDue: 2026-12-01 | Read the runs\nFeedback: review | here | Wrap errors.\nFeedback: nit | here | Wrap errors.\nFeedback: review | two words | Wrap errors.\nFeedback: lesson here: run the check\n' > "$T/malformed.md"
+out="$("$W" capture demo malformed --file "$T/malformed.md" 2>"$T/malformed.err")"; rc=$?
+case "$rc:$out" in "0:captured: raw/20"*"-malformed.md in "*"/demo") ok "a note with lines compile can't read is still captured, with nothing more on stdout" ;; *) bad "a note with lines compile can't read is still captured, with nothing more on stdout" "$rc: $out" ;; esac
+mname="$(for f in "$WIKIS_DIR"/demo/raw/*-malformed.md; do [ -f "$f" ] && printf '%s\n' "${f##*/}"; done | tail -n 1)"
+check "and saved" test -n "$mname"
+check "stderr warns about each such line, by its line in the saved note, with the fix" test "$(cat "$T/malformed.err")" = "$(printf 'warning: line 4 of raw/%s is a Waiting: line with no " | " between who and what, so compile can'"'"'t read it. Do: edit it to read Waiting: <who> | <what>\nwarning: line 5 of raw/%s is a Due: line whose date is not YYYY-MM-DD, so compile can'"'"'t read it. Do: edit it to read Due: <YYYY-MM-DD> | <what>\nwarning: line 6 of raw/%s is a Due: line with no " | " between the date and what, so compile can'"'"'t read it. Do: edit it to read Due: <YYYY-MM-DD> | <what>\n' "$mname" "$mname" "$mname")$(for l in 9 10 11; do printf '\nwarning: line %s of raw/%s is a Feedback: line not in the form the handbook gives, so compile can'"'"'t read it. Do: edit it to read Feedback: <kind> | <scope> | <rule>, where kind is review, correction, lesson, ask, procedure or toil, and scope is here, everywhere or a wiki'"'"'s name' "$l" "$mname"; done)"
+out="$(printf 'Waiting: Dana | Reply\nDue: 2026-12-01 | Read the runs\nFeedback: toil | everywhere | Release llm-relay: tag, hash, tap.\n' | "$W" capture demo wellformed 2>&1 >/dev/null)"
+check "a note whose lines are well formed gets no warning" test -z "$out"
+cp "$T/malformed.md" "$T/malformed-copy.md"
+out="$("$W" capture demo --copy "$T/malformed-copy.md" 2>&1 >/dev/null)"
+check "and a copy of a file is not looked at" test -z "$out"
+rm -f "$WIKIS_DIR"/demo/raw/*-malformed.md "$WIKIS_DIR"/demo/raw/*-wellformed.md "$WIKIS_DIR"/demo/raw/*-malformed-copy.md "$T"/malformed*
 refuse "capture refuses --file and --copy together" "$W" capture demo both --file "$T/note.md" --copy "$T/note.md"
 # A note taken in a folder, or on a branch, named for a ticket says which ticket, on a line
 # of its own at its end. A copy of a file, and a note that has the line, are left alone.
@@ -4420,6 +4561,12 @@ and a third" ] && ok "a page's line ends reach a client as line feeds" || bad "a
   csame "a slug with no letters or digits" helper "$T" "$T/cap/note.md" alpha "!!!"
   csame "an empty note" helper "$T" /dev/null alpha empty
   csame "an empty file" helper "$T" /dev/null alpha empty --file "$T/cap/empty.md"
+  # Lines compile can't read: the same warnings on stderr from both, and the note saved.
+  printf 'Waiting: user check the hook\r\nWaiting:  | Reply\nDue: next week | Read\nDue: 2026-12-01 Read\nDue: 2026-12-01 |  \nFeedback: nit | here | x\nFeedback: review | two words | x\nFeedback: review | here |\nFeedback: lesson | here | fine\nWaiting: Dana | fine\nDue: 2026-12-01 | fine\n Waiting: indented, so no line of its own\nWaiting: no line break at the end' > "$T/cap/malformed.md"
+  csame "a note with lines compile can't read: the same warnings" helper "$T" "$T/cap/malformed.md" alpha malformed
+  check "and there are warnings to compare" test "$(grep -c '^warning: line ' "$T/capture.err")" = 9
+  csame "and in a ticket folder, where the note gets a line on its end" helper "$T/cap/VID-74003" "$T/cap/malformed.md" alpha malformed
+  csame "a copy of such a file gets none" helper "$T/cap" /dev/null alpha --copy malformed.md
   # Two sessions, the same second, the same slug: every note is kept, by the helper and by the Bash.
   # crace <helper or nothing> <how many>: that many captures at once, then how many notes and
   # how many different ones raw/ holds.

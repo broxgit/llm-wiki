@@ -299,9 +299,13 @@ Usage: $WIKI_CMD <command> [options]
                        to the shared wiki's data/dependencies.csv.
   stale [days]         List pages not verified in that many days (default 90), or 50
                        commits behind their repository's clone under code_dirs.
-  patterns             Recurring feedback across wikis, and which patterns are ready to propose.
-  open [--data [<wiki>]]  What is waiting on someone or on a date, in every wiki. --data gives
-                       every entry in a plain form for a program. open --help has more.
+  patterns [seen <wiki> <heading> ...]
+                       Recurring feedback across wikis, and which patterns are ready to propose.
+                       seen tallies a sighting into patterns.md. patterns --help has more.
+  open [--data [<wiki>] | add | done]
+                       What is waiting on someone or on a date, in every wiki. --data gives
+                       every entry in a plain form for a program. add and done write open.md
+                       for compile. open --help has more.
   pages <wiki> [--data]  A wiki's pages and their titles. --data gives path, dates and title,
                        tab separated, for a program.
   skills [link]        Team skills in the wikis, and link them into ~/.claude/skills.
@@ -404,7 +408,7 @@ need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 # Raise GO_PROTOCOL, with the constant in cmd/llm-wiki/main.go, whenever a ported
 # command's arguments or output change. scripts/helper.sh builds releases and writes
 # helper.lock.
-GO_PROTOCOL=23
+GO_PROTOCOL=24
 HELPER_LOCK="$REPO/helper.lock"
 HELPER_DIR="${LLM_WIKI_HELPER_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/llm-wiki/helper}"
 
@@ -2248,15 +2252,26 @@ capture_ticketed() {
 
 # capture_run: capture, by the compiled helper when it is built and in Bash when not.
 capture_run() {
-  local bin out tty="" nl=$'\n'
+  local bin out tty="" nl=$'\n' line
   # The compiled helper saves the note too. Its first line says which answer follows,
   # the line to print or what to refuse with. It fails only before it reads stdin, and
-  # then capture_note answers.
+  # then capture_note answers. After a capture, each line past the second is a warning.
   [ ! -t 0 ] || tty=--tty
   # shellcheck disable=SC2086
   if bin="$(go_helper)" && out="$("$bin" capture --wikis "$WIKIS_DIR" --home "$HOME" --pwd "$PWD" --wiki-cmd "$WIKI_CMD" $tty -- "$@" 2>/dev/null)"; then
     case "$out" in
-      "captured$nl"?*) printf '%s\n' "${out#*"$nl"}"; return 0 ;;
+      "captured$nl"?*)
+        out="${out#*"$nl"}"
+        printf '%s\n' "${out%%"$nl"*}"
+        case "$out" in
+          *"$nl"*)
+            while IFS= read -r line; do say_warn_err "$line"; done <<CAPEOF
+${out#*"$nl"}
+CAPEOF
+            ;;
+        esac
+        return 0
+        ;;
       "refused$nl"?*) die "${out#*"$nl"}" ;;
     esac
   fi
@@ -2405,6 +2420,47 @@ capture_note() {
     die "$(cant_write "$root/raw/$name")"
   fi
   echo "captured: raw/$name in $(tilde "$root")"
+  # A copy is a document as it came, not a note: its lines are not looked at.
+  [ -n "$copy" ] || capture_lint "$root/raw/$name" "$name" | while IFS= read -r line; do say_warn_err "$line"; done
+}
+
+# capture_lint <note> <name>: a warning for each Waiting:, Due: or Feedback: line that compile
+# can't read, one a line, with its line number in the saved note. The note is saved all the
+# same. internal/capture's Lint says the same words: change both together.
+capture_lint() {
+  LC_ALL=C awk -v name="$2" '
+    function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
+    function say(what, fix) {
+      printf "warning: line %d of raw/%s is %s, so compile can'"'"'t read it. Do: edit it to read %s\n", FNR, name, what, fix
+    }
+    { line = $0; sub(/\r$/, "", line) }
+    index(line, "Waiting:") == 1 {
+      rest = substr(line, 9); i = index(rest, " | ")
+      if (i == 0 || trim(substr(rest, 1, i - 1)) == "" || trim(substr(rest, i + 3)) == "")
+        say("a Waiting: line with no \" | \" between who and what", "Waiting: <who> | <what>")
+      next
+    }
+    index(line, "Due:") == 1 {
+      rest = substr(line, 5); i = index(rest, " | ")
+      if (i == 0 || trim(substr(rest, 1, i - 1)) == "" || trim(substr(rest, i + 3)) == "")
+        say("a Due: line with no \" | \" between the date and what", "Due: <YYYY-MM-DD> | <what>")
+      else if (trim(substr(rest, 1, i - 1)) !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/)
+        say("a Due: line whose date is not YYYY-MM-DD", "Due: <YYYY-MM-DD> | <what>")
+      next
+    }
+    index(line, "Feedback:") == 1 {
+      rest = substr(line, 10); good = 0
+      i = index(rest, " | ")
+      if (i > 0) {
+        kind = trim(substr(rest, 1, i - 1)); rest = substr(rest, i + 3); j = index(rest, " | ")
+        if (j > 0) {
+          scope = trim(substr(rest, 1, j - 1)); rule = trim(substr(rest, j + 3))
+          good = kind ~ /^(review|correction|lesson|ask|procedure|toil)$/ && scope != "" && scope !~ /[ \t]/ && rule != ""
+        }
+      }
+      if (!good) say("a Feedback: line not in the form the handbook gives", "Feedback: <kind> | <scope> | <rule>, where kind is review, correction, lesson, ask, procedure or toil, and scope is here, everywhere or a wiki'"'"'s name")
+    }
+  ' "$1" 2>/dev/null || true
 }
 
 # The lock's first line is "held <token> <time>", as rules/compile.md has a session
@@ -9200,8 +9256,36 @@ $(pending_files "$d")
 EOF2
 }
 
+patterns_usage() {
+  cat <<EOF
+Usage: $WIKI_CMD patterns
+       $WIKI_CMD patterns seen <wiki> "<heading>" --kind KIND --from raw/NOTE [--rule TEXT] [--repo REPO] [--times N] [--date YYYY-MM-DD]
+
+Lists each wiki's patterns.md entries, which are ready to propose, which accepted fixes
+are seen again (AGAIN), and the Feedback: lines in notes not compiled yet.
+
+patterns seen is for compile, which holds the wiki's lock. It adds one sighting of a
+Feedback: line to patterns.md, in one step, as rules/patterns.md has it, and prints the
+entry's tally. The entry is the one with that heading, ignoring case, or else the one
+whose rule is --rule's text. With none, it adds an entry, which needs --rule.
+  --kind KIND         The Feedback: line's kind: review, correction, lesson, ask, procedure
+                      or toil. A review sets the entry's kind to review.
+  --from raw/NOTE     The note the line came from. It must be in the wiki's raw/.
+  --rule TEXT         The rule, in one line, for a new entry.
+  --repo REPO         The repository where it happened. - when it isn't known, the default.
+  --times N           What the sighting counts for, when the user said it happened before.
+  --date YYYY-MM-DD   The seen: line's date. The note's own date by default.
+EOF
+}
+
 cmd_patterns() {
   local d line ready name kind status n nrep pend found=0 total=0 regressed=0
+  case "${1:-}" in
+    seen) shift; patterns_seen "$@"; return 0 ;;
+    -h | --help) patterns_usage; return 0 ;;
+    "") ;;
+    *) die_usage "patterns takes seen, or nothing. Try $WIKI_CMD patterns --help" ;;
+  esac
   [ -d "$WIKIS_DIR" ] || die "no wikis at $(tilde "$WIKIS_DIR")"
   for d in "$WIKIS_DIR"/*/; do
     d="${d%/}"
@@ -9270,10 +9354,22 @@ open_usage() {
   cat <<EOF
 Usage: $WIKI_CMD open
        $WIKI_CMD open --data [<wiki>]
+       $WIKI_CMD open add <wiki> "<heading>" (--who WHO | --due YYYY-MM-DD) --from raw/NOTE [--date YYYY-MM-DD]
+       $WIKI_CMD open done <wiki> "<text>" --from raw/NOTE [--date YYYY-MM-DD]
 
 Lists what is open in every wiki: things waiting on someone, and dates to look at.
 Those past their date come first in each wiki. Agents add them to their notes as
 Waiting: and Due: lines, and close them with Done:. rules/open.md has the format.
+
+open add and open done are for compile, which holds the wiki's lock. They write open.md
+in one step, as rules/open.md has it, and print what they did.
+  add     An entry for a Waiting: line (--who) or a Due: line (--due), with the what as its
+          heading. When an open entry has that heading already, it gets a from: line instead.
+  done    Closes the one open entry whose heading contains the text, ignoring case, or of
+          several, the one whose heading is the text. When it matches none, or more than one,
+          it says which and changes nothing.
+  --from raw/NOTE     The note the line came from. It must be in the wiki's raw/.
+  --date YYYY-MM-DD   The date for the from: line and for done. The note's own date by default.
 
 open --data is for a program, such as an extension. It prints every entry of every
 wiki's open.md, or of one wiki's, the closed ones too, one a line, tab separated:
@@ -9392,6 +9488,8 @@ cmd_open() {
   local d line state kind detail status name n_open=0 n_over=0 want wikis=0
   case "${1:-}" in
     -h | --help) open_usage; return 0 ;;
+    add) shift; style_off; open_add "$@"; return 0 ;;
+    done) shift; style_off; open_done "$@"; return 0 ;;
     --data)
       # For a program: plain whatever the terminal is.
       style_off
@@ -9410,7 +9508,7 @@ cmd_open() {
       return 0
       ;;
     "") ;;
-    *) die_usage "open takes --data, or nothing. Try $WIKI_CMD open --help" ;;
+    *) die_usage "open takes --data, add, done, or nothing. Try $WIKI_CMD open --help" ;;
   esac
   [ -d "$WIKIS_DIR" ] || die "no wikis at $(tilde "$WIKIS_DIR")"
   for d in "$WIKIS_DIR"/*/; do
@@ -9441,6 +9539,336 @@ open_counts() {
   local d
   for d in "$WIKIS_DIR"/*/; do d="${d%/}"; if is_wiki "$d"; then open_ledger "$d"; fi; done | awk -F'|' '
     $1 == "open" || $1 == "overdue" { n++ } $1 == "overdue" { o++ } END { print n + 0, o + 0 }'
+}
+
+# ---- writing the ledgers ----------------------------------------------------
+# open add, open done and patterns seen write open.md and patterns.md for compile, which
+# agents did by hand, and got wrong. Compile holds the lock, so these don't take it. Text
+# from a note is data: one line of it is one line of the ledger, never a second entry.
+LEDGER_US="$(printf '\037')"
+
+# ledger_trim <text>: without spaces at either end.
+ledger_trim() {
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
+
+# ledger_line <what> <text>: refuse text with a line break or another control character in it.
+ledger_line() {
+  [ "$(printf '%s' "$2" | LC_ALL=C tr -d '\000-\037\177')" = "$2" ] || die "$1 can't hold a line break or another control character: it is one line of a ledger. Nothing was changed."
+}
+
+# ledger_note <root> <raw/NOTE>: the note's name, refused when the wiki's raw/ has no such note.
+ledger_note() {
+  local v="${2#raw/}"
+  case "$v" in '' | .* | */* | *[[:space:]]*) die "--from takes a note in the wiki's raw/, as raw/<file>. Nothing was changed." ;; esac
+  ledger_line --from "$v"
+  # The note is read where it is: never through a link, at raw/ or at the note.
+  if [ -L "$1/raw" ] || [ -L "$1/raw/$v" ]; then die "raw/$v in $(tilde "$1") is reached through a link, so it isn't taken for a note. Nothing was changed. Do: give a note that is a plain file in raw/"; fi
+  [ -f "$1/raw/$v" ] || die "there is no note raw/$v in $(tilde "$1"). Nothing was changed. Run: $WIKI_CMD pending $(tilde "$1"), for the notes' names"
+  printf '%s' "$v"
+}
+
+# ledger_day <option> <date>: refuse a date that isn't YYYY-MM-DD.
+ledger_day() {
+  case "$2" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;; *) die "$1 takes a date as YYYY-MM-DD. Nothing was changed." ;; esac
+}
+
+# ledger_date <note> <given date>: the date to write: the one given, or the note's own,
+# from its name, or today in UTC for a note named another way.
+ledger_date() {
+  local d="$2"
+  if [ -z "$d" ]; then
+    case "$1" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*) d="${1:0:10}" ;; *) d="$(date -u +%Y-%m-%d)" ;; esac
+  fi
+  ledger_day --date "$d"
+  printf '%s' "$d"
+}
+
+# ledger_entries <file> <note> <exact|contains|rule> <text>: the "## " entries that match, one
+# a line, the fields split by LEDGER_US: the heading's line number, the line number of the
+# entry's last "- " line, how many status lines it has, its status, 1 when a from: or seen:
+# line names raw/<note>, its kind, its rule, its heading, and its who or due. exact is a heading
+# equal to the text and contains one that contains it, ignoring case both; rule is a rule equal
+# to it. The note is looked for only where each line has it: a from: line's third word, a seen:
+# line's fourth, so a repository's name that looks like a note doesn't count.
+ledger_entries() {
+  [ -f "$1" ] || return 0
+  NOTE="raw/$2" MODE="$3" WANT="$4" LC_ALL=C awk -v us="$LEDGER_US" '
+    function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); gsub(/[\t\037]/, " ", s); return s }
+    function flush(   w, hit) {
+      if (name == "") return
+      w = tolower(ENVIRON["WANT"])
+      if (ENVIRON["MODE"] == "exact") hit = tolower(name) == w
+      else if (ENVIRON["MODE"] == "contains") hit = index(tolower(name), w) > 0
+      else hit = rule != "" && tolower(rule) == w
+      if (hit) print start us last us ns us status us has us kind us rule us name us detail
+      name = ""; ns = 0; status = ""; has = 0; kind = ""; rule = ""; detail = ""
+    }
+    /^## / { flush(); name = trim(substr($0, 4)); start = NR; last = NR; next }
+    name == "" { next }
+    /^- / { last = NR }
+    /^- status:/ { s = $0; sub(/^- status:/, "", s); status = trim(s); ns++ }
+    /^- kind:/ { kind = $3 }
+    /^- rule:/ { s = $0; sub(/^- rule:/, "", s); rule = trim(s) }
+    /^- who:/ { s = $0; sub(/^- who:/, "", s); detail = trim(s) }
+    /^- due:/ { detail = trim($3) }
+    /^- from:/ { if ($4 == ENVIRON["NOTE"]) has = 1 }
+    /^- seen:/ { if ($5 == ENVIRON["NOTE"]) has = 1 }
+    END { flush() }
+  ' "$1"
+}
+
+# ledger_headings <matches>: their headings, quoted, joined by commas.
+ledger_headings() {
+  printf '%s\n' "$1" | awk -F "$LEDGER_US" '{ out = out (NR > 1 ? ", " : "") "\"" $8 "\"" } END { print out }'
+}
+
+# ledger_write <file> <template> <first line> <last line>: the file, changed, in one step. In
+# the entry from the first line to the last, a status line becomes "- status: $LEDGER_STATUS"
+# and a kind line "- kind: $LEDGER_KIND", where those are set, and $LEDGER_ADD follows the
+# last line. $LEDGER_ENTRY goes at the end, after a blank line. A file that isn't there yet
+# starts as the template has it. The new text is written beside the file, then takes its
+# place: never through a link, and never half written.
+ledger_write() {
+  local f="$1" base="$2" tmp
+  if [ -L "$f" ] || { [ -e "$f" ] && [ ! -f "$f" ]; }; then
+    die "$(tilde "$f") isn't a plain file, so it is left alone. Nothing was changed. Do: make it a plain file, then run this again"
+  fi
+  [ ! -f "$f" ] || base="$f"
+  tmp="$(mktemp "${f%/*}/.${f##*/}.XXXXXX" 2>/dev/null)" || die "$(cant_write "$f")"
+  # The file's own permissions, or a new file's.
+  if [ -f "$f" ]; then cp -p "$f" "$tmp" 2>/dev/null || true; else chmod "$(printf '%o' $((0666 & ~0$(umask))))" "$tmp" 2>/dev/null || true; fi
+  if ! LEDGER_STATUS="${LEDGER_STATUS:-}" LEDGER_KIND="${LEDGER_KIND:-}" LEDGER_ADD="${LEDGER_ADD:-}" LEDGER_ENTRY="${LEDGER_ENTRY:-}" \
+    LC_ALL=C awk -v s="$3" -v l="$4" '
+    {
+      line = $0
+      if (NR >= s && NR <= l) {
+        if (ENVIRON["LEDGER_STATUS"] != "" && line ~ /^- status:/) line = "- status: " ENVIRON["LEDGER_STATUS"]
+        if (ENVIRON["LEDGER_KIND"] != "" && line ~ /^- kind:/) line = "- kind: " ENVIRON["LEDGER_KIND"]
+      }
+      print line
+      if (NR == l && ENVIRON["LEDGER_ADD"] != "") print ENVIRON["LEDGER_ADD"]
+      prev = line
+    }
+    END { if (ENVIRON["LEDGER_ENTRY"] != "") { if (NR > 0 && prev != "") print ""; printf "%s", ENVIRON["LEDGER_ENTRY"] } }
+  ' "$base" > "$tmp" 2>/dev/null || ! mv -f "$tmp" "$f" 2>/dev/null; then
+    rm -f "$tmp"
+    die "$(cant_write "$f")"
+  fi
+}
+
+# open_left <root>: how many entries are open in the wiki, past their date or not.
+open_left() { open_ledger "$1" | grep -cE '^(open|overdue)\|' || true; }
+
+# open add <wiki> <heading> (--who WHO | --due DATE) --from raw/NOTE [--date DATE]
+open_add() {
+  # Every check below goes by byte: in a UTF-8 locale, bash 3.2's patterns don't match a
+  # string that holds a byte that isn't UTF-8, so a | or a space next to one got through.
+  local LC_ALL=C
+  local wiki="" heading="" who="" due="" from="" date="" root f note m n line last has name detail kept=""
+  local LEDGER_STATUS="" LEDGER_KIND="" LEDGER_ADD="" LEDGER_ENTRY=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --who) need_value "$@"; who="$2"; shift 2 ;;
+      --due) need_value "$@"; due="$2"; shift 2 ;;
+      --from) need_value "$@"; from="$2"; shift 2 ;;
+      --date) need_value "$@"; date="$2"; shift 2 ;;
+      -h | --help) open_usage; return 0 ;;
+      -*) die_usage "open add options: --who WHO, --due YYYY-MM-DD, --from raw/NOTE, --date YYYY-MM-DD" ;;
+      *) if [ -z "$wiki" ]; then wiki="$1"; else heading="${heading:+$heading }$1"; fi; shift ;;
+    esac
+  done
+  [ -n "$wiki" ] && [ -n "$heading" ] || die_usage "usage: $WIKI_CMD open add <wiki> \"<heading>\" (--who WHO | --due YYYY-MM-DD) --from raw/NOTE [--date YYYY-MM-DD]"
+  { [ -n "$who" ] || [ -n "$due" ]; } && { [ -z "$who" ] || [ -z "$due" ]; } || die_usage "open add takes --who WHO for a Waiting: line or --due YYYY-MM-DD for a Due: line, one of the two"
+  [ -n "$from" ] || die_usage "open add needs --from raw/NOTE: the note the line came from"
+  root="$(wiki_root "$wiki")"
+  ledger_line "the heading" "$heading"
+  heading="$(ledger_trim "$heading")"
+  [ -n "$heading" ] || die_usage "open add needs a heading: what is waiting, in a line that stands alone"
+  # open and status read the ledger split at |.
+  case "$heading" in *"|"*) die "an open entry's heading can't hold |. Nothing was changed." ;; esac
+  if [ -n "$who" ]; then
+    ledger_line --who "$who"
+    who="$(ledger_trim "$who")"
+    [ -n "$who" ] || die "--who takes who it waits on: user, a name, or a team. Nothing was changed."
+    case "$who" in *"|"*) die "--who can't hold |. Nothing was changed." ;; esac
+  else
+    ledger_day --due "$due"
+  fi
+  note="$(ledger_note "$root" "$from")"
+  date="$(ledger_date "$note" "$date")"
+  f="$root/open.md"
+  m="$(ledger_entries "$f" "$note" exact "$heading" | awk -F "$LEDGER_US" '$3 == 1 && $4 == "open"')"
+  n="$(printf '%s' "$m" | grep -c . || true)"
+  [ "$n" -le 1 ] || die "$(tilde "$f") has $n open entries called \"$heading\". Nothing was changed. Do: close or rename all but one, then run this again"
+  if [ "$n" = 1 ]; then
+    IFS="$LEDGER_US" read -r line last _ _ has ekind _ name detail <<OPENEOF
+$m
+OPENEOF
+    if [ "$has" = 1 ]; then
+      echo "unchanged: the open entry \"$name\" in $(tilde "$root") already names raw/$note."
+      return 0
+    fi
+    # The entry keeps what it says: a later line that names someone else, or another date,
+    # adds a from: line and no more, and the line says so.
+    if [ "$ekind" = waiting ]; then
+      if [ -n "$due" ]; then kept=" It stays waiting on ${detail:-nobody named}, with no due date."
+      elif [ "$who" != "$detail" ]; then kept=" It keeps its own who, ${detail:-nobody named}, not $who."; fi
+    elif [ "$ekind" = due ]; then
+      if [ -n "$who" ]; then kept=" It stays due ${detail:-with no date}, waiting on nobody named."
+      elif [ "$due" != "$detail" ]; then kept=" It keeps its own due date, ${detail:-none}, not $due."; fi
+    fi
+    LEDGER_ADD="- from: $date raw/$note"
+    ledger_write "$f" "$REPO/template/open.md" "$line" "$last"
+    echo "added: a from: line for raw/$note to the open entry \"$name\" in $(tilde "$root").$kept $(open_left "$root") open in this wiki."
+    return 0
+  fi
+  if [ -n "$who" ]; then
+    LEDGER_ENTRY="$(printf '## %s\n- kind: waiting\n- who: %s\n- status: open\n- from: %s raw/%s' "$heading" "$who" "$date" "$note")"$'\n'
+  else
+    LEDGER_ENTRY="$(printf '## %s\n- kind: due\n- due: %s\n- status: open\n- from: %s raw/%s' "$heading" "$due" "$date" "$note")"$'\n'
+  fi
+  ledger_write "$f" "$REPO/template/open.md" 0 0
+  echo "added: \"$heading\" to open.md in $(tilde "$root"), $([ -n "$who" ] && echo "waiting on $who" || echo "due $due"). $(open_left "$root") open in this wiki."
+}
+
+# open done <wiki> <text> --from raw/NOTE [--date DATE]
+open_done() {
+  local LC_ALL=C
+  local wiki="" text="" from="" date="" root f note m n line last has name done_m exact
+  local LEDGER_STATUS="" LEDGER_KIND="" LEDGER_ADD="" LEDGER_ENTRY=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --from) need_value "$@"; from="$2"; shift 2 ;;
+      --date) need_value "$@"; date="$2"; shift 2 ;;
+      -h | --help) open_usage; return 0 ;;
+      -*) die_usage "open done options: --from raw/NOTE, --date YYYY-MM-DD" ;;
+      *) if [ -z "$wiki" ]; then wiki="$1"; else text="${text:+$text }$1"; fi; shift ;;
+    esac
+  done
+  [ -n "$wiki" ] && [ -n "$text" ] || die_usage "usage: $WIKI_CMD open done <wiki> \"<text>\" --from raw/NOTE [--date YYYY-MM-DD]"
+  [ -n "$from" ] || die_usage "open done needs --from raw/NOTE: the note the Done: line came from"
+  root="$(wiki_root "$wiki")"
+  ledger_line "the text" "$text"
+  text="$(ledger_trim "$text")"
+  [ -n "$text" ] || die_usage "open done needs the text of a Done: line"
+  note="$(ledger_note "$root" "$from")"
+  date="$(ledger_date "$note" "$date")"
+  f="$root/open.md"
+  m="$(ledger_entries "$f" "$note" contains "$text")"
+  done_m="$(printf '%s\n' "$m" | awk -F "$LEDGER_US" 'NF && !($3 == 1 && $4 == "open")')"
+  m="$(printf '%s\n' "$m" | awk -F "$LEDGER_US" '$3 == 1 && $4 == "open"')"
+  n="$(printf '%s' "$m" | grep -c . || true)"
+  if [ "$n" = 0 ]; then
+    if [ -n "$done_m" ]; then
+      die "\"$text\" matches no open entry in $(tilde "$f"), only $(ledger_headings "$done_m"), which isn't open. Nothing was changed. Run: $WIKI_CMD open, for the open entries"
+    fi
+    die "\"$text\" matches no open entry in $(tilde "$f"). Nothing was changed. Run: $WIKI_CMD open, for the open entries"
+  fi
+  # A heading that is the text itself wins over longer ones that contain it, so "Release
+  # llm-relay" can be closed beside "Release llm-relay to Homebrew".
+  exact="$(printf '%s\n' "$m" | WANT="$text" awk -F "$LEDGER_US" 'NF && tolower($8) == tolower(ENVIRON["WANT"])')"
+  if [ "$n" -gt 1 ] && [ "$(printf '%s' "$exact" | grep -c . || true)" = 1 ]; then
+    m="$exact"; n=1
+  fi
+  [ "$n" = 1 ] || die "\"$text\" matches $n open entries in $(tilde "$f"): $(ledger_headings "$m"). Nothing was changed. Do: give enough of one heading to pick it"
+  # And one that is already closed: the Done: line was about it, not a longer open one.
+  if [ -z "$exact" ]; then
+    exact="$(printf '%s\n' "$done_m" | WANT="$text" awk -F "$LEDGER_US" 'NF && $4 ~ /^done / && tolower($8) == tolower(ENVIRON["WANT"])')"
+    [ -z "$exact" ] || die "\"$text\" is the heading of $(ledger_headings "$exact") in $(tilde "$f"), which is already closed, so the longer $(ledger_headings "$m") was left open. Nothing was changed. Do: give more of that heading, if it is the one to close"
+  fi
+  IFS="$LEDGER_US" read -r line last _ _ has _ _ name _ <<OPENEOF
+$m
+OPENEOF
+  LEDGER_STATUS="done $date"
+  [ "$has" = 1 ] || LEDGER_ADD="- from: $date raw/$note"
+  ledger_write "$f" "$REPO/template/open.md" "$line" "$last"
+  echo "closed: \"$name\" in $(tilde "$root"), done $date. $(open_left "$root") open in this wiki."
+}
+
+# patterns seen <wiki> <heading> --kind KIND --from raw/NOTE [--rule TEXT] [--repo REPO] [--times N] [--date DATE]
+patterns_seen() {
+  local LC_ALL=C
+  local wiki="" heading="" kind="" rule="" repo="-" from="" date="" times="" root f note m n line last has ekind name x="" tally out
+  local LEDGER_STATUS="" LEDGER_KIND="" LEDGER_ADD="" LEDGER_ENTRY=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --kind) need_value "$@"; kind="$2"; shift 2 ;;
+      --rule) need_value "$@"; rule="$2"; shift 2 ;;
+      --repo) need_value "$@"; repo="$2"; shift 2 ;;
+      --from) need_value "$@"; from="$2"; shift 2 ;;
+      --times) need_value "$@"; times="$2"; shift 2 ;;
+      --date) need_value "$@"; date="$2"; shift 2 ;;
+      -h | --help) patterns_usage; return 0 ;;
+      -*) die_usage "patterns seen options: --kind KIND, --from raw/NOTE, --rule TEXT, --repo REPO, --times N, --date YYYY-MM-DD" ;;
+      *) if [ -z "$wiki" ]; then wiki="$1"; else heading="${heading:+$heading }$1"; fi; shift ;;
+    esac
+  done
+  [ -n "$wiki" ] && [ -n "$heading" ] || die_usage "usage: $WIKI_CMD patterns seen <wiki> \"<heading>\" --kind KIND --from raw/NOTE [--rule TEXT] [--repo REPO] [--times N] [--date YYYY-MM-DD]"
+  [ -n "$kind" ] || die_usage "patterns seen needs --kind: the Feedback: line's kind"
+  [ -n "$from" ] || die_usage "patterns seen needs --from raw/NOTE: the note the Feedback: line came from"
+  case "$kind" in review | correction | lesson | ask | procedure | toil) ;; *) die "--kind is one of review, correction, lesson, ask, procedure, toil. Nothing was changed." ;; esac
+  root="$(wiki_root "$wiki")"
+  ledger_line "the heading" "$heading"
+  heading="$(ledger_trim "$heading")"
+  [ -n "$heading" ] || die_usage "patterns seen needs a heading: the entry's short name"
+  case "$heading" in *"|"*) die "a pattern's heading can't hold |. Nothing was changed." ;; esac
+  ledger_line --rule "$rule"
+  rule="$(ledger_trim "$rule")"
+  ledger_line --repo "$repo"
+  case "$repo" in '' | *[[:space:]]*) die "--repo takes one word: the repository's name, or - when it isn't known. Nothing was changed." ;; esac
+  if [ -n "$times" ]; then
+    case "$times" in '' | *[!0-9]* | 0*) die "--times takes a number, 1 or more. Nothing was changed." ;; esac
+    [ "$times" = 1 ] || x=" x$times"
+  fi
+  note="$(ledger_note "$root" "$from")"
+  date="$(ledger_date "$note" "$date")"
+  f="$root/patterns.md"
+  m="$(ledger_entries "$f" "$note" exact "$heading")"
+  [ -n "$m" ] || [ -z "$rule" ] || m="$(ledger_entries "$f" "$note" rule "$rule")"
+  n="$(printf '%s' "$m" | grep -c . || true)"
+  [ "$n" -le 1 ] || die "\"$heading\" matches $n entries in $(tilde "$f"): $(ledger_headings "$m"). Nothing was changed. Do: give each entry a heading and a rule of its own, then run this again"
+  if [ "$n" = 1 ]; then
+    IFS="$LEDGER_US" read -r line last _ _ has ekind _ name _ <<PATEOF
+$m
+PATEOF
+    if [ "$has" = 1 ]; then
+      echo "unchanged: \"$name\" in $(tilde "$root") already has a sighting from raw/$note."
+      return 0
+    fi
+    LEDGER_ADD="- seen: $date $repo raw/$note$x"
+    [ "$kind" != review ] || [ "$ekind" = review ] || LEDGER_KIND=review
+    ledger_write "$f" "$REPO/template/patterns.md" "$line" "$last"
+    tally="tallied"
+  else
+    [ -n "$rule" ] || die "$(tilde "$f") has no entry called \"$heading\". Nothing was changed. Do: give --rule with the rule in one line to add one, or the heading of an entry it has (Run: $WIKI_CMD patterns)"
+    name="$heading"
+    LEDGER_ENTRY="$(printf '## %s\n- kind: %s\n- rule: %s\n- status: watching\n- seen: %s %s raw/%s%s' "$heading" "$kind" "$rule" "$date" "$repo" "$note" "$x")"$'\n'
+    ledger_write "$f" "$REPO/template/patterns.md" 0 0
+    tally="added"
+  fi
+  out="$(patterns_tally "$root" "$name")"
+  if [ -n "$out" ]; then echo "$tally: \"$name\" in $(tilde "$root"): $out"; else echo "$tally: \"$name\" in $(tilde "$root")."; fi
+}
+
+# patterns_tally <root> <heading>: the entry's tally, as patterns lists it. A heading with a |
+# in it, written by hand, can't be found there, and gets nothing.
+patterns_tally() {
+  local flag pname pkind pstatus pn pnrep
+  while IFS='|' read -r flag pname pkind pstatus pn pnrep; do
+    [ "$pname" = "$2" ] || continue
+    printf '%s, seen %s time(s) in %s repo(s), %s.' "${pkind:-?}" "$pn" "$pnrep" "${pstatus:-watching}"
+    case "$flag" in
+      ready) printf ' Ready to propose: rules/patterns.md says how.' ;;
+      regressed) printf " It was accepted, and is seen again since: the fix isn't working. Tell the user." ;;
+    esac
+    return 0
+  done <<PATEOF
+$(patterns_ledger "$1")
+PATEOF
 }
 
 # ---- skills -----------------------------------------------------------------
@@ -11106,6 +11534,11 @@ cmd_complete() {
   local cmd="${1:-}" prev=""
   [ "$i" -gt 1 ] && prev="$(eval "printf '%s' \"\${$((i - 1)):-}\"")"
   if [ "$i" -le 1 ]; then printf '%s\n' $COMMANDS; extension_names; return 0; fi
+  # The values open add, open done and patterns seen take: a kind, or nothing to offer.
+  case "$cmd:$prev" in
+    patterns:--kind) printf 'review\ncorrection\nlesson\nask\nprocedure\ntoil\n'; return 0 ;;
+    open:--from | open:--who | open:--due | open:--date | patterns:--from | patterns:--rule | patterns:--repo | patterns:--times | patterns:--date) return 0 ;;
+  esac
   case "$prev" in
     --since) printf '%s\n' $RANGES; return 0 ;;
     --format) printf 'standup\nsummary\ndetailed\n'; return 0 ;;
@@ -11123,7 +11556,17 @@ cmd_complete() {
     sync) [ "$i" -eq 2 ] && wiki_names; echo -m ;;
     index) [ "$i" -eq 2 ] && wiki_names; echo --check ;;
     lint) wiki_names; echo --all ;;
-    open) [ "$i" -eq 2 ] && echo --data; [ "$i" -eq 3 ] && wiki_names ;;
+    open)
+      if [ "$i" -eq 2 ]; then printf -- '--data\nadd\ndone\n'
+      elif [ "$i" -eq 3 ]; then wiki_names
+      elif [ "${2:-}" = add ]; then printf -- '--who\n--due\n--from\n--date\n'
+      elif [ "${2:-}" = "done" ]; then printf -- '--from\n--date\n'; fi
+      ;;
+    patterns)
+      if [ "$i" -eq 2 ]; then echo seen
+      elif [ "$i" -eq 3 ] && [ "${2:-}" = seen ]; then wiki_names
+      elif [ "${2:-}" = seen ]; then printf -- '--kind\n--from\n--rule\n--repo\n--times\n--date\n'; fi
+      ;;
     pages) [ "$i" -eq 2 ] && wiki_names; echo --data ;;
     history)
       [ "$i" -ne 2 ] || printf 'on\noff\nshow\n'
@@ -14560,6 +15003,7 @@ case "$cmd" in
   index) cmd_index "$@"; exit 0 ;;
   lint) cmd_lint "$@"; exit 0 ;;
   open) cmd_open "$@"; exit 0 ;;
+  patterns) cmd_patterns "$@"; exit 0 ;;
   pages) cmd_pages "$@"; exit 0 ;;
   workflows) cmd_workflows "$@"; exit 0 ;;
   list) cmd_list "$@"; exit 0 ;;
@@ -14659,7 +15103,6 @@ case "$cmd" in
   unlock) need_target; cmd_unlock "$(resolve "$target")" ;;
   # The line is for pasting into another agent's instruction file: a card at a terminal, the line alone otherwise.
   claude) if [ "$want_print" = 1 ]; then ui_card "$(claude_line)"; else cmd_claude; fi ;;
-  patterns) cmd_patterns ;;
   link) cmd_link "$( [ "$want_yes" = 1 ] && echo --yes)" ;;
   stats) cmd_stats "${target:-30d}" ;;
   skills) cmd_skills "${target:-list}" ;;
