@@ -26,6 +26,8 @@ type Options struct {
 	Args  []string         // the command's own arguments
 	Stdin io.Reader        // the note, when no --file or --copy names one
 	Now   func() time.Time // the clock; nil means time.Now
+	// Warn, when it is set, is given each warning about the saved note, as Lint says them.
+	Warn func(string)
 }
 
 // Refused is an answer, not a failure: what the Bash would die with, after "error: ".
@@ -188,8 +190,78 @@ func Run(o Options) (string, error) {
 		if place(note, perm) != nil {
 			return "", refuse(o.cantWrite(dest))
 		}
+		// A copy is a document as it came, not a note: its lines are not looked at.
+		if o.Warn != nil {
+			for _, w := range Lint(note, name) {
+				o.Warn(w)
+			}
+		}
 	}
 	return "captured: raw/" + name + " in " + o.tilde(root), nil
+}
+
+// Lint is a warning for each Waiting:, Due: or Feedback: line of a saved note that compile
+// can't read, with its line number in the note. It says what capture_lint in wiki.sh says,
+// byte for byte: change both together.
+func Lint(note []byte, name string) []string {
+	var out []string
+	say := func(n int, what, fix string) {
+		out = append(out, "warning: line "+strconv.Itoa(n)+" of raw/"+name+" is "+what+", so compile can't read it. Do: edit it to read "+fix)
+	}
+	trim := func(s string) string { return strings.Trim(s, " \t") }
+	// sides splits at the first " | ", and says whether both sides have something.
+	sides := func(s string) (string, bool) {
+		left, right, found := strings.Cut(s, " | ")
+		return trim(left), found && trim(left) != "" && trim(right) != ""
+	}
+	// awk reads a last line with no line break too, and nothing after a final one.
+	text := strings.TrimSuffix(string(note), "\n")
+	for i, line := range strings.Split(text, "\n") {
+		n := i + 1
+		line = strings.TrimSuffix(line, "\r")
+		switch {
+		case strings.HasPrefix(line, "Waiting:"):
+			if _, ok := sides(line[len("Waiting:"):]); !ok {
+				say(n, `a Waiting: line with no " | " between who and what`, "Waiting: <who> | <what>")
+			}
+		case strings.HasPrefix(line, "Due:"):
+			date, ok := sides(line[len("Due:"):])
+			if !ok {
+				say(n, `a Due: line with no " | " between the date and what`, "Due: <YYYY-MM-DD> | <what>")
+			} else if !isDate(date) {
+				say(n, "a Due: line whose date is not YYYY-MM-DD", "Due: <YYYY-MM-DD> | <what>")
+			}
+		case strings.HasPrefix(line, "Feedback:"):
+			good := false
+			if kind, rest, found := strings.Cut(line[len("Feedback:"):], " | "); found {
+				if scope, rule, found := strings.Cut(rest, " | "); found {
+					scope = trim(scope)
+					switch trim(kind) {
+					case "review", "correction", "lesson", "ask", "procedure", "toil":
+						good = scope != "" && !strings.ContainsAny(scope, " \t") && trim(rule) != ""
+					}
+				}
+			}
+			if !good {
+				say(n, "a Feedback: line not in the form the handbook gives",
+					"Feedback: <kind> | <scope> | <rule>, where kind is review, correction, lesson, ask, procedure or toil, and scope is here, everywhere or a wiki's name")
+			}
+		}
+	}
+	return out
+}
+
+// isDate is YYYY-MM-DD in digits, as the Bash's pattern has it: the date itself isn't checked.
+func isDate(s string) bool {
+	if len(s) != 10 || s[4] != '-' || s[7] != '-' {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if i != 4 && i != 7 && (s[i] < '0' || s[i] > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // Slug is the name a note gets: ASCII letters lowered, and every run of other bytes one

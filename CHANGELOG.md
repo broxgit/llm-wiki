@@ -4,6 +4,15 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v44 (2026-11-20)
+
+Compile writes `open.md` and `patterns.md` with commands, not by hand.
+
+- `rules/compile.md`, `rules/open.md` and `rules/patterns.md` tell the agent to use `wiki open add`, `wiki open done` and `wiki patterns seen`. Each writes the entry in the ledger's own form, in one step, and refuses text that would break it. `open done` changes nothing when its text matches no open entry or more than one, and says which.
+- `wiki capture` warns when a note's `Waiting:`, `Due:` or `Feedback:` line isn't in the form the handbook gives. The note is still saved. `rules/open.md` and `rules/patterns.md` say to fix it before it is compiled.
+- The steps by hand stay, for an agent without the script.
+- Do: run `wiki upgrade --all`.
+
 ## v43 (2026-11-19)
 
 A reminder stops the command it names, not a command that mentions it.

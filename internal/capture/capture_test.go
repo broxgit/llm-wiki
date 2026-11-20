@@ -171,3 +171,72 @@ func TestRunLeavesALineBreakToTheBash(t *testing.T) {
 		t.Error("it wrote before it gave up")
 	}
 }
+
+func TestLint(t *testing.T) {
+	head := func(n int, kind string) string {
+		return "warning: line " + strconv.Itoa(n) + " of raw/n.md is " + kind + ", so compile can't read it. Do: edit it to read "
+	}
+	waiting := `a Waiting: line with no " | " between who and what`
+	dueSep := `a Due: line with no " | " between the date and what`
+	dueDate := "a Due: line whose date is not YYYY-MM-DD"
+	feedback := "a Feedback: line not in the form the handbook gives"
+	fbFix := "Feedback: <kind> | <scope> | <rule>, where kind is review, correction, lesson, ask, procedure or toil, and scope is here, everywhere or a wiki's name"
+	for _, c := range []struct {
+		line string
+		want string // the start of the warning, or "" for none
+	}{
+		{"Waiting: Dana | Reply to the vendor", ""},
+		{"Waiting:user|x", head(1, waiting)},
+		{"Waiting: user check it", head(1, waiting)},
+		{"Waiting:  | Reply", head(1, waiting)},
+		{"Waiting: user | \t", head(1, waiting)},
+		{" Waiting: indented", ""},
+		{"waiting: lower case", ""},
+		{"Due: 2026-12-01 | Read", ""},
+		{"Due: 2026-12-01 | Read\r", ""},
+		{"Due: 2026-12-01 Read", head(1, dueSep)},
+		{"Due: next week | Read", head(1, dueDate)},
+		{"Due: 2026-1-2 | Read", head(1, dueDate)},
+		{"Feedback: review | here | Wrap errors.", ""},
+		{"Feedback: toil | go-common | a | b", ""},
+		{"Feedback: nit | here | x", head(1, feedback)},
+		{"Feedback: review | two words | x", head(1, feedback)},
+		{"Feedback: review | here |", head(1, feedback)},
+		{"Feedback: lesson here", head(1, feedback)},
+	} {
+		got := Lint([]byte(c.line+"\n"), "n.md")
+		switch {
+		case c.want == "" && len(got) != 0:
+			t.Errorf("%q: got %q, want no warning", c.line, got)
+		case c.want != "" && (len(got) != 1 || !strings.HasPrefix(got[0], c.want)):
+			t.Errorf("%q: got %q, want one that starts %q", c.line, got, c.want)
+		}
+	}
+	if got := Lint([]byte("Feedback: x"), "n.md"); len(got) != 1 || got[0] != head(1, feedback)+fbFix {
+		t.Errorf("a last line with no line break: got %q", got)
+	}
+	got := Lint([]byte("Captured: 2026-01-01\n\nWaiting: a\nDue: b\n"), "n.md")
+	if len(got) != 2 || !strings.HasPrefix(got[0], head(3, waiting)) || !strings.HasPrefix(got[1], head(4, dueSep)) {
+		t.Errorf("line numbers: got %q", got)
+	}
+}
+
+func TestRunWarnsAboutANoteNotACopy(t *testing.T) {
+	o, root := wiki(t)
+	var warned []string
+	o.Warn = func(w string) { warned = append(warned, w) }
+	o.Args, o.Stdin = []string{"demo", "note"}, strings.NewReader("Waiting: nobody\n")
+	line, err := Run(o)
+	if err != nil || len(warned) != 1 || !strings.HasPrefix(warned[0], "warning: line 3 of raw/2026-01-03-060405-note.md is a Waiting: line") {
+		t.Errorf("a note: %q, %v, warned %q", line, err, warned)
+	}
+	copied := filepath.Join(root, "copy.md")
+	if err := os.WriteFile(copied, []byte("Waiting: nobody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	warned = nil
+	o.Args, o.Stdin = []string{"demo", "--copy", copied}, nil
+	if _, err := Run(o); err != nil || len(warned) != 0 {
+		t.Errorf("a copy: %v, warned %q", err, warned)
+	}
+}

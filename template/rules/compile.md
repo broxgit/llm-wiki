@@ -37,9 +37,9 @@ For each source:
 2. Read it once, fully. Skip the read if this session wrote it.
 3. Update every other wiki page the source affects. Create a new page only if the topic will be referenced again. Before creating one, look for the topic in the other wikis with `wiki.sh find <word>`. If another wiki has it, add to that page or cite it, instead of starting a second copy. If the lesson holds beyond this project, as `AGENTS.md` describes under Ownership, write it in the shared wiki and cite it from here. When a page gains a claim that matters, revise its summary so the index shows it.
 4. Where the source disagrees with an existing page, or you doubt a claim, read `rules/conflicts.md` and follow it. Never overwrite silently.
-5. If it has `Feedback:` lines, add each to `patterns.md` as `rules/patterns.md` says.
+5. If it has `Feedback:` lines, add each to `patterns.md` as `rules/patterns.md` says, with `wiki.sh patterns seen` when you have the script.
 6. If it has `Verified:` lines, set each named page's `verified` to the note's `Captured:` date, and its `commit` when the line gives one. Leave a page whose `verified` is already later. A page in another wiki is stamped when that wiki compiles. A note with only such lines needs no topic page, and still gets its `log.md` entry.
-7. If it has `Waiting:`, `Due:` or `Done:` lines, read `rules/open.md` and update `open.md` as it says.
+7. If it has `Waiting:`, `Due:` or `Done:` lines, read `rules/open.md` and update `open.md` as it says, with `wiki.sh open add` and `wiki.sh open done` when you have the script.
 8. If it has `Uses:` or `Unused:` lines, read `rules/dependencies.md` and update `wiki/dependencies.md` as it says, here and in the other repository's wiki.
 
 After the last source, update `index.md` once (`wiki.sh index <wiki>`) and append one entry per source to `log.md`, naming the source in it. That entry is what marks the source compiled. Also stamp any page you confirmed against code during this compile. Then report in one line: pages created, pages updated, corrections, conflicts.

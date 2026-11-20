@@ -51,6 +51,8 @@ Each wiki keeps `patterns.md` at its root. Updating it is compile work, done und
 2. If there isn't, add an entry with `status: watching`.
 3. If the sighting is a review comment, set the entry's kind to `review`, whatever it was. Review comments are the costliest kind.
 
+With the script, `wiki.sh patterns seen <wiki> "<heading>" --kind <kind> --repo <repository> --from raw/<note>` does all three, and prints the entry's tally, so don't edit the file by hand. For an existing entry, give its heading. For a new one, add `--rule "<the rule>"`. `--times N` writes the `xN` below. `wiki.sh capture` warns when a `Feedback:` line isn't in the form above: fix the note before it is compiled.
+
 A feedback-only note needs no topic page. The ledger is its record. The note still gets its `log.md` entry, which marks it compiled.
 
 ```

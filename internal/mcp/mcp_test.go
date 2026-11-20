@@ -621,6 +621,11 @@ func TestWrappedTools(t *testing.T) {
 	if len(notes) != 1 || read(t, notes[0]) != "Captured: "+time.Now().UTC().Format("2006-01-02")+"\n\n"+note {
 		t.Errorf("wiki_capture left %v", notes)
 	}
+	// A line compile can't read is warned about after the line, as stderr follows stdout in must.
+	got, isErr = call(t, s, "wiki_capture", m{"wiki": "demo", "slug": "wt", "note": "Waiting: nobody\n"})
+	if lines := strings.Split(got, "\n"); isErr || len(lines) != 3 || !strings.HasPrefix(lines[1], "warning: line 3 of raw/") || !strings.HasPrefix(lines[2], "Saved") {
+		t.Errorf("wiki_capture with a line compile can't read = %q, error %v", got, isErr)
+	}
 	for _, c := range []struct {
 		args m
 		want string

@@ -625,10 +625,13 @@ func (s *Server) wikiCapture(a args) (string, error) {
 
 // capture saves the note as wiki.sh capture does, and answers as must would have:
 // the line it prints, or its refusal as the tool's error. Where the port isn't sure,
-// wiki.sh saves it.
+// wiki.sh saves it. Its warnings about the note follow the line, as must has stderr
+// after stdout.
 func (s *Server) capture(folder, wiki, slug, note string) (string, error) {
+	var warnings string
 	line, err := capture.Run(capture.Options{
 		Wikis: folder, Home: s.Home, Pwd: tempDir(), Args: []string{wiki, slug}, Stdin: strings.NewReader(note),
+		Warn: func(w string) { warnings += "\n" + w },
 	})
 	var refused *capture.Refused
 	if errors.As(err, &refused) {
@@ -637,7 +640,7 @@ func (s *Server) capture(folder, wiki, slug, note string) (string, error) {
 	if err != nil {
 		return s.must(folder, note, "capture", wiki, slug)
 	}
-	return line, nil
+	return line + warnings, nil
 }
 
 // wikiNew is server.py's wiki_new: a wiki by name, inside a collection's folder and nowhere else.
