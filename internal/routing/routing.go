@@ -210,7 +210,28 @@ const (
 	Missing            // one of the two files isn't there
 	NotHandbook        // both are, and AGENTS.md was read and has no version line
 	CantTell           // both are, and AGENTS.md can't be read: counted as a wiki
+	Linked             // its AGENTS.md, index.md, raw or wiki is a link
 )
+
+// WikiLink is wiki.sh's wiki_link: the first of a wiki's AGENTS.md, index.md, raw and wiki
+// that is a link, or "". Git carries links, and one pushed to a shared collection points
+// wherever its text says on the machine that pulls it, so a note in raw/ could be any file
+// there (code review M24). A part that can't be looked at is an error.
+func WikiLink(dir string) (string, error) {
+	for _, p := range []string{"AGENTS.md", "index.md", "raw", "wiki"} {
+		st, err := os.Lstat(dir + "/" + p)
+		if notThere(err) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		if st.Mode()&fs.ModeSymlink != 0 {
+			return p, nil
+		}
+	}
+	return "", nil
+}
 
 // WikiState is wiki.sh's is_wiki, with its three answers for a folder that has both files.
 // A wiki is a folder whose AGENTS.md is the handbook: two file names alone marked one
@@ -221,6 +242,9 @@ const (
 // The others are is_wiki in wiki.sh, mcp/server.py, hooks/reminders.py,
 // hooks/session-start.sh and extensions/wiki-confluence: change them together.
 func WikiState(dir string) (int, error) {
+	if link, err := WikiLink(dir); err != nil || link != "" {
+		return Linked, err
+	}
 	if ok, err := IsFile(dir + "/AGENTS.md"); err != nil || !ok {
 		return Missing, err
 	}

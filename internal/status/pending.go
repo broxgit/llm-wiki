@@ -36,7 +36,13 @@ func PendingNames(dir string) ([]string, error) {
 		if strings.HasPrefix(name, ".") {
 			continue
 		}
-		// [ -f ] follows a link.
+		// [ -f ] && [ ! -L ]: a link is no note, its text is read wherever it points
+		// (code review M24).
+		if link, err := isLink(dir + "/raw/" + name); err != nil {
+			return nil, err
+		} else if link {
+			continue
+		}
 		if ok, err := routing.IsFile(dir + "/raw/" + name); err != nil {
 			return nil, err
 		} else if !ok {
@@ -52,6 +58,18 @@ func PendingNames(dir string) ([]string, error) {
 		}
 	}
 	return names, nil
+}
+
+// isLink is the shell's [ -L path ], with an error for a path that can't be looked at.
+func isLink(path string) (bool, error) {
+	st, err := os.Lstat(path)
+	if routing.NotThere(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return st.Mode()&os.ModeSymlink != 0, nil
 }
 
 // compiled is compiled_stems: the names of the notes already compiled.

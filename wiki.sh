@@ -178,11 +178,75 @@ EOF2
 # the folder they're given, and keep the paths derived from it in step.
 set_collection() {
   WIKIS_DIR="$1"
+  links_off_all "$WIKIS_DIR"
   JOURNAL_DIR="$WIKIS_DIR/journal"
   JOURNAL_CFG="$JOURNAL_DIR/config"
   STATS_FILE="$WIKIS_DIR/stats.csv"
   DELEG_FILE="$WIKIS_DIR/delegation.md"
   DELEG_LOG="$WIKIS_DIR/delegation-log.csv"
+}
+
+# links_off <folder>: where the folder is the top of a git repository of its own, have git
+# write a link it tracks as a plain file that holds the link's text, and turn the links
+# already here into such files. Git carries links, and one pushed to a shared collection
+# points wherever its text says on the machine that pulls it: a note in raw/ could be any
+# file there (code review M24). A folder inside a larger repository is left alone, as
+# collection_repo has it. It runs wherever a collection is chosen or pulled, before anything
+# is read, so it says nothing: the session hook and the MCP servers read what follows it.
+# Where the setting can't be written, as in an agent's sandbox, it gives up quietly, and
+# is_wiki and the lists of notes and pages still pass over links. Only a link git tracks,
+# outside a merge, is turned into a file: from the index, so the file holds exactly what
+# git recorded, and git status stays clean.
+links_off() {
+  local top="$1" e p dir tmp q t here
+  # The top of a repository of its own, as collection_repo has it: a stray .git, a file or an
+  # empty folder, inside a larger repository would have git set this in that one. The test
+  # for .git first, so a folder with none starts no git.
+  [ -n "$top" ] && { [ -e "$top/.git" ] || [ -L "$top/.git" ]; } || return 0
+  t="$(git -C "$top" rev-parse --show-toplevel 2>/dev/null)" || return 0
+  here="$(cd "$top" 2>/dev/null && pwd -P)" || return 0
+  [ -n "$t" ] && [ "$t" = "$here" ] || return 0
+  # Set in the repository's own config only. A person who set it to true there has chosen
+  # links on disk, and it is left so: NEWS.md says how. A clone has no setting of its own.
+  case "$(git -C "$top" config --local --get core.symlinks 2>/dev/null || true)" in
+    false) ;;
+    true) return 0 ;;
+    *) git -C "$top" config core.symlinks false >/dev/null 2>&1 || return 0 ;;
+  esac
+  { git -C "$top" ls-files -s -z 2>/dev/null || true; } | while IFS= read -r -d '' e; do
+    # "<mode> <object> <stage><TAB><path>": a link, and not in the middle of a merge.
+    case "$e" in "120000 "*" 0"$'\t'*) ;; *) continue ;; esac
+    p="${e#*$'\t'}"
+    [ -L "$top/$p" ] || continue
+    case "$p" in */*) dir="$top/${p%/*}" ;; *) dir="$top" ;; esac
+    # Never through a folder that is a link: an untracked one, or a tracked link that a
+    # disk which ignores case takes for this path's folder (demo/RAW before demo/raw), would
+    # have the file written outside the collection. Each folder between the top and the file.
+    q="${p%/*}"; [ "$q" != "$p" ] || q=""
+    while [ -n "$q" ]; do
+      [ ! -L "$top/$q" ] || continue 2
+      case "$q" in */*) q="${q%/*}" ;; *) q="" ;; esac
+    done
+    # The file is written beside the link, then put in its place with one rename, so the
+    # path is never missing: a sync would take a missing file for a removed one. -T (GNU)
+    # or -h (BSD), so a link to a folder is replaced, not moved into.
+    tmp="$(mktemp "$dir/.llm-wiki-link.XXXXXX" 2>/dev/null)" || continue
+    if git -C "$top" cat-file blob ":0:$p" > "$tmp" 2>/dev/null && chmod 644 "$tmp" 2>/dev/null \
+      && { mv -f -T -- "$tmp" "$top/$p" 2>/dev/null || mv -f -h -- "$tmp" "$top/$p" 2>/dev/null; }; then :; else rm -f -- "$tmp"; fi
+  done || true
+  return 0
+}
+
+# links_off_all <collection>: links_off for the collection, and for each wiki in it that is a
+# repository of its own (made with new --git), which every command of the collection reads.
+links_off_all() {
+  local d
+  links_off "$1"
+  for d in "$1"/*/; do
+    d="${d%/}"
+    [ ! -L "$d" ] && { [ -e "$d/.git" ] || [ -L "$d/.git" ]; } || continue
+    links_off "$d"
+  done
 }
 
 # --collection NAME, anywhere on the command line, picks a collection by name.
@@ -408,7 +472,7 @@ need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 # Raise GO_PROTOCOL, with the constant in cmd/llm-wiki/main.go, whenever a ported
 # command's arguments or output change. scripts/helper.sh builds releases and writes
 # helper.lock.
-GO_PROTOCOL=24
+GO_PROTOCOL=25
 HELPER_LOCK="$REPO/helper.lock"
 HELPER_DIR="${LLM_WIKI_HELPER_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/llm-wiki/helper}"
 
@@ -683,15 +747,32 @@ version_of() { handbook_version "$1"; printf '%s' "$HB"; }
 # the wikis to reading, and calling it "not the handbook" would send a person to repair a
 # wiki that is fine. hooks/session-start.sh, mcp/server.py, hooks/reminders.py,
 # extensions/wiki-confluence and internal/routing hold the same test: change them together.
+# A folder whose AGENTS.md, index.md, raw or wiki is a link is not a wiki either: git
+# carries links, and one pushed to a shared collection points wherever its text says on
+# the machine that pulls it, so a note in raw/ could be any file there (code review M24).
 is_wiki() {
+  [ ! -L "$1/AGENTS.md" ] && [ ! -L "$1/index.md" ] && [ ! -L "$1/raw" ] && [ ! -L "$1/wiki" ] || return 1
   [ -f "$1/index.md" ] && [ -f "$1/AGENTS.md" ] || return 1
   handbook_version "$1/AGENTS.md"
   [ -n "$HB" ] || [ "$HB_READ" = no ]
 }
 
+# wiki_link <folder>: the first of a wiki's AGENTS.md, index.md, raw and wiki that is a
+# link, which is why is_wiki refused it. Prints nothing when none is.
+wiki_link() {
+  local p
+  for p in AGENTS.md index.md raw wiki; do
+    if [ -L "$1/$p" ]; then printf '%s' "$p"; return 0; fi
+  done
+  return 1
+}
+
 # not_wiki <folder>: the words for a folder is_wiki refused, with what to do.
 not_wiki() {
-  if [ -f "$1/index.md" ] && [ -f "$1/AGENTS.md" ]; then
+  local l
+  if l="$(wiki_link "$1")"; then
+    printf '%s is not a wiki: its %s is a link, so llm-wiki does not use it. Nothing was changed. Run: %s status' "$(tilde "$1")" "$l" "$WIKI_CMD"
+  elif [ -f "$1/index.md" ] && [ -f "$1/AGENTS.md" ]; then
     printf '%s is not a wiki: its AGENTS.md is not the llm-wiki handbook. Nothing was changed. Run: %s status' "$(tilde "$1")" "$WIKI_CMD"
   else
     printf '%s is not a wiki. Run: %s status' "$(tilde "$1")" "$WIKI_CMD"
@@ -1678,14 +1759,17 @@ cmd_list() {
 }
 
 cmd_start() {
-  local arg="${1:-$PWD}" repo="" top w="" wiki="" note="" out sshc slock track rstart rleft tv v line sname spath d n hinted="" extras="" more="" tkey tfind tline thits
-  if [ -d "$arg" ]; then
+  local arg="${1:-$PWD}" repo="" top w="" wiki="" note="" out sshc slock track rstart rleft tv v line sname spath d n hinted="" extras="" more="" tkey tfind tline thits isdir=0
+  # The argument is a folder when one is there by that name, unless start --name said it is
+  # a repository's name (code review L34).
+  if [ -z "${START_NAME:-}" ] && [ -d "$arg" ]; then isdir=1; fi
+  if [ "$isdir" = 1 ]; then
     if top="$(git -C "$arg" rev-parse --show-toplevel 2>/dev/null)"; then repo="$(repo_name "$top")"; fi
   else
     repo="$arg"
   fi
   # A folder named on the command line decides the collection, as $PWD would.
-  if [ -d "$arg" ] && [ -z "${pick:-}" ] && [ -z "${LLM_WIKI_FIXED_DIR:-}" ]; then set_collection "$(collection_for "$arg")"; fi
+  if [ "$isdir" = 1 ] && [ -z "${pick:-}" ] && [ -z "${LLM_WIKI_FIXED_DIR:-}" ]; then set_collection "$(collection_for "$arg")"; fi
   [ -d "$WIKIS_DIR" ] || die "no wikis at $(tilde "$WIKIS_DIR"). Run: $WIKI_CMD setup"
   helper_auto >/dev/null 2>&1 || true
   completion_refresh
@@ -1696,7 +1780,7 @@ cmd_start() {
   ! history_stray_git || echo "git: $(history_stray_text). Tell the user."
   if [ -n "$repo" ]; then w="$(which_wiki "$repo")"; [ -z "$w" ] || wiki="$WIKIS_DIR/$w"; fi
   # Not in a repository: the wikis of the clones in this folder, when it holds any.
-  if [ -z "$repo" ] && [ -d "$arg" ] && placeable "$arg"; then
+  if [ -z "$repo" ] && [ "$isdir" = 1 ] && placeable "$arg"; then
     place_all "$arg"
     note="$PLACE_NOTE"
     # A pattern of theirs says this folder has no wiki.
@@ -1773,7 +1857,7 @@ cmd_start() {
   echo "Read $(tilde "$wiki")/AGENTS.md, the handbook, if you haven't this session. Below is what its session start says to read next."
   # A folder named for a ticket: the pages that mention it, in whichever wiki they are.
   # After the pull, so a page another machine wrote is found.
-  if [ -d "$arg" ]; then
+  if [ "$isdir" = 1 ]; then
     tfind="$(ticket_find "$arg")"
     tkey="${tfind% *}"
     # With the Jira extension set up, the ticket and how to see where it stands.
@@ -1868,7 +1952,7 @@ EOF2
   fi
   # Lines extensions left for this repository, such as a CI failure on this branch. Last,
   # after everything else, and handed over once.
-  if [ -d "$arg" ] && [ -d "$NOTICE_DIR" ]; then
+  if [ "$isdir" = 1 ] && [ -d "$NOTICE_DIR" ]; then
     d="$( (notice_take "$arg") 2>/dev/null || true)"
     if [ -n "$d" ]; then
       echo
@@ -1877,7 +1961,7 @@ EOF2
     fi
   fi
   # An extension that fits this repository and isn't used in it, to offer.
-  if [ -d "$arg" ]; then
+  if [ "$isdir" = 1 ]; then
     d="$( (offer_lines "$arg") 2>/dev/null || true)"
     if [ -n "$d" ]; then
       echo
@@ -2395,7 +2479,9 @@ capture_note() {
   # Check every write. A failed redirect on a { } group didn't stop the script,
   # and a sandboxed agent (Antigravity, 2026-10-29) was told "captured" for a note
   # that was never written. So the note is built in a temp file and copied in one
-  # checked step.
+  # checked step. A raw that is a file, not a folder, is said as such: mkdir's failure
+  # read as a sandbox.
+  if [ -e "$root/raw" ] && [ ! -d "$root/raw" ]; then die "raw in ${root##*/} is a file, not a folder, so no note was saved. Do: move that file away, then capture again"; fi
   mkdir -p "$root/raw" 2>/dev/null || die "$(cant_write "$root/raw")"
   # A note on stdin or in a file is read, and refused when empty, before anything is made in raw/.
   if [ -z "$copy" ]; then
@@ -3563,6 +3649,8 @@ PY
 collection_pull() {
   local repo="$1" limit="${2:-}" f tmp rc=0 merged=0
   PULL=ok PULL_FILES="" PULL_ERR="" PULL_SETTLED="" PULL_ASIDE=""
+  # A link that comes in arrives as a plain file (code review M24).
+  links_off "$repo"
   f="$(sync_conflict_file "$repo" || true)"
   if sync_merging "$repo"; then
     PULL=merging; PULL_FILES="$(sync_unmerged "$repo")"
@@ -4143,6 +4231,118 @@ sync_scan_gate() {
   echo "scanned: the commits that were made with no scan. Nothing like a secret in them."
 }
 
+# links_take_out <repo> <name> <path>...: the step before a commit, once the paths are
+# staged. With core.symlinks off (links_off), a link git recorded is a plain file here, and
+# git goes on recording it as a link: an edit to it is committed as a link to the new text.
+# Two commits change that. The first, "<name>: take out N link(s)", is made from a
+# temporary index: HEAD's, without those entries. The files stay where they are, nothing is
+# moved, and the commit goes through the pre-commit hook like any other. Then the entries
+# leave the real index and the files are staged again, with -f in case an ignore rule now
+# matches one, as the plain files they are, for the caller's own commit. After a push no
+# clone gets those links again, whatever its settings. One commit could do it, by setting
+# the entry's mode in the index: two is what was decided, and each says what it did.
+#
+# Sets LINKS_DONE to the first commit's message and LINKS_COMMIT to it when it made one; a
+# caller whose own commit then fails calls links_undo. Fails, having committed nothing, with
+# LINKS_WHY: hand, a path (LINKS_PATH) that is a link on disk or one git is given as a link
+# that HEAD doesn't hold as one, as a link made by hand and added is, or as everything is in
+# a first commit; case, a path that another entry matches but for case, which this disk may
+# hold as one file; gitdir, the git folder can't be written; refused, the commit was
+# refused, with git's words in LINKS_ERR; restage, the files couldn't be staged again, and
+# the first commit was undone. links_why_text says each. Paths are literal, from the top.
+links_take_out() {
+  local repo="$1" name="$2" e p gd lst idx err dups lc nl=$'\n'
+  shift 2
+  LINKS_WHY="" LINKS_PATH="" LINKS_ERR="" LINKS_DONE="" LINKS_COMMIT="" LINKS_REPO="$repo"
+  LINKS_PATHS=()
+  # Most commits hold no link: one look, and no file is written. Read whole, not through
+  # grep -q, whose early exit would fail the pipe under pipefail.
+  case "$nl$(git -C "$repo" --literal-pathspecs ls-files -s -- "$@" 2>/dev/null || true)" in *"${nl}120000 "*) ;; *) return 0 ;; esac
+  gd="$(git -C "$repo" rev-parse --absolute-git-dir 2>/dev/null)" || { LINKS_WHY=gitdir; return 1; }
+  lst="$(mktemp "$gd/llm-wiki-links.XXXXXX" 2>/dev/null)" || { LINKS_WHY=gitdir; LINKS_PATH="$gd"; return 1; }
+  git -C "$repo" --literal-pathspecs ls-files -s -z -- "$@" > "$lst" 2>/dev/null || true
+  # Two entries that differ only in case are one file on a disk that ignores case: which of
+  # them the file is can't be told, and git may have staged the file under either. Asked
+  # first, so that isn't taken for a link made by hand.
+  dups="$TAB$(git -C "$repo" ls-files -z 2>/dev/null | tr '\0' '\n' | LC_ALL=C tr 'A-Z' 'a-z' | LC_ALL=C sort | uniq -d | tr '\n' "$TAB" || true)"
+  while IFS= read -r -d '' e; do
+    # "<mode> <object> <stage><TAB><path>": a link, and not in the middle of a merge.
+    case "$e" in "120000 "*" 0"$'\t'*) ;; *) continue ;; esac
+    p="${e#*$'\t'}"
+    lc="$(printf '%s' "$p" | LC_ALL=C tr 'A-Z' 'a-z')"
+    case "$dups" in *"$TAB$lc$TAB"*) LINKS_WHY=case; LINKS_PATH="$p"; rm -f "$lst"; return 1 ;; esac
+    # By the index and HEAD, not by the disk alone: links_off has already turned a link
+    # that was added by hand into a plain file. Only a link HEAD holds is repaired.
+    if [ -L "$repo/$p" ]; then e=hand; else
+      case "$(git -C "$repo" --literal-pathspecs ls-tree HEAD -- "$p" 2>/dev/null || true)" in "120000 "*) e="" ;; *) e=hand ;; esac
+    fi
+    if [ -n "$e" ]; then
+      LINKS_WHY=hand; LINKS_PATH="$p"; rm -f "$lst"; return 1
+    fi
+    LINKS_PATHS+=("$p")
+  done < "$lst"
+  rm -f "$lst"
+  [ "${#LINKS_PATHS[@]}" -gt 0 ] || return 0
+  idx="$gd/llm-wiki-index.$$"
+  rm -f "$idx" "$idx.lock"
+  if ! GIT_INDEX_FILE="$idx" git -C "$repo" read-tree HEAD >/dev/null 2>&1 \
+    || ! GIT_INDEX_FILE="$idx" git -C "$repo" --literal-pathspecs rm -q --cached -- "${LINKS_PATHS[@]}" >/dev/null 2>&1; then
+    rm -f "$idx" "$idx.lock"; LINKS_WHY=gitdir; LINKS_PATH="$gd"; return 1
+  fi
+  if ! err="$(GIT_INDEX_FILE="$idx" git -C "$repo" commit -q -m "$name: take out ${#LINKS_PATHS[@]} link(s)" 2>&1)"; then
+    rm -f "$idx" "$idx.lock"; LINKS_WHY=refused; LINKS_ERR="$err"; return 1
+  fi
+  rm -f "$idx" "$idx.lock"
+  LINKS_COMMIT="$(git -C "$repo" rev-parse -q --verify HEAD 2>/dev/null || true)"
+  LINKS_DONE="$name: take out ${#LINKS_PATHS[@]} link(s)"
+  case "$err" in *"this commit wasn't scanned for secrets"*) : > "$(sync_unscanned "$repo")" 2>/dev/null || true ;; esac
+  # The real index: the entries go, and the files come back in as plain files.
+  if ! git -C "$repo" --literal-pathspecs rm -q --cached -- "${LINKS_PATHS[@]}" >/dev/null 2>&1 \
+    || ! git -C "$repo" --literal-pathspecs add -f -- "${LINKS_PATHS[@]}" >/dev/null 2>&1; then
+    links_undo "$repo"
+    LINKS_WHY=restage
+    return 1
+  fi
+}
+
+# links_undo <repo>: take back the commit links_take_out made, when HEAD is still that
+# commit and no remote has it: a removal left on HEAD would go out with the next sync of any
+# wiki. Its entries go back into the index as HEAD holds them again, so the caller can
+# unstage the rest. Does nothing otherwise.
+links_undo() {
+  local repo="$1"
+  [ -n "${LINKS_COMMIT:-}" ] && [ "${LINKS_REPO:-}" = "$repo" ] || return 0
+  [ "$(git -C "$repo" rev-parse -q --verify HEAD 2>/dev/null || true)" = "$LINKS_COMMIT" ] || return 0
+  [ -z "$(git -C "$repo" branch -r --contains "$LINKS_COMMIT" 2>/dev/null || true)" ] || return 0
+  git -C "$repo" reset -q --soft 'HEAD^' >/dev/null 2>&1 || return 0
+  git -C "$repo" --literal-pathspecs reset -q -- ${LINKS_PATHS[@]+"${LINKS_PATHS[@]}"} >/dev/null 2>&1 || true
+  LINKS_COMMIT="" LINKS_DONE=""
+}
+
+# links_why_text <wiki name>: the words for a failed links_take_out, with what to do.
+links_why_text() {
+  case "${LINKS_WHY:-}" in
+    hand) printf "%s is a link. A wiki's files are files: a link points somewhere else on every other machine. Nothing was committed. Do: put a copy of the file there in place of the link (for a note: %s capture %s <slug> --copy <file>), then sync again" "$LINKS_PATH" "$WIKI_CMD" "$1" ;;
+    case) printf "%s and another file git holds differ only in case, and git records it as a link. A disk that ignores case holds the two as one file, so nothing was committed. Do: rename or remove one of them, then sync again" "$LINKS_PATH" ;;
+    gitdir) printf "%s can't be written, so the files git records as links can't be turned into plain files. Nothing was committed. Do: run %s sync outside the sandbox, or allow writes there" "$(tilde "${LINKS_PATH:-the git folder}")" "$WIKI_CMD" ;;
+    restage) printf "the files git recorded as links couldn't be staged again as plain files, so the commit that took them out was undone and nothing was committed. Do: run %s sync again, and if it says this again, ask the user" "$WIKI_CMD" ;;
+    *) printf 'the commit was refused. If the secret scan stopped it, redact the secret as the handbook says, then sync again.' ;;
+  esac
+}
+
+# links_recorded <repo>: for each folder at the repository's top that holds links git records
+# (outside a merge), "<folder><TAB><how many><TAB><the first one's path inside it>".
+links_recorded() {
+  local e p nl=$'\n'
+  { git -C "$1" ls-files -s -z 2>/dev/null || true; } | while IFS= read -r -d '' e; do
+    case "$e" in "120000 "*" 0"$'\t'*) ;; *) continue ;; esac
+    p="${e#*$'\t'}"
+    case "$p" in */*) ;; *) continue ;; esac
+    case "$p" in *"$nl"* | *"$TAB"*) continue ;; esac
+    printf '%s\t%s\n' "${p%%/*}" "${p#*/}"
+  done | LC_ALL=C awk -F '\t' '!($1 in n) { o[++k] = $1; f[$1] = $2 } { n[$1]++ } END { for (i = 1; i <= k; i++) printf "%s\t%d\t%s\n", o[i], n[o[i]], f[o[i]] }' || true
+}
+
 sync_do() {
   local wiki="" msg="" root repo path top err ahead here coll how cname f nl=$'\n'
   while [ $# -gt 0 ]; do
@@ -4256,11 +4456,25 @@ sync_do() {
       set -- "$@" "$f"
     done
   fi
+  # A wiki that is a repository of its own isn't reached by the dispatcher's links_off.
+  links_off "$repo"
   # Literal paths: a wiki folder called * or :(top) is otherwise a pattern that takes every file.
   git -C "$repo" --literal-pathspecs add -A -- "$@"
+  # Links in git become plain files for everyone, and a link made here is refused (code
+  # review M24). Either way nothing is left staged that this sync didn't commit.
+  if ! links_take_out "$repo" "${root##*/}" "$@"; then
+    git -C "$repo" --literal-pathspecs reset -q -- "$@" >/dev/null 2>&1 || git -C "$repo" --literal-pathspecs rm -r -q --cached --ignore-unmatch -- "$@" >/dev/null 2>&1 || true
+    case "$LINKS_WHY" in hand | case) [ "$path" != . ] || LINKS_PATH="${root##*/}/$LINKS_PATH" ;; esac
+    [ "$LINKS_WHY" != refused ] || [ -z "$LINKS_ERR" ] || printf '%s\n' "$LINKS_ERR"
+    die "$(links_why_text "${root##*/}")"
+  fi
+  [ -z "$LINKS_DONE" ] || echo "committed: $LINKS_DONE"
   if ! git -C "$repo" --literal-pathspecs diff --cached --quiet -- "$@"; then
     if ! err="$(git -C "$repo" --literal-pathspecs commit -q -m "$msg" -- "$@" 2>&1)"; then
       printf '%s\n' "$err"
+      # The commit that took links out goes too, while no remote has it: a removal left on
+      # HEAD would be pushed by the next sync of any wiki.
+      links_undo "$repo"
       # Nothing is left staged: git won't start a merge while anything is, so one wiki's
       # refused commit stopped every other wiki's sync as soon as it had to merge. The
       # files stay on disk as they were.
@@ -4440,7 +4654,8 @@ for d, dirs, files in os.walk(wroot):
     if rel.split(os.sep)[0] == "sources":
         continue
     for f in files:
-        if not f.endswith(".md"):
+        # A link is no page: its text is read wherever it points (code review M24).
+        if not f.endswith(".md") or os.path.islink(os.path.join(d, f)):
             continue
         path = os.path.relpath(os.path.join(d, f), root)
         top = rel.split(os.sep)[0]
@@ -4453,10 +4668,10 @@ for d, dirs, files in os.walk(wroot):
         if len(fm.get("summary", "")) > 120:
             long.append((path, len(fm["summary"])))
 sroot = os.path.join(root, "skills")
-if os.path.isdir(sroot):
+if os.path.isdir(sroot) and not os.path.islink(sroot):
     for name in sorted(os.listdir(sroot)):
         sk = os.path.join(sroot, name, "SKILL.md")
-        if os.path.isfile(sk):
+        if os.path.isfile(sk) and not os.path.islink(sk) and not os.path.islink(os.path.join(sroot, name)):
             fm = front(sk)
             pages[f"skills/{name}/SKILL.md"] = (fm.get("name", name), fm.get("description", ""), "Skills")
 
@@ -4609,8 +4824,9 @@ for root in roots:
     def add(kind, item):
         found.setdefault(kind, []).append(item)
     pages = []
+    # A link is no page: its text is read wherever it points (code review M24).
     for d, dirs, files in os.walk(os.path.join(root, "wiki")):
-        pages += [os.path.join(d, f) for f in files if f.endswith(".md")]
+        pages += [os.path.join(d, f) for f in files if f.endswith(".md") and not os.path.islink(os.path.join(d, f))]
     inbound = {}
     for p in pages:
         rel = os.path.relpath(p, root)
@@ -4709,9 +4925,11 @@ for root in roots:
         done |= set(re.findall(r"raw/([^\],\"\s]+)", (body_and_front(open(p, errors="replace").read())[1] or {}).get("sources", "")))
     done = {os.path.splitext(d)[0] for d in done}
     sdir = os.path.join(root, "wiki", "sources")
-    if os.path.isdir(sdir):
+    # Links are passed over, as pending_files and compiled_stems pass them (code review M24).
+    if os.path.isdir(sdir) and not os.path.islink(sdir):
         done |= {os.path.splitext(f)[0] for f in os.listdir(sdir)}
-    waiting = [f for f in (os.listdir(raw) if os.path.isdir(raw) else []) if not f.startswith(".")
+    waiting = [f for f in (os.listdir(raw) if os.path.isdir(raw) and not os.path.islink(raw) else []) if not f.startswith(".")
+               and os.path.isfile(os.path.join(raw, f)) and not os.path.islink(os.path.join(raw, f))
                and os.path.splitext(f)[0] not in done]
     if waiting:
         found[f"notes waiting to be compiled ({len(waiting)})"] = []
@@ -4757,7 +4975,8 @@ compiled_stems() {
       | LC_ALL=C xargs -0 awk '/^sources:/ { print; on = 1; next } on && /^[ \t]*- / { print; next } { on = 0 }' /dev/null 2>/dev/null \
       | LC_ALL=C grep -o 'raw/[^],"[:space:]]*' | LC_ALL=C sed 's#^raw/##' || true
   } | LC_ALL=C sed 's/\.[A-Za-z0-9]*$//'
-  [ ! -d "$r/wiki/sources" ] || ls "$r/wiki/sources" 2>/dev/null | LC_ALL=C sed -n 's/\.md$//p'
+  # A wiki/sources that is a link is not read, as the helper's copy has it (code review M24).
+  [ ! -d "$r/wiki/sources" ] || [ -L "$r/wiki/sources" ] || ls "$r/wiki/sources" 2>/dev/null | LC_ALL=C sed -n 's/\.md$//p'
 }
 
 # pending_files <wiki root>: raw files not compiled yet, oldest first.
@@ -4768,7 +4987,8 @@ pending_files() {
     compiled_stems "$1" || true
     echo "//raw//"
     for f in "$1"/raw/*; do
-      [ -f "$f" ] || continue
+      # A link is no note: its text is read wherever it points (code review M24).
+      [ -f "$f" ] && [ ! -L "$f" ] || continue
       b="${f##*/}"
       case "$b" in .*) continue ;; esac
       printf '%s\n' "$f"
@@ -5239,6 +5459,7 @@ git_init_collection() {
     return 0
   fi
   git -C "$WIKIS_DIR" init -q
+  links_off "$WIKIS_DIR"
   install_hook "$WIKIS_DIR"
   echo "git:     $(tilde "$WIKIS_DIR") is now one repo for every wiki"
   git_first_commit
@@ -5285,6 +5506,23 @@ git_first_commit() {
   [ $# -gt 0 ] || { echo "git:     nothing of llm-wiki's to commit yet"; return 0; }
   # Literal paths: git reads a pathspec as a pattern otherwise.
   git -C "$WIKIS_DIR" --literal-pathspecs add -A -- "$@" 2>/dev/null || true
+  # A link is no wiki file: it points somewhere else on every other machine (code review M24).
+  if ! links_take_out "$WIKIS_DIR" wikis "$@"; then
+    if git -C "$WIKIS_DIR" rev-parse -q --verify HEAD >/dev/null 2>&1; then
+      git -C "$WIKIS_DIR" --literal-pathspecs reset -q -- "$@" >/dev/null 2>&1 || true
+    else
+      git -C "$WIKIS_DIR" --literal-pathspecs rm -r -q --cached --ignore-unmatch -- "$@" >/dev/null 2>&1 || true
+    fi
+    case "$LINKS_WHY" in
+      hand) echo "git:     $LINKS_PATH is a link, so nothing is committed: a link points somewhere else on every other machine. Do: put a copy of the file there in place of the link, then run $WIKI_CMD setup git" ;;
+      refused)
+        [ -z "$LINKS_ERR" ] || printf '%s\n' "$LINKS_ERR"
+        echo "git:     the first commit was refused, so nothing is committed. Do: fix what git said above, then run $WIKI_CMD setup git"
+        ;;
+      *) echo "git:     the first commit wasn't made: $(links_why_text wikis)" ;;
+    esac
+    return 0
+  fi
   if git -C "$WIKIS_DIR" --literal-pathspecs diff --cached --quiet -- "$@" 2>/dev/null; then
     echo "git:     nothing of llm-wiki's to commit yet"
     return 0
@@ -5596,6 +5834,12 @@ cmd_status() {
     [ "$f" != "$WIKIS_DIR" ] && [ -d "$f" ] || continue
     printf '%s\t%s\n' "$n" "$f"
   done)"
+  # Their notes are counted below, so their links become files first (code review M24).
+  while IFS="$TAB" read -r n f; do
+    [ -z "$f" ] || links_off_all "$f"
+  done <<EOF2
+$others
+EOF2
   # The compiled helper makes the table and counts the other collections' notes. When
   # it isn't sure it answers nothing, and the Bash does it all.
   # The table goes through a file, so what it adds to STATUS_TODO stays here.
@@ -5668,6 +5912,16 @@ EOF2
     if [ "$(journal_get commit)" != yes ] && [ -n "$(git -C "$WIKIS_DIR" ls-files -- journal 2>/dev/null || true)" ]; then
       todo_add "journal: its files are in git, though they are set to stay on this machine. Earlier commits still hold them. Run: git -C $gw rm -r -q --cached journal && git -C $gw commit -q -m \"wikis: stop tracking the journal\""
     fi
+    # Links git records in a wiki: plain files here (links_off), and links in every clone that
+    # doesn't turn them off, until a sync of that wiki takes them out (code review M24).
+    local lw ln lp
+    while IFS="$TAB" read -r lw ln lp; do
+      [ -n "$lp" ] && is_wiki "$WIKIS_DIR/$lw" || continue
+      lp="$(printf '%s' "$lp" | LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C tr '"`' "''" | cut -c 1-200)"
+      todo_add "links: $ln file(s) in $lw are links in git, such as $lp. Nothing reads through them here, and a sync turns them into plain files for everyone. Run: $WIKI_CMD sync $lw"
+    done <<EOF2
+$(links_recorded "$WIKIS_DIR")
+EOF2
     for f in delegation.md delegation-log.csv stats.csv; do
       [ -n "$(git -C "$WIKIS_DIR" ls-files -- "$f" 2>/dev/null || true)" ] || continue
       todo_add "$f is in git, though it is this machine's own. Earlier commits still hold it. Run: git -C $gw rm -q --cached $f && git -C $gw commit -q -m \"wikis: stop tracking $f\""
@@ -5675,9 +5929,17 @@ EOF2
   fi
   # A folder that has both files and an AGENTS.md that was read and isn't the handbook is in
   # no table and no list. So that it doesn't vanish without a word, it is named here.
-  local nd
+  # One whose main parts include a link is named the same way (code review M24).
+  local nd nk
   for nd in "$WIKIS_DIR"/*/; do
     nd="${nd%/}"
+    # Asked first: an AGENTS.md or index.md that is a broken link, or a link to a folder,
+    # fails the -f tests below, and the folder would go unnamed. A folder with both names,
+    # as files or links, is one meant as a wiki.
+    if { [ -e "$nd/AGENTS.md" ] || [ -L "$nd/AGENTS.md" ]; } && { [ -e "$nd/index.md" ] || [ -L "$nd/index.md" ]; } && nk="$(wiki_link "$nd")"; then
+      todo_add "${nd##*/}: its $nk is a link, so llm-wiki doesn't use it. A link points somewhere else on every machine. Do: remove the link, or ask whoever added it"
+      continue
+    fi
     [ -f "$nd/index.md" ] && [ -f "$nd/AGENTS.md" ] || continue
     is_wiki "$nd" || todo_add "not a wiki: ${nd##*/} has AGENTS.md and index.md, but its AGENTS.md is not the handbook, so no command reads it. Do: if it is a wiki, add the line \"Handbook version 0.\" to its AGENTS.md, then run: $WIKI_CMD upgrade ${nd##*/}"
   done
@@ -5802,11 +6064,11 @@ EOF2
     notes=""
     n=0
     # The notes that mention the word, among the files that are notes: a folder, a
-    # broken link or a pipe named like one isn't read. What grep prints is what
+    # link or a pipe named like one isn't read. What grep prints is what
     # counts, not how it ended: one note that can't be read fails it.
     set --
     for f in "$d"/raw/*.md; do
-      if [ -f "$f" ]; then set -- "$@" "$f"; fi
+      if [ -f "$f" ] && [ ! -L "$f" ]; then set -- "$@" "$f"; fi
     done
     cands=""
     [ $# -eq 0 ] || cands="$(LC_ALL=C grep -l -i -F -- "$word" "$@" 2>/dev/null || true)"
@@ -6096,15 +6358,27 @@ EOF2
   if [ -f "$WIKIS_DIR/$SHARED/wiki/conventions.md" ] && ! git -C "$WIKIS_DIR" ls-files --error-unmatch -- "$SHARED/wiki/conventions.md" >/dev/null 2>&1; then
     paths="$paths $SHARED/wiki/conventions.md $SHARED/index.md"
   fi
+  # No paths, no commit: `git status --` and `git commit --` with none would take every wiki.
+  [ -n "$paths" ] || return 0
   # shellcheck disable=SC2086
   [ -n "$(cd "$WIKIS_DIR" && git status --porcelain -- $paths 2>/dev/null | head -n 1)" ] || return 0
   # shellcheck disable=SC2086
   if [ -n "$1" ]; then msg="wikis: handbook v$tv"; else msg="wikis: update collection files"; fi
+  # A handbook file git records as a link is committed as a plain file, after a commit that
+  # takes the link out (links_take_out, code review M24). What isn't committed is unstaged,
+  # as sync does: anything left staged stops the next merge.
+  local ok=0
   # shellcheck disable=SC2086
-  if (cd "$WIKIS_DIR" && git add -- $paths && git commit -q -m "$msg" -- $paths) >/dev/null 2>&1; then
+  if (cd "$WIKIS_DIR" && git add -- $paths) >/dev/null 2>&1 && links_take_out "$WIKIS_DIR" wikis $paths >/dev/null 2>&1; then
+    # shellcheck disable=SC2086
+    if (cd "$WIKIS_DIR" && git commit -q -m "$msg" -- $paths) >/dev/null 2>&1; then ok=1; else links_undo "$WIKIS_DIR"; fi
+  fi
+  if [ "$ok" = 1 ]; then
     ui_item ok "Committed the upgrade as \"$msg\"."
     [ -z "$(git -C "$WIKIS_DIR" remote)" ] || ui_item warn "Push it: $(typed "git -C $(tilde "$WIKIS_DIR") push")"
   else
+    # shellcheck disable=SC2086
+    git -C "$WIKIS_DIR" reset -q -- $paths >/dev/null 2>&1 || true
     ui_item warn "The upgrade isn't committed: git refused. Commit it yourself:"
     ui_detail "$(typed "git -C $(tilde "$WIKIS_DIR") add${paths} && git -C $(tilde "$WIKIS_DIR") commit -m \"$msg\"")"
   fi
@@ -8192,6 +8466,14 @@ cmd_mcp() {
   esac
   local list bin ctype
   if [ -n "${LLM_WIKI_FIXED_DIR:-}" ]; then list="$(printf 'here\t%s' "$WIKIS_DIR")"; else list="$(collections)"; fi
+  # Each collection, before either server reads one: the helper's searches and lists run no
+  # wiki.sh. links_off prints nothing, and stdout is the protocol's from here on.
+  local n f
+  while IFS="$TAB" read -r n f _; do
+    [ -z "$f" ] || links_off_all "$f"
+  done <<EOF2
+$list
+EOF2
   # Apps started from the desktop get a short PATH, without Homebrew's tools.
   PATH="$PATH:/opt/homebrew/bin:/usr/local/bin"
   # The helper or the Python, chosen once: a server that is up can't fall back.
@@ -15064,6 +15346,9 @@ record_use "$cmd" "${1:-}"
 case "$cmd" in
   start | capture | sync | find | which | pending | patterns | lint | index | log | lock | compile | mcp | journal | standup | tour | report | stats | __*) style_off ;;
 esac
+# Before anything is read: git writes a link in the collection as a plain file (code review
+# M24). Not for tab completion, which runs at every key and reads only names.
+case "$cmd" in __complete | completion) ;; *) links_off_all "$WIKIS_DIR" ;; esac
 if [ "$cmd" = journal ]; then
   cmd_journal "$@"
   exit 0
@@ -15103,6 +15388,19 @@ if [ "$cmd" = report ]; then
 fi
 case "$cmd" in
   update) cmd_update "$@"; exit 0 ;;
+  # start --name <repository>: the value is a repository's name, never read as a folder, as
+  # it would be when a folder of that name is where this runs (code review L34). The MCP
+  # servers run this from the temp folder.
+  start)
+    if [ "${1:-}" = --name ]; then
+      [ $# -eq 2 ] && [ -n "$2" ] || die_usage "usage: $WIKI_CMD start --name <repository>"
+      # A name, never a path: ../other would be read as a wiki outside the wikis folder.
+      valid_name "$2" || die_usage "start --name takes a repository's name: letters, digits, dots, dashes and underscores, not a path. Run: $WIKI_CMD start --name <repository>"
+      START_NAME=1
+      cmd_start "$2"
+      exit 0
+    fi
+    ;;
   __collection) printf '%s\n' "$WIKIS_DIR"; exit 0 ;;
   # The session hook asks for the helper to be fetched if it's missing.
   __helper-auto) helper_auto >/dev/null 2>&1 || true; exit 0 ;;

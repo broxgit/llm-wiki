@@ -233,16 +233,10 @@ func TestSearchLeavesToBash(t *testing.T) {
 		t.Error("a missing collection gave no error")
 	}
 	breaks := map[string]func(root string) error{
-		"a NUL in an index": func(root string) error { return os.WriteFile(root+"/demo/index.md", []byte("- canary\x00\n"), 0o644) },
-		"a NUL in a page":   func(root string) error { return os.WriteFile(root+"/zeta/wiki/a.md", []byte("canary\x00\n"), 0o644) },
-		"a linked page":     func(root string) error { return os.Symlink(root+"/stray/readme.md", root+"/zeta/wiki/link.md") },
-		"a linked folder":   func(root string) error { return os.Symlink(root+"/stray", root+"/zeta/wiki/more") },
-		"a linked wiki/": func(root string) error {
-			if err := os.Rename(root+"/zeta/wiki", root+"/zeta-pages"); err != nil {
-				return err
-			}
-			return os.Symlink(root+"/zeta-pages", root+"/zeta/wiki")
-		},
+		"a NUL in an index":              func(root string) error { return os.WriteFile(root+"/demo/index.md", []byte("- canary\x00\n"), 0o644) },
+		"a NUL in a page":                func(root string) error { return os.WriteFile(root+"/zeta/wiki/a.md", []byte("canary\x00\n"), 0o644) },
+		"a linked page":                  func(root string) error { return os.Symlink(root+"/stray/readme.md", root+"/zeta/wiki/link.md") },
+		"a linked folder":                func(root string) error { return os.Symlink(root+"/stray", root+"/zeta/wiki/more") },
 		"a wiki's name with a backslash": func(root string) error { return os.Rename(root+"/zeta", root+`/ze\ta`) },
 		"a page's name with a line break": func(root string) error {
 			return os.WriteFile(root+"/zeta/wiki/two\nlines.md", []byte("canary\n"), 0o644)
@@ -268,6 +262,17 @@ func TestSearchLeavesToBash(t *testing.T) {
 		if err == nil {
 			t.Errorf("%s: no error, and %q", name, got)
 		}
+	}
+	// A wiki whose wiki/ is a link is no wiki, so it isn't searched (code review M24).
+	linked := collection(t)
+	if err := os.Rename(linked+"/zeta/wiki", linked+"/zeta-pages"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(linked+"/zeta-pages", linked+"/zeta/wiki"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, err := Search(Options{Wikis: linked, Word: "canary"}); err != nil || strings.Contains(got, "zeta") {
+		t.Errorf("a linked wiki/: %q, %v", got, err)
 	}
 	// A page past the last one shown is never read, by the Bash or by this.
 	root := collection(t)
@@ -326,7 +331,8 @@ func TestSearchNotes(t *testing.T) {
 	}
 }
 
-// In raw/, a folder and a broken link named like notes are not notes, and a note
+// In raw/, a folder and a link named like notes are not notes, a link to a file included
+// (code review M24: its text is read wherever it points), and a note
 // counts as compiled by a sources: line, an item under one, or a summary page.
 func TestSearchNotesAmongOtherThings(t *testing.T) {
 	root := collection(t)
@@ -345,7 +351,7 @@ func TestSearchNotesAmongOtherThings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "demo:\n  waiting to be compiled:\n    raw/2026-02-02-good.md: A stork was seen.\n    raw/2026-01-04-link.md: A stork by a link.\n"
+	want := "demo:\n  waiting to be compiled:\n    raw/2026-02-02-good.md: A stork was seen.\n"
 	if got != want {
 		t.Errorf("got %q\nwant %q", got, want)
 	}

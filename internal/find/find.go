@@ -192,6 +192,10 @@ func noteHits(dir string, word []byte) ([]string, error) {
 		if strings.Contains(name, "\n") {
 			return nil, errors.New("a note's name for the Bash: " + name)
 		}
+		// A link is no note: its text is read wherever it points (code review M24).
+		if e.Type()&fs.ModeSymlink != 0 {
+			continue
+		}
 		if ok, err := routing.IsFile(dir + "/raw/" + name); err != nil {
 			return nil, err
 		} else if !ok {

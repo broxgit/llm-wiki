@@ -1546,7 +1546,10 @@ def wiki_folder(path):
     """wiki.sh's is_wiki: an index.md, and an AGENTS.md that is the handbook, which its
     "Handbook version N." line says. A handbook that can't be read counts, as it does there.
     The same test is in wiki.sh, internal/routing, hooks/reminders.py, hooks/session-start.sh,
-    mcp/server.py and extensions/wiki-confluence: change them together."""
+    mcp/server.py and extensions/wiki-confluence: change them together. A folder whose
+    AGENTS.md, index.md, raw or wiki is a link is not a wiki (code review M24)."""
+    if any(os.path.islink(os.path.join(path, p)) for p in ("AGENTS.md", "index.md", "raw", "wiki")):
+        return False
     agents = os.path.join(path, "AGENTS.md")
     if not (os.path.isfile(agents) and os.path.isfile(os.path.join(path, "index.md"))):
         return False
