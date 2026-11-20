@@ -583,6 +583,17 @@ tilde() {
   esac
 }
 
+# qpath <path>: the path as tilde gives it, quoted for a shell where it needs quoting, for a
+# command the user pastes. The ~/ stays outside the quotes, where the shell expands it.
+qpath() {
+  local t pre=""
+  t="$(tilde "$1")"
+  case "$t" in *[!A-Za-z0-9._/~@%+=:,-]*) ;; *) printf '%s' "$t"; return 0 ;; esac
+  # shellcheck disable=SC2088
+  case "$t" in "~/"*) pre="~/"; t="${t:2}" ;; esac
+  printf "%s'%s'" "$pre" "$(printf '%s' "$t" | sed "s/'/'\\\\''/g")"
+}
+
 # can_read <file or folder>: whether this shell can read it. An agent's sandbox can
 # refuse what the permissions allow, so this tries rather than asks.
 can_read() {
@@ -716,7 +727,7 @@ link_shared() {
 }
 
 scaffold() {
-  local root="$1" want_git="$2"
+  local root="$1" want_git="$2" name
   [ -d "$TEMPLATE" ] || die "template/ not found next to this script"
   case "$root/" in
     "$REPO"/*) die "refusing to create a wiki inside the template repo" ;;
@@ -762,6 +773,14 @@ scaffold() {
     else
       git -C "$root" init -q
       install_hook "$root"
+      # Asked before git is: with no name, git's own message was all there was (code review
+      # L3). The wiki is its own repository, so the name is set there, not in the collection.
+      if [ -z "$(git -C "$root" config user.email || true)" ] || [ -z "$(git -C "$root" config user.name || true)" ]; then
+        name="$(qpath "$root")"
+        if [ "${root%/*}" = "${WIKIS_DIR%/}" ] || [ "${root%/*}" -ef "$WIKIS_DIR" ]; then name="${root##*/}"; fi
+        echo "git:     initialized, but no commit name or email is set yet, so nothing is committed. Run: git -C $(qpath "$root") config user.name \"Your Name\" && git -C $(qpath "$root") config user.email you@example.com && $WIKI_CMD sync $name"
+        return 0
+      fi
       git -C "$root" add -A
       git -C "$root" commit -q -m "wiki: scaffold"
       echo "git:     initialized with a first commit"
@@ -1712,7 +1731,7 @@ cmd_start() {
   fi
   [ -z "$note" ] || echo "$note"
   # The pull. A failure is a warning: offline, a sandbox, or another session pulling.
-  if in_git_repo "$WIKIS_DIR" && [ -n "$(git -C "$WIKIS_DIR" remote 2>/dev/null)" ]; then
+  if collection_repo && [ -n "$(git -C "$WIKIS_DIR" remote 2>/dev/null)" ]; then
     # Keep the collection's own SSH command (setup may name a key there) and add a
     # timeout, so an unreachable host can't hang the session.
     remote_env "$WIKIS_DIR"
@@ -3636,18 +3655,18 @@ sync_index_after_merge() {
   [ -f "$root/index.md" ] && [ ! -L "$root/index.md" ] || return 0
   # And only where the merge joined two versions of it: an index that came through as one
   # side had it, a person's own included, is left as it is.
-  ! git -C "$repo" diff --quiet 'HEAD^1' HEAD -- "$idx" 2>/dev/null || return 0
-  ! git -C "$repo" diff --quiet 'HEAD^2' HEAD -- "$idx" 2>/dev/null || return 0
+  ! git -C "$repo" --literal-pathspecs diff --quiet 'HEAD^1' HEAD -- "$idx" 2>/dev/null || return 0
+  ! git -C "$repo" --literal-pathspecs diff --quiet 'HEAD^2' HEAD -- "$idx" 2>/dev/null || return 0
   ! (cmd_index "$root" --check) >/dev/null 2>&1 || return 0
-  (cmd_index "$root") >/dev/null 2>&1 || { git -C "$repo" checkout -q -- "$idx" >/dev/null 2>&1 || true; return 0; }
-  git -C "$repo" diff --quiet -- "$idx" 2>/dev/null && return 0
-  if git -C "$repo" add -- "$idx" >/dev/null 2>&1 \
-    && git -C "$repo" commit -q -m "${root##*/}: index made again after a merge" -- "$idx" >/dev/null 2>&1; then
+  (cmd_index "$root") >/dev/null 2>&1 || { git -C "$repo" --literal-pathspecs checkout -q -- "$idx" >/dev/null 2>&1 || true; return 0; }
+  git -C "$repo" --literal-pathspecs diff --quiet -- "$idx" 2>/dev/null && return 0
+  if git -C "$repo" --literal-pathspecs add -- "$idx" >/dev/null 2>&1 \
+    && git -C "$repo" --literal-pathspecs commit -q -m "${root##*/}: index made again after a merge" -- "$idx" >/dev/null 2>&1; then
     echo "index: made again from the pages, after a merge left it with lines that no longer matched them."
   else
     # Refused, as by the secret scan: nothing is left staged, and the file is as the merge left it.
-    git -C "$repo" reset -q -- "$idx" >/dev/null 2>&1 || true
-    git -C "$repo" checkout -q -- "$idx" >/dev/null 2>&1 || true
+    git -C "$repo" --literal-pathspecs reset -q -- "$idx" >/dev/null 2>&1 || true
+    git -C "$repo" --literal-pathspecs checkout -q -- "$idx" >/dev/null 2>&1 || true
   fi
   return 0
 }
@@ -4125,7 +4144,7 @@ sync_scan_gate() {
 }
 
 sync_do() {
-  local wiki="" msg="" root repo path top err ahead here coll how cname nl=$'\n'
+  local wiki="" msg="" root repo path top err ahead here coll how cname f nl=$'\n'
   while [ $# -gt 0 ]; do
     case "$1" in
       -m) need_value "$@"; msg="${2:-}"; shift 2 ;;
@@ -4218,16 +4237,37 @@ sync_do() {
   # A hook of ours from an earlier version is brought up to date first, with the rules beside
   # it: an old one reads a .gitleaks.toml in the folder, which a remote could have written.
   [ "$(hook_state "$repo")" != ours ] || install_hook "$repo" >/dev/null 2>&1 || true
-  # Only this wiki: other sessions may have notes waiting, uncommitted, in other wikis.
-  git -C "$repo" add -A -- "$path"
-  if ! git -C "$repo" diff --cached --quiet -- "$path"; then
-    if ! err="$(git -C "$repo" commit -q -m "$msg" -- "$path" 2>&1)"; then
+  # Only this wiki: other sessions may have notes waiting, uncommitted, in other wikis. In the
+  # collection's own repository, its two top files go along when they are new or changed:
+  # nothing else ever committed WIKIS.md where init had no name to commit as, and a clone
+  # without it is a repository the wikis don't manage (code review L48). And .gitignore, so
+  # what `journal set commit` changed in it is kept. Each is named wherever the wiki's folder
+  # is: left out of the test or the reset, a staged .gitignore would block every later merge.
+  set -- "$path"
+  if [ "$repo" = "$WIKIS_DIR" ]; then
+    # journal/ at the top of the collection is the work journal, kept on this machine unless it
+    # is set to be committed. A wiki's files there don't change that.
+    case "$(printf '%s' "$path" | LC_ALL=C tr 'A-Z' 'a-z')" in
+      journal) [ "$(journal_get commit)" = yes ] || die "nothing was synced. $(tilde "$root") is the work journal's folder, which stays on this machine: the journal's commit setting is no. Do: move the wiki to a folder with another name, or run $WIKI_CMD journal set commit yes to commit the journal" ;;
+    esac
+    for f in WIKIS.md .gitignore; do
+      [ -f "$repo/$f" ] && [ ! -L "$repo/$f" ] || continue
+      [ -n "$(git -C "$repo" status --porcelain --untracked-files=normal -- "$f" 2>/dev/null || true)" ] || continue
+      set -- "$@" "$f"
+    done
+  fi
+  # Literal paths: a wiki folder called * or :(top) is otherwise a pattern that takes every file.
+  git -C "$repo" --literal-pathspecs add -A -- "$@"
+  if ! git -C "$repo" --literal-pathspecs diff --cached --quiet -- "$@"; then
+    if ! err="$(git -C "$repo" --literal-pathspecs commit -q -m "$msg" -- "$@" 2>&1)"; then
       printf '%s\n' "$err"
       # Nothing is left staged: git won't start a merge while anything is, so one wiki's
       # refused commit stopped every other wiki's sync as soon as it had to merge. The
       # files stay on disk as they were.
-      # reset has no HEAD to go by in a repository with no commit yet.
-      git -C "$repo" reset -q -- "$path" >/dev/null 2>&1 || git -C "$repo" rm -r -q --cached -- "$path" >/dev/null 2>&1 || true
+      # reset has no HEAD to go by in a repository with no commit yet, on an older git. There
+      # rm unstages, and --ignore-unmatch keeps a path that isn't in the index from stopping
+      # it for the rest.
+      git -C "$repo" --literal-pathspecs reset -q -- "$@" >/dev/null 2>&1 || git -C "$repo" --literal-pathspecs rm -r -q --cached --ignore-unmatch -- "$@" >/dev/null 2>&1 || true
       die "the commit was refused. If the secret scan stopped it, redact the secret as the handbook says, then sync again."
     fi
     echo "committed: $msg"
@@ -5115,32 +5155,165 @@ init_collection() {
   write_delegation_file
 }
 
+# collection_repo: the wikis folder is the top of a git repository of its own. A wikis folder
+# inside a larger repository, such as a home folder kept in git, is not: llm-wiki sets up no
+# remote, name, hook or commit there (code review M29 and M18, 2026-11-16).
+collection_repo() {
+  local d="${1:-$WIKIS_DIR}" top here
+  top="$(git -C "$d" rev-parse --show-toplevel 2>/dev/null)" || return 1
+  here="$(cd "$d" 2>/dev/null && pwd -P)" || return 1
+  [ -n "$top" ] && [ "$top" = "$here" ]
+}
+
+# gitignore_ok: whether the collection's .gitignore can be written: missing, or a plain file.
+# One that is a link would have the lines written wherever it points, and one that is a
+# folder can't take them. Says so, with what to do, when it can't.
+gitignore_ok() {
+  local gi="$WIKIS_DIR/.gitignore"
+  if [ -L "$gi" ] || { [ -e "$gi" ] && [ ! -f "$gi" ]; }; then
+    echo "note:    $(tilde "$gi") is a link or not a plain file, so the rules that keep the journal and delegation files out of git weren't written. Do: make it a plain file, then run $WIKI_CMD upgrade --all"
+    return 1
+  fi
+}
+
+# collection_unignored: names each of one machine's own files that git would still take in the
+# collection's repository, with the rule that lets it back in: a later ! rule in the user's
+# .gitignore, or one in core.excludesFile. The user's rules are theirs, and aren't rewritten.
+collection_unignored() {
+  local f out src
+  collection_repo || return 0
+  set -- delegation.md delegation-log.csv stats.csv
+  [ "$(journal_get commit)" = yes ] || set -- journal/config "$@"
+  for f in "$@"; do
+    git -C "$WIKIS_DIR" check-ignore -q --no-index -- "$f" 2>/dev/null && continue
+    out="$(git -C "$WIKIS_DIR" check-ignore -v -n --no-index -- "$f" 2>/dev/null || true)"
+    out="${out%%"$TAB"*}"
+    src="${out%%:*}"
+    case "${out##*:}" in
+      '!'*) echo "note:    ${f%/config} isn't ignored by git: the rule ${out##*:} in $(tilde "$src"), line $(printf '%s' "$out" | cut -d: -f 2), lets it back in. Do: remove that rule, or ${f%/config} goes into the next commit" ;;
+      *) echo "note:    ${f%/config} isn't ignored by git. Do: add the line /${f%/config}$([ "$f" != journal/config ] || echo /) to $(tilde "$WIKIS_DIR/.gitignore")" ;;
+    esac
+  done
+}
+
+# collection_outside_text: what is said when the wikis folder sits inside another repository.
+collection_outside_text() {
+  local top
+  top="$(git -C "$WIKIS_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+  # shellcheck disable=SC2088
+  if [ -n "$top" ] && [ "$top" -ef "$HOME" ]; then top="~"; else top="$(tilde "$top")"; fi
+  printf 'the wikis folder is inside another repository, %s. llm-wiki leaves that one alone: no remote, name, hook or commit is set up there' "$top"
+}
+
+# collection_ignores: the rules that keep one machine's own files out of the collection's
+# repository. Written whether llm-wiki made the repository or found it: a clone of an empty
+# remote had none, and its first commit took the journal (code review M18, 2026-11-16). In a
+# larger repository it still writes the .gitignore inside the wikis folder, which is the one
+# thing there that keeps the journal out, and nothing else. Safe to run again.
+collection_ignores() {
+  local l
+  in_git_repo "$WIKIS_DIR" || return 0
+  # A link or a folder: nothing is written, and the first commit, which goes by name, is still safe.
+  gitignore_ok || return 0
+  for l in .DS_Store .compile-lock .obsidian/ .trash/; do ensure_line "$WIKIS_DIR/.gitignore" "$l"; done
+  apply_journal_commit
+  apply_delegation_ignore
+  collection_unignored
+}
+
 git_init_collection() {
   if history_on; then die "a history of $(tilde "$WIKIS_DIR") is kept on this machine, in place of git. Do: to use git there, run $WIKI_CMD history off first"; fi
   if git_planted "$WIKIS_DIR"; then die "git can't be set up in $(tilde "$WIKIS_DIR"): the folder, or one above it, holds HEAD, objects/ and refs/, the files of a git repository that someone put there. Do: look at who added them, and remove them"; fi
   if in_git_repo "$WIKIS_DIR"; then
-    echo "git:     $(tilde "$WIKIS_DIR") is already in a repo, skipped"
+    if ! collection_repo; then
+      collection_ignores
+      echo "git:     $(collection_outside_text). Do: to keep a history with git, move $(tilde "$WIKIS_DIR") out of it, then run $WIKI_CMD setup git"
+      return 0
+    fi
+    # A clone of an empty remote is a repository with nothing in it yet: it gets the rules and
+    # the hook, and its first commit, as one llm-wiki made would. git_first_commit writes the
+    # rules before anything else.
+    echo "git:     $(tilde "$WIKIS_DIR") is already a repo, kept as it is"
     install_hook "$WIKIS_DIR"
+    if git -C "$WIKIS_DIR" rev-parse -q --verify HEAD >/dev/null 2>&1; then collection_ignores; else git_first_commit; fi
     return 0
   fi
-  [ -f "$WIKIS_DIR/.gitignore" ] || printf '.DS_Store\n.compile-lock\n.obsidian/\n.trash/\n' > "$WIKIS_DIR/.gitignore"
   git -C "$WIKIS_DIR" init -q
   install_hook "$WIKIS_DIR"
-  apply_journal_commit
-  apply_delegation_ignore
   echo "git:     $(tilde "$WIKIS_DIR") is now one repo for every wiki"
   git_first_commit
 }
 
-# Commit everything, unless git has no name and email to commit as.
+# The collection's first commit, unless git has no name and email to commit as. It takes
+# llm-wiki's own files by name: WIKIS.md, .gitignore, each wiki that isn't a repository of
+# its own, and the journal only when it is set to be committed. Never everything in the
+# folder: a README a remote began with stays as it was, and the journal and delegation files
+# stay out whatever the .gitignore says (code review M18).
 git_first_commit() {
+  local d n=0 what="" err
+  collection_repo || return 0
+  collection_ignores
   if [ -z "$(git -C "$WIKIS_DIR" config user.email || true)" ] || [ -z "$(git -C "$WIKIS_DIR" config user.name || true)" ]; then
     echo "git:     no commit name or email set yet, so nothing is committed. $WIKI_CMD setup git sets them."
     return 0
   fi
-  git -C "$WIKIS_DIR" add -A
-  git -C "$WIKIS_DIR" commit -q -m "wikis: start collection"
-  echo "git:     first commit made"
+  set --
+  for d in WIKIS.md .gitignore; do
+    [ -f "$WIKIS_DIR/$d" ] && [ ! -L "$WIKIS_DIR/$d" ] || continue
+    ! git -C "$WIKIS_DIR" check-ignore -q -- "$d" 2>/dev/null || continue
+    set -- "$@" "$d"
+  done
+  for d in "$WIKIS_DIR"/*/; do
+    d="${d%/}"
+    # Only a name a wiki can have: a folder called * or :(top) would be read by git as a
+    # pattern and take every file. And never journal/, the journal's own folder, whatever
+    # is in it: that goes in below, and only when it is set to be committed.
+    valid_name "${d##*/}" || continue
+    case "$(printf '%s' "${d##*/}" | LC_ALL=C tr 'A-Z' 'a-z')" in journal) continue ;; esac
+    [ ! -L "$d" ] && is_wiki "$d" || continue
+    # A wiki made with --git is a repository of its own: staged here, it would be a link to
+    # another repository that no clone could fill. A .git that is a broken link counts too.
+    [ ! -e "$d/.git" ] && [ ! -L "$d/.git" ] || continue
+    ! git -C "$WIKIS_DIR" check-ignore -q -- "${d##*/}" 2>/dev/null || continue
+    set -- "$@" "${d##*/}"
+  done
+  if [ "$(journal_get commit)" = yes ] && [ -d "$WIKIS_DIR/journal" ] && [ ! -L "$WIKIS_DIR/journal" ] \
+    && [ ! -e "$WIKIS_DIR/journal/.git" ] && [ ! -L "$WIKIS_DIR/journal/.git" ] \
+    && ! git -C "$WIKIS_DIR" check-ignore -q -- journal/config 2>/dev/null; then
+    set -- "$@" journal
+  fi
+  [ $# -gt 0 ] || { echo "git:     nothing of llm-wiki's to commit yet"; return 0; }
+  # Literal paths: git reads a pathspec as a pattern otherwise.
+  git -C "$WIKIS_DIR" --literal-pathspecs add -A -- "$@" 2>/dev/null || true
+  if git -C "$WIKIS_DIR" --literal-pathspecs diff --cached --quiet -- "$@" 2>/dev/null; then
+    echo "git:     nothing of llm-wiki's to commit yet"
+    return 0
+  fi
+  # What went in, said from what is staged, not from what was asked for.
+  for d in "$@"; do
+    git -C "$WIKIS_DIR" --literal-pathspecs diff --cached --quiet -- "$d" 2>/dev/null && continue
+    case "$d" in
+      WIKIS.md | .gitignore) what="$what, $d" ;;
+      journal) what="$what, the journal" ;;
+      *) n=$((n + 1)) ;;
+    esac
+  done
+  [ "$n" = 0 ] || what="$what, $n wiki(s)"
+  what="${what#, }"
+  case "$what" in *", "*) what="${what%, *} and ${what##*, }" ;; esac
+  # A refused commit, by a hook or by signing, ends nothing: what this staged is unstaged,
+  # and init or setup goes on. The files stay on disk as they were.
+  if ! err="$(git -C "$WIKIS_DIR" --literal-pathspecs commit -q -m "wikis: start collection" -- "$@" 2>&1)"; then
+    [ -z "$err" ] || printf '%s\n' "$err"
+    if git -C "$WIKIS_DIR" rev-parse -q --verify HEAD >/dev/null 2>&1; then
+      git -C "$WIKIS_DIR" --literal-pathspecs reset -q -- "$@" >/dev/null 2>&1 || true
+    else
+      git -C "$WIKIS_DIR" --literal-pathspecs rm -r -q --cached --ignore-unmatch -- "$@" >/dev/null 2>&1 || true
+    fi
+    echo "git:     the first commit was refused, so nothing is committed. Do: fix what git said above, then run $WIKI_CMD setup git"
+    return 0
+  fi
+  echo "git:     first commit made: $what"
 }
 
 # ---- secret scan ------------------------------------------------------------
@@ -5471,7 +5644,7 @@ $r
 EOF2
   ! history_stray_git || todo_add "git: $(history_stray_text)"
   # A pull that was undone because two machines changed one page, and a merge left open.
-  if in_git_repo "$WIKIS_DIR"; then
+  if collection_repo; then
     local cf cday cfiles
     cf="$(sync_conflict_file "$WIKIS_DIR" || true)"
     # Settled and pushed by hand, with no sync to remove the record: nothing waits to be
@@ -5486,6 +5659,19 @@ EOF2
       todo_add "sync: blocked since ${cday:-an earlier day}. $(sync_clash "$cfiles"). Ask an agent: \"settle the sync conflict in $cfiles\""
     fi
     ! sync_merging "$WIKIS_DIR" || todo_add "sync: blocked. $(tilde "$WIKIS_DIR") is in the middle of a merge. Do: finish it (edit the file, git add, git commit --no-edit), or undo it: git -C $(tilde "$WIKIS_DIR") merge --abort"
+    # One machine's own files that a first commit took, as setup's did in a clone of an empty
+    # remote (code review M18). Each command also commits: a sync commits one wiki's folder,
+    # and would leave the removal staged. Nothing is removed for the user, and history isn't
+    # rewritten: that is a force push, and the user's call.
+    local gw
+    gw="$(qpath "$WIKIS_DIR")"
+    if [ "$(journal_get commit)" != yes ] && [ -n "$(git -C "$WIKIS_DIR" ls-files -- journal 2>/dev/null || true)" ]; then
+      todo_add "journal: its files are in git, though they are set to stay on this machine. Earlier commits still hold them. Run: git -C $gw rm -r -q --cached journal && git -C $gw commit -q -m \"wikis: stop tracking the journal\""
+    fi
+    for f in delegation.md delegation-log.csv stats.csv; do
+      [ -n "$(git -C "$WIKIS_DIR" ls-files -- "$f" 2>/dev/null || true)" ] || continue
+      todo_add "$f is in git, though it is this machine's own. Earlier commits still hold it. Run: git -C $gw rm -q --cached $f && git -C $gw commit -q -m \"wikis: stop tracking $f\""
+    done
   fi
   # A folder that has both files and an AGENTS.md that was read and isn't the handbook is in
   # no table and no list. So that it doesn't vanish without a word, it is named here.
@@ -5505,7 +5691,7 @@ EOF2
     pw="$(wiki_planted "$pd")"
     [ -z "$pw" ] || todo_add "git files: $(wiki_planted_text "$pw")"
   done
-  if in_git_repo "$WIKIS_DIR" && [ -f "$WIKIS_DIR/WIKIS.md" ]; then
+  if collection_repo && [ -f "$WIKIS_DIR/WIKIS.md" ]; then
     case "$(hook_state "$WIKIS_DIR")" in
       ours) command -v gitleaks >/dev/null 2>&1 || todo_add "secrets: commits aren't scanned, gitleaks isn't installed. Run: brew install gitleaks" ;;
       none) todo_add "secrets: commits aren't scanned. Run: $WIKI_CMD upgrade --all" ;;
@@ -5889,7 +6075,7 @@ upgrade_commit() {
   local d f paths="" tv msg
   # Even with no wiki behind, an upgrade can change collection files, such as the
   # ignore rules, so this runs every time.
-  in_git_repo "$WIKIS_DIR" || return 0
+  collection_repo || return 0
   tv="$(version_of "$TEMPLATE/AGENTS.md")"
   for d in $1; do
     for f in AGENTS.md CLAUDE.md rules .gitattributes .gitignore; do
@@ -8215,7 +8401,7 @@ update_wikis() {
     [ -d "$f" ] || continue
     ui_stage COLLECTION "$n: $(tilde "$f")"
     track=""
-    if in_git_repo "$f" && [ -n "$(git -C "$f" remote 2>/dev/null)" ]; then
+    if collection_repo "$f" && [ -n "$(git -C "$f" remote 2>/dev/null)" ]; then
       remote_env "$f" ask
       track="$(track_remote "$f")"
       if [ "$track" != new ]; then
@@ -8243,7 +8429,7 @@ update_wikis() {
     # The upgrade hands back what it did, which this shows as its own CHANGED stage.
     k="$(LLM_WIKI_UPGRADE_DATA=1 WIKIS_DIR="$f" "$REPO/wiki.sh" upgrade --all </dev/null 2>/dev/null | sed -n 's/^upgraded'"$TAB"'//p' | tail -n 1)"
     [ -z "$k" ] || upgrade_changed "${k%%"$TAB"*}" "$(printf '%s' "$k" | cut -f 2)"
-    if in_git_repo "$f" && [ -n "$(git -C "$f" remote 2>/dev/null)" ]; then
+    if collection_repo "$f" && [ -n "$(git -C "$f" remote 2>/dev/null)" ]; then
       ahead="$(git -C "$f" rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)"
       if ! (sync_scan_gate "$f") >/dev/null 2>&1; then
         ui_item warn "not pushed: a commit here wasn't scanned for secrets. Run: $(typed "$WIKI_CMD sync <wiki>"), which says what to do."
@@ -8398,6 +8584,7 @@ remove_line() {
 apply_journal_commit() {
   local gi="$WIKIS_DIR/.gitignore"
   in_git_repo "$WIKIS_DIR" || return 0
+  gitignore_ok || return 0
   # Anchored with /: unanchored, it would also hide any folder called journal in a wiki.
   remove_line "$gi" "journal/"
   if [ "$(journal_get commit)" = yes ]; then
@@ -8407,8 +8594,10 @@ apply_journal_commit() {
     fi
   else
     ensure_line "$gi" "/journal/"
-    if [ -n "$(git -C "$WIKIS_DIR" ls-files journal 2>/dev/null)" ]; then
-      echo "note:    journal files are already tracked. To stop tracking them: git -C $(tilde "$WIKIS_DIR") rm -r --cached journal"
+    # The command commits too: a removal left staged blocks the next sync's merge. Only in the
+    # collection's own repository: a larger one is someone else's to commit in.
+    if collection_repo && [ -n "$(git -C "$WIKIS_DIR" ls-files -- journal 2>/dev/null)" ]; then
+      echo "note:    journal files are already tracked. To stop tracking them: git -C $(qpath "$WIKIS_DIR") rm -r -q --cached journal && git -C $(qpath "$WIKIS_DIR") commit -q -m \"wikis: stop tracking the journal\""
     fi
   fi
 }
@@ -12328,16 +12517,21 @@ deleg_set_mode() {
 # The preferences, the handoff log and the lookup stats are one person's, so they
 # stay on this machine. In a shared collection, coworkers would otherwise overwrite them.
 apply_delegation_ignore() {
-  local f
+  local f t
   in_git_repo "$WIKIS_DIR" || return 0
+  gitignore_ok || return 0
   # Anchored with /, so they match only at the top of the collection. Unanchored,
   # delegation.md also hid every wiki's rules/delegation.md, which belongs in git.
   for f in delegation.md delegation-log.csv stats.csv; do
     remove_line "$WIKIS_DIR/.gitignore" "$f"
     ensure_line "$WIKIS_DIR/.gitignore" "/$f"
   done
-  if [ -n "$(git -C "$WIKIS_DIR" ls-files delegation.md delegation-log.csv 2>/dev/null)" ]; then
-    echo "note:    delegation files are tracked from before. To keep them on this machine only: git -C $(tilde "$WIKIS_DIR") rm --cached delegation.md delegation-log.csv"
+  # The command names only what is tracked, since git rm refuses a path it doesn't know, and
+  # commits too, so no removal is left staged. Only in the collection's own repository.
+  collection_repo || return 0
+  t="$(git -C "$WIKIS_DIR" ls-files -- delegation.md delegation-log.csv stats.csv 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
+  if [ -n "$t" ]; then
+    echo "note:    delegation files are tracked from before. To keep them on this machine only: git -C $(qpath "$WIKIS_DIR") rm -q --cached $t && git -C $(qpath "$WIKIS_DIR") commit -q -m \"wikis: stop tracking the delegation files\""
   fi
 }
 
@@ -12687,7 +12881,7 @@ setup_pending() {
   local k
   [ -d "$WIKIS_DIR" ] || return 0
   setup_done git || echo git
-  if in_git_repo "$WIKIS_DIR"; then setup_done git.identity || echo git.identity; fi
+  if collection_repo; then setup_done git.identity || echo git.identity; fi
   if is_wiki "$WIKIS_DIR/$SHARED"; then setup_done workflows || echo workflows; fi
   setup_done delegation.mode || echo delegation.mode
   setup_done feedback || echo feedback
@@ -12891,6 +13085,17 @@ setup_collection() {
 
 setup_git() {
   local url
+  # A wikis folder inside a larger repository, such as a home folder kept in git: that
+  # repository is someone else's, and gets no remote, name, hook or commit from here. The
+  # .gitignore inside the wikis folder still keeps the journal out of it.
+  if in_git_repo "$WIKIS_DIR" && ! collection_repo; then
+    if ! setup_due git; then collection_ignores >/dev/null; return 0; fi
+    section "Git"
+    collection_ignores | sed 's/^/  /'
+    ui_item warn "$(collection_outside_text). Do: to keep a history with git, move $(tilde "$WIKIS_DIR") out of it, then run $(typed "$WIKI_CMD setup git")"
+    setup_mark git
+    return 0
+  fi
   if setup_due git; then
     section "Git"
     if in_git_repo "$WIKIS_DIR"; then
@@ -12937,6 +13142,9 @@ setup_git() {
     setup_mark git
   fi
   in_git_repo "$WIKIS_DIR" || return 0
+  # The rules that keep the journal and the delegation files out, before any commit: a
+  # repository llm-wiki found, such as a clone of an empty remote, never had them.
+  collection_ignores | sed 's/^/  /'
   # A repo with no commits yet needs a name and email before anything else.
   if setup_due git.identity || ! git -C "$WIKIS_DIR" rev-parse -q --verify HEAD >/dev/null; then
     setup_identity
@@ -13326,9 +13534,11 @@ setup_list_rows() {
   pending=" $(setup_pending | tr '\n' ' ')"
   new_note="  <- new"
   echo "collection          $(tilde "$WIKIS_DIR")$([ -d "$WIKIS_DIR" ] || echo ' (missing)')"
-  if in_git_repo "$WIKIS_DIR"; then
+  if collection_repo; then
     echo "git                 remote $(git -C "$WIKIS_DIR" remote get-url origin 2>/dev/null || echo none)"
     echo "git.identity        $(git -C "$WIKIS_DIR" config user.email 2>/dev/null || echo 'no email set')"
+  elif in_git_repo "$WIKIS_DIR"; then
+    echo "git                 inside another repository, left alone"
   else
     echo "git                 not a repo"
   fi
@@ -14776,6 +14986,7 @@ EOF
     chat) SETUP_MODE=all; setup_chat ;;
     git.identity)
       in_git_repo "$WIKIS_DIR" || die "$(tilde "$WIKIS_DIR") isn't a git repo yet. Run: $WIKI_CMD setup git"
+      collection_repo || die "$(collection_outside_text). Do: to keep a history with git, move $(tilde "$WIKIS_DIR") out of it, then run $WIKI_CMD setup git"
       setup_identity
       setup_push_check
       ;;
