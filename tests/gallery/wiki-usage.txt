@@ -26,8 +26,10 @@
   sync <wiki> [-m MSG] Commit this wiki's changes, pull with a merge, and push.
   index <wiki> [--check]  Bring index.md in step with the pages' frontmatter, in place.
   lint <wiki>... | --all  The mechanical lint checks. Reports, changes nothing.
-  harvest [--dry-run]  Copy Claude Code's own memory notes into the wikis, where every
-                       repo and teammate can use them.
+  harvest [--dry-run] [--with-user]
+                       Copy Claude Code's own memory notes into the wikis, where every
+                       repo and teammate can use them. Notes about you stay behind
+                       unless --with-user is given.
   pending [<wiki>] [--show] [--keep-inbox]
                        Notes waiting to be compiled. --show prints a wiki's in one go.
                        --keep-inbox counts without taking the notes in an inbox.
