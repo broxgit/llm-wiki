@@ -86,6 +86,7 @@ read -r -d '' PARTS <<'TABLE' || true
 2 | A wiki that passes for a repository |
 2 | A folder that only looks like a wiki |
 2 | Two clones change one page |
+2 | The collection's first commit |
 3 | A remote that doesn't answer |
 2 | The suite itself |
 3 | Obsidian plugin |
@@ -12492,6 +12493,282 @@ tcg d reset -q --hard '@{u}' 2>/dev/null; rm -f "$TC2/d/wikis/.git/llm-wiki-conf
 # An entry left with two status lines, as a merge settled by hand can leave it.
 printf '\n## Twice\n- kind: waiting\n- who: Sam\n- status: open\n- status: done 2026-06-03\n' >> "$TC2/d/wikis/demo/open.md"
 expect "an entry with two status lines is named by lint" "it has two status lines" tcw d lint demo
+fi
+
+if section "The collection's first commit"; then
+# Code review M18, L48 and L3 (2026-11-16). A wikis folder that was a git repository first,
+# such as a clone of an empty remote, got no .gitignore, and setup's first commit took the
+# journal and delegation.md with it. WIKIS.md was never committed where init had no name to
+# commit as. And `new --git` with no name ended in git's own message. Each case has a home of
+# its own, so a name set for one is not set for the next.
+FC="$T/firstcommit"
+mkdir -p "$FC/bin"
+# setup offers to install gitleaks with Homebrew where it isn't installed: never here.
+printf '#!/bin/sh\nexit 1\n' > "$FC/bin/brew"
+chmod +x "$FC/bin/brew"
+fcw() { local h="$1"; shift; env HOME="$h" WIKIS_DIR="$h/wikis" GIT_CONFIG_NOSYSTEM=1 PATH="$FC/bin:$PATH" "$W" "$@"; }
+fcg() { local h="$1"; shift; env HOME="$h" GIT_CONFIG_NOSYSTEM=1 git "$@"; }
+fcid() { mkdir -p "$1" && fcg "$1" config --global user.email t@example.invalid && fcg "$1" config --global user.name T && fcg "$1" config --global init.defaultBranch main; }
+# The files a commit holds, one per line.
+fcfiles() { fcg "$1" -C "$1/wikis" show --name-only --format= "${2:-HEAD}" 2>/dev/null; }
+# One machine's own files at the top of the collection, among the paths on standard input.
+fcmine() { grep -e '^journal/' -e '^delegation\.md$' -e '^delegation-log\.csv$' -e '^stats\.csv$'; }
+# A clone of an empty remote, as a person starting a shared collection makes one.
+fcclone() { mkdir -p "$1"; git init -q --bare "$1.git"; fcg "$1" clone -q "$1.git" "$1/wikis" 2>/dev/null; }
+
+# The review's steps: a name set, a clone, init --git, a journal entry, setup's git step with Enter.
+FA="$FC/a"; mkdir -p "$FA"; fcid "$FA"; fcclone "$FA"
+out="$(fcw "$FA" init --git 2>&1)"
+case "$out" in *"first commit made: WIKIS.md, .gitignore and 1 wiki(s)"*) ok "init --git in a clone of an empty remote makes the first commit, and says what went in" ;; *) bad "init --git in a clone of an empty remote makes the first commit, and says what went in" "$out" ;; esac
+check "and leaves one commit" test "$(fcg "$FA" -C "$FA/wikis" rev-list --count HEAD 2>/dev/null)" = 1
+fcw "$FA" journal note demo "A private line about my day." >/dev/null 2>&1
+printf '\n\n\n\n\n\n' | in_tty fcw "$FA" setup git >/dev/null 2>&1
+out="$(fcg "$FA" -C "$FA/wikis" ls-files)"
+check "the clone's commits hold no journal, delegation or stats file" test -z "$(printf '%s\n' "$out" | fcmine)"
+check "and they hold WIKIS.md" bash -c "printf '%s\n' '$out' | grep -qx WIKIS.md"
+f=1; for l in .DS_Store .compile-lock .obsidian/ .trash/ /journal/ /delegation.md /delegation-log.csv /stats.csv; do grep -qxF -- "$l" "$FA/wikis/.gitignore" 2>/dev/null || f=0; done
+[ "$f" = 1 ] && ok "the clone's .gitignore has the four base lines and the ones for the journal and delegation files" || bad "the clone's .gitignore has the four base lines and the ones for the journal and delegation files" "$(cat "$FA/wikis/.gitignore" 2>&1)"
+
+# No name until setup asks for one: the first commit is setup's, and it takes llm-wiki's own files by name.
+FB="$FC/b"; fcclone "$FB"
+printf 'Our wikis.\n' > "$FB/wikis/README.md"
+out="$(fcw "$FB" init --git 2>&1)"
+case "$out" in *"no commit name or email set yet, so nothing is committed"*) ok "init --git with no name in a clone commits nothing, and says so" ;; *) bad "init --git with no name in a clone commits nothing, and says so" "$out" ;; esac
+fcw "$FB" journal note demo "A private line." >/dev/null 2>&1
+printf '\nT\nt@example.invalid\n\n\n\n' | in_tty fcw "$FB" setup git >/dev/null 2>&1
+out="$(fcfiles "$FB")"
+case "$out" in *global/AGENTS.md*) ok "setup's first commit holds the shared wiki" ;; *) bad "setup's first commit holds the shared wiki" "$out" ;; esac
+check "and WIKIS.md and .gitignore" bash -c "printf '%s\n' '$out' | grep -qx WIKIS.md && printf '%s\n' '$out' | grep -qx .gitignore"
+check "and no journal, delegation or stats file" test -z "$(printf '%s\n' "$out" | fcmine)"
+case "$out" in *README.md*) bad "a file that was in the folder before llm-wiki isn't in the first commit" "$out" ;; *) ok "a file that was in the folder before llm-wiki isn't in the first commit" ;; esac
+expect "and it is still untracked" "?? README.md" fcg "$FB" -C "$FB/wikis" status --porcelain
+
+# With the journal set to be committed before the first commit, the journal goes in.
+FJ="$FC/j"; fcclone "$FJ"
+fcw "$FJ" init --git >/dev/null 2>&1
+fcw "$FJ" journal set commit yes >/dev/null 2>&1
+fcid "$FJ"
+printf '\n\n\n\n\n\n' | in_tty fcw "$FJ" setup git >/dev/null 2>&1
+expect "with the journal's commit set to yes, the first commit holds journal/config" "journal/config" fcfiles "$FJ"
+
+# An existing .gitignore keeps the user's lines, in order, with the new ones after.
+FG="$FC/g"; fcid "$FG"; fcclone "$FG"
+printf 'node_modules/\n*.log' > "$FG/wikis/.gitignore"
+fcw "$FG" init --git >/dev/null 2>&1
+check "an existing .gitignore keeps its own lines first, in order" test "$(head -n 2 "$FG/wikis/.gitignore" | tr '\n' ' ')" = "node_modules/ *.log "
+check "and the new lines come after them" bash -c "sed -n '3,\$p' '$FG/wikis/.gitignore' | grep -qxF /journal/"
+
+# A wikis folder inside a larger repository with no commit: a home folder kept in git.
+FH="$FC/h"; mkdir -p "$FH"; fcid "$FH"; fcg "$FH" init -q "$FH"; echo private > "$FH/taxes.txt"
+fcw "$FH" init >/dev/null 2>&1
+out="$(printf '\n\n\n\n\n\n\n\n' | in_tty fcw "$FH" setup git 2>&1)"
+case "$out" in *"the wikis folder is inside another repository, ~. llm-wiki leaves that one alone"*) ok "setup git in a larger repository says it isn't the wikis' own, and leaves it alone" ;; *) bad "setup git in a larger repository says it isn't the wikis' own, and leaves it alone" "$out" ;; esac
+check "that repository has no commit" bash -c "! env HOME='$FH' git -C '$FH' rev-parse -q --verify HEAD"
+check "no remote" test -z "$(fcg "$FH" -C "$FH" remote)"
+check "no name of its own" test -z "$(fcg "$FH" -C "$FH" config --local user.name)"
+check "and no hook" test ! -e "$FH/.git/hooks/pre-commit"
+check "the .gitignore in the wikis folder still keeps the journal out" grep -qxF /journal/ "$FH/wikis/.gitignore"
+expect "init --git there says the same" "inside another repository" fcw "$FH" init --git
+check "and adds no hook either" test ! -e "$FH/.git/hooks/pre-commit"
+expect "setup git.identity there refuses" "inside another repository" in_tty fcw "$FH" setup git.identity
+lacks "and setup doesn't count the name as a question for it" "git.identity" fcw "$FH" setup --pending
+
+# L48: no name when the collection is made, a name set by hand afterwards, then a sync.
+FL="$FC/l"; mkdir -p "$FL"
+fcw "$FL" init --git >/dev/null 2>&1
+fcid "$FL"
+fcw "$FL" new demo >/dev/null 2>&1
+fcw "$FL" sync demo -m "demo: start" >/dev/null 2>&1
+out="$(fcfiles "$FL")"
+check "a sync after the name is set commits WIKIS.md" bash -c "printf '%s\n' '$out' | grep -qx WIKIS.md"
+check "and .gitignore" bash -c "printf '%s\n' '$out' | grep -qx .gitignore"
+check "and leaves nothing staged" fcg "$FL" -C "$FL/wikis" diff --cached --quiet
+lacks "a sync with nothing new in them doesn't name them again" "WIKIS.md" bash -c "printf 'x\n' > '$FL/wikis/demo/raw/n.md'; $(declare -f fcw fcg fcfiles); FC='$FC' W='$W'; fcw '$FL' sync demo -m again >/dev/null 2>&1; fcfiles '$FL'"
+
+# A changed .gitignore is committed by the next sync of any wiki, even one with nothing new.
+fcw "$FA" journal set commit yes >/dev/null 2>&1
+fcw "$FA" sync global -m "global: update" >/dev/null 2>&1
+check "after journal set commit yes, a sync with nothing new in the wiki commits .gitignore" test "$(fcfiles "$FA")" = .gitignore
+check "and leaves nothing staged" fcg "$FA" -C "$FA/wikis" diff --cached --quiet
+lacks "and doesn't take the journal with it" "journal/" fcfiles "$FA"
+fcw "$FA" journal set commit no >/dev/null 2>&1
+fcw "$FA" sync global >/dev/null 2>&1
+
+# A sync whose commit is refused, with WIKIS.md changed: nothing is left staged.
+FR="$FC/r"; fcid "$FR"; fcclone "$FR"
+fcw "$FR" init --git >/dev/null 2>&1
+printf '\nA line of our own.\n' >> "$FR/wikis/WIKIS.md"
+printf 'x\n' > "$FR/wikis/global/raw/n.md"
+printf '#!/bin/sh\nexit 1\n' > "$FR/wikis/.git/hooks/pre-commit"
+out="$(fcw "$FR" sync global 2>&1)"; code=$?
+case "$code:$out" in 1:*"the commit was refused"*) ok "a sync whose commit is refused says so" ;; *) bad "a sync whose commit is refused says so" "exit $code: $out" ;; esac
+check "and leaves nothing staged, the two top files included" fcg "$FR" -C "$FR/wikis" diff --cached --quiet
+check "and WIKIS.md keeps its change on disk" grep -q 'A line of our own' "$FR/wikis/WIKIS.md"
+
+# L3: new --git with no name set says so in llm-wiki's words, with the wiki's own folder.
+FN="$FC/n"; mkdir -p "$FN"
+fcw "$FN" init >/dev/null 2>&1
+out="$(fcw "$FN" new demo --git 2>&1)"
+case "$out" in *"no commit name or email is set yet, so nothing is committed. Run: git -C ~/wikis/demo config user.name"*) ok "new --git with no name says so, and how to set it for that wiki" ;; *) bad "new --git with no name says so, and how to set it for that wiki" "$out" ;; esac
+case "$out" in *"Please tell me who you are"*) bad "and git's own message isn't in it" "$out" ;; *) ok "and git's own message isn't in it" ;; esac
+check "the wiki is made anyway" test -f "$FN/wikis/demo/index.md"
+fcid "$FN"
+out="$(fcw "$FN" init --git 2>&1)"
+case "$out" in *"first commit made: WIKIS.md, .gitignore and 1 wiki(s)"*) ok "a first commit made afterwards counts only the shared wiki" ;; *) bad "a first commit made afterwards counts only the shared wiki" "$out" ;; esac
+check "and doesn't stage the wiki that is a repository of its own" test -z "$(fcg "$FN" -C "$FN/wikis" ls-files -- demo)"
+
+# A collection this already happened to: status names each file, with a command that also commits.
+FS="$FC/s"; fcid "$FS"; mkdir -p "$FS"
+fcw "$FS" init --git >/dev/null 2>&1
+fcw "$FS" journal note demo "A private line." >/dev/null 2>&1
+printf 'kind,n\n' > "$FS/wikis/stats.csv"
+fcg "$FS" -C "$FS/wikis" add -f journal delegation.md stats.csv
+fcg "$FS" -C "$FS/wikis" commit -q -m leak
+# What journal set and upgrade say end with the commit too: a removal left staged blocks the next merge.
+expect "journal set says how to stop tracking the journal, and the command commits" "git -C ~/wikis rm -r -q --cached journal && git -C ~/wikis commit -q -m \"wikis: stop tracking the journal\"" fcw "$FS" journal set commit no
+expect "upgrade says how to stop tracking the delegation files, stats.csv with them, and commits" "git -C ~/wikis rm -q --cached delegation.md stats.csv && git -C ~/wikis commit -q -m \"wikis: stop tracking the delegation files\"" fcw "$FS" upgrade --all
+out="$(fcw "$FS" status 2>&1)"
+case "$out" in *"journal: its files are in git, though they are set to stay on this machine. Earlier commits still hold them. Run: git -C ~/wikis rm -r -q --cached journal && git -C ~/wikis commit -q -m \"wikis: stop tracking the journal\""*) ok "status names a tracked journal, and the command that stops it" ;; *) bad "status names a tracked journal, and the command that stops it" "$out" ;; esac
+case "$out" in *"delegation.md is in git, though it is this machine's own."*"Run: git -C ~/wikis rm -q --cached delegation.md && git -C ~/wikis commit -q -m \"wikis: stop tracking delegation.md\""*) ok "and a tracked delegation.md" ;; *) bad "and a tracked delegation.md" "$out" ;; esac
+case "$out" in *"stats.csv is in git"*) ok "and a tracked stats.csv" ;; *) bad "and a tracked stats.csv" "$out" ;; esac
+for l in journal delegation.md stats.csv; do
+  c="$(printf '%s\n' "$out" | grep -e "- $l" | sed 's/.*Run: //')"
+  env HOME="$FS" GIT_CONFIG_NOSYSTEM=1 bash -c "$c" >/dev/null 2>&1
+done
+check "after the commands, git status is clean" test -z "$(fcg "$FS" -C "$FS/wikis" status --porcelain)"
+check "HEAD has no journal, delegation.md or stats.csv" bash -c "! env HOME='$FS' git -C '$FS/wikis' ls-tree -r --name-only HEAD | grep -e '^journal/' -e '^delegation.md' -e '^stats.csv'"
+check "and the files are still on disk" test -f "$FS/wikis/journal/config" -a -f "$FS/wikis/delegation.md"
+out="$(fcw "$FS" status 2>&1)"
+case "$out" in *"journal: its files are in git"* | *" is in git, though"*) bad "and the lines are gone" "$out" ;; *) ok "and the lines are gone" ;; esac
+
+# A folder whose name git would read as a pattern: * takes every file. Made by hand, it
+# passes for a wiki, beside a README of the remote's and a journal.
+FP="$FC/p"; fcclone "$FP"
+fcw "$FP" init --git >/dev/null 2>&1
+mkdir "$FP/wikis/*"; cp "$FP/wikis/global/AGENTS.md" "$FP/wikis/global/index.md" "$FP/wikis/*/"
+printf 'Our wikis.\n' > "$FP/wikis/README.md"
+fcw "$FP" journal note demo "A private line." >/dev/null 2>&1
+fcid "$FP"
+fcw "$FP" init --git >/dev/null 2>&1
+out="$(fcg "$FP" -C "$FP/wikis" ls-files)"
+check "a wiki folder named * doesn't take the README into the first commit" bash -c "! printf '%s\n' '$out' | grep -qx README.md"
+check "or the journal" test -z "$(printf '%s\n' "$out" | fcmine)"
+check "and isn't in it itself: no wiki can have that name" bash -c "! printf '%s\n' '$out' | grep -q '^[*]/'"
+printf 'x\n' > "$FP/wikis/*/n.md"
+printf 'Not a wiki.\n' > "$FP/wikis/other.txt"
+fcw "$FP" sync '*' -m star >/dev/null 2>&1
+out="$(fcfiles "$FP")"
+check "a sync of that folder commits only what is in it" bash -c "[ -n '$out' ] && ! printf '%s\n' '$out' | grep -v '^[*]/'"
+expect "and a file beside it is still untracked" "?? other.txt" fcg "$FP" -C "$FP/wikis" status --porcelain
+expect "and so is the README" "?? README.md" fcg "$FP" -C "$FP/wikis" status --porcelain
+
+# A folder called journal that looks like a wiki is the journal still.
+FK="$FC/k"; fcid "$FK"; fcclone "$FK"
+fcw "$FK" init >/dev/null 2>&1
+cp "$FK/wikis/global/AGENTS.md" "$FK/wikis/global/index.md" "$FK/wikis/journal/"
+out="$(fcw "$FK" init --git 2>&1)"
+case "$out" in *"first commit made: WIKIS.md, .gitignore and 1 wiki(s)"*) ok "a journal folder that looks like a wiki isn't counted as one" ;; *) bad "a journal folder that looks like a wiki isn't counted as one" "$out" ;; esac
+check "and isn't in the first commit" test -z "$(fcg "$FK" -C "$FK/wikis" ls-files | fcmine)"
+expect "a sync of it is refused, and says why" "is the work journal's folder, which stays on this machine" fcw "$FK" sync journal
+check "and commits nothing of it" test -z "$(fcg "$FK" -C "$FK/wikis" ls-files | fcmine)"
+check "and leaves nothing staged" fcg "$FK" -C "$FK/wikis" diff --cached --quiet
+# With the journal set to be committed it goes in once, as the journal. A wiki and a journal
+# whose .git is a link, even a broken one, are repositories of their own and stay out.
+FK2="$FC/k2"; fcclone "$FK2"
+fcw "$FK2" init --git >/dev/null 2>&1
+cp "$FK2/wikis/global/AGENTS.md" "$FK2/wikis/global/index.md" "$FK2/wikis/journal/"
+fcw "$FK2" journal set commit yes >/dev/null 2>&1
+fcw "$FK2" new demo >/dev/null 2>&1; ln -s "$FC/nowhere" "$FK2/wikis/demo/.git"
+fcid "$FK2"
+out="$(fcw "$FK2" init --git 2>&1)"
+case "$out" in *"first commit made: WIKIS.md, .gitignore, the journal and 1 wiki(s)"*) ok "with commit yes, the journal goes in once, as the journal" ;; *) bad "with commit yes, the journal goes in once, as the journal" "$out" ;; esac
+check "and a wiki whose .git is a broken link stays out" test -z "$(fcg "$FK2" -C "$FK2/wikis" ls-files -- demo)"
+FK3="$FC/k3"; fcclone "$FK3"
+fcw "$FK3" init --git >/dev/null 2>&1
+fcw "$FK3" journal set commit yes >/dev/null 2>&1
+ln -s "$FC/nowhere" "$FK3/wikis/journal/.git"
+fcid "$FK3"
+out="$(fcw "$FK3" init --git 2>&1)"
+case "$out" in *"first commit made: WIKIS.md, .gitignore and 1 wiki(s)"*) ok "a journal with a .git of its own stays out, and the line doesn't name it" ;; *) bad "a journal with a .git of its own stays out, and the line doesn't name it" "$out" ;; esac
+
+# A .gitignore that is a link: nothing is written through it, and the first commit is still safe.
+FY="$FC/y"; fcid "$FY"; fcclone "$FY"
+printf 'outside\n' > "$FC/y-outside"; ln -s "$FC/y-outside" "$FY/wikis/.gitignore"
+fcw "$FY" init >/dev/null 2>&1
+fcw "$FY" journal note demo "A private line." >/dev/null 2>&1
+out="$(fcw "$FY" init --git 2>&1)"
+case "$out" in *".gitignore is a link or not a plain file, so the rules that keep the journal and delegation files out of git weren't written. Do: "*) ok "a .gitignore that is a link is written through by nothing, and says so" ;; *) bad "a .gitignore that is a link is written through by nothing, and says so" "$out" ;; esac
+check "the file it points to is as it was" test "$(cat "$FC/y-outside")" = outside
+case "$out" in *"first commit made: WIKIS.md and 1 wiki(s)"*) ok "and the first commit names only what went in" ;; *) bad "and the first commit names only what went in" "$out" ;; esac
+check "which is no journal or delegation file" test -z "$(fcg "$FY" -C "$FY/wikis" ls-files | fcmine)"
+FZ="$FC/z"; fcid "$FZ"; fcclone "$FZ"; mkdir "$FZ/wikis/.gitignore"
+out="$(fcw "$FZ" init --git 2>&1)"; code=$?
+case "$code:$out" in 0:*"is a link or not a plain file"*"first commit made"*) ok "a .gitignore that is a folder ends nothing, and says so" ;; *) bad "a .gitignore that is a folder ends nothing, and says so" "exit $code: $out" ;; esac
+
+# A first commit a hook refuses ends nothing either, and leaves nothing staged.
+FQ="$FC/q"; fcid "$FQ"; fcclone "$FQ"
+printf '#!/bin/sh\necho "refused by a hook"\nexit 1\n' > "$FQ/wikis/.git/hooks/pre-commit"; chmod +x "$FQ/wikis/.git/hooks/pre-commit"
+out="$(fcw "$FQ" init --git 2>&1)"; code=$?
+case "$code:$out" in 0:*"refused by a hook"*"the first commit was refused, so nothing is committed."*"Next:"*) ok "a refused first commit says so, with git's words, and init goes on" ;; *) bad "a refused first commit says so, with git's words, and init goes on" "exit $code: $out" ;; esac
+check "and nothing is left staged" test -z "$(fcg "$FQ" -C "$FQ/wikis" ls-files)"
+
+# A refused sync in a repository with no commit yet leaves nothing staged.
+FR2="$FC/r2"; fcclone "$FR2"
+fcw "$FR2" init --git >/dev/null 2>&1
+fcid "$FR2"
+printf '#!/bin/sh\nexit 1\n' > "$FR2/wikis/.git/hooks/pre-commit"; chmod +x "$FR2/wikis/.git/hooks/pre-commit"
+printf 'x\n' > "$FR2/wikis/global/raw/n.md"
+expect "a sync refused before the first commit says so" "the commit was refused" fcw "$FR2" sync global
+check "and leaves nothing staged, WIKIS.md and .gitignore included" test -z "$(fcg "$FR2" -C "$FR2/wikis" ls-files)"
+
+# One of the files that stay on this machine let back in by a rule of the user's: named, not rewritten.
+FU="$FC/u"; fcid "$FU"; fcclone "$FU"
+printf '/delegation.md\n!/delegation.md\n' > "$FU/wikis/.gitignore"
+out="$(fcw "$FU" init --git 2>&1)"
+case "$out" in *"delegation.md isn't ignored by git: the rule !/delegation.md in .gitignore, line 2, lets it back in. Do: remove that rule"*) ok "a rule that lets delegation.md back in is named, with its line" ;; *) bad "a rule that lets delegation.md back in is named, with its line" "$out" ;; esac
+check "the rule is left as it is" test "$(sed -n 2p "$FU/wikis/.gitignore")" = '!/delegation.md'
+check "and the first commit still holds no delegation.md" test -z "$(fcg "$FU" -C "$FU/wikis" ls-files | fcmine)"
+
+# A path with a space in a command to paste is quoted, so it works when pasted.
+fcwd() { local h="$1" d="$2"; shift 2; env HOME="$h" WIKIS_DIR="$d" GIT_CONFIG_NOSYSTEM=1 PATH="$FC/bin:$PATH" "$W" "$@"; }
+FW="$FC/w"; fcid "$FW"; FWD="$FW/My Wikis"
+fcwd "$FW" "$FWD" init --git >/dev/null 2>&1
+fcwd "$FW" "$FWD" journal note demo "A private line." >/dev/null 2>&1
+fcg "$FW" -C "$FWD" add -f journal; fcg "$FW" -C "$FWD" commit -q -m leak
+out="$(fcwd "$FW" "$FWD" status 2>&1)"
+case "$out" in *"Run: git -C ~/'My Wikis' rm -r -q --cached journal && git -C ~/'My Wikis' commit -q"*) ok "status quotes a collection folder with a space in it" ;; *) bad "status quotes a collection folder with a space in it" "$out" ;; esac
+c="$(printf '%s\n' "$out" | grep -e "- journal" | sed 's/.*Run: //')"
+env HOME="$FW" GIT_CONFIG_NOSYSTEM=1 bash -c "$c" >/dev/null 2>&1
+check "and the command works as pasted" test -z "$(fcg "$FW" -C "$FWD" ls-files -- journal)"
+FV="$FC/v"; mkdir -p "$FV"
+fcwd "$FV" "$FV/My Wikis" init >/dev/null 2>&1
+out="$(fcwd "$FV" "$FV/My Wikis" new demo --git 2>&1)"
+case "$out" in *"Run: git -C ~/'My Wikis/demo' config user.name \"Your Name\" && git -C ~/'My Wikis/demo' config user.email"*) ok "new --git quotes a wiki folder with a space in it" ;; *) bad "new --git quotes a wiki folder with a space in it" "$out" ;; esac
+c="$(printf '%s\n' "$out" | sed -n 's/.*Run: \(.*\) && [^&]* sync .*/\1/p')"
+env HOME="$FV" GIT_CONFIG_NOSYSTEM=1 bash -c "$c" >/dev/null 2>&1
+check "and the commands that set the name work as pasted" test "$(fcg "$FV" -C "$FV/My Wikis/demo" config --local user.name)" = "Your Name"
+
+# A wikis folder inside a larger repository that has a remote: the commands that pull, commit
+# and push in the collection leave that repository alone, and status gives no git advice for it.
+FX="$FC/x"; fcid "$FX"
+git init -q --bare "$FX.git"
+fcg "$FX" init -q "$FX"; echo home > "$FX/a.txt"; fcg "$FX" -C "$FX" add a.txt; fcg "$FX" -C "$FX" commit -q -m home
+fcg "$FX" -C "$FX" remote add origin "$FX.git"; fcg "$FX" -C "$FX" push -q -u origin main 2>/dev/null
+fcg "$FX" clone -q "$FX.git" "$FC/x-other" 2>/dev/null; echo more > "$FC/x-other/b.txt"
+fcg "$FX" -C "$FC/x-other" add b.txt; fcg "$FX" -C "$FC/x-other" commit -q -m "remote only"; fcg "$FX" -C "$FC/x-other" push -q 2>/dev/null
+fcw "$FX" init >/dev/null 2>&1
+set_version "$FX/wikis/global/AGENTS.md" 1
+xhead="$(fcg "$FX" -C "$FX" rev-parse HEAD)"; xremote="$(git --git-dir="$FX.git" rev-parse HEAD)"
+fcw "$FX" upgrade --all </dev/null >/dev/null 2>&1
+fcw "$FX" update --wikis-only </dev/null >/dev/null 2>&1
+(cd "$FC" && fcw "$FX" start >/dev/null 2>&1)
+check "upgrade, update and start make no commit in the larger repository, and pull nothing into it" test "$(fcg "$FX" -C "$FX" rev-parse HEAD)" = "$xhead"
+check "and push nothing from it" test "$(git --git-dir="$FX.git" rev-parse HEAD)" = "$xremote"
+check "and stage nothing in it" fcg "$FX" -C "$FX" diff --cached --quiet
+check "and put no hook in it" test ! -e "$FX/.git/hooks/pre-commit"
+out="$(fcw "$FX" status 2>&1)"
+case "$out" in *"secrets:"* | *"git -C"*) bad "status gives no git advice for it" "$out" ;; *) ok "status gives no git advice for it" ;; esac
+expect "and setup --list says it is left alone" "inside another repository, left alone" fcw "$FX" setup --list
 fi
 
 if section "A remote that doesn't answer"; then

@@ -4,6 +4,13 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2027-02-01: the collection's first commit keeps your journal out
+
+- A wikis folder that was a clone of an empty remote now gets the `.gitignore` lines that keep the journal and delegation files out.
+- The first commit takes only `WIKIS.md`, `.gitignore` and your wikis. A wikis folder inside a larger repository gets no remote, name, hook or commit.
+- `wiki sync` commits `WIKIS.md` and `.gitignore` when they changed. `wiki new <name> --git` with no git name set says how to set one.
+- Do: run `wiki status`. If it says your journal or `delegation.md` is in git, run the command it gives.
+
 ## 2027-01-31: open items and patterns are written by commands
 
 - `wiki open add` and `wiki open done` add and close entries in a wiki's `open.md`. `done` changes nothing when its text matches no entry or several.
