@@ -4648,6 +4648,10 @@ lines"
 else
   skipped "the Go helper against the Bash for find (go isn't installed)"
 fi
+# --collection reads the whole list: stopping at the name closed the pipe while the rest was
+# still being written, and the command ended with 141 and no word.
+{ printf 'pickme %s\n' "$T/pickme"; i=0; while [ "$i" -lt 3000 ]; do printf 'c%s %s/c%s\n' "$i" "$T" "$i"; i=$((i + 1)); done; } > "$HOME/.config/llm-wiki/collections"
+check "--collection finds a collection listed before many others" test "$(env -u WIKIS_DIR "$W" --collection pickme __collection 2>&1)" = "$T/pickme"
 rm -f "$HOME/.config/llm-wiki/collections"
 fi
 
@@ -6001,7 +6005,7 @@ assert a and 'Third.' in a[0]['body'], a"
 echo "a note" | cauto capture pub note >/dev/null
 CONFLUENCE_AUTO=pub cauto sync pub >/dev/null 2>&1
 check "a sync that changed only notes reaches for nothing" test ! -s "$C/writes.log"
-check "and its log says why" grep -q "no page of pub changed" "$HOME/.local/state/llm-wiki/extensions/confluence/sync-pub.log"
+check "and its log says why" grep -q "no page of pub changed" "$HOME/.local/state/llm-wiki/extensions/confluence/"sync-pub@*.log
 printf -- '---\ntitle: Auto\n---\n\nFourth.\n' > "$CA/pub/wiki/concepts/auto.md"
 expect "the tick catches up on a page no sync published" "confluence: ok" env CONFLUENCE_AUTO=pub WIKIS_DIR="$CA" CONFLUENCE_URL="http://127.0.0.1:$(cat "$C/port")" CONFLUENCE_EMAIL=me@example.com CONFLUENCE_API_TOKEN=smoke-token LLM_WIKI_EVENTS=wait "$W" extensions tick
 check "with the page as it is on disk" state x "assert 'Fourth.' in [p for p in P.values() if p['title'] == 'pub: Auto'][0]['body']"
@@ -6110,6 +6114,181 @@ case "$out" in *"What it sends"*"The wiki's pages, to everyone who can read that
 lacks "and a no saves no space" "space =" cat "$WH/.config/llm-wiki/confluence"
 case "$out" in *"What is set"*"Watching     wdemo hears about 1 page(s) and the space ENG"*"Finished is  Verified"*"Publishing   off"*"What happens now"*"confluence check"*) ok "it ends with what is set, a line for each choice, and what happens now" ;; *) bad "it ends with what is set and what happens now" "$out" ;; esac
 case "$out" in *"confluence is set up."*) ok "and with pages to watch, it is set up without a space" ;; *) bad "and with pages to watch, it is set up without a space" "$out" ;; esac
+# A setting names one wiki (M21). The settings are one file a machine, and every collection has
+# a wiki called global, so auto = global names neither of two: a sync publishes nothing, and says
+# which to write. Each step of a run happens in the collection its setting names.
+MD="$T/m21-default"
+MK="$T/m21-work"
+for d in "$MD" "$MK"; do WIKIS_DIR="$d" "$W" init --git >/dev/null 2>&1; mkdir -p "$d/global/wiki/concepts"; done
+printf 'work %s\n' "$MK" > "$HOME/.config/llm-wiki/collections"
+M21C="$HOME/.config/llm-wiki/confluence"
+XSC="$HOME/.local/state/llm-wiki/extensions/confluence"
+# m21: the wiki command as a person runs it, the collection chosen by the collections file, with
+# events waited for unless M21_EVENTS is empty. m21page <collection> <text>: a page of its global changes.
+m21() { env -u WIKIS_DIR -u CONFLUENCE_SPACE -u CONFLUENCE_AUTO LLM_WIKI_EVENTS="${M21_EVENTS-wait}" LLM_WIKI_DEFAULT_DIR="$MD" CONFLUENCE_URL="http://127.0.0.1:$cport" CONFLUENCE_EMAIL=me@example.com CONFLUENCE_API_TOKEN=smoke-token "$W" "$@"; }
+m21page() { printf -- '---\ntitle: Plans\n---\n\n%s\n' "$2" > "$1/global/wiki/concepts/plans.md"; }
+m21done() { i=0; while { [ ! -s "$XSC/$1.status" ] || [ -d "$XSC/$1.running" ]; } && [ "$i" -lt 300 ]; do sleep 0.1; i=$((i + 1)); done; }
+printf 'space = MTWO\nauto = global\n' > "$M21C"
+m21page "$MK" "Work's own plans."
+m21 --collection work sync global -m "a page" >/dev/null 2>&1
+check "with two collections that each have global, auto = global publishes neither: a sync of the second's publishes nothing" state x "assert not any(p['space'] == 'MTWO' for p in P.values())"
+check "and the run fails, so status says so" grep -q "^failed (exit 1)" "$XSC/sync-global@work.status"
+expect "its log names both collections and the line to write" "auto names global, and two collections have a wiki called global: default, work. Say which in $M21C, such as auto = work/global." cat "$XSC/sync-global@work.log"
+expect "and says nothing was published" "Nothing was published." cat "$XSC/sync-global@work.log"
+expect "status names the run with its collection" "extension confluence: its last sync-global@work run failed (exit 1)" m21 status
+rm -f "$XSC/sync-global@work.status" "$XSC/sync-global@work.log"
+m21page "$MK" "Work's plans, again."
+M21_EVENTS="" m21 --collection work sync global -m "again" >/dev/null 2>&1
+m21done sync-global@work
+check "started the real way, in the background, the same sync publishes nothing either" state x "assert not any(p['space'] == 'MTWO' for p in P.values())"
+check "and fails the same way" grep -q "^failed (exit 1)" "$XSC/sync-global@work.status"
+expect "naming both collections" "two collections have a wiki called global: default, work" cat "$XSC/sync-global@work.log"
+printf 'space = MTWO\nauto = work/global\n' > "$M21C"
+m21page "$MK" "Work's plans, a third time."
+m21 --collection work sync global -m "third" >/dev/null 2>&1
+check "with auto = work/global, a sync of work's global publishes it" state x "assert any(p['space'] == 'MTWO' and 'a third time' in p['body'] for p in P.values())"
+m21page "$MD" "The default collection's own plans."
+m21 sync global -m "default" >/dev/null 2>&1
+check "and a sync of the other global publishes nothing" state x "assert not any('default collection' in p['body'] for p in P.values())"
+expect "its log says it isn't in auto" "default/global isn't in auto, so it wasn't published." cat "$XSC/sync-global.log"
+printf 'space = MTWO\nauto = work/global\nwatch.work/global = 900\n' > "$M21C"
+out="$(m21 confluence config 2>&1)"
+case "$out" in *"watch     work/global: 900"*"auto      work/global"*) ok "config shows a wiki named with its collection" ;; *) bad "config shows a wiki named with its collection" "$out" ;; esac
+case "$out" in *"isn't a wiki"* | *"collections have"*) bad "and reports no fault for it" "$out" ;; *) ok "and reports no fault for it" ;; esac
+cput 900 "<p>Changed for the work collection.</p>"
+m21 extensions tick >/dev/null 2>&1
+check "a tick started in the default collection notes a change to a page work/global watches, in work's global" grep -rq "Changed for the work collection." "$MK/global/raw"
+check "and nothing in the default collection's global" test -z "$(grep -rl "Changed for the work collection." "$MD/global/raw")"
+printf 'space = MTWO\nspace.default/global = MONE\nauto = default/global, work/global\n' > "$M21C"
+m21 extensions tick >/dev/null 2>&1
+check "with auto = default/global, work/global, a tick publishes each, into its own space" state x "
+assert any(p['space'] == 'MONE' and 'default collection' in p['body'] for p in P.values())
+assert any(p['space'] == 'MTWO' and 'a third time' in p['body'] for p in P.values())
+assert not any(p['space'] == 'MONE' and 'third time' in p['body'] for p in P.values())"
+printf 'space = MTWO\nspace.global = MONE\n' > "$M21C"
+expect "a bare space.global, with two globals, publishes neither, and says which to write" "space.global names global, and two collections have a wiki called global: default, work. Say which in $M21C, such as space.work/global = MONE" m21 --collection work confluence publish global
+refuse "and fails" m21 --collection work confluence publish global
+printf 'watch.global = 900\n' > "$M21C"
+expect "a bare watch.global is checked in neither collection" "watch.global names global, and two collections have a wiki called global: default, work." m21 confluence check
+expect "config says so" "watch.global names global, and two collections have a wiki called global" m21 confluence config
+expect "a session can't set a bare watch.global either, and is told which to write" "such as watch.default/global" m21 extensions set confluence watch.global 900
+out="$(m21 --collection work extensions set confluence watch.work/global 900 2>&1)"
+check "setting watch.work/global writes it" grep -qx "watch.work/global = 900" "$M21C"
+check "and leaves a bare watch.global, which named neither wiki" grep -qx "watch.global = 900" "$M21C"
+case "$out" in *"taken out"*) bad "and takes nothing out" "$out" ;; *) ok "and takes nothing out" ;; esac
+# A bare one that named that same wiki is taken out in the same write, and said, but never by a clear.
+WIKIS_DIR="$MK" "$W" new team >/dev/null 2>&1
+printf 'watch.team = 900\n' > "$M21C"
+m21 extensions set confluence watch.work/team - >/dev/null 2>&1
+check "clearing watch.work/team leaves watch.team" grep -qx "watch.team = 900" "$M21C"
+out="$(m21 extensions set confluence watch.work/team 900 2>&1)"
+check "setting it takes out watch.team, which named the same wiki" test "$(grep '^watch' "$M21C")" = "watch.work/team = 900"
+case "$out" in *"watch.team taken out: watch.work/team names the same wiki with its collection"*) ok "and says so" ;; *) bad "and says so" "$out" ;; esac
+# A whole space is watched only from a terminal; one page stays a session's to set.
+expect "a session can't watch a whole space" "space:ENG watches a whole space, which saves every page in it as a note, so a session doesn't set it. The user sets it in a terminal: " m21 extensions set confluence watch.work/team "900, space:ENG"
+check "and nothing was written" test "$(grep '^watch' "$M21C")" = "watch.work/team = 900"
+printf 'watch.work/team = 900, space:ENG\n' > "$M21C"
+check "a space the user set stays when a session changes the pages beside it" m21 extensions set confluence watch.work/team "901, space:ENG"
+check "as written" grep -qx "watch.work/team = 901, space:ENG" "$M21C"
+# Say which collection: a wiki of another collection is shown with its name, though no other has one of that name.
+printf 'watch.work/team = 900\n' > "$M21C"
+expect "check from the default collection shows work/team as work/team" "== work/team" m21 confluence check
+M21H="$T/m21home"
+mkdir -p "$M21H/.config/llm-wiki"
+HOME="$M21H" "$W" extensions add confluence >/dev/null 2>&1
+printf 'work %s\n' "$MK" > "$M21H/.config/llm-wiki/collections"
+printf 'watch.global = 900\n' > "$M21H/.config/llm-wiki/confluence"
+out="$(printf 'http://127.0.0.1:%s\n\nhttp://127.0.0.1:%s\nglobal\ny\nwork/global\n900\nn\n\nn\n' "$cport" "$cport" | env -u WIKIS_DIR -u CONFLUENCE_SPACE HOME="$M21H" LLM_WIKI_DEFAULT_DIR="$MD" ATLASSIAN_API_TOKEN=smoke-token "$W" extensions setup confluence 2>&1)"
+case "$out" in *"Other collections: work. Name a wiki in one with its collection, such as work/global."*"two collections have a wiki called global: default, work, so nothing was saved for it. Name it with its collection, such as default/global."*) ok "setup says a bare global names neither, and how to name one" ;; *) bad "setup says a bare global names neither, and how to name one" "$out" ;; esac
+case "$out" in *"taken out"*) bad "and writing watch.work/global leaves watch.global, which named neither" "$out" ;; *) ok "and writing watch.work/global leaves watch.global, which named neither" ;; esac
+check "both are in the file" test "$(grep '^watch' "$M21H/.config/llm-wiki/confluence" | sort | tr '\n' ' ')" = "watch.global = 900 watch.work/global = 900 "
+printf 'watch.team = 900\n' > "$M21H/.config/llm-wiki/confluence"
+out="$(printf 'http://127.0.0.1:%s\n\nhttp://127.0.0.1:%s\nwork/team\n\nn\n\nn\n' "$cport" "$cport" | env -u WIKIS_DIR -u CONFLUENCE_SPACE HOME="$M21H" LLM_WIKI_DEFAULT_DIR="$MD" ATLASSIAN_API_TOKEN=smoke-token "$W" extensions setup confluence 2>&1)"
+case "$out" in *"watch.team taken out: watch.work/team names the same wiki with its collection."*) ok "setup's watch.work/team takes out watch.team, which named the same wiki, and says so" ;; *) bad "setup's watch.work/team takes out watch.team, which named the same wiki, and says so" "$out" ;; esac
+check "with the pages it watched kept" test "$(grep '^watch' "$M21H/.config/llm-wiki/confluence")" = "watch.work/team = 900"
+# Each collection's wiki has its own run, paths and status: a sync of work's global while the
+# default collection's is running neither waits on it nor leaves its pages for it to publish.
+printf 'space = MTWO\nauto = default/global\n' > "$M21C"
+mkdir "$XSC/sync-global.running"
+m21page "$MK" "Work's plans, while default's run goes on."
+m21 --collection work sync global -m "while" >/dev/null 2>&1
+check "a sync of work's global while default's is running leaves nothing for default's run" test ! -e "$XSC/sync-global.next"
+expect "and has a run of its own" "work/global isn't in auto, so it wasn't published." cat "$XSC/sync-global@work.log"
+rmdir "$XSC/sync-global.running"
+# Which collection a run is in comes from WIKIS_DIR and the collections file, never from its environment.
+printf 'space = MTWO\nauto = work/global\n' > "$M21C"
+m21page "$MD" "Default's plans, labelled as work's."
+printf 'wiki/concepts/plans.md\n' > "$XSC/sync-global.next"
+env -u CONFLUENCE_SPACE WIKIS_DIR="$MD" LLM_WIKI_DEFAULT_DIR="$MD" LLM_WIKI_COLLECTION=work LLM_WIKI_COLLECTIONS="$(printf 'work\t%s' "$MD")" \
+  EXT_COLL=work EXT_COLLS="$(printf 'work\t%s' "$MD")" EXT_COLLS_FOR="$MD" CONFLUENCE_URL="http://127.0.0.1:$cport" CONFLUENCE_API_TOKEN=smoke-token \
+  "$W" __ext-run confluence sync global
+check "a background run told by its environment that the default collection is work publishes nothing for auto = work/global" state x "assert not any('labelled as' in p['body'] for p in P.values())"
+expect "it knows it is the default collection" "default/global isn't in auto" cat "$XSC/sync-global.log"
+# One folder is one collection: listed twice, or through a link, its wikis aren't taken for two.
+ln -s "$MK" "$T/m21-link"
+printf 'work %s\nlink %s\n' "$MK" "$T/m21-link" > "$HOME/.config/llm-wiki/collections"
+printf 'space = MTEAM\nauto = team\n' > "$M21C"
+mkdir -p "$MK/team/wiki/concepts"
+printf -- '---\ntitle: Roster\n---\n\nThe team, once.\n' > "$MK/team/wiki/concepts/roster.md"
+m21 --collection work sync team -m "roster" >/dev/null 2>&1
+check "with work listed twice, by a link, auto = team still names work's team, and a sync publishes it" state x "assert any(p['space'] == 'MTEAM' and 'once' in p['body'] for p in P.values())"
+printf 'space = MTEAM\nauto = link/team\n' > "$M21C"
+printf -- '---\ntitle: Roster\n---\n\nThe team, twice.\n' > "$MK/team/wiki/concepts/roster.md"
+m21 --collection link sync team -m "roster" >/dev/null 2>&1
+check "and chosen by its other name, the folder goes by that name" state x "assert any(p['space'] == 'MTEAM' and 'twice' in p['body'] for p in P.values())"
+rm "$T/m21-link"
+# A folder no collection names is never taken for a collection called here.
+MH="$T/m21-here"
+ML="$T/m21-loose"
+for d in "$MH" "$ML"; do WIKIS_DIR="$d" "$W" init --git >/dev/null 2>&1; mkdir -p "$d/global/wiki/concepts"; done
+printf 'work %s\nhere %s\n' "$MK" "$MH" > "$HOME/.config/llm-wiki/collections"
+printf 'space = MHERE\nauto = here/global\n' > "$M21C"
+m21page "$ML" "A loose folder's plans."
+env -u CONFLUENCE_SPACE WIKIS_DIR="$ML" LLM_WIKI_DEFAULT_DIR="$MD" LLM_WIKI_EVENTS=wait CONFLUENCE_URL="http://127.0.0.1:$cport" CONFLUENCE_API_TOKEN=smoke-token "$W" sync global -m "loose" >/dev/null 2>&1
+check "auto = here/global publishes nothing from a folder no collection names" state x "assert not any(p['space'] == 'MHERE' for p in P.values())"
+m21page "$MH" "The plans of the collection called here."
+m21 --collection here sync global -m "here" >/dev/null 2>&1
+check "and publishes the global of the collection called here" state x "assert any(p['space'] == 'MHERE' and 'called here' in p['body'] for p in P.values())"
+printf 'work %s\n' "$MK" > "$HOME/.config/llm-wiki/collections"
+# A wiki's name is one wiki.sh takes, spelled as its folder is.
+mkdir -p "$MK/-x"
+cp "$MK/global/AGENTS.md" "$MK/global/index.md" "$MK/-x/"
+printf 'watch.work/-x = 900\nauto = -x\n' > "$M21C"
+out="$(m21 confluence config 2>&1)"
+case "$out" in *"watch.work/-x names work/-x, which is neither a wiki's name nor collection/wiki."*"auto names -x, which is neither a wiki's name nor collection/wiki."*) ok "a name that starts with a dash is no wiki's" ;; *) bad "a name that starts with a dash is no wiki's" "$out" ;; esac
+rm -rf "${MK:?}/-x"
+printf 'space = MPUBLIC\nspace.work/global = MTWO\nauto = work/Global\n' > "$M21C"
+m21 extensions tick >/dev/null 2>&1
+check "auto = work/Global names no wiki, so nothing goes to the space for the rest" state x "assert not any(p['space'] == 'MPUBLIC' for p in P.values())"
+expect "and config says it isn't a wiki" "auto names work/Global, which isn't a wiki here." m21 confluence config
+# A settings file with odd content is read, said, and never ends in a traceback.
+# In a UTF-8 locale, where printing such a byte as it is fails.
+M21LOC="$(locale -a 2>/dev/null | grep -i -m 1 -e '^en_US.utf-\?8$' -e '^C.utf-\?8$' || true)"
+m21u() { ( [ -z "$M21LOC" ] || export LC_ALL="$M21LOC"; m21 "$@" ); }
+printf 'watch.\377x = 900\nspace.\377 = A\377\nparent{.global = 1\n' > "$M21C"
+lacks "config reads a file with bytes that aren't UTF-8, and a brace in a key" "Traceback" m21u confluence config
+lacks "and so does check" "Traceback" m21u confluence check
+# config's lines about a bare space.<wiki> are true.
+printf 'space = MTWO\nspace.global =\n' > "$M21C"
+lacks "an empty space.global says nothing about it" "Until then" m21 confluence config
+out="$(m21 confluence config 2>&1)"
+case "$out" in *"
+. "* | *"
+! ."*) bad "and no line that starts with nothing but a mark or a dot" "$out" ;; *) ok "and no line that starts with nothing but a mark or a dot" ;; esac
+printf 'space = MTWO\nspace.work/global = MTWO\nspace.global = MONE\n' > "$M21C"
+out="$(m21 confluence config 2>&1)"
+case "$out" in *"space.global names global, and two collections have a wiki called global: default, work, so it counts for none of them. default/global is not published until you say which in $M21C, such as space.default/global = MONE."*) ok "with space.work/global set, a bare space.global names only default/global as not published" ;; *) bad "with space.work/global set, a bare space.global names only default/global as not published" "$out" ;; esac
+# One wiki's fault in a tick is said, and the rest of auto is still published.
+printf 'space = MPUB\nspace.global = MONE\nspace.work/global = MTWO\nauto = default/global, work/global\n' > "$M21C"
+m21page "$MK" "Work's plans, past a fault."
+expect "a tick with one wiki it can't publish fails" "confluence: failed" m21 extensions tick
+check "but publishes the others" state x "assert any(p['space'] == 'MTWO' and 'past a fault' in p['body'] for p in P.values())"
+expect "and its log says which and why" "space.global names global, and two collections have a wiki called global" cat "$XSC/tick.log"
+rm -f "$HOME/.config/llm-wiki/collections"
+printf 'space = MSOLO\nauto = global\n' > "$M21C"
+m21page "$MD" "Alone again."
+m21 sync global -m "alone" >/dev/null 2>&1
+check "with one collection, auto = global publishes it, as before" state x "assert any(p['space'] == 'MSOLO' and 'Alone again' in p['body'] for p in P.values())"
 rm "$HOME/.config/llm-wiki/confluence"
 unset CONFLUENCE_SPACE
 kill "$CPID" 2>/dev/null
@@ -10062,6 +10241,8 @@ REC="$T/rec"
 mkdir -p "$XD" "$REC"
 WIKIS_DIR="$EW" "$W" init --git >/dev/null 2>&1
 WIKIS_DIR="$EW" "$W" new edemo >/dev/null 2>&1
+# The name of a sync run's files for edemo: no collection names $EW, so its real path tells it apart.
+EK="sync-edemo@dir-$(cd "$EW" && pwd -P | cksum | cut -d ' ' -f 1)"
 ew() { WIKIS_DIR="$EW" LLM_WIKI_EVENTS=wait "$W" "$@"; }
 ew sync edemo -m "start" >/dev/null 2>&1
 cat > "$XD/wiki-rec" <<EXT
@@ -10089,17 +10270,17 @@ echo "a note" | ew capture edemo first >/dev/null
 ew sync edemo -m "a note" >/dev/null 2>&1
 out="$(cat "$REC/log" 2>/dev/null)"
 case "$out" in "--wiki-event sync edemo|api=4|in=1|changed=raw/"*"-first.md "*) ok "a sync that changed a wiki runs the extension, with the paths it changed" ;; *) bad "a sync that changed a wiki runs the extension, with the paths it changed" "$out" ;; esac
-check "what it printed is in its log" grep -q "said on the way" "$XS/rec/sync-edemo.log"
-check "and the run is recorded as fine" grep -q "^ok" "$XS/rec/sync-edemo.status"
+check "what it printed is in its log" grep -q "said on the way" "$XS/rec/$EK.log"
+check "and the run is recorded as fine" grep -q "^ok" "$XS/rec/$EK.status"
 check "an extension that asks for no events is never run" test ! -e "$REC/quiet"
 ew sync edemo >/dev/null 2>&1
 check "a sync that changed nothing runs nothing" test "$(grep -c . "$REC/log")" = 1
 # A run that is still going takes the next sync's paths when it ends.
-mkdir "$XS/rec/sync-edemo.running"
+mkdir "$XS/rec/$EK.running"
 echo "second" | ew capture edemo second >/dev/null
 ew sync edemo >/dev/null 2>&1
 check "while one run is going, another isn't started" test "$(grep -c . "$REC/log")" = 1
-rmdir "$XS/rec/sync-edemo.running"
+rmdir "$XS/rec/$EK.running"
 echo "third" | ew capture edemo third >/dev/null
 ew sync edemo >/dev/null 2>&1
 out="$(sed -n 2p "$REC/log")"
@@ -10211,7 +10392,48 @@ echo "fourth" | WIKIS_DIR="$EW" "$W" capture edemo fourth >/dev/null
 WIKIS_DIR="$EW" "$W" sync edemo >/dev/null 2>&1
 i=0; while ! grep -q "sync edemo" "$REC/log" 2>/dev/null && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
 expect "without being told to wait, sync starts it in the background" "--wiki-event sync edemo" cat "$REC/log"
-i=0; while [ -d "$XS/rec/sync-edemo.running" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+i=0; while [ -d "$XS/rec/$EK.running" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+# Every extension is told which collection it runs in and every collection there is, so a setting
+# kept for the whole machine can name a wiki by its collection: each has a global (M21).
+cat > "$XD/wiki-coll" <<EXT
+#!/bin/sh
+# wiki-extension: Records the collections it is told of, for the smoke test.
+# wiki-events: sync
+{ echo "\$1|\$LLM_WIKI_COLLECTION"; printf '%s\n' "\$LLM_WIKI_COLLECTIONS"; } >> "$REC/coll"
+EXT
+chmod +x "$XD/wiki-coll"
+mkdir -p "$HOME/.config/llm-wiki"
+printf 'ework %s\n' "$EW" > "$HOME/.config/llm-wiki/collections"
+WIKIS_DIR="$EW" "$W" coll >/dev/null 2>&1
+check "an extension run by name is told the collection it is in, and every collection" test "$(cat "$REC/coll" 2>&1)" = "|ework
+default	$HOME/wikis
+ework	$EW"
+: > "$REC/coll"
+echo "fifth" | WIKIS_DIR="$EW" "$W" capture edemo fifth >/dev/null
+WIKIS_DIR="$EW" "$W" sync edemo >/dev/null 2>&1
+i=0; while { [ ! -s "$XS/coll/sync-edemo@ework.status" ] || [ -d "$XS/coll/sync-edemo@ework.running" ]; } && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+check "and so is one run for an event in the background" test "$(cat "$REC/coll" 2>&1)" = "--wiki-event|ework
+default	$HOME/wikis
+ework	$EW"
+: > "$REC/coll"
+WIKIS_DIR="$T/elsewhere" "$W" coll >/dev/null 2>&1
+check "a collection only WIKIS_DIR names is unnamed, which no collection can be called" test "$(head -n 1 "$REC/coll" 2>&1)" = "|(unnamed)"
+rm -f "$XD/wiki-coll" "$HOME/.config/llm-wiki/collections"
+# A wiki's name reaches the event as one argument, whatever is in it.
+cat > "$XD/wiki-args" <<EXT
+#!/bin/sh
+# wiki-extension: Records its arguments one a line, for the smoke test.
+# wiki-events: sync
+for a in "\$@"; do echo "\$a"; done > "$REC/args"
+EXT
+chmod +x "$XD/wiki-args"
+mkdir -p "$XS/args"
+echo index.md > "$XS/args/sync-pay draft@${EK#sync-edemo@}.next"
+WIKIS_DIR="$EW" "$W" __ext-run args sync "pay draft"
+check "a wiki's name with a space reaches the event as one argument" test "$(cat "$REC/args" 2>&1)" = "--wiki-event
+sync
+pay draft"
+rm -f "$XD/wiki-args"
 expect "completion offers log and tick" "tick" "$W" __complete 2 extensions ""
 check "the docs give the contract's second version" grep -q 'wiki-event' "$REPO/docs/extensions.md"
 rm -rf "$XD" "$XS"

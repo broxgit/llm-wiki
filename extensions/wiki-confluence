@@ -105,6 +105,9 @@ Publishing:
   space.<wiki>, parent.<wiki>   the same, for one wiki
   auto           optional: the wikis to publish by themselves, such as payments, relay.
                  Each is published in the background when a sync changes its pages.
+These files serve every collection on this machine, and each has a wiki called global. Where
+more than one collection has a wiki of a name, a setting names it with its collection, such as
+watch.work/global or auto = work/global, and a name without one stands for none of them.
 Signing in:
   url            only on a server of your own: Confluence's address
 The sign-in comes from {SHARED}, which every Atlassian
@@ -326,10 +329,10 @@ def unfit(text):
     return ""
 
 
-def set_conf(path, key, value):
+def set_conf(path, key, value, drop=()):
     """Set one `name = value` line in a settings file, or take it out when value is empty.
-    Every other line stays as it is. The file is written beside itself and moved into place,
-    so a write that fails leaves the old one."""
+    The lines of the keys in drop are taken out in the same write. Every other line stays as it
+    is. The file is written beside itself and moved into place, so a write that fails leaves the old one."""
     why = unfit(key) or unfit(value) or ("is more than one line" if len(value.splitlines()) > 1 else "")
     if why:
         die_usage(f"the value of {key} {why}, so nothing was written")
@@ -337,7 +340,8 @@ def set_conf(path, key, value):
         lines = conf_lines(path)
     except FileNotFoundError:
         lines = []
-    kept = [l for l in lines if l.split("#", 1)[0].split("=", 1)[0].strip() != key or "=" not in l.split("#", 1)[0]]
+    gone = (key,) + tuple(drop)
+    kept = [l for l in lines if l.split("#", 1)[0].split("=", 1)[0].strip() not in gone or "=" not in l.split("#", 1)[0]]
     if value:
         kept.append(f"{key} = {value}")
     # A settings file that is a link, as with dotfiles kept elsewhere, stays one: the file it names is replaced.
@@ -564,6 +568,9 @@ def setup():
     if wikis:
         print()
         print("Your wikis: " + ", ".join(wikis))
+    others = [n for n, f in collections() if n != here_collection() and os.path.isdir(f)]
+    if others:
+        print(f"Other collections: {', '.join(others)}. Name a wiki in one with its collection, such as {others[0]}/global.")
     lists = watch_lists(own)
     first = True
     while True:
@@ -573,13 +580,20 @@ def setup():
         wiki = ask("Which wiki should hear about Confluence pages? Leave empty to skip watching", default)
         if not wiki:
             break
-        if not is_wiki(wiki):
+        _, name, why = find_wiki(wiki)
+        if why == "several":
+            found = having(name)
+            pick = here_collection() if here_collection() in found else found[0]
+            print("  " + warn(f"{how_many(len(found))} collections have a wiki called {name}: {', '.join(found)}, so nothing was saved for it. "
+                              f"Name it with its collection, such as {pick}/{name}."))
+        elif why:
             print("  " + warn(f"{wiki} isn't one of your wikis, so nothing was saved for it."))
         else:
             print(f"Name the pages for {wiki}. Paste a page's address from your browser, or its id, and separate")
             print("several with commas. To watch every page in a space from now on, write space: and its key,")
             print("such as space:ENG.")
-            raw = ask(f"Pages to watch for {wiki}", ", ".join(lists.get(wiki, [])))
+            drop = bare_twin(own, wiki)
+            raw = ask(f"Pages to watch for {wiki}", ", ".join(lists.get(wiki) or (lists.get(name, []) if drop else [])))
             kept = []
             for t in [x.strip() for x in raw.split(",") if x.strip()]:
                 kind, ref = target(t)
@@ -599,8 +613,13 @@ def setup():
                         kept.append(ref)
                         st = page_state(c, ref)
                         print("  " + done(f"{page['title']} (version {page['version']}" + (f", {st}" if st else "") + ")"))
-            set_conf(CONFIG, f"watch.{wiki}", ", ".join(kept))
+            drop = drop if kept else ()
+            set_conf(CONFIG, f"watch.{wiki}", ", ".join(kept), drop)
             lists[wiki] = kept
+            for k in drop:
+                lists.pop(name, None)
+                own.pop(k, None)
+                print(f"  {k} taken out: watch.{wiki} names the same wiki with its collection.")
         if not ask_yn("Watch pages for another wiki?", False):
             break
     print()
@@ -635,7 +654,16 @@ def setup():
         print("A wiki named next is published by itself, seconds after a sync changes its pages. Any other")
         print(f"is published only when you run {CMD} confluence publish <wiki>.")
         auto = ask("Wikis to publish by themselves, separated by commas. Leave empty for none", own.get("auto", ""))
-        set_conf(CONFIG, "auto", auto)
+        # A bare name that more than one collection has would publish none of them: it is left out, and said.
+        given = [x.strip() for x in auto.split(",") if x.strip()]
+        kept = [w for w in given if find_wiki(w)[2] != "several"]
+        for w in given:
+            if w not in kept:
+                found = having(w)
+                pick = here_collection() if here_collection() in found else found[0]
+                print("  " + warn(f"{how_many(len(found))} collections have a wiki called {w}: {', '.join(found)}, so it was left out. "
+                                  f"Name it with its collection, such as {pick}/{w}."))
+        set_conf(CONFIG, "auto", auto if kept == given else ", ".join(kept))
     elif has:
         print(f"  Publishing stays as it is: the space {own['space']}. To turn it off, answer yes and clear the space with -.")
     else:
@@ -1159,9 +1187,9 @@ def noted(root):
     return out
 
 
-def waiting_lines(wiki_cmd, root, wiki):
+def waiting_lines(wiki_cmd, root, wiki, wikis_dir):
     """The lines of this extension's notes that no compile has taken yet."""
-    r = subprocess.run([wiki_cmd, "pending", wiki], capture_output=True, text=True)
+    r = subprocess.run([wiki_cmd, "pending", wiki], capture_output=True, text=True, env=in_collection(wikis_dir))
     names = [l.split()[0][len("raw/"):] for l in r.stdout.splitlines() if l.startswith("raw/")] if r.returncode == 0 else []
     lines = set()
     for n in names:
@@ -1197,28 +1225,43 @@ def cmd_check(args):
         die_usage(f"check takes --save and a wiki's name. {CMD} confluence --help")
     conf = settings()
     need_sign_in(conf)
-    wikis_dir = os.environ.get("WIKIS_DIR") or die("WIKIS_DIR isn't set. Run this as: wiki confluence")
+    os.environ.get("WIKIS_DIR") or die("WIKIS_DIR isn't set. Run this as: wiki confluence")
     wiki_cmd = os.environ.get("LLM_WIKI") or die("LLM_WIKI isn't set. Run this as: wiki confluence")
-    only = rest[0] if rest else None
-    if only and not is_wiki(only):
-        die(f"{only} isn't a wiki here. {CMD} status lists the wikis.")
-    lists = {w: refs for w, refs in watch_lists(conf).items() if not only or w == only}
+    only = which_wiki(rest[0]) if rest else None
+    if rest and not only:
+        die(f"{rest[0]} isn't a wiki here. {CMD} status lists the wikis.")
+    here = here_collection()
     c = Confluence(conf)
     now = datetime.datetime.now(datetime.timezone.utc)
     finished = done_states(conf)
-    found = {}     # wiki -> [change]
-    closes = {}    # wiki -> [heading]
-    waiting = {}   # wiki -> the lines of its notes no compile has taken yet
+    found = {}     # (collection, wiki) -> [change]
+    closes = {}    # (collection, wiki) -> [heading]
+    waiting = {}   # (collection, wiki) -> the lines of its notes no compile has taken yet
     bad = 0
     seen_spaces = []
 
-    for wiki, refs in lists.items():
-        if not is_wiki(wiki):
-            print(warn(f"watch.{wiki} names a wiki that isn't here. Take it out of {CONFIG}."))
+    # What each watch.<wiki> names, in the collection it names. Each wiki's notes go into it there.
+    lists = {}     # (collection, wiki) -> [what it watches]
+    named = 0
+    for entry, refs in watch_lists(conf).items():
+        coll, wiki, why = find_wiki(entry)
+        if only and (wiki != only[2] or (not why and coll != only[0])):
+            continue
+        named += 1
+        if why == "missing":
+            print(warn(f"watch.{entry} names a wiki that isn't here. Take it out of {CONFIG}."))
+        elif why:
+            print(warn(entry_fault(f"watch.{entry}", entry, why, watch_as) + ". Nothing was checked for it."))
+        if why:
             bad = 1
             continue
-        print(f"== {wiki}")
-        root = os.path.join(wikis_dir, wiki)
+        lists.setdefault((coll, wiki), [])
+        lists[(coll, wiki)] += [r for r in refs if r not in lists[(coll, wiki)]]
+
+    for (coll, wiki), refs in lists.items():
+        shown = label(coll, wiki)
+        print(f"== {shown}")
+        root = os.path.join(collection_folder(coll), wiki)
         known = noted(root)
         ids = []
         for ref in refs:
@@ -1237,19 +1280,19 @@ def cmd_check(args):
                     continue
                 got = space_pages(c, val, since)
                 if got is None:
-                    print("  " + warn(f"the space {val} can't be read. Check it in watch.{wiki} in {CONFIG}."))
+                    print("  " + warn(f"the space {val} can't be read. Check it in watch.{shown} in {CONFIG}."))
                     bad = 1
                     continue
                 seen_spaces.append(val)
                 print(f"  space {val}: {len(got)} page(s) changed since {since:%Y-%m-%d %H:%M} UTC")
                 ids += [i for i in got if i not in ids]
             else:
-                print("  " + warn(f"{ref} isn't a page's address, an id, or space:KEY. Fix watch.{wiki} in {CONFIG}."))
+                print("  " + warn(f"{ref} isn't a page's address, an id, or space:KEY. Fix watch.{shown} in {CONFIG}."))
                 bad = 1
         for pid in ids:
             page = fetch_page(c, pid)
             if page is None:
-                print("  " + warn(f"{pid} isn't a page you can read. Take it out of watch.{wiki} in {CONFIG}."))
+                print("  " + warn(f"{pid} isn't a page you can read. Take it out of watch.{shown} in {CONFIG}."))
                 bad = 1
                 continue
             page["status"] = page_state(c, pid)
@@ -1267,43 +1310,53 @@ def cmd_check(args):
             stat = f"version {page['version']}" + (f", {page['status']}" if page["status"] else "")
             print(f"  {page['title'][:44]:<44} {stat:<28} {page['kind'] or 'unchanged'}")
             if page["kind"]:
-                found.setdefault(wiki, []).append(page)
+                found.setdefault((coll, wiki), []).append(page)
 
-    # An open item whose heading links a page closes when the page's status means finished.
-    r = subprocess.run([wiki_cmd, "open", "--data"] + ([only] if only else []), capture_output=True, text=True)
-    for line in r.stdout.splitlines() if r.returncode == 0 else []:
-        f = line.split("\t")
-        if len(f) < 8 or f[1] not in ("open", "overdue"):
-            continue
-        m = PAGE_REF.search(f[7])
-        if not m:
-            continue
-        st = page_state(c, m.group(1) or m.group(2))
-        if st and st.lower() in finished:
-            if f[0] not in found and f[0] not in closes and f[0] not in lists:
-                print(f"== {f[0]}")
-            print(f"  open item: {f[7][:70]}")
-            if f[0] not in waiting:
-                waiting[f[0]] = waiting_lines(wiki_cmd, os.path.join(wikis_dir, f[0]), f[0])
-            if f"Done: {f[7]}" in waiting[f[0]]:
-                # A waiting note already asks for it: leave it out.
-                print(f"      its page is {st}: already noted as done, waiting for a compile")
-            else:
-                print(f"      its page is {st}, which means finished: the item closes")
-                closes.setdefault(f[0], []).append((f[7], st))
+    # An open item whose heading links a page closes when the page's status means finished. In
+    # this collection, any wiki's; in another, only a wiki that a watch.<wiki> names there.
+    colls = [only[0]] if only else [here] + [k[0] for k in lists if k[0] != here]
+    for coll in [x for i, x in enumerate(colls) if x not in colls[:i]]:
+        folder = collection_folder(coll)
+        r = subprocess.run([wiki_cmd, "open", "--data"] + ([only[2]] if only else []), capture_output=True, text=True,
+                           env=in_collection(folder))
+        for line in r.stdout.splitlines() if r.returncode == 0 else []:
+            f = line.split("\t")
+            if len(f) < 8 or f[1] not in ("open", "overdue"):
+                continue
+            key = (coll, f[0])
+            if coll != here and not only and key not in lists:
+                continue
+            m = PAGE_REF.search(f[7])
+            if not m:
+                continue
+            st = page_state(c, m.group(1) or m.group(2))
+            if st and st.lower() in finished:
+                if key not in found and key not in closes and key not in lists:
+                    print(f"== {label(coll, f[0])}")
+                print(f"  open item: {f[7][:70]}")
+                if key not in waiting:
+                    waiting[key] = waiting_lines(wiki_cmd, os.path.join(folder, f[0]), f[0], folder)
+                if f"Done: {f[7]}" in waiting[key]:
+                    # A waiting note already asks for it: leave it out.
+                    print(f"      its page is {st}: already noted as done, waiting for a compile")
+                else:
+                    print(f"      its page is {st}, which means finished: the item closes")
+                    closes.setdefault(key, []).append((f[7], st))
 
     n = sum(len(v) for v in found.values()) + sum(len(v) for v in closes.values())
     print()
-    if not lists and not closes:
+    if not named and not closes:
         print(f"No wiki watches a page yet. Run: {CMD} extensions setup confluence. {GUIDE}")
     if n == 0:
-        if lists:
+        if named:
             print("Nothing changed.")
     elif not save:
         print(f"{n} change(s) to note. To note them in the wiki: {CMD} confluence check --save")
     else:
-        for wiki in sorted(set(found) | set(closes)):
-            pages = found.get(wiki, [])
+        for key in sorted(set(found) | set(closes)):
+            coll, wiki = key
+            folder, shown = collection_folder(coll), label(coll, wiki)
+            pages = found.get(key, [])
             note = [f"# Confluence: what changed, as of {now:%Y-%m-%d}", "",
                     f"Source: {c.url}, read by `wiki confluence` on {now:%Y-%m-%d %H:%M} UTC.", ""]
             for page in pages:
@@ -1322,16 +1375,19 @@ def cmd_check(args):
                         note += ["The page's text:", "", "````text", page["text"], "````", ""]
             for page in pages:
                 note.append(f"Confluence-page: {page['id']} | version {page['version']} | status {page['status']}")
-            for h, st in closes.get(wiki, []):
+            for h, st in closes.get(key, []):
                 note += ["", f"The page this item waits on is {st}.", f"Done: {h}"]
-            # From the wikis' folder, so a ticket folder's name isn't written into a note about pages.
+            # From the wikis' folder, so a ticket folder's name isn't written into a note about pages. And in
+            # the wiki's own collection, which needn't be the one this run is in.
             r = subprocess.run([wiki_cmd, "capture", wiki, "confluence"], input="\n".join(note) + "\n", text=True, capture_output=True,
-                               cwd=os.environ.get("WIKIS_DIR") or None)
+                               cwd=folder or None, env=in_collection(folder))
             if r.returncode != 0:
-                die(f"couldn't save the note in {wiki}: {r.stderr.strip()}")
-            r = subprocess.run([wiki_cmd, "sync", wiki, "-m", f"Confluence: {len(pages) + len(closes.get(wiki, []))} change(s)"], capture_output=True, text=True)
+                die(f"couldn't save the note in {shown}: {r.stderr.strip()}")
+            r = subprocess.run([wiki_cmd, "sync", wiki, "-m", f"Confluence: {len(pages) + len(closes.get(key, []))} change(s)"],
+                               capture_output=True, text=True, env=in_collection(folder))
             if r.returncode != 0:
-                die(f"saved the note in {wiki}, but the sync failed. Run: {CMD} sync {wiki}")
+                again = f"{CMD} sync {wiki}" + ("" if coll == here else f" --collection {coll}")
+                die(f"saved the note in {shown}, but the sync failed. Run: {again}")
             for page in pages:
                 try:
                     os.makedirs(os.path.dirname(cache_path(page["id"])), exist_ok=True)
@@ -1339,7 +1395,7 @@ def cmd_check(args):
                         f.write(page["text"])
                 except OSError:
                     pass
-            print(f"{wiki}: noted {len(pages) + len(closes.get(wiki, []))} change(s). The next compile works them into the wiki.")
+            print(f"{shown}: noted {len(pages) + len(closes.get(key, []))} change(s). The next compile works them into the wiki.")
     if save:
         for key in seen_spaces:
             try:
@@ -1353,13 +1409,13 @@ def cmd_check(args):
 
 # ---- commands ------------------------------------------------------------------
 
-def wiki_pages(wiki_cmd, root, wiki):
+def wiki_pages(wiki_cmd, root, wiki, wikis_dir):
     """[(path in the wiki, title, text)], the index first. Which pages there are, and
     the title each goes by, come from `wiki pages --data`."""
     def read(p):
         with open(p, encoding="utf-8", errors="replace") as f:
             return f.read()
-    r = subprocess.run([wiki_cmd, "pages", wiki, "--data"], capture_output=True, text=True)
+    r = subprocess.run([wiki_cmd, "pages", wiki, "--data"], capture_output=True, text=True, env=in_collection(wikis_dir))
     if r.returncode != 0:
         die((r.stderr.strip() or f"couldn't list the pages of {wiki}").replace("error: ", "", 1))
     pages = []
@@ -1380,27 +1436,46 @@ def wiki_pages(wiki_cmd, root, wiki):
     return out
 
 
-def cmd_publish(args):
+def which_wiki(name):
+    """A wiki named on the command line: (collection, folder, wiki). A bare name is the
+    collection's this runs in; collection/wiki names one in another."""
+    wikis_dir = os.environ.get("WIKIS_DIR") or die("WIKIS_DIR isn't set. Run this as: wiki confluence")
+    if "/" not in name:
+        if not is_wiki(name):
+            return None
+        return here_collection(), wikis_dir, name
+    coll, wiki, why = find_wiki(name)
+    if why:
+        return None
+    return coll, collection_folder(coll), wiki
+
+
+def cmd_publish(args, target=None):
+    """publish <wiki>, or with target, (collection, folder, wiki), a wiki an event publishes."""
     dry = "--dry-run" in args
     rest = [a for a in args if a != "--dry-run"]
-    if len(rest) != 1 or rest[0].startswith("-"):
-        die_usage(f"usage: {CMD} confluence publish <wiki> [--dry-run]")
-    wiki = rest[0]
-    wikis_dir = os.environ.get("WIKIS_DIR") or die("WIKIS_DIR isn't set. Run this as: wiki confluence")
+    if target is None:
+        if len(rest) != 1 or rest[0].startswith("-"):
+            die_usage(f"usage: {CMD} confluence publish <wiki> [--dry-run]")
+        target = which_wiki(rest[0]) or die(f"no wiki called {rest[0]}")
+    coll, wikis_dir, wiki = target
     root = os.path.join(wikis_dir, wiki)
-    if not is_wiki(wiki):
-        die(f"no wiki called {wiki}")
     conf = settings()
     need_sign_in(conf)
-    space = conf.get(f"space.{wiki}") or conf.get("space")
-    parent = conf.get(f"parent.{wiki}") or conf.get("parent") or ""
+    space, fault = per_wiki(conf, "space", coll, wiki)
+    parent, fault2 = per_wiki(conf, "parent", coll, wiki)
+    if fault or fault2:
+        die(f"{fault or fault2}. Nothing was published")
+    space = space or conf.get("space")
+    parent = parent or conf.get("parent") or ""
+    shown = label(coll, wiki)
     if not space:
-        die(f"no space to publish {wiki} into. Run: {CMD} extensions setup confluence (or set space.{wiki} in {CONFIG}). {GUIDE}")
+        die(f"no space to publish {shown} into. Run: {CMD} extensions setup confluence (or set space.{shown} in {CONFIG}). {GUIDE}")
     wiki_cmd = os.environ.get("LLM_WIKI") or die("LLM_WIKI isn't set. Run this as: wiki confluence")
-    pages = wiki_pages(wiki_cmd, root, wiki)
+    pages = wiki_pages(wiki_cmd, root, wiki, wikis_dir)
     titles = {rel: title for rel, title, _ in pages}
     c = Confluence(conf)
-    print(f"{'Would publish' if dry else 'Publishing'} {len(pages)} page(s) of {wiki} to the space {space} at {c.url}")
+    print(f"{'Would publish' if dry else 'Publishing'} {len(pages)} page(s) of {shown} to the space {space} at {c.url}")
 
     made = changed = same = 0
     problems = []
@@ -1462,7 +1537,7 @@ def cmd_publish(args):
             clashes[0] += 1 if e.code == 409 else 0
     gone = sorted(t for t, p in existing.items() if t not in titles.values() and ours(p))
 
-    print(f"{wiki}: {made} {'to create' if dry else 'created'}, {changed} {'to update' if dry else 'updated'}, {same} unchanged.")
+    print(f"{shown}: {made} {'to create' if dry else 'created'}, {changed} {'to update' if dry else 'updated'}, {same} unchanged.")
     for t in gone:
         print(f"  no longer in the wiki, left in Confluence: {t}")
     for p in problems:
@@ -1506,19 +1581,38 @@ def cmd_config(args):
     print(f"token     {'from ' + where if where else 'not set'}")
     for wiki, refs in watch_lists(conf).items():
         print(f"watch     {wiki}: {', '.join(refs)}")
-        if not is_wiki(wiki):
+        why = find_wiki(wiki)[2]
+        if why == "missing":
             print(warn(f"watch.{wiki} names a wiki that isn't here. Take it out of {CONFIG}."))
+        elif why:
+            print(warn(entry_fault(f"watch.{wiki}", wiki, why, watch_as) + ". Nothing is checked for it."))
     if not watch_lists(conf):
         print("watch     off: no pages named")
     print(f"finished  {', '.join(x.capitalize() for x in done_states(conf))}")
     print(f"space     {conf.get('space') or 'not set'}")
     print(f"auto      {', '.join(auto_wikis(conf)) or 'off'}")
     for w in auto_wikis(conf):
-        if not is_wiki(w):
+        why = find_wiki(w)[2]
+        if why == "missing":
             print(warn(f"auto names {w}, which isn't a wiki here. Take it out of auto in {CONFIG}."))
+        elif why:
+            print(warn(entry_fault("auto", w, why, auto_as) + ". Nothing is published for it by itself."))
     for k in sorted(conf):
         if k.startswith(("space.", "parent")) and k != "_from":
             print(f"{k:<9} {conf[k]}")
+            # A bare one that more than one collection has counts for none: each of them without a
+            # setting of its own is refused when published, and named here.
+            key, _, wiki = k.partition(".")
+            if key not in ("space", "parent") or not conf[k] or not NAME_OK.match(wiki):
+                continue
+            found = having(wiki)
+            lacking = [c for c in found if not conf.get(f"{key}.{c}/{wiki}")]
+            if len(found) > 1 and lacking:
+                pick = here_collection() if here_collection() in lacking else lacking[0]
+                which = " and ".join(f"{c}/{wiki}" for c in lacking)
+                print(warn(f"{k} names {wiki}, and {how_many(len(found))} collections have a wiki called {wiki}: {', '.join(found)}, "
+                           f"so it counts for none of them. {which} {'is' if len(lacking) == 1 else 'are'} not published until you "
+                           f"say which in {CONFIG}, such as {key}.{pick}/{wiki} = {conf[k]}."))
     if not conf["url"] or not where:
         print(f"\nNot set up: {sign_in_missing(conf)}. Run: {CMD} extensions setup confluence. {GUIDE}")
         return 1
@@ -1537,9 +1631,7 @@ def cmd_config(args):
 def is_wiki(name):
     """A wiki of this collection, by name. An extension is one file and can import no other,
     so this is a copy of wiki.sh's is_wiki, with the others it names."""
-    if "/" in name:
-        return False
-    return wiki_folder(os.path.join(os.environ.get("WIKIS_DIR", ""), name))
+    return wiki_in(os.environ.get("WIKIS_DIR", ""), name)
 
 
 def wiki_folder(path):
@@ -1567,6 +1659,164 @@ def auto_wikis(conf):
     return [w.strip() for w in conf.get("auto", "").split(",") if w.strip()]
 
 
+# ---- which wiki a setting names ------------------------------------------------------------
+# The settings are one file a machine, and every collection has a wiki called global. So a
+# setting names a wiki as `wiki` or `collection/wiki`, and a bare name names a wiki only where
+# no other collection has one of that name. One that more than one has names none of them:
+# nothing is published or watched for it, and the run says what to write instead.
+
+NAME_OK = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]*\Z")
+COLLECTION_OK = re.compile(r"[A-Za-z0-9_-]+\Z")
+# What llm-wiki calls a folder that no collection is listed for, such as a test's WIKIS_DIR. No
+# collection can have the name, so no setting can name it.
+UNNAMED = "(unnamed)"
+
+
+def here_collection():
+    """The name of the collection this run is in, as llm-wiki hands it over."""
+    return os.environ.get("LLM_WIKI_COLLECTION") or UNNAMED
+
+
+def collections():
+    """[(name, folder)]: the collections on this machine, from LLM_WIKI_COLLECTIONS, with the one
+    this run is in at the folder in WIKIS_DIR. Run by an older llm-wiki, or by hand, only that one.
+    A line whose name no collection can have is left out."""
+    here, folder = here_collection(), os.environ.get("WIKIS_DIR", "")
+    out = []
+    for line in os.environ.get("LLM_WIKI_COLLECTIONS", "").split("\n"):
+        name, tab, path = line.partition("\t")
+        if not tab or not path or any(n == name for n, _ in out):
+            continue
+        if name == here:
+            out.append((name, folder))
+        elif COLLECTION_OK.match(name):
+            out.append((name, path))
+    if not any(n == here for n, _ in out):
+        out.append((here, folder))
+    return out
+
+
+def collection_folder(name):
+    return next((f for n, f in collections() if n == name), None)
+
+
+_LISTED = {}
+
+
+def wiki_in(folder, wiki):
+    """Whether folder holds a wiki called exactly wiki: a name wiki.sh's own rule takes (letters,
+    digits, dots, dashes and underscores, not starting with a dot or a dash), spelled as the folder
+    lists it, so a disk that ignores case can't make Global and global one wiki."""
+    if not folder or not NAME_OK.match(wiki or ""):
+        return False
+    if folder not in _LISTED:
+        try:
+            _LISTED[folder] = set(os.listdir(folder))
+        except OSError:
+            _LISTED[folder] = set()
+    return wiki in _LISTED[folder] and wiki_folder(os.path.join(folder, wiki))
+
+
+def having(wiki):
+    """The collections that have a wiki of that name."""
+    return [n for n, f in collections() if wiki_in(f, wiki)]
+
+
+def find_wiki(entry):
+    """What an entry of a setting names: (collection, wiki, why). why is "" when it names one wiki;
+    "form" when it is neither a name nor collection/wiki; "collection" when this machine has no
+    collection of that name; "missing" when there is no such wiki; "several" for a bare name that
+    more than one collection has, which names none of them."""
+    coll, slash, wiki = entry.partition("/")
+    if slash:
+        if not COLLECTION_OK.match(coll) or not NAME_OK.match(wiki):
+            return coll, wiki, "form"
+        folder = collection_folder(coll)
+        if folder is None:
+            return coll, wiki, "collection"
+        return coll, wiki, "" if wiki_in(folder, wiki) else "missing"
+    if not NAME_OK.match(entry):
+        return None, entry, "form"
+    found = having(entry)
+    if len(found) > 1:
+        return None, entry, "several"
+    return (found[0], entry, "") if found else (here_collection(), entry, "missing")
+
+
+def names(entry, coll, wiki):
+    """Whether an entry of a setting names this wiki of this collection, and it alone."""
+    return find_wiki(entry) == (coll, wiki, "")
+
+
+def label(coll, wiki):
+    """A wiki as a person reads it: with its collection's name when that isn't the collection this
+    run is in, or when another collection has a wiki of that name."""
+    return f"{coll}/{wiki}" if coll != here_collection() or len(having(wiki)) > 1 else wiki
+
+
+def in_collection(folder):
+    """The environment for a call into llm-wiki about a wiki of the collection in folder."""
+    env = dict(os.environ)
+    env["WIKIS_DIR"] = folder
+    return env
+
+
+def watch_as(w):
+    return f"watch.{w}"
+
+
+def auto_as(w):
+    return f"auto = {w}"
+
+
+def how_many(n):
+    return {2: "two", 3: "three", 4: "four", 5: "five"}.get(n, str(n))
+
+
+def several(wiki, example):
+    """The words for a bare name that more than one collection has, ending with the fix. example
+    gives the setting as it should be written, from collection/wiki."""
+    found = having(wiki)
+    pick = here_collection() if here_collection() in found else found[0]
+    return (f"{how_many(len(found))} collections have a wiki called {wiki}: {', '.join(found)}. "
+            f"Say which in {CONFIG}, such as {example(pick + '/' + wiki)}")
+
+
+def entry_fault(setting, entry, why, example):
+    """Why an entry of a setting names no wiki, in one line with its fix, for every why but "missing",
+    whose words each caller has. example is as for several()."""
+    if why == "several":
+        return f"{setting} names {entry}, and " + several(entry, example)
+    if why == "collection":
+        return (f"{setting} names {entry}, and this machine has no collection called {entry.partition('/')[0]}. "
+                f"Take it out of {CONFIG}, or fix the name")
+    if why == "form":
+        return f"{setting} names {entry}, which is neither a wiki's name nor collection/wiki. Fix it in {CONFIG}"
+    return ""
+
+
+def bare_twin(own, entry):
+    """For watch.<collection>/<wiki>: (the bare watch.<wiki>,) when the file has one and it names that
+    same wiki, so the one with its collection takes its place in the same write. Else ()."""
+    coll, slash, wiki = entry.partition("/")
+    if slash and f"watch.{wiki}" in own and find_wiki(wiki) == (coll, wiki, ""):
+        return (f"watch.{wiki}",)
+    return ()
+
+
+def per_wiki(conf, key, coll, wiki):
+    """space.<wiki> or parent.<wiki> for one wiki: (value, fault). The entry with its collection
+    wins. A bare one counts only where no other collection has a wiki of that name."""
+    if conf.get(f"{key}.{coll}/{wiki}"):
+        return conf[f"{key}.{coll}/{wiki}"], ""
+    if conf.get(f"{key}.{wiki}"):
+        if len(having(wiki)) > 1:
+            value = conf[f"{key}.{wiki}"]
+            return "", f"{key}.{wiki} names {wiki}, and " + several(wiki, lambda w: f"{key}.{w} = {value}")
+        return conf[f"{key}.{wiki}"], ""
+    return "", ""
+
+
 def on_event(args):
     """Run by llm-wiki for an event. On tick it checks the watched pages and notes what
     changed, then catches up on publishing. On sync it publishes a wiki that auto names."""
@@ -1581,9 +1831,16 @@ def on_event(args):
         print("auto is empty, so nothing was published.")
         return worst
     if args[:1] == ["sync"] and len(args) > 1:
-        wiki = args[1]
-        if wiki not in auto:
-            print(f"{wiki} isn't in auto, so it wasn't published.")
+        # The sync was of this wiki in the collection this run is in, and auto has to name that one.
+        wiki, here = args[1], here_collection()
+        unclear = [e for e in auto if e == wiki and find_wiki(e)[2] == "several"]
+        for e in unclear:
+            print(entry_fault("auto", e, "several", auto_as) + ".")
+        if not any(names(e, here, wiki) for e in auto):
+            if unclear:
+                print("Nothing was published.")
+                return 1
+            print(f"{label(here, wiki)} isn't in auto, so it wasn't published.")
             return 0
         try:
             with open(os.environ.get("LLM_WIKI_CHANGED", ""), encoding="utf-8", errors="replace") as f:
@@ -1591,17 +1848,34 @@ def on_event(args):
         except OSError:
             paths = ["index.md"]
         if not any(p == "index.md" or p.startswith("wiki/") for p in paths):
-            print(f"no page of {wiki} changed, so nothing was published.")
-            return 0
-        return cmd_publish([wiki])
+            print(f"no page of {label(here, wiki)} changed, so nothing was published.")
+            return 1 if unclear else 0
+        code = cmd_publish([], (here, os.environ.get("WIKIS_DIR", ""), wiki))
+        return code if code or not unclear else 1
     if args[:1] == ["tick"]:
-        # Catch up on a publish that a sync couldn't make. Unchanged pages cost a read.
-        for wiki in auto:
-            if not is_wiki(wiki):
-                print(f"auto names {wiki}, which isn't a wiki here. Take it out of auto in {CONFIG}.")
+        # Catch up on a publish that a sync couldn't make. Unchanged pages cost a read. Each wiki
+        # is published from its own collection, whichever one this tick started in.
+        done = []
+        for entry in auto:
+            coll, wiki, why = find_wiki(entry)
+            if why == "missing":
+                print(f"auto names {entry}, which isn't a wiki here. Take it out of auto in {CONFIG}.")
+            elif why:
+                print(entry_fault("auto", entry, why, auto_as) + ". Nothing was published for it.")
+            if why:
                 worst = 1
                 continue
-            code = cmd_publish([wiki])
+            if (coll, wiki) in done:
+                continue
+            done.append((coll, wiki))
+            # One wiki that can't be published, such as for a setting that names it unclearly, says
+            # why in the log and the rest are still published. The run fails at the end.
+            try:
+                code = cmd_publish([], (coll, collection_folder(coll), wiki))
+            except SystemExit as e:
+                sys.stderr.flush()
+                code = e.code if isinstance(e.code, int) else 1
+            code = 1 if code not in (0, 1, 75) else code
             worst = code if code == 1 or worst == 0 else worst
         return worst
     return 0
@@ -1676,7 +1950,7 @@ def setting_rows():
     url, url_from = own_value(own, "CONFLUENCE_URL", "url")
     rows.append(("url", url, url_from, "Confluence's own address, only where the site isn't on Atlassian Cloud. Part of that setup", "terminal"))
     watching = sorted(k for k in own if k.startswith("watch.") and own[k].strip())
-    watch_what = "Pages that wiki hears about when they change: page addresses or ids, or space:KEY for a whole space. Watching only reads"
+    watch_what = "Pages that wiki hears about when they change: page addresses or ids, or space:KEY for a whole space, which only the user sets, in a terminal. Watching only reads"
     for k in watching:
         rows.append((k, own[k], "file", watch_what, "set"))
     if not watching:
@@ -1774,28 +2048,49 @@ def wiki_set(args):
         die_usage(f"{key} can't hold a #, which starts a comment in the settings file")
     clear = value == "-"
     path = CONFIG
+    drop = ()
     if key == "done_states":
         out = "" if clear else value
     else:
-        wiki = key[len("watch."):]
-        if not is_wiki(wiki):
-            die_usage(f"{wiki} isn't one of your wikis, so it can't hear about pages. {CMD} list shows them")
+        entry = key[len("watch."):]
+        _, wiki, why = find_wiki(entry)
+        if why == "missing":
+            die_usage(f"{entry} isn't one of your wikis, so it can't hear about pages. {CMD} list shows them")
+        if why:
+            die_usage(entry_fault(key, entry, why, watch_as) + ". Nothing was written")
+        own = read_conf(CONFIG)
         out = ""
         if not clear:
+            # Watching a whole space saves every page in it as a note, from now on, so it takes a
+            # terminal. One already in this setting may stay; a session adds none.
+            had = [x.strip() for x in own.get(key, "").split(",") if x.strip()]
             kept = []
             for t in [x.strip() for x in value.split(",") if x.strip()]:
                 kind, ref = target(t)
                 if kind is None:
                     die_usage(f"each entry of {key} is a page's address, an id, or space:KEY")
+                if kind == "space" and f"space:{ref}" not in had:
+                    die_usage(f"space:{ref} watches a whole space, which saves every page in it as a note, so a session doesn't set it. "
+                              f"The user sets it in a terminal: {CMD} extensions setup confluence")
                 kept.append(f"space:{ref}" if kind == "space" else ref)
             out = ", ".join(kept)
-    set_conf(path, key, out)
+            drop = bare_twin(own, entry)
+    set_conf(path, key, out, drop)
     line = f"{key} {'cleared' if not out else 'set'} in {path}"
     print(line)
+    for k in drop:
+        print(f"{k} taken out: {key} names the same wiki with its collection")
     return 0
 
 
 def main(argv):
+    # A settings file may hold bytes that aren't UTF-8, kept as they are when read. Printing one
+    # shows it escaped rather than ending the run.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="backslashreplace")
+        except (AttributeError, ValueError):
+            pass
     if argv and argv[0] == "--wiki-settings":
         return wiki_settings()
     if argv and argv[0] == "--wiki-set":
