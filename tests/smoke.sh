@@ -14087,9 +14087,14 @@ check "and a bad site" test "$(code_of cset site nothing)" = 2
 check "and a custom token_cmd" test "$(code_of cset token_cmd 'echo x')" = 2
 check "and a watch for a wiki that isn't here" test "$(code_of cset watch.nowiki 12345)" = 2
 check "and a watch that names nothing a page is" test "$(code_of cset watch.gdemo nonsense)" = 2
+# A whole space saves every page in it as a note, so a session doesn't set one (decided
+# 2026-11-16, code review M21). A page it can.
 out="$(gw extensions set confluence watch.gdemo "https://acme.atlassian.net/wiki/spaces/ENG/pages/12345/Title, space:ENG" 2>&1)"
+case "$out" in *"space:ENG watches a whole space"*"The user sets it in a terminal"*) ok "a watch on a whole space is refused from a session" ;; *) bad "a watch on a whole space is refused from a session" "$out" ;; esac
+check "and nothing is written for it" test ! -e "$GCFG/confluence"
+out="$(gw extensions set confluence watch.gdemo "https://acme.atlassian.net/wiki/spaces/ENG/pages/12345/Title" 2>&1)"
 case "$out" in "watch.gdemo set in $GCFG/confluence"*) ok "a watch for a wiki that is here is set, without asking the site" ;; *) bad "a watch for a wiki that is here is set, without asking the site" "$out" ;; esac
-check "as page ids and space keys, as the interactive setup keeps them" grep -qx 'watch.gdemo = 12345, space:ENG' "$GCFG/confluence"
+check "as a page id, as the interactive setup keeps it" grep -qx 'watch.gdemo = 12345' "$GCFG/confluence"
 expect "settings lists it" "watch.gdemo" gw extensions settings confluence
 gw extensions set confluence done_states "Verified, Done" >/dev/null 2>&1
 check "done_states is set" grep -qx 'done_states = Verified, Done' "$GCFG/confluence"
