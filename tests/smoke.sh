@@ -85,6 +85,7 @@ read -r -d '' PARTS <<'TABLE' || true
 3 | What CI skips |
 2 | A wiki that passes for a repository |
 2 | A folder that only looks like a wiki |
+2 | Links in a wiki |
 2 | Two clones change one page |
 2 | The collection's first commit |
 3 | A remote that doesn't answer |
@@ -3297,6 +3298,34 @@ if [ -x "$T/bin/llm-wiki" ]; then
 else
   skipped "the MCP server from the compiled helper (go isn't installed)"
 fi
+# A name with an underscore in front, which wiki new takes and every other tool refused, and
+# a collection folder that is there with no wiki in it, where wiki_new made a wiki with no
+# WIKIS.md and no shared wiki (code review L51). And the servers run wiki.sh in the temp
+# folder, where start read a repository's name as a folder of that name (code review L34).
+mcp_odd() { # mcp_odd <who> <helper or ""> <folder>
+  local who="$1" dir="$3" out
+  MCP_GO="$2"
+  mkdir -p "$dir" "$dir-shared/.git" "$T/mcp-tmp/alpha"
+  out="$(WIKIS_DIR="$dir" mcp_call wiki_new '{"name":"_x"}')"
+  case "$out" in "The folder the wikis are kept in was there with no wikis in it, so it was set up first, with the shared wiki."*"created: "*"Created on this machine."*) ok "$who: wiki_new in an empty collection folder sets it up first, and says so" ;; *) bad "$who: wiki_new in an empty collection folder sets it up first, and says so" "$out" ;; esac
+  check "$who: WIKIS.md and the shared wiki are there" test -f "$dir/WIKIS.md" -a -f "$dir/global/AGENTS.md"
+  expect "$who: wiki_capture takes the name with an underscore in front" "captured: " env WIKIS_DIR="$dir" bash -c "$(declare -f mcp_call mcp_serve); MCP_GO='$2' W='$W'; mcp_call wiki_capture '{\"wiki\":\"_x\",\"slug\":\"first\",\"note\":\"n\"}'"
+  expect "$who: and wiki_read" "# Index" env WIKIS_DIR="$dir" bash -c "$(declare -f mcp_call mcp_serve); MCP_GO='$2' W='$W'; mcp_call wiki_read '{\"wiki\":\"_x\"}'"
+  expect "$who: and wiki_start" "/_x, for the repository _x" env WIKIS_DIR="$dir" bash -c "$(declare -f mcp_call mcp_serve); MCP_GO='$2' W='$W'; mcp_call wiki_start '{\"repository\":\"_x\"}'"
+  WIKIS_DIR="$dir" mcp_call wiki_new '{"name":"alpha"}' >/dev/null
+  expect "$who: wiki_start for a repository named like a folder in the temp folder names its wiki" "/alpha, for the repository alpha" env TMPDIR="$T/mcp-tmp" WIKIS_DIR="$dir" bash -c "$(declare -f mcp_call mcp_serve); MCP_GO='$2' W='$W'; mcp_call wiki_start '{\"repository\":\"alpha\"}'"
+  expect "$who: and with no repository answers as before" "Not in a repository" env TMPDIR="$T/mcp-tmp" WIKIS_DIR="$dir" bash -c "$(declare -f mcp_call mcp_serve); MCP_GO='$2' W='$W'; mcp_call wiki_start"
+  expect "$who: a name with a line feed after it is refused" "ERROR: that isn't a repository name." env WIKIS_DIR="$dir" bash -c "$(declare -f mcp_call mcp_serve); MCP_GO='$2' W='$W'; mcp_call wiki_start '{\"repository\":\"alpha\\n\"}'"
+  out="$(WIKIS_DIR="$dir-shared" mcp_call wiki_new '{"name":"global"}')"
+  case "$out" in "The folder the wikis are kept in was there with no wikis in it, so it was set up first, with the shared wiki."*"Created on this machine: it is the shared wiki, which setting up the folder made."*) ok "$who: with the shared wiki's own name, in a folder that holds only a .git, the answer is that it was created" ;; *) bad "$who: with the shared wiki's own name, in a folder that holds only a .git, the answer is that it was created" "$out" ;; esac
+  MCP_GO=""
+}
+mcp_odd python "" "$T/mcp-odd-py/wikis"
+if [ -x "$T/bin/llm-wiki" ]; then
+  mcp_odd helper "$T/bin/llm-wiki" "$T/mcp-odd-go/wikis"
+else
+  skipped "the odd names on the helper's server (no Go here)"
+fi
 expect "mcp --print gives the config entry" '"args"' "$W" mcp --print
 D="$T/desktop"
 lacks "without the desktop app, setup --list says nothing about Chat" "chat   " env LLM_WIKI_DESKTOP_DIR="$D" "$W" setup --list
@@ -3801,8 +3830,7 @@ exit 0"*) ok "and the note after it is still found, and the compiled one isn't" 
   case "$out" in "epsilon:
   waiting to be compiled:
     raw/2026-02-02-good.md: A stork was seen.
-    raw/2026-01-04-link.md: A stork by a link.
-exit 0"*) ok "and the real notes among them are found, a linked one included" ;; *) bad "and the real notes among them are found, a linked one included" "$out" ;; esac
+exit 0"*) ok "and the real notes among them are found, a linked one left out (code review M24)" ;; *) bad "and the real notes among them are found, a linked one left out (code review M24)" "$out" ;; esac
   if [ "$(id -u)" != 0 ]; then
     printf 'A stork nobody can read.\n' > "$FD/epsilon/raw/2026-03-03-secret.md"
     chmod 000 "$FD/epsilon/raw/2026-03-03-secret.md"
@@ -3915,7 +3943,7 @@ goes"
   # In a wiki: the folder with an index and no handbook is no longer searched at all.
   printf 'Handbook version 1.\n' > "$FD/notes/AGENTS.md"
   ln -s "$FD/alpha/wiki" "$FD/notes/wiki"
-  fsame "find, helper and Bash: a wiki/ folder that is a link" bash canary
+  fsame "find, helper and Bash: a wiki whose wiki/ is a link is not searched (code review M24)" helper canary
   rm -f "$FD/notes/wiki" "$FD/notes/AGENTS.md"
   if [ "$(id -u)" != 0 ]; then
     chmod 000 "$FD/alpha/wiki/a/x.md"
@@ -4445,7 +4473,7 @@ and a third" ] && ok "a page's line ends reach a client as line feeds" || bad "a
   check "and there wiki.sh did the search and the routing" bash -c "grep -qx find '$T/helper-ran' && grep -qx which '$T/helper-ran'"
   [ -s "$T/status-ran" ] && ! grep -qx 0 "$T/status-ran" && ok "and the Bash made the status table, with a link under wiki/" || bad "and the Bash made the status table, with a link under wiki/" "$(cat "$T/status-ran")"
   expect "a link inside the wiki is read" "canary, the sixth page, so never shown" python3 "$MS" text "$T/mcp.go.out" read-link
-  expect "a link to a file counts as a page, and one to a folder doesn't" "alpha (collection default): 22 page(s)" python3 "$MS" text "$T/mcp.go.out" list
+  expect "a link is no page, to a file or to a folder (code review M24)" "alpha (collection default): 19 page(s)" python3 "$MS" text "$T/mcp.go.out" list
   expect "and a repos.md that isn't UTF-8 is read" "jobapp (collection work): 2 page(s), covers: jobapp-web jobapp-api $(printf 'caf\357\277\275')" python3 "$MS" text "$T/mcp.go.out" list
   expect "wiki_start still finds the collection" "/jobapp, for the repository jobapp-api" python3 "$MS" text "$T/mcp.go.out" start
   check "and wiki.sh logs a long word as the helper's server does" grep -E -q ",global,search-none,x($(printf '\303\251')){29}\$" "$CW/stats.csv"
@@ -12145,6 +12173,285 @@ for f in wiki.sh internal/routing/routing.go mcp/server.py hooks/reminders.py ho
 done
 out="$(grep -n 'AGENTS\.md' "$REPO"/internal/*/*.go "$REPO/mcp/server.py" "$REPO/hooks/reminders.py" "$REPO/extensions/wiki-confluence" | grep -v '_test\.go:' | grep -E 'isFile|is_file|isfile|IsFile' | grep -v 'internal/routing/routing.go\|internal/tokens/\|agents = \|agents)' || true)"
 if [ -z "$out" ]; then ok "no other copy tests for AGENTS.md by its name alone"; else bad "no other copy tests for AGENTS.md by its name alone" "$out"; fi
+fi
+
+if section "Links in a wiki"; then
+# Git carries links, and one pushed to a shared collection points wherever its text says on
+# the machine that pulls it. A link in raw/ named like a note made any file there a waiting
+# note: wiki pending listed it, wiki find printed its lines, status counted it, and the next
+# compile was told to read it. A raw that was a link made a folder of documents into notes,
+# and a capture wrote into it (code review M24, 2026-11-16).
+[ -x "$T/bin/llm-wiki" ] || ! command -v go >/dev/null 2>&1 || build_helper >/dev/null 2>&1
+LX="$T/links"
+mkdir -p "$LX/bin"
+command -v gitleaks >/dev/null 2>&1 || { printf '#!/bin/sh\nexit 0\n' > "$LX/bin/gitleaks"; chmod +x "$LX/bin/gitleaks"; }
+# lxw <home> <command>...: wiki.sh in a home of its own, its collection chosen as a person's is.
+lxw() { local h="$1"; shift; env -u WIKIS_DIR HOME="$LX/$h" PATH="$PATH:$LX/bin" LLM_WIKI_NO_GO="${LLM_WIKI_NO_GO-1}" "$W" "$@"; }
+lxg() { local h="$1"; shift; env HOME="$LX/$h" git "$@"; }
+for h in n m a b c s mg lo u; do
+  mkdir -p "$LX/$h"
+  git config --file "$LX/$h/.gitconfig" user.email t@example.com
+  git config --file "$LX/$h/.gitconfig" user.name t
+  git config --file "$LX/$h/.gitconfig" init.defaultBranch main
+done
+lxhelp() { if [ -x "$T/bin/llm-wiki" ]; then LLM_WIKI_NO_GO="" LLM_WIKI_GO="$T/bin/llm-wiki" "$@"; else LLM_WIKI_NO_GO=1 "$@"; fi; }
+
+# A collection with no git: only the second layer stands between a link and a session.
+lxw n init >/dev/null 2>&1; lxw n new demo >/dev/null 2>&1; lxw n new linked >/dev/null 2>&1; lxw n new filed >/dev/null 2>&1
+D="$LX/n/wikis"
+mkdir -p "$LX/n/.aws" "$LX/n/Documents"
+printf '[default]\naws_secret_access_key = ONLY-A-TEST-VALUE\n' > "$LX/n/.aws/credentials"
+printf 'A private letter with the zebraword.\n' > "$LX/n/Documents/letter.md"
+ln -s ../../../.aws/credentials "$D/demo/raw/2026-11-01-000000-keys.md"
+printf 'A real note with the zebraword.\n' > "$D/demo/raw/2026-11-01-000001-real.md"
+ln -s ../../../Documents/letter.md "$D/demo/wiki/letter.md"
+rm -rf "$D/linked/raw"; ln -s ../../Documents "$D/linked/raw"
+rm -rf "$D/filed/raw"; printf 'not a folder\n' > "$D/filed/raw"
+for go in "" 1; do
+  if [ -z "$go" ]; then who="with the helper"; run=lxhelp; else who="with the Bash"; run=""; fi
+  out="$($run lxw n pending 2>&1)"
+  case "$out" in *"demo: 1 waiting"*) ok "$who, a link to a file in raw/ is no waiting note" ;; *) bad "$who, a link to a file in raw/ is no waiting note" "$out" ;; esac
+  case "$out" in *linked*) bad "$who, a wiki whose raw is a link isn't listed by pending" "$out" ;; *) ok "$who, a wiki whose raw is a link isn't listed by pending" ;; esac
+  out="$($run lxw n find aws_secret_access_key 2>&1)"
+  case "$out" in *ONLY-A-TEST-VALUE* | *keys.md*) bad "$who, find doesn't read through a link in raw/" "$out" ;; *) ok "$who, find doesn't read through a link in raw/" ;; esac
+  out="$($run lxw n find zebraword 2>&1)"
+  case "$out" in *"private letter"* | *letter.md* | *"linked:"*) bad "$who, nor through a raw or a page that is a link" "$out" ;; *"real.md: A real note"*) ok "$who, nor through a raw or a page that is a link" ;; *) bad "$who, nor through a raw or a page that is a link" "$out" ;; esac
+  out="$($run lxw n status 2>&1)"
+  case "$(printf '%s\n' "$out" | grep '^demo ' | tr -s ' ')" in "demo v$TV 1 free"*) ok "$who, status counts the one real note" ;; *) bad "$who, status counts the one real note" "$out" ;; esac
+  case "$(printf '%s\n' "$out" | grep -c '^linked ')" in 0) ok "$who, and has no row for the wiki whose raw is a link" ;; *) bad "$who, and has no row for the wiki whose raw is a link" "$out" ;; esac
+  case "$out" in *"linked: its raw is a link, so llm-wiki doesn't use it. A link points somewhere else on every machine. Do: remove the link, or ask whoever added it"*) ok "$who, status says why it is left out, with the fix" ;; *) bad "$who, status says why it is left out, with the fix" "$out" ;; esac
+  out="$(printf 'A note.\n' | $run lxw n capture linked landed 2>&1)"; code=$?
+  [ "$code" = 1 ] && case "$out" in *"/wikis/linked is not a wiki: its raw is a link, so llm-wiki does not use it. Nothing was changed. Run: "*" status"*) true ;; *) false ;; esac && ok "$who, capture refuses a wiki whose raw is a link, and says why" || bad "$who, capture refuses a wiki whose raw is a link, and says why" "exit $code: $out"
+  check "$who, and writes nothing where the link points" test "$(ls "$LX/n/Documents")" = letter.md
+  out="$(printf 'A note.\n' | $run lxw n capture filed landed 2>&1)"; code=$?
+  [ "$code" = 1 ] && case "$out" in *"raw in filed is a file, not a folder, so no note was saved. Do: move that file away, then capture again"*) true ;; *) false ;; esac && ok "$who, capture into a raw that is a file says so, not that a sandbox stopped it" || bad "$who, capture into a raw that is a file says so, not that a sandbox stopped it" "exit $code: $out"
+done
+out="$(lxw n index demo 2>&1)"
+case "$out" in *letter.md*) bad "index lists no page that is a link" "$out" ;; *) ok "index lists no page that is a link" ;; esac
+lacks "and the index doesn't name it" "letter.md" cat "$D/demo/index.md"
+# Every copy of what counts as a wiki refuses one whose parts are links.
+for f in wiki.sh internal/routing/routing.go mcp/server.py hooks/reminders.py hooks/session-start.sh extensions/wiki-confluence; do
+  check "$f refuses a wiki whose parts are links" grep -q -e '"raw", "wiki"' -e '! -L "$1/raw" ] && \[ ! -L "$1/wiki"' "$REPO/$f"
+done
+
+# A collection inside a larger repository: llm-wiki sets nothing there, and the checks hold.
+lxg m init -q "$LX/m"
+lxw m init >/dev/null 2>&1; lxw m new demo >/dev/null 2>&1
+mkdir -p "$LX/m/.aws"; printf 'aws_secret_access_key = ONLY-A-TEST-VALUE\n' > "$LX/m/.aws/credentials"
+ln -s ../../../.aws/credentials "$LX/m/wikis/demo/raw/2026-11-01-000000-keys.md"
+expect "in a larger repository, a link in raw/ is no waiting note either" "nothing waiting" lxw m pending demo
+check "and git's settings there are not touched" test -z "$(lxg m -C "$LX/m" config --get core.symlinks)"
+check "and the link is left as it is" test -L "$LX/m/wikis/demo/raw/2026-11-01-000000-keys.md"
+
+# The first layer: a collection that is its own repository writes links as plain files.
+lxg a init -q --bare "$LX/remote.git"
+lxw a init --git >/dev/null 2>&1; lxw a new demo >/dev/null 2>&1; lxw a new other >/dev/null 2>&1
+A="$LX/a/wikis"
+check "init --git turns links off in a new collection" test "$(lxg a -C "$A" config --get core.symlinks)" = false
+lxg a -C "$A" add -A && lxg a -C "$A" commit -q -m first
+# Two links, the second named *, recorded as a teammate's machine would push them.
+for n in 2026-11-01-000000-keys.md '*'; do
+  h="$(printf '../../../.aws/credentials' | lxg a -C "$A" hash-object -w --stdin)"
+  lxg a -C "$A" update-index --add --cacheinfo "120000,$h,demo/raw/$n"
+done
+lxg a -C "$A" commit -q -m "two links"
+lxg a -C "$A" remote add origin "$LX/remote.git" && lxg a -C "$A" push -q -u origin HEAD 2>/dev/null
+B="$LX/b/wikis"
+lxg b clone -q "$LX/remote.git" "$B"
+mkdir -p "$LX/b/.aws"; printf 'aws_secret_access_key = ONLY-A-TEST-VALUE\n' > "$LX/b/.aws/credentials"
+check "a clone made without the setting has the links (the case this guards)" test -L "$B/demo/raw/2026-11-01-000000-keys.md"
+printf 'an unsaved edit\n' >> "$B/other/index.md"; printf 'an unsaved edit\n' >> "$B/demo/log.md"
+cksum "$B/other/index.md" "$B/demo/log.md" > "$LX/edits.before"
+out="$(lxw b which demo 2>&1)"
+# shellcheck disable=SC2088
+[ "$out" = "~/wikis/demo" ] && ok "the first command in that clone prints what it prints and nothing else" || bad "the first command in that clone prints what it prints and nothing else" "$out"
+check "and turns links off there" test "$(lxg b -C "$B" config --get core.symlinks)" = false
+check "and each link is now a plain file that holds its text, the one named * too" bash -c "for f in '$B/demo/raw/2026-11-01-000000-keys.md' '$B/demo/raw/*'; do [ -f \"\$f\" ] && [ ! -L \"\$f\" ] && [ \"\$(cat \"\$f\")\" = ../../../.aws/credentials ] || exit 1; done"
+check "and git sees nothing changed in that wiki" test -z "$(lxg b -C "$B" status --porcelain -- demo/raw)"
+cksum "$B/other/index.md" "$B/demo/log.md" > "$LX/edits.after"
+check "unsaved edits beside them are as they were" cmp -s "$LX/edits.before" "$LX/edits.after"
+# The MCP server as the first command: its first bytes are the protocol's.
+lxg c clone -q "$LX/remote.git" "$LX/c/wikis"
+out="$(printf '{"jsonrpc":"2.0","id":1,"method":"ping"}\n' | lxw c mcp 2>/dev/null | head -c 10)"
+[ "$out" = '{"jsonrpc"' ] && ok "wiki mcp as the first command: the first bytes out are the protocol's" || bad "wiki mcp as the first command: the first bytes out are the protocol's" "$out"
+check "and the link it found is a plain file before the server reads anything" test ! -L "$LX/c/wikis/demo/raw/2026-11-01-000000-keys.md"
+# Someone who set the setting to true in the collection, as NEWS.md says to, keeps links on disk.
+lxg c -C "$LX/c/wikis" config core.symlinks true
+rm -f "$LX/c/wikis/demo/raw/2026-11-01-000000-keys.md"; lxg c -C "$LX/c/wikis" checkout -q -- demo/raw/2026-11-01-000000-keys.md
+lxw c which demo >/dev/null 2>&1
+check "a collection set to keep links has them left as they are" test -L "$LX/c/wikis/demo/raw/2026-11-01-000000-keys.md" -a "$(lxg c -C "$LX/c/wikis" config --get core.symlinks)" = true
+mkdir -p "$LX/c/.aws"; printf 'aws_secret_access_key = ONLY-A-TEST-VALUE\n' > "$LX/c/.aws/credentials"
+lacks "and nothing reads through them there either" "keys.md" lxw c pending demo
+# A second collection, reached in each of the ways a session or a person reaches one.
+S="$LX/s/work"
+lxw s init >/dev/null 2>&1
+mkdir -p "$LX/s/.config/llm-wiki" "$LX/s/code/proj"
+printf 'work  ~/work  ~/code/*\n' > "$LX/s/.config/llm-wiki/collections"
+lxg s init -q "$LX/s/code/proj"
+lxg s clone -q "$LX/remote.git" "$S"
+LK="demo/raw/2026-11-01-000000-keys.md"
+lxrelink() { rm -f "$S/$LK"; lxg s -C "$S" config --unset core.symlinks; lxg s -C "$S" -c core.symlinks=true checkout -q -- "$LK"; [ -L "$S/$LK" ]; }
+lxrelink && (cd "$LX/s" && lxw s start "$LX/s/code/proj" >/dev/null 2>&1)
+check "wiki start <a folder of the second collection>, from the home folder: the link there is a plain file" test -f "$S/$LK" -a ! -L "$S/$LK"
+lxrelink && printf '{"cwd":"%s","hook_event_name":"SessionStart"}' "$LX/s/code/proj" | lxw s __codex-start >/dev/null 2>&1
+check "the same through Codex's session start" test -f "$S/$LK" -a ! -L "$S/$LK"
+lxrelink && lxw s update --wikis-only </dev/null >/dev/null 2>&1
+check "and through wiki update" test -f "$S/$LK" -a ! -L "$S/$LK"
+lxrelink && printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"wiki_search","arguments":{"word":"aws_secret_access_key","collection":"work"}}}\n' | lxhelp lxw s mcp >/dev/null 2>&1
+check "and before the MCP server searches it" test -f "$S/$LK" -a ! -L "$S/$LK"
+out="$(lxw s status 2>&1)"
+case "$out" in *"is a link"* | *"links: "*) bad "a collection with no links has neither line about them in status" "$out" ;; *) ok "a collection with no links has neither line about them in status" ;; esac
+# A link pushed from another clone, pulled by session start, comes in as a plain file.
+h="$(printf '../../../.aws/credentials' | lxg a -C "$A" hash-object -w --stdin)"
+lxg a -C "$A" update-index --add --cacheinfo "120000,$h,demo/raw/2026-11-02-000000-more.md"
+lxg a -C "$A" commit -q -m "one more link" && lxg a -C "$A" push -q 2>/dev/null
+lxg b -C "$B" config --unset core.symlinks
+lxw b start demo >/dev/null 2>&1
+check "a link pulled by session start comes in as a plain file" test -f "$B/demo/raw/2026-11-02-000000-more.md" -a ! -L "$B/demo/raw/2026-11-02-000000-more.md"
+# A link in the middle of a merge is left as it is.
+lxw mg init --git >/dev/null 2>&1
+MG="$LX/mg/wikis"
+lxg mg -C "$MG" config --unset core.symlinks
+ln -s elsewhere "$MG/clash.md"
+h="$(printf 'elsewhere' | lxg mg -C "$MG" hash-object -w --stdin)"
+printf '120000 %s 1\tclash.md\n120000 %s 2\tclash.md\n120000 %s 3\tclash.md\n' "$h" "$h" "$h" | lxg mg -C "$MG" update-index --index-info
+lxw mg status >/dev/null 2>&1
+check "a link git holds in the middle of a merge is left alone" test -L "$MG/clash.md"
+# Section 4: status names links git records, with the fix.
+out="$(lxw b status 2>&1)"
+case "$out" in *"links: 3 file(s) in demo are links in git, such as raw/"*". Nothing reads through them here, and a sync turns them into plain files for everyone. Run: "*" sync demo"*) ok "status says how many files git records as links in a wiki, and how to fix it" ;; *) bad "status says how many files git records as links in a wiki, and how to fix it" "$out" ;; esac
+# The repair: one commit takes them out, the next holds them as plain files.
+before="$(lxg b -C "$B" rev-parse HEAD)"
+out="$(lxw b sync demo -m "demo: notes" 2>&1)"; code=$?
+[ "$code" = 0 ] && case "$out" in *"committed: demo: take out 3 link(s)"*"committed: demo: notes"*"synced: "*) true ;; *) false ;; esac && ok "wiki sync makes a commit that takes the links out, then its own" || bad "wiki sync makes a commit that takes the links out, then its own" "exit $code: $out"
+check "the two commits are the only new ones" test "$(lxg b -C "$B" log --format=%s "$before..HEAD" | tr '\n' '|')" = "demo: notes|demo: take out 3 link(s)|"
+check "git records them as plain files now" test -z "$(lxg b -C "$B" ls-files -s -- demo | grep '^120000' || true)"
+lxg b clone -q "$LX/remote.git" "$LX/b/fresh"
+check "a fresh clone, with no setting, has no link" test -z "$(find "$LX/b/fresh" -type l)"
+cksum "$B/other/index.md" > "$LX/other.after"; grep -F "$B/other/index.md" "$LX/edits.before" > "$LX/other.before"
+check "another wiki's unsaved edit is untouched" test "$(cut -d ' ' -f 1,2 "$LX/other.before")" = "$(cut -d ' ' -f 1,2 "$LX/other.after")"
+lacks "and status no longer names links" "links: " lxw b status
+printf 'more\n' >> "$B/$LK"
+expect "after that, an edit to one of them syncs like any other" "committed: demo: an edit" lxw b sync demo -m "demo: an edit"
+check "as a plain file" test "$(lxg b -C "$B" ls-files -s -- "$LK" | cut -c 1-6)" = 100644
+# A link made by hand is refused, and nothing is committed or left staged.
+ln -s ../../../.aws/credentials "$B/demo/raw/hand made.md"
+before="$(lxg b -C "$B" rev-parse HEAD)"
+out="$(lxw b sync demo 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"error: demo/raw/hand made.md is a link. A wiki's files are files: a link points somewhere else on every other machine. Nothing was committed. Do: put a copy of the file there in place of the link (for a note: "*" capture demo <slug> --copy <file>), then sync again"*) true ;; *) false ;; esac && ok "a link made by hand in a wiki is refused, and the message says what to do" || bad "a link made by hand in a wiki is refused, and the message says what to do" "exit $code: $out"
+check "nothing was committed" test "$(lxg b -C "$B" rev-parse HEAD)" = "$before"
+check "and nothing is left staged" test -z "$(lxg b -C "$B" diff --cached --name-only)"
+rm -f "$B/demo/raw/hand made.md"
+# A handbook git records as a link is committed by upgrade as a plain file.
+set_version "$B/demo/AGENTS.md" "$((TV - 1))"
+h="$(lxg b -C "$B" hash-object -w demo/AGENTS.md)"
+lxg b -C "$B" update-index --cacheinfo "100644,$h,demo/AGENTS.md" && lxg b -C "$B" commit -q -m "demo: an old handbook"
+lxg b -C "$B" update-index --cacheinfo "120000,$h,demo/AGENTS.md" && lxg b -C "$B" commit -q -m "demo: the handbook as a link"
+lxg b -C "$B" config core.symlinks false
+lxw b upgrade demo >/dev/null 2>&1
+check "upgrade commits a handbook that git recorded as a link as a plain file" test "$(lxg b -C "$B" ls-files -s -- demo/AGENTS.md | cut -c 1-6)" = 100644
+check "after a commit that takes the link out" bash -c "env HOME='$LX/b' git -C '$B' log --format=%s -3 | grep -qx 'wikis: take out 1 link(s)'"
+# An upgrade that git refuses leaves nothing staged: a staged file stops the next merge.
+set_version "$B/demo/AGENTS.md" "$((TV - 1))"; lxg b -C "$B" commit -q -m "demo: an older handbook" -- demo/AGENTS.md
+printf '#!/bin/sh\nexit 1\n' > "$B/.git/hooks/pre-commit"; chmod +x "$B/.git/hooks/pre-commit"
+lxw b upgrade demo >/dev/null 2>&1
+check "an upgrade whose commit is refused leaves nothing staged" test -z "$(lxg b -C "$B" diff --cached --name-only)" -a -n "$(lxg b -C "$B" status --porcelain -- demo/AGENTS.md)"
+lxg b -C "$B" checkout -q -- demo
+rm -f "$B/.git/hooks/pre-commit"
+# The repair never moves a file. lxrec records paths as links and checks them out as files.
+lxrec() {
+  local h="$1" r="$2" p x
+  shift 2
+  x="$(printf '../../../.aws/credentials' | lxg "$h" -C "$r" hash-object -w --stdin)"
+  for p in "$@"; do lxg "$h" -C "$r" update-index --add --cacheinfo "120000,$x,$p"; done
+  lxg "$h" -C "$r" commit -q -m "links"
+  for p in "$@"; do rm -f "$r/$p"; lxg "$h" -C "$r" checkout -q -- "$p"; done
+}
+lxrec b "$B" demo/raw/r1.md demo/raw/r2.md
+printf '#!/bin/sh\nexit 1\n' > "$B/.git/hooks/pre-commit"; chmod +x "$B/.git/hooks/pre-commit"
+before="$(lxg b -C "$B" rev-parse HEAD)"
+out="$(lxw b sync demo 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"the commit was refused."*) true ;; *) false ;; esac && ok "a repair commit the hook refuses stops the sync, as a refused commit does" || bad "a repair commit the hook refuses stops the sync, as a refused commit does" "exit $code: $out"
+check "the files are where they were, nothing is committed or staged, and nothing is left in the git folder" bash -c "[ -f '$B/demo/raw/r1.md' ] && [ -f '$B/demo/raw/r2.md' ] && [ \"\$(env HOME='$LX/b' git -C '$B' rev-parse HEAD)\" = '$before' ] && [ -z \"\$(env HOME='$LX/b' git -C '$B' diff --cached --name-only)\" ] && ! ls '$B/.git' | grep -q 'llm-wiki-links\|llm-wiki-index'"
+# The repair goes through, and the sync's own commit is refused: the repair is undone too.
+rm -f "$B/.git/hooks/pre-commit"
+printf '#!/bin/sh\ncase "$(cat "$1")" in *"take out"*) exit 0 ;; esac\nexit 1\n' > "$B/.git/hooks/commit-msg"; chmod +x "$B/.git/hooks/commit-msg"
+out="$(lxw b sync demo -m "demo: refused" 2>&1)"; code=$?
+check "when the sync's own commit is refused, the commit that took links out is undone" test "$code:$(lxg b -C "$B" rev-parse HEAD)" = "1:$before"
+check "so git still records them as links, and nothing is staged" test "$(lxg b -C "$B" ls-files -s -- demo/raw/r1.md | cut -c 1-6):$(lxg b -C "$B" diff --cached --name-only)" = "120000:"
+rm -f "$B/.git/hooks/commit-msg"
+# A file an ignore rule matches is staged again all the same, and not pushed as removed.
+printf '/demo/raw/r1.md\n' >> "$B/.git/info/exclude"
+out="$(lxw b sync demo -m "demo: two links" 2>&1)"; code=$?
+[ "$code" = 0 ] && case "$out" in *"committed: demo: take out 2 link(s)"*"committed: demo: two links"*) true ;; *) false ;; esac && ok "with an ignore rule matching one, the repair still makes its two commits" || bad "with an ignore rule matching one, the repair still makes its two commits" "exit $code: $out"
+check "and the ignored one is in git as a plain file, not removed" test "$(lxg b -C "$B" ls-tree HEAD -- demo/raw/r1.md | cut -c 1-6)" = 100644
+sed -i.bak '/r1.md/d' "$B/.git/info/exclude"
+# A link added by hand is refused, though links_off has already made it a plain file.
+ln -s ../../../.aws/credentials "$B/demo/raw/added.md"; lxg b -C "$B" add -- demo/raw/added.md
+before="$(lxg b -C "$B" rev-parse HEAD)"
+out="$(lxw b sync demo 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"demo/raw/added.md is a link."*) true ;; *) false ;; esac && ok "a link added to git by hand is refused as one made by hand" || bad "a link added to git by hand is refused as one made by hand" "exit $code: $out"
+check "with nothing committed" test "$(lxg b -C "$B" rev-parse HEAD)" = "$before"
+lxg b -C "$B" rm -q --cached -- demo/raw/added.md; rm -f "$B/demo/raw/added.md"
+# Two entries that differ only in case are one file on a disk that ignores case.
+: > "$LX/case-probe"
+if [ -e "$LX/CASE-PROBE" ]; then
+  lxrec b "$B" demo/raw/Case.md
+  x="$(printf 'other\n' | lxg b -C "$B" hash-object -w --stdin)"
+  lxg b -C "$B" update-index --add --cacheinfo "100644,$x,demo/raw/case.md" && lxg b -C "$B" commit -q -m "case"
+  out="$(lxw b sync demo 2>&1)"; code=$?
+  [ "$code" = 1 ] && case "$out" in *"demo/raw/"[Cc]"ase.md and another file git holds differ only in case"*) true ;; *) false ;; esac && ok "a link whose name another entry has but for case is refused, in words of its own" || bad "a link whose name another entry has but for case is refused, in words of its own" "exit $code: $out"
+  lxg b -C "$B" rm -q --cached -- demo/raw/Case.md demo/raw/case.md; rm -f "$B/demo/raw/Case.md"; lxg b -C "$B" commit -q -m "no case"
+else
+  skipped "two names that differ only in case (this disk tells them apart)"
+fi
+# links_off writes nowhere through a folder that is a link, and replaces a link to a folder.
+lxw lo init --git >/dev/null 2>&1; lxw lo new demo >/dev/null 2>&1
+LO="$LX/lo/wikis"
+lxg lo -C "$LO" add -A && lxg lo -C "$LO" commit -q -m first
+mkdir -p "$LX/lo/outside" "$LX/lo/outdir"; printf 'keep me\n' > "$LX/lo/target.md"; ln -s ../target.md "$LX/lo/outside/x.md"
+x="$(printf 'zzz' | lxg lo -C "$LO" hash-object -w --stdin)"
+y="$(printf '../../outdir' | lxg lo -C "$LO" hash-object -w --stdin)"
+lxg lo -C "$LO" update-index --add --cacheinfo "120000,$x,demo/sub/x.md" && lxg lo -C "$LO" update-index --add --cacheinfo "120000,$y,demo/raw/d.md" && lxg lo -C "$LO" commit -q -m links
+ln -s ../../outside "$LO/demo/sub"; ln -s "$LX/lo/outdir" "$LO/demo/raw/d.md"
+lxw lo which demo >/dev/null 2>&1
+check "links_off writes nothing through a folder that is a link" test -L "$LX/lo/outside/x.md" -a "$(cat "$LX/lo/target.md")" = "keep me"
+check "and a link to a folder becomes a plain file, with nothing moved into the folder" test -f "$LO/demo/raw/d.md" -a ! -L "$LO/demo/raw/d.md" -a -z "$(ls -A "$LX/lo/outdir")"
+# Not in a larger repository, even with a stray .git in the wikis folder.
+mkdir "$LX/m/wikis/.git"
+lxw m pending demo >/dev/null 2>&1
+check "an empty .git in a wikis folder inside a larger repository sets nothing in that one" test -z "$(lxg m -C "$LX/m" config --get core.symlinks)"
+rmdir "$LX/m/wikis/.git"
+# A wiki that is a repository of its own, and another collection, as status reads it.
+lxw a new solo >/dev/null 2>&1; lxg a -C "$A/solo" init -q
+lxg a -C "$A/solo" add -A && lxg a -C "$A/solo" commit -q -m first
+lxrec a "$A/solo" raw/2026-11-03-000000-solo.md
+lxg a -C "$A/solo" config --unset core.symlinks; rm -f "$A/solo/raw/2026-11-03-000000-solo.md"; lxg a -C "$A/solo" -c core.symlinks=true checkout -q -- raw/2026-11-03-000000-solo.md
+lxw a pending solo >/dev/null 2>&1
+check "a wiki that is a repository of its own has its links turned into files too" test -f "$A/solo/raw/2026-11-03-000000-solo.md" -a ! -L "$A/solo/raw/2026-11-03-000000-solo.md"
+lxrelink && (cd "$LX/s" && lxw s status >/dev/null 2>&1)
+check "so does another collection, before status counts its notes" test -f "$S/$LK" -a ! -L "$S/$LK"
+# upgrade --all with nothing of its own to commit commits nothing that was staged elsewhere.
+lxw u init --git >/dev/null 2>&1; lxw u new demo >/dev/null 2>&1
+U="$LX/u/wikis"
+lxg u -C "$U" add -A && lxg u -C "$U" commit -q -m first
+lxg u -C "$U" rm -q .gitignore && lxg u -C "$U" commit -q -m "no ignore file" && mkdir "$U/.gitignore"
+printf 'A note.\n' > "$U/demo/raw/2026-11-04-000000-staged.md"; lxg u -C "$U" add -- demo/raw/2026-11-04-000000-staged.md
+lxw u upgrade --all >/dev/null 2>&1
+check "upgrade with no file of its own to commit leaves a note staged elsewhere as it was" test "$(lxg u -C "$U" log -1 --format=%s):$(lxg u -C "$U" diff --cached --name-only)" = "no ignore file:demo/raw/2026-11-04-000000-staged.md"
+# Status names a wiki whose AGENTS.md is a broken link, and the lists pass over links.
+lxw n new broken >/dev/null 2>&1; rm -f "$D/broken/AGENTS.md"; ln -s nowhere "$D/broken/AGENTS.md"
+expect "status names a wiki whose AGENTS.md is a broken link" "broken: its AGENTS.md is a link, so llm-wiki doesn't use it." lxw n status
+expect "lint counts no link in raw/ as a waiting note" "notes waiting to be compiled (1)" lxw n lint demo
+mkdir -p "$LX/n/Documents/sk" "$LX/n/Documents/srcs"
+printf -- '---\nname: sk\ndescription: a skill from outside\n---\n' > "$LX/n/Documents/sk/SKILL.md"
+: > "$LX/n/Documents/srcs/2026-11-01-000001-real.md"
+ln -s ../../Documents "$D/demo/skills"; ln -s ../../../Documents/srcs "$D/demo/wiki/sources"
+lacks "index lists no skill under a skills folder that is a link" "skills/" lxw n index demo
+expect "a wiki/sources that is a link marks no note compiled" "raw/2026-11-01-000001-real.md" lxw n pending demo
+# start --name takes a name, never a path.
+out="$(lxw n start --name ../other 2>&1)"; code=$?
+[ "$code" = 2 ] && case "$out" in *"start --name takes a repository's name"*) true ;; *) false ;; esac && ok "start --name refuses a path" || bad "start --name refuses a path" "exit $code: $out"
 fi
 
 if section "Two clones change one page"; then

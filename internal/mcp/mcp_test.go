@@ -373,10 +373,10 @@ func TestList(t *testing.T) {
 	links(t, root)
 	// Python stops the whole listing at a repos.md that isn't UTF-8.
 	write(t, root+"/home/wikis-work/jobapp/repos.md", "- caf\xe9\n- jobs\n")
+	// Pages: deploy, crlf, latin, .hid/h, sub/deep. Not notes.txt, and no link, to a file,
+	// to a folder or to nothing: a link is no page (code review M24).
 	got, isErr := call(t, s, "wiki_list", m{})
-	// Pages: deploy, crlf, latin, .hid/h, sub/deep, the two links to files, and the broken
-	// link. Not notes.txt, and not the link to a folder or what is under it again.
-	want := "demo (collection default): 8 page(s), covers: api web\n" +
+	want := "demo (collection default): 5 page(s), covers: api web\n" +
 		"global (collection default): 0 page(s)\n" +
 		"jobapp (collection work): 1 page(s), covers: caf\ufffd jobs"
 	if isErr || got != want {
@@ -564,13 +564,13 @@ func TestStart(t *testing.T) {
 		calls string
 	}{
 		// Named after the repository, or listed in a repos.md: no wiki.sh to find out.
-		{m{"repository": "demo"}, "args: [start] [demo]|wikis: " + root + "/home/wikis"},
-		{m{"repository": "web"}, "args: [start] [web]|wikis: " + root + "/home/wikis"},
-		{m{"repository": "jobapp"}, "args: [start] [jobapp]|wikis: " + root + "/home/wikis-work"},
-		{m{"repository": "jobs"}, "args: [start] [jobs]|wikis: " + root + "/home/wikis-work"},
+		{m{"repository": "demo"}, "args: [start] [--name] [demo]|wikis: " + root + "/home/wikis"},
+		{m{"repository": "web"}, "args: [start] [--name] [web]|wikis: " + root + "/home/wikis"},
+		{m{"repository": "jobapp"}, "args: [start] [--name] [jobapp]|wikis: " + root + "/home/wikis-work"},
+		{m{"repository": "jobs"}, "args: [start] [--name] [jobs]|wikis: " + root + "/home/wikis-work"},
 		// Nobody's: the default.
-		{m{"repository": "nosuch"}, "args: [start] [nosuch]|wikis: " + root + "/home/wikis"},
-		{m{"repository": "jobapp", "collection": "default"}, "args: [start] [jobapp]|wikis: " + root + "/home/wikis"},
+		{m{"repository": "nosuch"}, "args: [start] [--name] [nosuch]|wikis: " + root + "/home/wikis"},
+		{m{"repository": "jobapp", "collection": "default"}, "args: [start] [--name] [jobapp]|wikis: " + root + "/home/wikis"},
 		{m{"collection": "work"}, "args: [start]|wikis: " + root + "/home/wikis-work"},
 		{m{}, "args: [start]|wikis: " + root + "/home/wikis"},
 	} {
@@ -587,7 +587,7 @@ func TestStart(t *testing.T) {
 	os.Remove(root + "/calls.log")
 	call(t, s, "wiki_start", m{"repository": "jobs"})
 	calls := read(t, root+"/calls.log")
-	if n := strings.Count(calls, "args: [which] [jobs]"); n != 1 || !strings.Contains(calls, "args: [start] [jobs]\ndir: "+realTemp(t)+"\nwikis: "+root+"/home/wikis-work\n") {
+	if n := strings.Count(calls, "args: [which] [jobs]"); n != 1 || !strings.Contains(calls, "args: [start] [--name] [jobs]\ndir: "+realTemp(t)+"\nwikis: "+root+"/home/wikis-work\n") {
 		t.Errorf("wiki_start for a repository routing can't place ran:\n%s", calls)
 	}
 	if got, isErr := call(t, s, "wiki_start", m{"repository": "../x"}); !isErr || got != "that isn't a repository name." {
@@ -783,5 +783,15 @@ func TestFromEnv(t *testing.T) {
 	s := FromEnv()
 	if got := fmt.Sprint(s.Collections); got != "[{default /a/wikis} {work /b/wikis}]" || s.WikiSh != "/x/wiki.sh" || s.Timeout != 90*time.Second {
 		t.Errorf("FromEnv: %s, %q, %v", got, s.WikiSh, s.Timeout)
+	}
+}
+
+// A name ends at the end: a line feed after it reached which_wiki's grep as an empty second
+// pattern and went into stats.csv, so both servers refuse it. A first underscore is a name.
+func TestNameEndsAtTheEnd(t *testing.T) {
+	for in, want := range map[string]bool{"alpha": true, "_x": true, "alpha\n": false, "alpha\nbeta": false, "-x": false, ".x": false} {
+		if got := name.MatchString(in); got != want {
+			t.Errorf("name.MatchString(%q) = %v, want %v", in, got, want)
+		}
 	}
 }

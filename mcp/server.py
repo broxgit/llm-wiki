@@ -18,7 +18,11 @@ TIMEOUT = 90
 MAX_READ = 200_000
 MAX_NOTE = 200_000
 READABLE = (".md", ".csv", ".txt")
-NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+# wiki.sh's valid_name, which takes a first underscore: wiki_new makes such a wiki, and every
+# other tool has to reach it (code review L51). \Z, not $: $ also matches before a line
+# feed at the end, and one let through reached which_wiki's grep as a second, empty
+# pattern, which matched any repos.md with a blank line, and went into stats.csv.
+NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*\Z")
 LOOKUP_WINDOW = 600
 LOOKUPS = {}
 
@@ -49,7 +53,10 @@ def is_wiki(path):
     """wiki.sh's is_wiki: an index.md, and an AGENTS.md that is the handbook, which its
     "Handbook version N." line says. A handbook that can't be read counts, as it does there.
     The same test is in wiki.sh, internal/routing, hooks/reminders.py, hooks/session-start.sh,
-    mcp/server.py and extensions/wiki-confluence: change them together."""
+    mcp/server.py and extensions/wiki-confluence: change them together. A folder whose
+    AGENTS.md, index.md, raw or wiki is a link is not a wiki (code review M24)."""
+    if any(os.path.islink(os.path.join(path, p)) for p in ("AGENTS.md", "index.md", "raw", "wiki")):
+        return False
     agents = os.path.join(path, "AGENTS.md")
     if not (os.path.isfile(agents) and os.path.isfile(os.path.join(path, "index.md"))):
         return False
@@ -157,7 +164,10 @@ def wiki_list(_):
     for name, folder in collections():
         for w in wikis_in(folder):
             path = os.path.join(folder, w)
-            pages = sum(len([f for f in fs if f.endswith(".md")]) for _, _, fs in os.walk(os.path.join(path, "wiki")))
+            # A link is no page (code review M24): os.walk doesn't enter a linked folder, and a
+            # linked file is left out of the count.
+            pages = sum(len([f for f in fs if f.endswith(".md") and not os.path.islink(os.path.join(d, f))])
+                        for d, _, fs in os.walk(os.path.join(path, "wiki")))
             covers = ""
             try:
                 # A repos.md that isn't UTF-8 must not end the listing.
@@ -190,7 +200,9 @@ def wiki_start(args):
         folder = collection_covering(repo)
     else:
         _, folder = pick_collection(args.get("collection"))
-    return must(folder, "start", *([repo] if repo else []))
+    # --name: the server runs in the temp folder, and a folder there by the repository's name
+    # would otherwise be read as that folder (code review L34).
+    return must(folder, "start", *(["--name", repo] if repo else []))
 
 
 def wiki_search(args):
@@ -286,14 +298,31 @@ def wiki_new(args):
     ):
         raise ToolError("that can't be a wiki's name. A wiki is made in the folder the wikis are kept in, so its name is a name, not a path: letters, digits and spaces, 80 characters at most.")
     _, folder = pick_collection(args.get("collection"))
+    # The folder is set up first when it holds no wiki: missing, empty, or with only a .git.
+    # Without it the wiki was made with no WIKIS.md and no shared wiki (code review L51).
     first = ""
     if not os.path.isdir(folder):
         must(folder, "init")
         first = "The folder the wikis are kept in wasn't there, so it was created first, with the shared wiki.\n"
+    elif all(n == ".git" for n in listing(folder)):
+        must(folder, "init")
+        first = "The folder the wikis are kept in was there with no wikis in it, so it was set up first, with the shared wiki.\n"
     out = must(folder, "new", name)
+    # The shared wiki's own name, which init has just made: that is what was created.
+    if first and (out.startswith("exists:  ") or "\nexists:  " in out):
+        return first + out + "\nCreated on this machine: it is the shared wiki, which setting up the folder made. Notes go into it with wiki_capture."
     if out.startswith("exists:  ") or "\nexists:  " in out:
         return first + out + "\nNothing was created: that wiki was already there. Notes go into it with wiki_capture."
     return first + out + "\nCreated on this machine. Notes go into it with wiki_capture, under the name on the created line."
+
+
+def listing(folder):
+    """The names in a folder, or one that is no name when it can't be listed: a folder that
+    can't be read is not taken for an empty one."""
+    try:
+        return os.listdir(folder)
+    except OSError:
+        return [""]
 
 
 def wiki_feedback(args):

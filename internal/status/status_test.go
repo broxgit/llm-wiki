@@ -189,6 +189,32 @@ func TestAlso(t *testing.T) {
 	}
 }
 
+// A link in raw/ is no note, and a wiki whose raw or wiki is a link is no wiki: git carries
+// links, and one points wherever its text says on the machine that pulls it (code review M24).
+func TestLinks(t *testing.T) {
+	other := t.TempDir()
+	write(t, other+"/secret.md", "x\n")
+	d := wiki(t, other, "w", "28")
+	write(t, d+"/raw/a.md", "x\n")
+	if err := os.Symlink(other+"/secret.md", d+"/raw/b.md"); err != nil {
+		t.Fatal(err)
+	}
+	if names, err := PendingNames(d); err != nil || !reflect.DeepEqual(names, []string{"a.md"}) {
+		t.Errorf("PendingNames = %q, %v, want [a.md]", names, err)
+	}
+	d = wiki(t, other, "linked", "28")
+	if err := os.Symlink(other, d+"/raw"); err != nil {
+		t.Fatal(err)
+	}
+	r, err := Run(Options{Wikis: t.TempDir(), TemplateVersion: "28", WikiCmd: "wiki", Also: []string{other}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []int{1}; !reflect.DeepEqual(r.Also, want) {
+		t.Errorf("also: %v, want %v", r.Also, want)
+	}
+}
+
 func TestStem(t *testing.T) {
 	for in, want := range map[string]string{
 		"a.md": "a", "a.tar.gz": "a.tar", "a": "a", "a.b-c": "a.b-c", "a.": "a", "a.m\xc3\xa9": "a.m\xc3\xa9", "a.md\r": "a.md\r",
@@ -239,7 +265,6 @@ func TestUnsure(t *testing.T) {
 		"NUL in a page":      func(root string) { write(t, root+"/w/wiki/a.md", "a\x00\n") },
 		"NUL in the lock":    func(root string) { write(t, root+"/w/.compile-lock", "held\x00\n") },
 		"a link under wiki/": func(root string) { os.Symlink(root+"/w/index.md", root+"/w/wiki/l.md") },
-		"wiki/ is a link":    func(root string) { os.RemoveAll(root + "/w/wiki"); os.Symlink(root, root+"/w/wiki") },
 		"no log.md":          func(root string) { os.Remove(root + "/w/log.md") },
 		"a name with a line break": func(root string) {
 			wiki(t, root, "two\nlines", "28")

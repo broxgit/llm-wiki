@@ -83,6 +83,9 @@ func Run(o Options) (string, error) {
 	root := o.resolve(wiki)
 	// The words are not_wiki's in wiki.sh.
 	switch st, err := routing.WikiState(root); {
+	case err == nil && st == routing.Linked:
+		link, _ := routing.WikiLink(root)
+		return "", refuse(o.tilde(root) + " is not a wiki: its " + link + " is a link, so llm-wiki does not use it. Nothing was changed. Run: " + o.WikiCmd + " status")
 	case err != nil || st == routing.Missing:
 		return "", refuse(o.tilde(root) + " is not a wiki. Run: " + o.WikiCmd + " status")
 	case st == routing.NotHandbook:
@@ -131,6 +134,10 @@ func Run(o Options) (string, error) {
 		name = stamp + "-" + slug + "-" + strconv.Itoa(n) + "." + ext
 	}
 	dest := root + "/raw/" + name
+	// A raw that is a file, not a folder, is said as such: the failure read as a sandbox.
+	if st, err := os.Stat(root + "/raw"); err == nil && !st.IsDir() {
+		return "", refuse("raw in " + root[strings.LastIndex(root, "/")+1:] + " is a file, not a folder, so no note was saved. Do: move that file away, then capture again")
+	}
 	if err := os.MkdirAll(root+"/raw", 0o777); err != nil {
 		return "", refuse(o.cantWrite(root + "/raw"))
 	}

@@ -127,8 +127,10 @@ fi
 # index.md, and an AGENTS.md with the handbook's "Handbook version N." line. One that can't
 # be opened counts, as it does there. The same test is in wiki.sh, internal/routing,
 # mcp/server.py, hooks/reminders.py and extensions/wiki-confluence: change them together.
+# A folder whose AGENTS.md, index.md, raw or wiki is a link is not a wiki (code review M24).
 hook_is_wiki() {
   local l got="" opened=no LC_ALL=C
+  [ ! -L "$1/AGENTS.md" ] && [ ! -L "$1/index.md" ] && [ ! -L "$1/raw" ] && [ ! -L "$1/wiki" ] || return 1
   [ -f "$1/index.md" ] && [ -f "$1/AGENTS.md" ] || return 1
   {
     opened=yes
