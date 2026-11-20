@@ -26,10 +26,12 @@ const (
 	shared       = "global"         // SHARED in wiki.sh: the wiki a search that found nothing is logged against
 )
 
-// name is what a wiki, a repository or a slug may be. Python's $ also matches before a
-// line feed at the very end, so one is let through here too, and wiki.sh or the lookup
-// then refuses the name in both servers alike.
-var name = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*\n?$`)
+// name is what a wiki, a repository or a slug may be: server.py's NAME, which ends at \Z.
+// A line feed at the end is refused in both servers: let through, it reached which_wiki's
+// grep as a second, empty pattern, which matched any repos.md with a blank line, and went
+// into stats.csv. A first underscore is wiki.sh's valid_name: wiki_new makes such a wiki,
+// and every other tool has to reach it (code review L51).
+var name = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]*$`)
 
 // readable is the files wiki_read gives out.
 var readable = []string{".md", ".csv", ".txt"}
@@ -243,7 +245,8 @@ func (s *Server) wikiList(args) (string, error) {
 
 // countPages is the .md files os.walk finds under a folder: in every folder below it,
 // hidden ones too, but not through a link to a folder. What can't be listed counts
-// nothing. A link to a file counts, and so does one that leads nowhere.
+// nothing. A link is no page, so a link to a file, or one that leads nowhere, doesn't
+// count either (code review M24).
 func countPages(dir string) int {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -255,7 +258,7 @@ func countPages(dir string) int {
 		switch {
 		case e.IsDir():
 			n += countPages(path)
-		case e.Type()&fs.ModeSymlink != 0 && isDir(path):
+		case e.Type()&fs.ModeSymlink != 0:
 		case strings.HasSuffix(e.Name(), ".md"):
 			n++
 		}
@@ -325,7 +328,9 @@ func (s *Server) wikiStart(a args) (string, error) {
 		folder = c.Folder
 	}
 	if repo != "" {
-		return s.must(folder, "", "start", repo)
+		// --name: the server runs in the temp folder, and a folder there by the repository's
+		// name would otherwise be read as that folder (code review L34).
+		return s.must(folder, "", "start", "--name", repo)
 	}
 	return s.must(folder, "", "start")
 }
@@ -643,6 +648,21 @@ func (s *Server) capture(folder, wiki, slug, note string) (string, error) {
 	return line + warnings, nil
 }
 
+// onlyGit is server.py's test on listing: a folder that holds nothing but a .git, or nothing.
+// One that can't be listed is not taken for an empty one.
+func onlyGit(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.Name() != ".git" {
+			return false
+		}
+	}
+	return true
+}
+
 // wikiNew is server.py's wiki_new: a wiki by name, inside a collection's folder and nowhere else.
 func (s *Server) wikiNew(a args) (string, error) {
 	called, err := a.text("name")
@@ -671,18 +691,30 @@ func (s *Server) wikiNew(a args) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// The folder is set up first when it holds no wiki: missing, empty, or with only a .git.
+	// Without it the wiki was made with no WIKIS.md and no shared wiki (code review L51).
 	first := ""
 	if !isDir(c.Folder) {
 		if _, err := s.must(c.Folder, "", "init"); err != nil {
 			return "", err
 		}
 		first = "The folder the wikis are kept in wasn't there, so it was created first, with the shared wiki.\n"
+	} else if onlyGit(c.Folder) {
+		if _, err := s.must(c.Folder, "", "init"); err != nil {
+			return "", err
+		}
+		first = "The folder the wikis are kept in was there with no wikis in it, so it was set up first, with the shared wiki.\n"
 	}
 	out, err := s.must(c.Folder, "", "new", called)
 	if err != nil {
 		return "", err
 	}
-	if strings.HasPrefix(out, "exists:  ") || strings.Contains(out, "\nexists:  ") {
+	exists := strings.HasPrefix(out, "exists:  ") || strings.Contains(out, "\nexists:  ")
+	// The shared wiki's own name, which init has just made: that is what was created.
+	if first != "" && exists {
+		return first + out + "\nCreated on this machine: it is the shared wiki, which setting up the folder made. Notes go into it with wiki_capture.", nil
+	}
+	if exists {
 		return first + out + "\nNothing was created: that wiki was already there. Notes go into it with wiki_capture.", nil
 	}
 	return first + out + "\nCreated on this machine. Notes go into it with wiki_capture, under the name on the created line.", nil

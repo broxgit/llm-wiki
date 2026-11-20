@@ -82,4 +82,30 @@ func TestWikiState(t *testing.T) {
 			t.Error("IsWiki = false")
 		}
 	})
+	// A wiki whose main parts include a link is none: git carries links (code review M24).
+	for _, part := range []string{"AGENTS.md", "index.md", "raw", "wiki"} {
+		t.Run(part+" a link", func(t *testing.T) {
+			dir := make("linked-"+part, "Handbook version 3.\n", true)
+			os.MkdirAll(root+"/elsewhere-"+part, 0o755)
+			os.WriteFile(root+"/elsewhere-"+part+"/file", []byte("Handbook version 3.\n"), 0o644)
+			target := root + "/elsewhere-" + part
+			if part == "AGENTS.md" || part == "index.md" {
+				target += "/file"
+			}
+			os.Remove(dir + "/" + part)
+			if err := os.Symlink(target, dir+"/"+part); err != nil {
+				t.Fatal(err)
+			}
+			got, err := WikiState(dir)
+			if err != nil || got != Linked {
+				t.Errorf("WikiState = %d, %v, want Linked", got, err)
+			}
+			if ok, _ := IsWiki(dir); ok {
+				t.Error("IsWiki = true")
+			}
+			if l, _ := WikiLink(dir); l != part {
+				t.Errorf("WikiLink = %q, want %q", l, part)
+			}
+		})
+	}
 }

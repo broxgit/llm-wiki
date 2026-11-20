@@ -166,4 +166,6 @@ Every call to action that `wiki status` or `wiki report` prints ends with its fi
 
 Keep the session hook's output short. Claude Code shows the model only a short preview of a long hook output and saves the rest to a file, which the model may never read. The hook points at the handbook rather than embedding it for this reason.
 
+A collection that is its own git repository gets `core.symlinks=false` in its own config (`links_off`, wherever a collection is chosen or pulled), because git carries links and one pushed to a shared collection points wherever its text says on every machine that pulls it: a note in `raw/` could be any file there (code review M24). A local `true` is left alone, for someone who keeps links on purpose.
+
 `ROADMAP.md` lists what's planned and what's still untested. When you finish an item, move it to Done and say what changed.
