@@ -4923,6 +4923,14 @@ h=[l for l in open(sys.argv[1]) if l.startswith('## ')]
 assert h and all(re.match(r'## \d{4}-\d\d-\d\d: \S', l) for l in h) and len(set(h))==len(h)
 d=[l[3:13] for l in h]
 assert d==sorted(d,reverse=True)" "$REPO/NEWS.md"
+# The date is the day an entry was written. Each new entry was once given the day after the
+# last one, and 115 entries in three weeks reached February of the next year. A day of
+# slack, for a clock ahead of UTC.
+check "no NEWS.md entry is dated after today" python3 -c "
+import datetime,sys
+last=(datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(days=1)).strftime('%Y-%m-%d')
+late=[l.strip() for l in open(sys.argv[1]) if l.startswith('## ') and l[3:13]>last]
+assert not late, late" "$REPO/NEWS.md"
 # wiki update prints every entry a user hasn't seen, as it is. An entry is one line for
 # each change they would notice, and nothing else.
 out="$(python3 -c "
