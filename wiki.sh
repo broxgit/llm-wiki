@@ -2,6 +2,11 @@
 # wiki.sh: set up and look after LLM wikis built from this template.
 # Works with the bash that ships on macOS (3.2) and on Linux.
 set -euo pipefail
+# Which collection an extension runs in is worked out here, from WIKIS_DIR and the collections
+# file, never taken from the environment: ext_collections keeps its answer in these.
+EXT_COLL=""
+EXT_COLLS=""
+EXT_COLLS_FOR=""
 # Feed a loop with a heredoc holding $(...), not process substitution. On bash 3.2 the exit of
 # a substituted process can interrupt a blocked printf, and under set -e that ends the
 # script partway (reproduced: 10 of 40 runs, none with a heredoc). Empty output gives one
@@ -265,8 +270,12 @@ if [ "${args[0]:-}" = __complete ] && [ "$took" -gt 0 ]; then
   case "${args[1]:-}" in '' | *[!0-9]*) ;; *) [ "${args[1]}" -lt "$took" ] || args[1]=$((10#${args[1]} - took)) ;; esac
 fi
 set -- ${args[@]+"${args[@]}"}
+# The name the user chose, for a folder that more than one collection's line names.
+EXT_PICKED="$pick"
 if [ -n "$pick" ]; then
-  WIKIS_DIR="$(collections | awk -F'\t' -v n="$pick" '$1 == n { print $2; exit }')"
+  # awk reads to the end: an exit at the first match closed the pipe while collections was still
+  # printing, and under pipefail the whole command ended with 141 and no word.
+  WIKIS_DIR="$(collections | awk -F'\t' -v n="$pick" '$1 == n && !found { print $2; found = 1 }')"
   [ -n "$WIKIS_DIR" ] || { echo "error: no collection called $pick. Collections: $(collections | cut -f 1 | tr '\n' ' ')" >&2; exit 1; }
 elif [ -z "${WIKIS_DIR:-}" ]; then
   WIKIS_DIR="$(collection_for "$PWD")"
@@ -10853,6 +10862,74 @@ EXT_DIR="${LLM_WIKI_EXTENSIONS_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/llm-wik
 EXT_API=4
 EXT_READY_SECONDS="${LLM_WIKI_READY_SECONDS:-5}"
 EXT_STATE="${XDG_STATE_HOME:-$HOME/.local/state}/llm-wiki/extensions"
+# ext_collections: sets EXT_COLL, the name of the collection this run is in, and EXT_COLLS,
+# a "name<TAB>folder" line for each collection on this machine, which every extension is
+# given as LLM_WIKI_COLLECTION and LLM_WIKI_COLLECTIONS. Every collection has a wiki called
+# global, so a setting kept for the whole machine names a wiki by its collection too, and an
+# extension needs both to tell them apart. Both come from WIKIS_DIR and the collections file
+# alone, in every run, a background one included.
+# - A line whose name isn't one a collection can have (coll_name_ok) is left out.
+# - One folder is one collection, compared by its real path, so a folder listed twice or
+#   through a link isn't two: the name chosen with --collection when it is one of them, else
+#   the first listed.
+# - A folder no line names, such as a test's WIKIS_DIR, is EXT_UNNAMED, which no collection
+#   can be called and no setting can name.
+EXT_UNNAMED="(unnamed)"
+coll_name_ok() { case "$1" in '' | *[!A-Za-z0-9_-]*) return 1 ;; esac; }
+ext_real() { (cd "$1" 2>/dev/null && pwd -P) || printf '%s' "$1"; }
+ext_collections() {
+  local n f r real here all tab nl seen
+  [ "$EXT_COLLS_FOR" != "$WIKIS_DIR" ] || return 0
+  EXT_COLLS_FOR="$WIKIS_DIR"
+  tab="$(printf '\t')"
+  nl='
+'
+  here="$(ext_real "$WIKIS_DIR")"
+  all="$(collections)"
+  EXT_COLL=""
+  EXT_COLLS=""
+  while IFS="$tab" read -r n f r; do
+    coll_name_ok "$n" && [ -n "$f" ] || continue
+    [ "$(ext_real "$f")" = "$here" ] || continue
+    if [ "$n" = "$EXT_PICKED" ]; then EXT_COLL="$n"; break; fi
+    [ -n "$EXT_COLL" ] || EXT_COLL="$n"
+  done <<EOF2
+$all
+EOF2
+  seen="$nl"
+  while IFS="$tab" read -r n f r; do
+    coll_name_ok "$n" && [ -n "$f" ] || continue
+    case "$nl$EXT_COLLS$nl" in *"$nl$n$tab"*) continue ;; esac
+    real="$(ext_real "$f")"
+    case "$seen" in *"$nl$real$nl"*) continue ;; esac
+    seen="$seen$real$nl"
+    if [ "$real" = "$here" ]; then n="$EXT_COLL"; f="$WIKIS_DIR"; fi
+    EXT_COLLS="$EXT_COLLS${EXT_COLLS:+$nl}$n$tab$f"
+  done <<EOF2
+$all
+EOF2
+  if [ -z "$EXT_COLL" ]; then
+    EXT_COLL="$EXT_UNNAMED"
+    EXT_COLLS="$EXT_COLLS${EXT_COLLS:+$nl}$EXT_UNNAMED$tab$WIKIS_DIR"
+  fi
+}
+
+# ext_key <event> [wiki]: the name of a run's files beside the extension's log: the event, and
+# for a wiki its name and collection, so two collections' wikis of one name never share a run,
+# its paths or its status. The default collection's keep the name they had, sync-<wiki>; another's
+# is sync-<wiki>@<collection>, and a folder no collection names is told apart by its real path.
+ext_key() {
+  local k="$1${2:+-$2}"
+  if [ -n "${2:-}" ]; then
+    ext_collections
+    case "$EXT_COLL" in
+      default) ;;
+      "$EXT_UNNAMED") k="$k@dir-$(ext_real "$WIKIS_DIR" | cksum | cut -d ' ' -f 1)" ;;
+      *) k="$k@$EXT_COLL" ;;
+    esac
+  fi
+  printf '%s' "$k"
+}
 # How often the tick comes is a setting on each machine, `extensions every`: a length
 # of time such as 90m, 4h, 2d or 3w. There is one for all extensions and, where it is
 # set, one of an extension's own, which wins. LLM_WIKI_TICK_MINUTES overrides both, for
@@ -10973,7 +11050,8 @@ ext_run() {
   local n="$1" ev="$2" wiki="${3:-}" f dir key pid t code state
   f="$(ext_file "$n")" && [ -x "$f" ] || return 0
   dir="$EXT_STATE/$n"
-  key="$ev${wiki:+-$wiki}"
+  ext_collections
+  key="$(ext_key "$ev" "$wiki")"
   mkdir -p "$dir" 2>/dev/null || return 0
   # Not set up, or missing what it is written in: `wiki status` says so, with the fix.
   if ! ext_ready "$n" >/dev/null; then echo "$n: not set up"; return 0; fi
@@ -10987,9 +11065,9 @@ ext_run() {
       rm -f "${dir:?}/${key:?}.taken"
     fi
     (
-      # shellcheck disable=SC2086
       LLM_WIKI="$REPO/wiki.sh" LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" LLM_WIKI_EXTENSION="$EXT_API" \
-        LLM_WIKI_IN_EVENT=1 LLM_WIKI_CHANGED="$dir/$key.changed" exec "$f" --wiki-event "$ev" $wiki
+        LLM_WIKI_COLLECTION="$EXT_COLL" LLM_WIKI_COLLECTIONS="$EXT_COLLS" \
+        LLM_WIKI_IN_EVENT=1 LLM_WIKI_CHANGED="$dir/$key.changed" exec "$f" --wiki-event "$ev" ${wiki:+"$wiki"}
     ) </dev/null > "$dir/$key.log" 2>&1 &
     pid=$!
     t=0
@@ -11023,10 +11101,19 @@ ext_run() {
 }
 
 # ext_launch <name> <event> [wiki]: start a run that outlives this process.
-# LLM_WIKI_EVENTS=wait runs it here instead, for the smoke tests.
+# LLM_WIKI_EVENTS=wait runs it here instead, for the smoke tests. The collections are
+# worked out here and handed on, so the run knows which collection the event came from.
 ext_launch() {
   if [ "${LLM_WIKI_EVENTS:-}" = wait ]; then ( ext_run "$@" ) >/dev/null 2>&1 || true
-  else LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" nohup "$REPO/wiki.sh" __ext-run "$@" </dev/null >/dev/null 2>&1 &
+  else
+    # The run works out its collection again. Only the name is handed on, as --collection, for a
+    # folder the collections file lists under more than one: the file then says which folder it is.
+    ext_collections
+    if coll_name_ok "$EXT_COLL"; then
+      LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" nohup "$REPO/wiki.sh" --collection "$EXT_COLL" __ext-run "$@" </dev/null >/dev/null 2>&1 &
+    else
+      LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" nohup "$REPO/wiki.sh" __ext-run "$@" </dev/null >/dev/null 2>&1 &
+    fi
   fi
 }
 
@@ -11034,7 +11121,7 @@ ext_launch() {
 # sync that left the wiki's files different, whether it committed them or pulled them.
 # A sync made inside an event starts none, so two extensions can't set each other off.
 ext_sync_event() {
-  local repo="$1" path="$2" before="$4" after want changed n wiki="${3##*/}"
+  local repo="$1" path="$2" before="$4" after want changed n key wiki="${3##*/}"
   [ -z "${LLM_WIKI_IN_EVENT:-}" ] && [ -n "$before" ] || return 0
   want="$(ext_wanting sync)"
   [ -n "$want" ] || return 0
@@ -11043,9 +11130,11 @@ ext_sync_event() {
   changed="$(git -C "$repo" diff --name-only "$before" "$after" -- "$path" 2>/dev/null)" || return 0
   [ -n "$changed" ] || return 0
   [ "$path" = . ] || changed="$(printf '%s\n' "$changed" | cut -c "$((${#path} + 2))-")"
+  ext_collections
+  key="$(ext_key sync "$wiki")"
   for n in $want; do
     mkdir -p "$EXT_STATE/$n" 2>/dev/null || continue
-    printf '%s\n' "$changed" >> "$EXT_STATE/$n/sync-$wiki.next"
+    printf '%s\n' "$changed" >> "$EXT_STATE/$n/$key.next"
     ext_launch "$n" sync "$wiki"
   done
 }
@@ -11131,8 +11220,10 @@ ext_ready() {
     msg="it needs $need, which isn't on this machine. Do: install $need"
   elif ext_has_setup "$f"; then
     out="$dir/ready.out"
+    ext_collections
     (
-      LLM_WIKI="$REPO/wiki.sh" LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" LLM_WIKI_EXTENSION="$EXT_API" exec "$f" --wiki-ready
+      LLM_WIKI="$REPO/wiki.sh" LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" LLM_WIKI_EXTENSION="$EXT_API" \
+        LLM_WIKI_COLLECTION="$EXT_COLL" LLM_WIKI_COLLECTIONS="$EXT_COLLS" exec "$f" --wiki-ready
     ) </dev/null > "$out" 2>/dev/null &
     pid=$!
     t=0
@@ -11181,7 +11272,9 @@ ext_setup() {
     return 0
   fi
   ui_detail "These are questions for a terminal. Or ask your agent to walk you through it: it runs $(typed "$WIKI_CMD setup --guide $n")."
-  LLM_WIKI="$REPO/wiki.sh" LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" LLM_WIKI_EXTENSION="$EXT_API" "$f" --wiki-setup || true
+  ext_collections
+  LLM_WIKI="$REPO/wiki.sh" LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" LLM_WIKI_EXTENSION="$EXT_API" \
+    LLM_WIKI_COLLECTION="$EXT_COLL" LLM_WIKI_COLLECTIONS="$EXT_COLLS" "$f" --wiki-setup || true
   if msg="$(ext_ready "$n")"; then
     ui_item ok "$n is set up."
   else
@@ -11194,7 +11287,9 @@ ext_call() {
   local n="$1" f
   shift
   f="$(ext_file "$n")"
-  LLM_WIKI="$REPO/wiki.sh" LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" LLM_WIKI_EXTENSION="$EXT_API" "$f" "$@" </dev/null
+  ext_collections
+  LLM_WIKI="$REPO/wiki.sh" LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" LLM_WIKI_EXTENSION="$EXT_API" \
+    LLM_WIKI_COLLECTION="$EXT_COLL" LLM_WIKI_COLLECTIONS="$EXT_COLLS" "$f" "$@" </dev/null
 }
 
 # ext_can_settings <name>: succeed when the extension is on, can run, and answers --wiki-settings.
@@ -11244,7 +11339,9 @@ run_extension() {
   [ -x "$f" ] || die "the extension ${f##*/wiki-} isn't executable. Run: chmod +x $f"
   need="$(ext_needs "$f")"
   [ -z "$need" ] || die "$WIKI_CMD ${f##*/wiki-} needs $need, which isn't on this machine. Do: install $need"
-  LLM_WIKI="$REPO/wiki.sh" LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" LLM_WIKI_EXTENSION="$EXT_API" exec "$f" "$@"
+  ext_collections
+  LLM_WIKI="$REPO/wiki.sh" LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" LLM_WIKI_EXTENSION="$EXT_API" \
+    LLM_WIKI_COLLECTION="$EXT_COLL" LLM_WIKI_COLLECTIONS="$EXT_COLLS" exec "$f" "$@"
 }
 
 # ext_runs_on <file>: " (runs on: sync, tick)" for the list, or nothing.
@@ -11402,8 +11499,10 @@ offer_found() {
 # it says it doesn't, 2 when it didn't say in time or said something else.
 offer_watches() {
   local pid t=0 code=0
+  ext_collections
   (
-    LLM_WIKI="$REPO/wiki.sh" LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" LLM_WIKI_EXTENSION="$EXT_API" exec "$1" --wiki-watches "$2"
+    LLM_WIKI="$REPO/wiki.sh" LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" LLM_WIKI_EXTENSION="$EXT_API" \
+      LLM_WIKI_COLLECTION="$EXT_COLL" LLM_WIKI_COLLECTIONS="$EXT_COLLS" exec "$1" --wiki-watches "$2"
   ) </dev/null >/dev/null 2>&1 &
   pid=$!
   while kill -0 "$pid" 2>/dev/null; do

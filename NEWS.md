@@ -10,6 +10,13 @@ Format: one `## YYYY-MM-DD: title` section per entry, newest first. The date is 
 - A note whose type harvest can't read is left too. `wiki harvest --with-user` copies them all, as before.
 - With a remote, harvest's first line says where the notes it copies are pushed at the next sync.
 
+## 2026-11-20: a Confluence setting names a wiki in one collection
+
+- Every collection has a `global` wiki, so a Confluence setting can name one with its collection, such as `auto = work/global` or `watch.work/global`.
+- A name that two collections have, such as a bare `auto = global`, now publishes and watches neither, and the extension's log says what to write.
+- The daily check and publish reach a wiki in any collection that a setting names, whichever collection the session started in.
+- Do: with more than one collection, run `wiki confluence config`. If it says two collections have a wiki, write that setting as it says.
+
 ## 2026-11-20: a link in a wiki is no longer followed
 
 - A note, page, `raw` or `wiki` folder that is a link is no longer read, listed or searched. `wiki status` names a wiki left out for one.
