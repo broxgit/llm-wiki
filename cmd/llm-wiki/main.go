@@ -27,7 +27,7 @@ import (
 // protocol is what wiki.sh checks before it trusts this program: the commands, their
 // arguments and what they print. Raise it, and GO_PROTOCOL in wiki.sh with it, whenever
 // one of those changes, so a binary left over from an older checkout is passed over.
-const protocol = "25"
+const protocol = "26"
 
 // gitSafe is wiki.sh's own first step, for a helper started without it, as the MCP server
 // can be: every git this process starts gets safe.bareRepository=explicit, after whatever
@@ -213,11 +213,14 @@ func runCapture(args []string) (string, error) {
 	fs.StringVar(&o.Pwd, "pwd", "", "")
 	fs.StringVar(&o.WikiCmd, "wiki-cmd", "wiki", "")
 	fs.BoolVar(&o.TTY, "tty", false, "")
+	// A session's --copy and --file take a file only from these folders: capture_from's.
+	fs.BoolVar(&o.OnlyFrom, "only-from", false, "")
+	fs.Func("from", "", func(d string) error { o.From = append(o.From, d); return nil })
 	if err := fs.Parse(args); err != nil {
 		return "", err
 	}
 	if o.Wikis == "" {
-		return "", errors.New("capture takes: --wikis <folder> --home <folder> --pwd <folder> [--tty] -- <arguments>")
+		return "", errors.New("capture takes: --wikis <folder> --home <folder> --pwd <folder> [--tty] [--only-from [--from <folder>]...] -- <arguments>")
 	}
 	o.Args = fs.Args()
 	// The warnings about a saved note follow its line, one a line, for wiki.sh to put on stderr.

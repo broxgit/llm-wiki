@@ -1420,32 +1420,38 @@ check "capture's name has seconds, not a guess" bash -c "basename '$f' | grep -E
 printf 'Captured: 2026-01-01\n\nAlready has it.\n' | "$W" capture demo decided-postgres >/dev/null
 check "a second capture in the same second never overwrites" bash -c "ls '$WIKIS_DIR'/demo/raw/ | grep -q 'decided-postgres-2.md' || [ \$(ls '$WIKIS_DIR'/demo/raw/ | grep -c decided-postgres) -ge 2 ]"
 check "a note that has the line keeps just one" bash -c "[ \$(cat '$WIKIS_DIR'/demo/raw/*decided-postgres*.md | grep -c '^Captured:') -eq 2 ]"
-printf 'pdf bytes\n' > "$T/spec.pdf"
-expect "capture --copy stores a document unchanged" "spec.pdf" "$W" capture demo --copy "$T/spec.pdf"
+# From a session, --copy and --file take a file of the repository the command runs in, so these
+# run in one (code review M6).
+BK="$T/bk"; mkdir -p "$BK" && git -C "$BK" init -q
+bk() { (cd "$BK" && "$@"); }
+printf 'pdf bytes\n' > "$BK/spec.pdf"
+expect "capture --copy stores a document unchanged" "spec.pdf" bk "$W" capture demo --copy "$BK/spec.pdf"
 refuse "capture refuses an empty note" bash -c "'$W' capture demo empty </dev/null"
-printf 'From a file.\n' > "$T/note.md"
-expect "capture --file reads the note from a file" "captured: raw/" "$W" capture demo from-file --file "$T/note.md"
+printf 'From a file.\n' > "$BK/note.md"
+expect "capture --file reads the note from a file" "captured: raw/" bk "$W" capture demo from-file --file "$BK/note.md"
 check "and adds the Captured line" bash -c "head -n 1 \"\$(ls '$WIKIS_DIR'/demo/raw/*-from-file.md)\" | grep -q '^Captured: '"
 refuse "capture --file needs the file to exist" "$W" capture demo nope --file "$T/nope.md"
 # A Waiting:, Due: or Feedback: line compile can't read is warned about on stderr. The note is
 # saved all the same, and capture still succeeds.
-printf 'Waiting: Dana | Reply to the vendor\nWaiting: user check the hook\nDue: next week | Read the runs\nDue: 2026-12-01 Read the runs\nDue: 2026-12-01 | Read the runs\nFeedback: review | here | Wrap errors.\nFeedback: nit | here | Wrap errors.\nFeedback: review | two words | Wrap errors.\nFeedback: lesson here: run the check\n' > "$T/malformed.md"
-out="$("$W" capture demo malformed --file "$T/malformed.md" 2>"$T/malformed.err")"; rc=$?
+printf 'Waiting: Dana | Reply to the vendor\nWaiting: user check the hook\nDue: next week | Read the runs\nDue: 2026-12-01 Read the runs\nDue: 2026-12-01 | Read the runs\nFeedback: review | here | Wrap errors.\nFeedback: nit | here | Wrap errors.\nFeedback: review | two words | Wrap errors.\nFeedback: lesson here: run the check\n' > "$BK/malformed.md"
+out="$(bk "$W" capture demo malformed --file "$BK/malformed.md" 2>"$T/malformed.err")"; rc=$?
 case "$rc:$out" in "0:captured: raw/20"*"-malformed.md in "*"/demo") ok "a note with lines compile can't read is still captured, with nothing more on stdout" ;; *) bad "a note with lines compile can't read is still captured, with nothing more on stdout" "$rc: $out" ;; esac
 mname="$(for f in "$WIKIS_DIR"/demo/raw/*-malformed.md; do [ -f "$f" ] && printf '%s\n' "${f##*/}"; done | tail -n 1)"
 check "and saved" test -n "$mname"
 check "stderr warns about each such line, by its line in the saved note, with the fix" test "$(cat "$T/malformed.err")" = "$(printf 'warning: line 4 of raw/%s is a Waiting: line with no " | " between who and what, so compile can'"'"'t read it. Do: edit it to read Waiting: <who> | <what>\nwarning: line 5 of raw/%s is a Due: line whose date is not YYYY-MM-DD, so compile can'"'"'t read it. Do: edit it to read Due: <YYYY-MM-DD> | <what>\nwarning: line 6 of raw/%s is a Due: line with no " | " between the date and what, so compile can'"'"'t read it. Do: edit it to read Due: <YYYY-MM-DD> | <what>\n' "$mname" "$mname" "$mname")$(for l in 9 10 11; do printf '\nwarning: line %s of raw/%s is a Feedback: line not in the form the handbook gives, so compile can'"'"'t read it. Do: edit it to read Feedback: <kind> | <scope> | <rule>, where kind is review, correction, lesson, ask, procedure or toil, and scope is here, everywhere or a wiki'"'"'s name' "$l" "$mname"; done)"
 out="$(printf 'Waiting: Dana | Reply\nDue: 2026-12-01 | Read the runs\nFeedback: toil | everywhere | Release llm-relay: tag, hash, tap.\n' | "$W" capture demo wellformed 2>&1 >/dev/null)"
 check "a note whose lines are well formed gets no warning" test -z "$out"
-cp "$T/malformed.md" "$T/malformed-copy.md"
-out="$("$W" capture demo --copy "$T/malformed-copy.md" 2>&1 >/dev/null)"
+cp "$BK/malformed.md" "$BK/malformed-copy.md"
+out="$(bk "$W" capture demo --copy "$BK/malformed-copy.md" 2>&1 >/dev/null)"
 check "and a copy of a file is not looked at" test -z "$out"
-rm -f "$WIKIS_DIR"/demo/raw/*-malformed.md "$WIKIS_DIR"/demo/raw/*-wellformed.md "$WIKIS_DIR"/demo/raw/*-malformed-copy.md "$T"/malformed*
-refuse "capture refuses --file and --copy together" "$W" capture demo both --file "$T/note.md" --copy "$T/note.md"
+rm -f "$WIKIS_DIR"/demo/raw/*-malformed.md "$WIKIS_DIR"/demo/raw/*-wellformed.md "$WIKIS_DIR"/demo/raw/*-malformed-copy.md "$T"/malformed* "$BK"/malformed*
+expect "capture refuses --file and --copy together" "not both" bk "$W" capture demo both --file "$BK/note.md" --copy "$BK/note.md"
 # A note taken in a folder, or on a branch, named for a ticket says which ticket, on a line
 # of its own at its end. A copy of a file, and a note that has the line, are left alone.
 TC="$T/tkcap"
 mkdir -p "$TC/VID-74003" "$TC/VID-74005/svc" "$TC/python-3" "$TC/sprint-12" "$TC/plain/repo" "$TC/plain/sync" "$TC/abc-7" "$TC/UTF-8" "$TC/tmp"
+# A repository, so a session's --copy and --file of its files are taken (code review M6).
+git -C "$TC" init -q
 git init -q "$TC/plain/repo" && git -C "$TC/plain/repo" commit -q --allow-empty -m init && git -C "$TC/plain/repo" switch -q -c feature/vid-74441-end-block
 tcap() { local d="$1"; shift; (cd "$d" && env TMPDIR="$TC/tmp" "$W" capture demo "$@"); }
 tnote() { ls "$WIKIS_DIR"/demo/raw/*-"$1".md | tail -n 1; }
@@ -1499,6 +1505,109 @@ check "with the helper off, the line is added just the same" grep -qxF "Ticket: 
 rm -rf "$TC"
 # What these made is gone, so later searches and counts don't find it.
 rm -f "$WIKIS_DIR"/demo/raw/*-tk-*.md "$WIKIS_DIR"/demo/raw/*-copy.txt
+# From a session, with no terminal, --copy and --file take a file only from the repository
+# the command runs in or from a wikis folder (code review M6, choice C). It is a speed bump:
+# the same file on stdin is taken. At a terminal, any file is.
+OF="$T/onlyfrom"
+mkdir -p "$OF/repo/sub" "$OF/outside" "$OF/VID-74010"
+git -C "$OF/repo" init -q; git -C "$OF/VID-74010" init -q
+printf 'outside\n' > "$OF/outside/o.txt"; printf 'inside\n' > "$OF/repo/sub/in.txt"; printf 'at home\n' > "$HOME/outside.txt"
+printf 'tab\n' > "$OF/repo/$(printf 'a\tb').txt"
+ln -s "$OF/outside/o.txt" "$OF/repo/link.txt"; ln -s "$OF/outside" "$OF/repo/out"; ln -s sub/in.txt "$OF/repo/inner.txt"
+# ofcap <folder> <capture's arguments>: capture there, with no terminal.
+ofcap() { local d="$1"; shift; (cd "$d" && "$W" capture demo "$@" </dev/null); }
+OF_WORDS=" takes a file only from the repository it runs in, or from a wikis folder, when no one is at a terminal. "
+OF_END=" is in neither, so nothing was saved. This keeps a session from copying the wrong file in by mistake, and guards nothing: a note on stdin is taken from anywhere. Do: ask the user to run the command in a terminal, where any file is taken"
+# ofno <check> <the path as the message names it> <folder> <capture's arguments>: refused with
+# exit 1 and the words, and nothing saved.
+ofno() {
+  local name="$1" shown="$2" before out rc opt=--copy
+  shift 2
+  case " $* " in *" --file "*) opt=--file ;; esac
+  before="$(ls "$WIKIS_DIR/demo/raw" | wc -l | tr -d ' ')"
+  out="$(ofcap "$@" 2>&1)" && rc=0 || rc=$?
+  if [ "$rc:$out" != "1:error: capture $opt$OF_WORDS$shown$OF_END" ]; then bad "$name" "exit $rc: $out"; return; fi
+  [ "$(ls "$WIKIS_DIR/demo/raw" | wc -l | tr -d ' ')" = "$before" ] && ok "$name" || bad "$name (a note was saved)" "$out"
+}
+ofno "from a session, a --copy of a file outside the repository is refused, and says it guards nothing" "$OF/outside/o.txt" "$OF/repo" --copy "$OF/outside/o.txt"
+ofno "and so is a --file" "$OF/outside/o.txt" "$OF/repo" of-file --file "$OF/outside/o.txt"
+ofno "and a path that leaves the repository by .." "sub/../../outside/o.txt" "$OF/repo" --copy sub/../../outside/o.txt
+ofno "and a link in the repository to a file outside it" "link.txt" "$OF/repo" --copy link.txt
+ofno "and a path through a link in the repository to a folder outside it" "out/o.txt" "$OF/repo" --copy out/o.txt
+ofno "in a folder named for a ticket, before the ticket step copies the file aside" "$OF/outside/o.txt" "$OF/VID-74010" of-tk --file "$OF/outside/o.txt"
+ofno "and a copy there" "$OF/outside/o.txt" "$OF/VID-74010" --copy "$OF/outside/o.txt"
+# shellcheck disable=SC2088
+ofno "from the home folder, which is no project" "~/outside.txt" "$HOME" --copy "$HOME/outside.txt"
+ofno "and from a folder in no repository" "o.txt" "$OF/outside" --copy o.txt
+OH="$T/onlyfrom-home"; mkdir -p "$OH"; git -C "$OH" init -q; printf 'dotfile\n' > "$OH/.profile-copy"
+out="$(cd "$OH" && HOME="$OH" "$W" capture demo --copy .profile-copy </dev/null 2>&1)" && rc=0 || rc=$?
+[ "$rc:$out" = "1:error: capture --copy$OF_WORDS.profile-copy$OF_END" ] && ok "a repository whose top is the home folder is no project either" || bad "a repository whose top is the home folder is no project either" "exit $rc: $out"
+out="$(ofcap "$OF/repo" --copy "$(printf 'a\tb').txt" 2>&1)" && rc=0 || rc=$?
+[ "$rc:$out" = "1:error: capture --copy takes no path with a control character in it when no one is at a terminal, so nothing was saved. Do: ask the user to run the command in a terminal" ] && ok "a path with a control character is refused, even inside the repository" || bad "a path with a control character is refused, even inside the repository" "exit $rc: $out"
+expect "a file that isn't there is still refused in its own words" "no file at $OF/repo/gone.txt" ofcap "$OF/repo" --copy "$OF/repo/gone.txt"
+expect "a file of the repository is taken" "captured: raw/" ofcap "$OF/repo" --copy sub/in.txt
+expect "and one named from a folder below its top" "captured: raw/" ofcap "$OF/repo/sub" of-sub --file in.txt
+expect "and a link in it to a file in it" "captured: raw/" ofcap "$OF/repo" --copy inner.txt
+expect "a file in a wikis folder is taken, from the home folder too" "captured: raw/" ofcap "$HOME" --copy "$WIKIS_DIR/demo/index.md"
+printf 'mine\n' > "$OF/VID-74010/mine.md"
+ofcap "$OF/VID-74010" of-tk-mine --file mine.md >/dev/null 2>&1
+check "in a folder named for a ticket, a file of its repository is taken, with the Ticket: line" grep -qxF "Ticket: VID-74010" "$(ls "$WIKIS_DIR"/demo/raw/*-of-tk-mine.md | tail -n 1)"
+out="$(cd "$OF/repo" && "$W" capture demo of-stdin < "$OF/outside/o.txt" 2>&1)"
+case "$out" in "captured: raw/"*) ok "the same file on stdin is taken, which is why the words say it guards nothing" ;; *) bad "the same file on stdin is taken, which is why the words say it guards nothing" "$out" ;; esac
+# At a terminal, any file is taken: run on a pseudo-terminal of Python's.
+on_pty() { python3 -I -c 'import os, pty, subprocess, sys
+m, s = pty.openpty()
+p = subprocess.Popen(sys.argv[1:], stdin=s, stdout=s, stderr=s, close_fds=True)
+os.close(s)
+out = b""
+while True:
+    try:
+        d = os.read(m, 4096)
+    except OSError:
+        break
+    if not d:
+        break
+    out += d
+sys.stdout.write(out.decode("utf-8", "replace").replace("\r\n", "\n"))
+sys.exit(p.wait())' "$@"; }
+expect "at a terminal, a file from anywhere is taken" "captured: raw/" on_pty bash -c "cd '$OF/repo' && '$W' capture demo --copy '$OF/outside/o.txt'"
+expect "with --file too" "captured: raw/" on_pty bash -c "cd '$HOME' && '$W' capture demo of-tty --file '$OF/outside/o.txt'"
+# From a review of the check (2026-11-21). A path is judged as the kernel opens it: a link
+# followed by .. goes where the link points. Here sub/out/../o.txt opens the o.txt beside the
+# outside folder, and sub/o.txt, which the shell would make of it, is a link to that file.
+printf 'beside\n' > "$OF/o.txt"; ln -s "$OF/outside" "$OF/repo/sub/out"; ln -s "$OF/o.txt" "$OF/repo/sub/o.txt"
+ofno "a link followed by .. is judged where the link points, not by its spelling" "sub/out/../o.txt" "$OF/repo" --copy sub/out/../o.txt
+mkdir -p "$OF/repo/deep/dir"; printf 'deep\n' > "$OF/repo/deep/in.txt"; ln -s deep/dir "$OF/repo/sublink"
+expect "and a link in the repository followed by .. to a file in it is taken" "captured: raw/" ofcap "$OF/repo" of-deep --file sublink/../in.txt
+mkdir -p "$OF/a"; mv "$OF/repo" "$OF/a/repo"; ln -s a/repo "$OF/repo"
+expect "from a folder reached by a link, a path by .. that stays in the repository is taken" "captured: raw/" ofcap "$OF/repo" of-dots --file ../repo/sub/in.txt
+out="$(cd "$OF/repo" && GIT_WORK_TREE="$OF/outside" "$W" capture demo --copy "$OF/outside/o.txt" </dev/null 2>&1)" && rc=0 || rc=$?
+[ "$rc:$out" = "1:error: capture --copy$OF_WORDS$OF/outside/o.txt$OF_END" ] && ok "GIT_WORK_TREE in the environment doesn't make another folder the project" || bad "GIT_WORK_TREE in the environment doesn't make another folder the project" "exit $rc: $out"
+expect "a home that is empty takes no exception, and a file of the repository is still taken" "captured: raw/" bash -c "cd '$OF/repo' && HOME= XDG_CONFIG_HOME='$HOME/.config' '$W' capture demo of-nohome --file sub/in.txt </dev/null"
+mkdir -p "$HOME/.config/llm-wiki"; printf 'work %s\n' "$OF/a" > "$HOME/.config/llm-wiki/collections"; chmod 000 "$HOME/.config/llm-wiki/collections"
+out="$(cd "$OF/repo" && printf 'a note\n' | "$W" capture demo of-unread 2>&1)"
+case "$out" in "captured: raw/"*"-of-unread.md in "*) case "$out" in *awk* | *"can't open"*) bad "a collections file that can't be read says nothing, and stdin is still taken" "$out" ;; *) ok "a collections file that can't be read says nothing, and stdin is still taken" ;; esac ;; *) bad "a collections file that can't be read says nothing, and stdin is still taken" "$out" ;; esac
+expect "and the check goes by the repository and the wikis" "captured: raw/" ofcap "$OF/repo" of-unread2 --file sub/in.txt
+chmod 644 "$HOME/.config/llm-wiki/collections"; rm -f "$HOME/.config/llm-wiki/collections"
+out="$(cd "$OF/repo" && printf 'a note\n' | "$W" capture demo of-nl --file "$(printf 'a\nb')" 2>&1)" && rc=0 || rc=$?
+[ "$rc:$out" = "1:error: capture --file takes no path with a control character in it when no one is at a terminal, so nothing was saved. Do: ask the user to run the command in a terminal" ] && ok "and so is one with a line break" || bad "and so is one with a line break" "exit $rc: $out"
+# An option given twice pairs with the wrong word: refused before anything is read, and in a
+# folder named for a ticket, its step never copies the file aside.
+mkdir -p "$OF/tmp"; git -C "$OF/VID-74010" init -q
+out="$(cd "$OF/VID-74010" && TMPDIR="$OF/tmp" "$W" capture demo of-twice --file --file "$OF/outside/o.txt" </dev/null 2>&1)" && rc=0 || rc=$?
+[ "$rc:$out" = "1:error: capture takes --file NOTE once" ] && ok "--file given twice is refused, in a folder named for a ticket too" || bad "--file given twice is refused, in a folder named for a ticket too" "exit $rc: $out"
+out="$(on_pty bash -c "cd '$OF/VID-74010' && TMPDIR='$OF/tmp' '$W' capture demo of-twice --file --file '$OF/outside/o.txt'")" && rc=0 || rc=$?
+case "$rc:$out" in "1:error: capture takes --file NOTE once"*) ok "and at a terminal" ;; *) bad "and at a terminal" "exit $rc: $out" ;; esac
+check "and the ticket step left no copy of the file behind" test -z "$(ls -A "$OF/tmp")"
+expect "--copy given twice is refused" "capture takes --copy FILE once" ofcap "$OF/repo" --copy sub/in.txt --copy sub/in.txt
+# An empty name is no file: it was read as no option, and the note taken from stdin.
+for o in --copy --file; do
+  out="$(cd "$OF/repo" && printf 'not this\n' | "$W" capture demo of-empty "$o" "" 2>&1)" && rc=0 || rc=$?
+  [ "$rc:$out" = "1:error: $o needs a value" ] && ok "$o with an empty name is refused, and stdin isn't read" || bad "$o with an empty name is refused, and stdin isn't read" "exit $rc: $out"
+done
+check "and nothing was saved for them" test -z "$(ls "$WIKIS_DIR"/demo/raw/*-of-empty.md "$WIKIS_DIR"/demo/raw/*-of-twice.md 2>/dev/null)"
+rm -rf "$OF" "$OH" "$HOME/outside.txt"
+rm -f "$WIKIS_DIR"/demo/raw/*-o.txt "$WIKIS_DIR"/demo/raw/*-in.txt "$WIKIS_DIR"/demo/raw/*-inner.txt "$WIKIS_DIR"/demo/raw/*-index.md "$WIKIS_DIR"/demo/raw/*-of-*.md
 # An agent's sandbox can block writes to the wikis. Each command must say so and
 # fail, never report a capture, lock or log entry that wasn't written.
 chmod 555 "$WIKIS_DIR/demo/raw"
@@ -2679,6 +2788,12 @@ check "upgrade --all links team skills into the plugin too" test -L "$HOME/.gemi
 mkdir -p "$HOME/.gemini/config" && printf '{"userSettings":{"globalPermissionGrants":{"allow":["command(ls)"]}}}\n' > "$HOME/.gemini/config/config.json"
 out="$("$W" permissions 2>&1)"
 case "$out" in *"Antigravity grants"*"\"read_file($WIKIS_DIR)\","*"\"write_file($WIKIS_DIR)\","*"command("*"wiki"*) ok "permissions lists Antigravity's grants for the wikis and wiki.sh" ;; *) bad "permissions lists Antigravity's grants for the wikis and wiki.sh" "$out" ;; esac
+# The grant of the wiki command covers capture and sync, so its offer says what they allow (code review M6).
+cp "$HOME/.gemini/config/config.json" "$T/agy-config.before"
+out="$(printf 'n\nn\nn\nn\n' | in_tty "$W" setup antigravity 2>&1)"
+case "$out" in *"command("*"With these, a session can save any file it can read into a wiki and push it."*"Add them to Antigravity's grants?"*) ok "setup antigravity says what the grant of the wiki command allows, before it asks" ;; *) bad "setup antigravity says what the grant of the wiki command allows, before it asks" "$out" ;; esac
+check "and a no leaves the grants as they were" cmp -s "$T/agy-config.before" "$HOME/.gemini/config/config.json"
+rm -f "$T/agy-config.before"
 expect "setup --list counts the missing Antigravity grants" "grant(s) missing" "$W" setup --list
 "$W" permissions 2>/dev/null | sed -n '/^"read_file('"$(printf '%s' "$WIKIS_DIR" | sed 's#/#\\/#g')"')",/,$p' | sed 's/,$//' | python3 -c 'import json,sys; p=sys.argv[1]; s=json.load(open(p)); s["userSettings"]["globalPermissionGrants"]["allow"]+= [json.loads(l) for l in sys.stdin.read().splitlines()]; json.dump(s,open(p,"w"))' "$HOME/.gemini/config/config.json"
 expect "once present, setup --list says so" "grants in place" "$W" setup --list
@@ -3388,6 +3503,12 @@ for want in '"Bash(wiki sync *)",' "wiki.sh sync *)" "wiki.sh capture *)" "data/
   case "$out" in *"$want"*) ok "permissions prints: $want" ;; *) bad "permissions prints: $want" "$out" ;; esac
 done
 expect "setup --list counts the missing rules" "allow rule(s) missing" "$W" setup --list
+# The offer says what the rules for capture and sync allow (code review M6, choice A).
+cp "$HOME/.claude/settings.json" "$T/perm-settings.before"
+out="$(printf 'n\n' | in_tty "$W" setup permissions 2>&1)"
+case "$out" in *"start, capture, lock, log, index, sync"*"With these, a session can save any file it can read into a wiki and push it."*"allow rule(s) to ~/.claude/settings.json?"*) ok "setup permissions says what the rules allow, before it asks" ;; *) bad "setup permissions says what the rules allow, before it asks" "$out" ;; esac
+check "and a no adds none" cmp -s "$T/perm-settings.before" "$HOME/.claude/settings.json"
+rm -f "$T/perm-settings.before"
 "$W" permissions 2>/dev/null | sed 's/,$//' | python3 -c 'import json,sys; p=sys.argv[1]; s=json.load(open(p)); s["permissions"]["allow"]+= [json.loads(l) for l in sys.stdin.read().splitlines()]; json.dump(s,open(p,"w"))' "$HOME/.claude/settings.json"
 expect "once present, setup --list says the commands are allowed" "wiki commands allowed" "$W" setup --list
 check "and other settings were kept" python3 -c "import json,sys; s=json.load(open(sys.argv[1])); assert s['theme']=='dark' and 'Bash(ls *)' in s['permissions']['allow']" "$HOME/.claude/settings.json"
@@ -4507,6 +4628,8 @@ and a third" ] && ok "a page's line ends reach a client as line feeds" || bad "a
   printf '#!/bin/sh\n[ "$1" = capture ] || exec "%s" "$@"\n"%s" "$@"\nrc=$?\necho "$rc" >> "%s"\nexit $rc\n' "$T/bin/llm-wiki" "$T/bin/llm-wiki" "$T/capture-ran" > "$T/bin/capture-spy"
   chmod +x "$T/bin/capture-spy"
   rm -rf "$FD/alpha/raw"; mkdir -p "$FD/alpha/raw" "$T/cap"
+  # A repository: from a session, --copy and --file take its files (code review M6).
+  git -C "$T/cap" init -q
   printf 'a note in a file\n' > "$T/cap/note.md"; printf 'Captured: 2020-01-02\n\nit came dated\n' > "$T/cap/dated.md"
   printf 'data\n' > "$T/cap/Two.Dots.TXT"; printf 'plain\n' > "$T/cap/noext"; printf 'KEY=1\n' > "$T/cap/.env"; printf 'x\n' > "$T/cap/end."
   printf '#!/bin/sh\n' > "$T/cap/run.sh"; chmod 755 "$T/cap/run.sh"; : > "$T/cap/empty.md"
@@ -4515,13 +4638,15 @@ and a third" ] && ok "a page's line ends reach a client as line feeds" || bad "a
   # helper, or with the Bash alone when none is named. Prints stdout, the exit code and
   # what raw/ holds, then empties raw/. stderr goes to $T/capture.err. With CLOCKED set,
   # raw/ can't be written in for the run.
+  # CENV, when set, is more of the environment for the run, as NAME=value words.
   CLOCKED=""
+  CENV=()
   crun() {
     local go="$1" dir="$2" in="$3" no=1 f
     shift 3
     [ -z "$go" ] || no=""
     [ -z "$CLOCKED" ] || chmod 555 "$FD/alpha/raw"
-    (cd "$dir" && env -u WIKIS_DIR LLM_WIKI_NO_GO="$no" LLM_WIKI_GO="$go" "$W" capture "$@" < "$in" 2>"$T/capture.raw-err"; echo "exit $?") | sed "$CSTAMP"
+    (cd "$dir" && env -u WIKIS_DIR ${CENV[@]+"${CENV[@]}"} LLM_WIKI_NO_GO="$no" LLM_WIKI_GO="$go" "$W" capture "$@" < "$in" 2>"$T/capture.raw-err"; echo "exit $?") | sed "$CSTAMP"
     sed "$CSTAMP" "$T/capture.raw-err" > "$T/capture.err"
     echo "raw:"
     for f in "$FD/alpha/raw"/*; do
@@ -4553,7 +4678,7 @@ and a third" ] && ok "a page's line ends reach a client as line feeds" || bad "a
   csame "a note that came with its Captured line, kept as it is" helper "$T" "$T/cap/dated.md" alpha dated
   csame "a note in a file" helper "$T/cap" /dev/null alpha from-file --file note.md
   csame "a copy, named for the file" helper "$T/cap" /dev/null alpha --copy Two.Dots.TXT
-  csame "a copy with a slug of its own" helper "$T" /dev/null alpha given --copy "$T/cap/Two.Dots.TXT"
+  csame "a copy with a slug of its own" helper "$T/cap" /dev/null alpha given --copy "$T/cap/Two.Dots.TXT"
   csame "a copy of a file with no extension" helper "$T/cap" /dev/null alpha --copy noext
   csame "of one whose name starts with a dot" helper "$T/cap" /dev/null alpha --copy .env
   csame "of one whose name ends with a dot" helper "$T/cap" /dev/null alpha --copy end.
@@ -4589,7 +4714,7 @@ and a third" ] && ok "a page's line ends reach a client as line feeds" || bad "a
   csame "no slug" helper "$T" "$T/cap/note.md" alpha
   csame "a slug with no letters or digits" helper "$T" "$T/cap/note.md" alpha "!!!"
   csame "an empty note" helper "$T" /dev/null alpha empty
-  csame "an empty file" helper "$T" /dev/null alpha empty --file "$T/cap/empty.md"
+  csame "an empty file" helper "$T/cap" /dev/null alpha empty --file "$T/cap/empty.md"
   # Lines compile can't read: the same warnings on stderr from both, and the note saved.
   printf 'Waiting: user check the hook\r\nWaiting:  | Reply\nDue: next week | Read\nDue: 2026-12-01 Read\nDue: 2026-12-01 |  \nFeedback: nit | here | x\nFeedback: review | two words | x\nFeedback: review | here |\nFeedback: lesson | here | fine\nWaiting: Dana | fine\nDue: 2026-12-01 | fine\n Waiting: indented, so no line of its own\nWaiting: no line break at the end' > "$T/cap/malformed.md"
   csame "a note with lines compile can't read: the same warnings" helper "$T" "$T/cap/malformed.md" alpha malformed
@@ -4648,17 +4773,101 @@ and a third" ] && ok "a page's line ends reach a client as line feeds" || bad "a
     chmod 755 \"\$r/raw\"; [ -z \"\$(ls -A \"\$r/raw\")\" ]"
   csame "a file that isn't there" helper "$T" /dev/null alpha gone --file "$T/cap/gone.md"
   csame "a copy of one that isn't there" helper "$T" /dev/null alpha --copy "$T/cap/gone.md"
-  csame "--file and --copy together" helper "$T" /dev/null alpha both --file "$T/cap/note.md" --copy "$T/cap/noext"
+  csame "--file and --copy together" helper "$T/cap" /dev/null alpha both --file "$T/cap/note.md" --copy "$T/cap/noext"
   csame "--file with nothing after it" helper "$T" /dev/null alpha slug --file
   csame "an option it doesn't have" helper "$T" /dev/null alpha slug --nope
+  # From a session, --copy and --file take a file only from the repository the command runs
+  # in or from a wikis folder (code review M6). What is taken goes through the helper, which
+  # checks it again with the folders capture_run hands it.
+  ln -s Two.Dots.TXT "$T/cap/in-link.txt"; printf 'out\n' > "$T/cap-outside.txt"; ln -s "$T/cap-outside.txt" "$T/cap/out-link.txt"
+  printf 'at home\n' > "$HOME/cap-home.txt"
+  csame "from a session, a copy of a link in the repository to a file in it is taken" helper "$T/cap" /dev/null alpha --copy in-link.txt
+  csame "and of a file in another collection's folder, from a folder in no repository" helper "$T" /dev/null alpha --copy "$CW/jobapp/index.md"
+  csame "and of one in this collection's" helper "$T" /dev/null alpha --copy "$FD/alpha/index.md"
+  # cfrom <check> <folder> <capture's arguments>: wiki.sh refuses before either answers, the
+  # same with the helper on and off, and the helper, called as capture_run calls it from a
+  # session, refuses with the same words.
+  cfrom() {
+    local name="$1" dir="$2" a b c top nl=$'\n'
+    shift 2
+    : > "$T/capture-ran"
+    a="$(crun "" "$dir" /dev/null "$@")"; cp "$T/capture.err" "$T/capture.a"
+    b="$(crun "$T/bin/capture-spy" "$dir" /dev/null "$@")"
+    top="$(unset GIT_DIR GIT_WORK_TREE; git -C "$dir" rev-parse --show-toplevel 2>/dev/null || true)"
+    # CF_HOME and CF_FROM, when set, are the home and the more folders wiki.sh would pass.
+    c="$(cd "$dir" && "$T/bin/llm-wiki" capture --wikis "$FD" --home "${CF_HOME-$HOME}" --pwd "$dir" --wiki-cmd wiki --only-from --from="$top" --from="$FD" --from="$CW" ${CF_FROM[@]+"${CF_FROM[@]}"} -- "$@" </dev/null)"
+    if [ "$a" = "$b" ] && case "$a" in "exit 1"*) true ;; *) false ;; esac && cmp -s "$T/capture.a" "$T/capture.err" && [ ! -s "$T/capture-ran" ] \
+      && [ "${c%%"$nl"*}" = refused ] && [ "error: ${c#*"$nl"}" = "$(cat "$T/capture.a")" ]; then
+      ok "$name"
+    else
+      bad "$name" "$(printf 'Bash: %s\n%s\nwith the helper: %s\n%s\nhelper ran: %s\nthe helper itself: %s' "$a" "$(cat "$T/capture.a")" "$b" "$(cat "$T/capture.err")" "$(cat "$T/capture-ran")" "$c")"
+    fi
+  }
+  cfrom "a copy from outside the repository is refused, the same by wiki.sh and by the helper" "$T/cap" alpha --copy "$T/cap-outside.txt"
+  cfrom "and a note's file" "$T/cap" alpha out --file "$T/cap-outside.txt"
+  cfrom "and a link in the repository to a file outside it" "$T/cap" alpha --copy out-link.txt
+  cfrom "and a path out of it by .." "$T/cap/VID-74003" alpha --copy ../../cap-outside.txt
+  cfrom "and one from a ticket's folder" "$T/cap/VID-74003" alpha tk-out --file "$T/cap-outside.txt"
+  cfrom "and one from a folder in no repository" "$T" alpha --copy "$T/cap-outside.txt"
+  cfrom "and one from the home folder" "$HOME" alpha --copy "$HOME/cap-home.txt"
+  cfrom "and a path with a control character" "$T/cap" alpha --copy "$(printf 'a\001b')"
+  # From a review of the check (2026-11-21), each compared between the Bash and the helper.
+  CF_FROM=()
+  cfrom "and one with a line break, which the helper refuses in the same words" "$T/cap" alpha --copy "$(printf 'a\nb')"
+  # A path is judged as the kernel opens it. outdir/../capo.txt opens $T/capo.txt, and
+  # capo.txt in the repository, which the shell's spelling would make of it, links there.
+  printf 'beside\n' > "$T/capo.txt"; mkdir -p "$T/cap-out" "$T/cap/deep/dir"; ln -s "$T/cap-out" "$T/cap/outdir"; ln -s "$T/capo.txt" "$T/cap/capo.txt"
+  printf 'deep\n' > "$T/cap/deep/in.txt"; ln -s deep/dir "$T/cap/sublink"; ln -s cap/VID-74003 "$T/cap-deeplink"
+  cfrom "a link followed by .. is judged where the link points" "$T/cap" alpha --copy outdir/../capo.txt
+  csame "and a link in the repository followed by .. to a file in it is taken" helper "$T/cap" /dev/null alpha --copy sublink/../in.txt
+  csame "and from a folder reached by a link, a path by .. that stays in the repository" helper "$T/cap-deeplink" /dev/null alpha --copy ../Two.Dots.TXT
+  CENV=(GIT_WORK_TREE="$T")
+  cfrom "GIT_WORK_TREE in the environment doesn't make another folder the project" "$T/cap" alpha --copy "$T/cap-outside.txt"
+  # With no home named in full there is no home exception, and the root is never a project.
+  mkdir -p "$T/xdg-root/llm-wiki"; printf 'root /\n' > "$T/xdg-root/llm-wiki/collections"
+  CENV=(HOME= XDG_CONFIG_HOME="$T/xdg-root" LLM_WIKI_DEFAULT_DIR="$FD"); CF_HOME=""; CF_FROM=(--from=/)
+  cfrom "an empty home, and a collection at the root, let nothing in" "$T" alpha --copy "$T/cap-outside.txt"
+  CENV=(HOME=rel XDG_CONFIG_HOME="$T/xdg-root" LLM_WIKI_DEFAULT_DIR="$FD"); CF_HOME=rel
+  cfrom "nor does a home that isn't named in full" "$T" alpha --copy "$T/cap-outside.txt"
+  CENV=(); unset CF_HOME; CF_FROM=(); rm -rf "$T/xdg-root" "$T/rel"
+  # A home spelled in another case, on a disk that ignores case, is still the home folder.
+  UPH="$(printf '%s' "$HOME" | tr '[:lower:]' '[:upper:]')"
+  if [ "$UPH" != "$HOME" ] && [ -d "$UPH" ] && [ "$UPH" -ef "$HOME" ]; then
+    cp "$HOME/.config/llm-wiki/collections" "$T/collections.case"; printf 'athome %s\n' "$HOME" >> "$HOME/.config/llm-wiki/collections"
+    CENV=(HOME="$UPH"); CF_HOME="$UPH"; CF_FROM=(--from="$HOME")
+    cfrom "a home spelled in another case still holds no project" "$HOME" alpha --copy "$HOME/cap-home.txt"
+    CENV=(); unset CF_HOME; CF_FROM=(); mv "$T/collections.case" "$HOME/.config/llm-wiki/collections"
+  else
+    skipped "a home spelled in another case (this disk tells case apart)"
+  fi
+  # A repository whose name has a line break is left out of what the helper is given, not split.
+  NLR="$T/nl$(printf '\nrepo')"; mkdir -p "$NLR"; git -C "$NLR" init -q
+  printf '#!/bin/sh\n[ "$1" = capture ] && printf "%%s\\n" "$@" > "%s"\nexec "%s" "$@"\n' "$T/capture-args" "$T/bin/llm-wiki" > "$T/bin/args-spy"; chmod +x "$T/bin/args-spy"
+  out="$(crun "$T/bin/args-spy" "$NLR" /dev/null alpha --copy "$FD/alpha/index.md")"
+  case "$out" in "captured: raw/"*) ok "from a repository whose name has a line break, a wikis file is taken" ;; *) bad "from a repository whose name has a line break, a wikis file is taken" "$out" ;; esac
+  check "and the helper was given no piece of that name as a folder" bash -c "grep -q -- '^--only-from\$' '$T/capture-args' && [ \"\$(grep -c -- '^--from=' '$T/capture-args')\" = 3 ] && ! grep -q -- '^--from=$T/nl' '$T/capture-args'"
+  rm -rf "$NLR" "$T/bin/args-spy" "$T/capture-args"
+  # An option given twice, and an empty name.
+  cfrom "--file given twice is refused before anything is read" "$T/cap/VID-74003" alpha tw --file --file "$T/cap-outside.txt"
+  cfrom "and --copy" "$T/cap" alpha --copy Two.Dots.TXT --copy Two.Dots.TXT
+  csame "--copy with an empty name is refused" helper "$T/cap" "$T/cap/note.md" alpha --copy ""
+  csame "and --file, with the note on stdin left unread" helper "$T/cap" "$T/cap/note.md" alpha empty --file ""
+  case "$(crun "$T/bin/capture-spy" "$T/cap" "$T/cap/note.md" alpha empty --file ""; cat "$T/capture.err")" in *"exit 1"*"raw:"*"error: --file needs a value") ok "and both refuse it" ;; *) bad "and both refuse it" "$(cat "$T/capture.err")" ;; esac
+  # The helper reads the path it checked: from --pwd, not from the folder it was started in.
+  printf 'decoy\n' > "$T/Two.Dots.TXT"
+  out="$(cd "$T" && "$T/bin/llm-wiki" capture --wikis "$FD" --home "$HOME" --pwd "$T/cap" --wiki-cmd wiki --only-from --from="$T/cap" --from="$FD" -- alpha --copy Two.Dots.TXT </dev/null)"
+  f="$(ls "$FD"/alpha/raw/*-two-dots.TXT 2>/dev/null | head -n 1)"
+  [ -n "$f" ] && cmp -s "$f" "$T/cap/Two.Dots.TXT" && ok "the helper checks, and copies, the file --pwd names" || bad "the helper checks, and copies, the file --pwd names" "$out"
+  rm -rf "$FD/alpha/raw" "$T/Two.Dots.TXT" "$T/capo.txt" "$T/cap-out" "$T/cap-deeplink"; mkdir -p "$FD/alpha/raw"
+  rm -f "$T/cap-outside.txt" "$HOME/cap-home.txt" "$T/capture.a"
   csame "a third name" helper "$T" "$T/cap/note.md" alpha one two
   csame "an empty name, which the next one fills" helper "$T" "$T/cap/note.md" "" alpha filled
   csame "a slug with a line break, which the Bash answers" bash "$T" "$T/cap/note.md" alpha "two
 lines"
   if [ "$(id -u)" != 0 ]; then
     chmod 000 "$T/cap/dated.md"
-    csame "a file it can't read, which the Bash answers" bash "$T" /dev/null alpha locked --file "$T/cap/dated.md"
-    csame "and a copy of one" helper "$T" /dev/null alpha --copy "$T/cap/dated.md"
+    csame "a file it can't read, which the Bash answers" bash "$T/cap" /dev/null alpha locked --file "$T/cap/dated.md"
+    csame "and a copy of one" helper "$T/cap" /dev/null alpha --copy "$T/cap/dated.md"
     chmod 644 "$T/cap/dated.md"
     CLOCKED=1
     csame "a raw folder it can't write in" helper "$T" "$T/cap/note.md" alpha sandboxed
@@ -4684,6 +4893,11 @@ rm -f "$HOME/.config/llm-wiki/collections"
 fi
 
 if section "Bash 3.2 safety"; then
+# printf piped into an awk that leaves at its first match: awk closes the pipe, and printf
+# then at times prints "write error: Broken pipe" into the command's output, or ends it
+# under pipefail. It failed setup's output on macOS in CI, and --collection before that.
+out="$(grep -n "printf '%s\\\\n' .*| awk .*exit }'" "$REPO/wiki.sh" || true)"
+[ -z "$out" ] && ok "no printf is piped into an awk that exits early" || bad "no printf is piped into an awk that exits early" "$out"
 # A script's exit trap removes a folder. That folder must be one mktemp made: with a mktemp
 # that fails, each script stops with exit 2 and removes nothing of the folder it was started in.
 mkdir -p "$T/m25/bin" "$T/m25/cwd"
@@ -15097,7 +15311,9 @@ echo "- seen: 2026-01-20 harbor-api raw/2026-01-20-153000-rate-limit-decision.md
 expect "and the compile's sighting makes it ready, as the guide says" "READY" tw patterns
 cp "$T/tour-patterns" "$TP"
 case "$out" in *"Your coding agent forgets everything"*"1. A new session already knows why"*) ok "the guide opens with what llm-wiki is for, and what you get" ;; *) bad "the guide opens with what llm-wiki is for, and what you get" "$out" ;; esac
-check "a capture works" tw capture harbor-api tour-note --file "$TD/code/harbor-api/README.md"
+# From the project, as a session in it runs it: from a session, --file takes a file of the
+# repository the command runs in (code review M6).
+check "a capture works" bash -c "cd '$TD/code/harbor-api' && env -u WIKIS_DIR '$TD/wiki' capture harbor-api tour-note --file README.md"
 n="$(find "$TD/wikis/harbor-api/raw" -name '*tour-note*' -exec basename {} \;)"
 tw log harbor-api ingest "Tour note" --source "raw/$n" >/dev/null
 n="$(tw pending harbor-api | grep -c '^raw/')"

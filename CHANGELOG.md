@@ -4,6 +4,14 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v45 (2026-11-20)
+
+A session's `--file` and `--copy` take a file of the project or the wikis.
+
+- `AGENTS.md` says that from a session, the file given to `wiki capture --file` or `--copy` must be in the repository the command runs in or in a wikis folder. `wiki capture` refuses any other with no terminal, so a note written to `/tmp` and passed with `--file` is refused. Piping the note in works from anywhere.
+- At a terminal, any file is taken, as before.
+- Do: run `wiki upgrade --all`.
+
 ## v44 (2026-11-20)
 
 Compile writes `open.md` and `patterns.md` with commands, not by hand.
