@@ -4,6 +4,12 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. The date is the day the entry is written, in UTC, and several entries can share a day. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-11-21: a session's capture takes a file of its project only
+
+- With no terminal, `wiki capture --copy` and `--file` take a file only from the repository they run in or from a wikis folder.
+- It keeps an agent from copying the wrong file in by mistake. It is no guard: a note piped in is taken from anywhere.
+- At a terminal, any file is taken, as before. Setup's offer of allow rules now says they let a session save any file it can read and push it.
+
 ## 2026-11-20: a link in a wiki is no longer followed
 
 - A note, page, `raw` or `wiki` folder that is a link is no longer read, listed or searched. `wiki status` names a wiki left out for one.

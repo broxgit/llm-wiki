@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Handbook version 44.
+Handbook version 45.
 
 This folder is a knowledge base maintained by an LLM agent. Any agent working here follows this file. It needs no vendor features. Plain markdown, plain files.
 
@@ -123,7 +123,7 @@ The world changes. Pages don't. Each page records when its claims were last conf
 Trigger: your own judgment (see Act without being asked), or the user says "save this", "capture this", "file this", or "save this session", or hands over a source.
 
 1. Ask of each item: would another repository need this? Then it goes in the shared wiki or the wiki that owns it (see Other wikis). One conversation can make notes in several wikis.
-2. Save it with `wiki.sh capture <wiki> <slug>`: pipe the note in, or pass `--file NOTE`. A document goes in unchanged with `--copy FILE`. The command names the file from the clock and adds the `Captured:` line.
+2. Save it with `wiki.sh capture <wiki> <slug>`: pipe the note in, or pass `--file NOTE`. A document goes in unchanged with `--copy FILE`. From a session, either file must be in the repository you run it in or in a wikis folder. The command names the file from the clock and adds the `Captured:` line.
 3. A note is plain markdown, no frontmatter: decisions, facts, open questions, links cited. Keep only what the user said or confirmed, what you checked against code or a source, and what a cited source says. Leave out speculation.
 4. Report the path in one line. Capture never touches `wiki/`, `index.md`, or `log.md`.
 
