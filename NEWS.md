@@ -10,6 +10,13 @@ Format: one `## YYYY-MM-DD: title` section per entry, newest first. The date is 
 - It keeps an agent from copying the wrong file in by mistake. It is no guard: a note piped in is taken from anywhere.
 - At a terminal, any file is taken, as before. Setup's offer of allow rules now says they let a session save any file it can read and push it.
 
+## 2026-11-20: a Confluence setting names a wiki in one collection
+
+- Every collection has a `global` wiki, so a Confluence setting can name one with its collection, such as `auto = work/global` or `watch.work/global`.
+- A name that two collections have, such as a bare `auto = global`, now publishes and watches neither, and the extension's log says what to write.
+- The daily check and publish reach a wiki in any collection that a setting names, whichever collection the session started in.
+- Do: with more than one collection, run `wiki confluence config`. If it says two collections have a wiki, write that setting as it says.
+
 ## 2026-11-20: a link in a wiki is no longer followed
 
 - A note, page, `raw` or `wiki` folder that is a link is no longer read, listed or searched. `wiki status` names a wiki left out for one.
