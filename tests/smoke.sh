@@ -4893,6 +4893,11 @@ rm -f "$HOME/.config/llm-wiki/collections"
 fi
 
 if section "Bash 3.2 safety"; then
+# printf piped into an awk that leaves at its first match: awk closes the pipe, and printf
+# then at times prints "write error: Broken pipe" into the command's output, or ends it
+# under pipefail. It failed setup's output on macOS in CI, and --collection before that.
+out="$(grep -n "printf '%s\\\\n' .*| awk .*exit }'" "$REPO/wiki.sh" || true)"
+[ -z "$out" ] && ok "no printf is piped into an awk that exits early" || bad "no printf is piped into an awk that exits early" "$out"
 # A script's exit trap removes a folder. That folder must be one mktemp made: with a mktemp
 # that fails, each script stops with exit 2 and removes nothing of the folder it was started in.
 mkdir -p "$T/m25/bin" "$T/m25/cwd"

@@ -6287,7 +6287,7 @@ commit_lag() {
         if [ "$multi" = 1 ]; then printf '%s\tbare %s\n' "${f#"$root"/}" "$c"; continue; fi
         repo="${root##*/}"; hash="$c" ;;
     esac
-    path="$(printf '%s\n' "$map" | awk -F'\t' -v r="$repo" '$1 == r { print $2; exit }')"
+    path="$(printf '%s\n' "$map" | awk -F'\t' -v r="$repo" '$1 == r && !seen { print $2; seen = 1 }')"
     [ -n "$path" ] || continue
     if ! git -C "$path" cat-file -e "$hash^{commit}" 2>/dev/null; then
       printf '%s\tmissing %s %s\n' "${f#"$root"/}" "$hash" "$repo"
@@ -8910,7 +8910,9 @@ JOURNAL_KEYS="$(printf '%s\n' "$JOURNAL_SETTINGS" | cut -d '|' -f 1 | tr '\n' ' 
 
 # journal_field <key> <n>: field n of a setting. 2 type, 3 level, 4 default, 5 description.
 journal_field() {
-  printf '%s\n' "$JOURNAL_SETTINGS" | awk -F '|' -v k="$1" -v n="$2" '$1 == k { print $n; exit }'
+  # awk reads to the end: leaving at the first match closed the pipe on printf, which then
+  # at times printed "write error: Broken pipe" into whatever setup was printing.
+  printf '%s\n' "$JOURNAL_SETTINGS" | awk -F '|' -v k="$1" -v n="$2" '$1 == k && !seen { print $n; seen = 1 }'
 }
 
 journal_default() { journal_field "$1" 4; }
