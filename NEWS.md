@@ -4,6 +4,13 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. The date is the day the entry is written, in UTC, and several entries can share a day. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-11-23: Jira keeps an item open while a ticket can't be read
+
+- An item no longer closes while Jira won't show a ticket it names. With `projects` set it stays open; without, you're asked once.
+- With `projects` set, a key counts in any case and next to a hyphen, such as `sec-9` or `SEC-9-fix`.
+- A ticket whose status or flag wasn't read, or whose answer is odd, decides nothing, and one resolved Won't Do counts as dropped even in `done_statuses`.
+- Only you turn Jira's `auto_close` on, in `wiki extensions setup jira`, and change `projects` or `done_statuses` while it is on. If it's on now, it stays on.
+
 ## 2026-11-23: sharing feedback and extension setup take a terminal
 
 - `wiki setup feedback share` now needs a terminal: sharing files notes on a public tracker, so a person turns it on. `off` and `notes` work from anywhere.
