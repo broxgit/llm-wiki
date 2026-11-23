@@ -3695,10 +3695,14 @@ case "$out4" in *"- tools: Terminal only"*) bad "and no longer calls it terminal
 out4="$(env WIKIS_DIR="$TW4" "$W" setup --guide 2>&1)"
 case "$out4" in *"- Also terminal only: "*"setup plugin | skills | upgrade | collections"*"with no question asked: "*"setup tools"*) ok "the whole guide names it apart from the terminal-only steps" ;; *) bad "the whole guide names it apart from the terminal-only steps" "$out4" ;; esac
 expect "the guide still calls a neighbouring step terminal only" "- collections: Terminal only: " env WIKIS_DIR="$TW4" "$W" setup --guide collections
-case "$out" in *"bash - installed - listed by tl, tm"*) ok "setup tools lists a tool, which wikis list it, and that it is installed" ;; *) bad "setup tools lists a tool, which wikis list it, and that it is installed" "$out" ;; esac
-case "$out" in *"nosuchtool123 - not installed here - listed by tl"*) ok "and one that is missing" ;; *) bad "and one that is missing" "$out" ;; esac
-case "$out" in *"python3.14 - installed"*) ok "a name with a dot and digits is a name" ;; *) bad "a name with a dot and digits is a name" "$out" ;; esac
-case "$out" in *"ask - not installed here"*) ok "a name is looked for on PATH, never among the script's own functions" ;; *) bad "a name is looked for on PATH, never among the script's own functions" "$out" ;; esac
+# The parts of a line are joined by " - ", or by a middle dot where the locale has one, as CI's does.
+# These checks are about the words, so they read the line with the plain separator.
+TL_DOT="$(printf '\302\267')"
+tl_plain() { printf '%s' "$1" | LC_ALL=C sed "s/ $TL_DOT / - /g"; }
+case "$(tl_plain "$out")" in *"bash - installed - listed by tl, tm"*) ok "setup tools lists a tool, which wikis list it, and that it is installed" ;; *) bad "setup tools lists a tool, which wikis list it, and that it is installed" "$out" ;; esac
+case "$(tl_plain "$out")" in *"nosuchtool123 - not installed here - listed by tl"*) ok "and one that is missing" ;; *) bad "and one that is missing" "$out" ;; esac
+case "$(tl_plain "$out")" in *"python3.14 - installed"*) ok "a name with a dot and digits is a name" ;; *) bad "a name with a dot and digits is a name" "$out" ;; esac
+case "$(tl_plain "$out")" in *"ask - not installed here"*) ok "a name is looked for on PATH, never among the script's own functions" ;; *) bad "a name is looked for on PATH, never among the script's own functions" "$out" ;; esac
 n4="$(printf '%s\n' "$out" | grep -c 'tl: line [0-9]* of wiki/conventions.md names no plain program, so it was left out. Do: ' || true)"
 [ "$n4" = 4 ] && ok "a line whose name has a leading dash, shell characters, a space or a control character is named by its line, and left out" || bad "a line whose name has a leading dash, shell characters, a space or a control character is named by its line, and left out" "$n4 named: $out"
 case "$out" in *"-rf"* | *'$(touch'* | *"two words"* | *"$(printf '\033')"* | *zzz* | *jira*) bad "and no text of those lines reaches the terminal, nor a tool outside the section" "$out" ;; *) ok "and no text of those lines reaches the terminal, nor a tool outside the section" ;; esac
@@ -3721,7 +3725,7 @@ case "$out" in *"Claude Code: Bash in ~/.claude/settings.json lets agents run an
 out4="$(printf '' | env LC_ALL=C PYTHONUTF8=0 WIKIS_DIR="$TW4" "$W" setup tools 2>&1)"
 case "$out4" in *"Claude Code: Bash(ls *) in ~/.claude/settings.json lets agents run"*) ok "under an ASCII locale, a settings file with a character outside ASCII is still read" ;; *) bad "under an ASCII locale, a settings file with a character outside ASCII is still read" "$out4" ;; esac
 # Which folders are read: wikis only, with names valid_name takes, and no page or wiki folder that is a link.
-case "$out" in *"notawiki"* | *"oddname"* | *"bidiname"* | *"linkedpage"* | *"linkeddir"* | *"bad name"* | *"$(printf '\342\200\256')"*) bad "no tool is read from a folder that is no wiki, has an odd name, or reaches through a link" "$out" ;; *"bash - installed"*) ok "no tool is read from a folder that is no wiki, has an odd name, or reaches through a link" ;; *) bad "no tool is read from a folder that is no wiki, has an odd name, or reaches through a link" "$out" ;; esac
+case "$(tl_plain "$out")" in *"notawiki"* | *"oddname"* | *"bidiname"* | *"linkedpage"* | *"linkeddir"* | *"bad name"* | *"$(printf '\342\200\256')"*) bad "no tool is read from a folder that is no wiki, has an odd name, or reaches through a link" "$out" ;; *"bash - installed"*) ok "no tool is read from a folder that is no wiki, has an odd name, or reaches through a link" ;; *) bad "no tool is read from a folder that is no wiki, has an odd name, or reaches through a link" "$out" ;; esac
 case "$out" in *"lk: wiki/conventions.md is a link, so its tools weren't read. Do: "*) ok "a conventions page that is a link is named in one line" ;; *) bad "a conventions page that is a link is named in one line" "$out" ;; esac
 if [ "$(id -u)" != 0 ]; then
   case "$out" in *"ur: wiki/conventions.md can't be read from this shell, so its tools weren't read. Do: "*) ok "a conventions page that can't be read is named in one line, and the step goes on" ;; *) bad "a conventions page that can't be read is named in one line, and the step goes on" "$out" ;; esac
