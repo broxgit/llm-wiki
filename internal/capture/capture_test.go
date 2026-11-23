@@ -240,3 +240,153 @@ func TestRunWarnsAboutANoteNotACopy(t *testing.T) {
 		t.Errorf("a copy: %v, warned %q", err, warned)
 	}
 }
+
+// From a session, --copy and --file take a file only from inside one of From, compared by
+// real path, and never from the home folder or one that holds it. At a terminal, or without
+// OnlyFrom, any file is taken.
+func TestRunTakesASessionsFileOnlyFromTheProjectOrTheWikis(t *testing.T) {
+	o, _ := wiki(t)
+	home := o.Home
+	repo := filepath.Join(home, "repo")
+	out := filepath.Join(home, "outside")
+	for _, d := range []string{filepath.Join(repo, "sub"), out} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(p string) {
+		if err := os.WriteFile(p, []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(repo, "sub", "in.txt"))
+	write(filepath.Join(out, "o.txt"))
+	write(filepath.Join(home, "at-home.txt"))
+	write(filepath.Join(repo, "tab\there.txt"))
+	write(filepath.Join(o.Wikis, "demo", "kept.txt"))
+	if err := os.Symlink(filepath.Join(out, "o.txt"), filepath.Join(repo, "link.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(repo, "sub", "in.txt"), filepath.Join(repo, "inner.txt")); err != nil {
+		t.Fatal(err)
+	}
+	o.OnlyFrom, o.From, o.Pwd = true, []string{repo, o.Wikis}, repo
+	outside := "takes a file only from the repository it runs in, or from a wikis folder, when no one is at a terminal. "
+	for _, c := range []struct {
+		args []string
+		want string // "" when it is taken, or a piece of the refusal
+	}{
+		// Taken ones are named in full: the copy itself reads a path from the process's folder.
+		{[]string{"demo", "--copy", filepath.Join(repo, "sub", "in.txt")}, ""},
+		{[]string{"demo", "--copy", filepath.Join(repo, "inner.txt")}, ""},
+		{[]string{"demo", "--copy", filepath.Join(o.Wikis, "demo", "kept.txt")}, ""},
+		{[]string{"demo", "s", "--file", filepath.Join(repo, "sub", "in.txt")}, ""},
+		{[]string{"demo", "--copy", filepath.Join(out, "o.txt")}, "capture --copy " + outside + "~/outside/o.txt is in neither"},
+		{[]string{"demo", "s", "--file", "../outside/o.txt"}, "capture --file " + outside + "../outside/o.txt is in neither"},
+		{[]string{"demo", "--copy", "sub/../../outside/o.txt"}, "is in neither"},
+		{[]string{"demo", "--copy", "link.txt"}, "link.txt is in neither"},
+		{[]string{"demo", "--copy", "tab\there.txt"}, "capture --copy takes no path with a control character in it"},
+		// A file that isn't there is refused further on, in its own words.
+		{[]string{"demo", "--copy", "gone.txt"}, "no file at gone.txt"},
+	} {
+		_, err := Run(withArgs(o, c.args))
+		var r *Refused
+		switch {
+		case c.want == "" && err != nil:
+			t.Errorf("%q was refused: %v", c.args, err)
+		case c.want != "" && (!errors.As(err, &r) || !strings.Contains(r.Msg, c.want)):
+			t.Errorf("%q: got %v, want a refusal with %q", c.args, err, c.want)
+		}
+	}
+	// The home folder, a repository whose top is the home folder, and a folder that holds it are no project.
+	h := o
+	h.Pwd, h.From = home, []string{home, "/", o.Wikis}
+	if _, err := Run(withArgs(h, []string{"demo", "--copy", "at-home.txt"})); err == nil || !strings.Contains(err.Error(), "at-home.txt is in neither") {
+		t.Errorf("a copy from the home folder: %v", err)
+	}
+	// At a terminal, and for a caller that doesn't ask for the check, any file is taken.
+	for _, p := range []Options{{OnlyFrom: true, TTY: true}, {}} {
+		q := o
+		q.OnlyFrom, q.TTY = p.OnlyFrom, p.TTY
+		if _, err := Run(withArgs(q, []string{"demo", "--copy", filepath.Join(out, "o.txt")})); err != nil {
+			t.Errorf("OnlyFrom %v, TTY %v: %v", p.OnlyFrom, p.TTY, err)
+		}
+	}
+}
+
+// From a review of the check: what the kernel opens decides, the path checked is the path
+// read, and an option given twice, an empty name, a line break and an unusable home are
+// each refused or handled as wiki.sh does.
+func TestRunChecksWhatThePathOpens(t *testing.T) {
+	o, _ := wiki(t)
+	home := o.Home
+	repo := filepath.Join(home, "repo")
+	for _, d := range []string{filepath.Join(repo, "sub"), filepath.Join(repo, "deep", "dir"), filepath.Join(home, "outside")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(p, s string) {
+		if err := os.WriteFile(p, []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := func(to, at string) {
+		if err := os.Symlink(to, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(home, "o.txt"), "beside\n")
+	write(filepath.Join(repo, "deep", "in.txt"), "deep\n")
+	write(filepath.Join(repo, "here.txt"), "here\n")
+	link(filepath.Join(home, "outside"), filepath.Join(repo, "sub", "out"))
+	link(filepath.Join(home, "o.txt"), filepath.Join(repo, "sub", "o.txt"))
+	link("deep/dir", filepath.Join(repo, "sublink"))
+	o.OnlyFrom, o.From, o.Pwd = true, []string{repo, o.Wikis}, repo
+	refused := func(args []string, want string) {
+		t.Helper()
+		_, err := Run(withArgs(o, args))
+		var r *Refused
+		if !errors.As(err, &r) || r.Msg != want {
+			t.Errorf("%q: got %v, want %q", args, err, want)
+		}
+	}
+	refused([]string{"demo", "--copy", "sub/out/../o.txt"}, "capture --copy takes a file only from the repository it runs in, or from a wikis folder, when no one is at a terminal. sub/out/../o.txt is in neither, so nothing was saved. This keeps a session from copying the wrong file in by mistake, and guards nothing: a note on stdin is taken from anywhere. Do: ask the user to run the command in a terminal, where any file is taken")
+	refused([]string{"demo", "s", "--file", "a\nb"}, "capture --file takes no path with a control character in it when no one is at a terminal, so nothing was saved. Do: ask the user to run the command in a terminal")
+	refused([]string{"demo", "s", "--file", "--file", "x"}, "capture takes --file NOTE once")
+	refused([]string{"demo", "--copy", "a", "--copy", "a"}, "capture takes --copy FILE once")
+	refused([]string{"demo", "--copy", ""}, "--copy needs a value")
+	refused([]string{"demo", "s", "--file", ""}, "--file needs a value")
+	// sublink/../in.txt opens deep/in.txt, in the repository. The process's own folder is
+	// elsewhere: what is checked and what is read is the path from Pwd.
+	if _, err := Run(withArgs(o, []string{"demo", "--copy", "sublink/../in.txt"})); err != nil {
+		t.Errorf("a link in the repository followed by ..: %v", err)
+	}
+	if _, err := Run(withArgs(o, []string{"demo", "--copy", "here.txt"})); err != nil {
+		t.Errorf("a name from Pwd, read from Pwd: %v", err)
+	}
+	// With no home named in full, the root is still no project.
+	for _, h := range []string{"", "rel"} {
+		p := o
+		p.Home, p.From = h, []string{"/"}
+		_, err := Run(withArgs(p, []string{"demo", "--copy", filepath.Join(home, "o.txt")}))
+		var r *Refused
+		if !errors.As(err, &r) || !strings.Contains(r.Msg, "is in neither") {
+			t.Errorf("home %q, the root as a folder: %v", h, err)
+		}
+	}
+	// A home spelled in another case, where the disk ignores case, still holds no project.
+	up := strings.ToUpper(home)
+	if up != home && sameFile(up, home) {
+		p := o
+		p.Home, p.From, p.Pwd = up, []string{home}, home
+		if _, err := Run(withArgs(p, []string{"demo", "--copy", filepath.Join(home, "o.txt")})); err == nil {
+			t.Errorf("a home in capitals let the home folder through")
+		}
+	}
+}
+
+func withArgs(o Options, args []string) Options {
+	o.Args, o.Stdin = args, nil
+	return o
+}

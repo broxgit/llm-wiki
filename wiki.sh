@@ -483,7 +483,7 @@ need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 # Raise GO_PROTOCOL, with the constant in cmd/llm-wiki/main.go, whenever a ported
 # command's arguments or output change. scripts/helper.sh builds releases and writes
 # helper.lock.
-GO_PROTOCOL=25
+GO_PROTOCOL=26
 HELPER_LOCK="$REPO/helper.lock"
 HELPER_DIR="${LLM_WIKI_HELPER_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/llm-wiki/helper}"
 
@@ -2317,15 +2317,29 @@ INEOF
 # --file reads the note from a file instead of stdin. Some agents approve a command
 # once and for all only when it has no pipe or heredoc (Antigravity, 2026-10-29).
 cmd_capture() {
-  local tk a prev="" tmp="" has_file=0 has_copy=0 rc=0 argv=()
+  local tk a prev="" tmp="" has_file=0 has_copy=0 rc=0 argv=() CAPTURE_FROM="" CAPTURE_ONLY=""
+  for a in "$@"; do
+    case "$a" in --copy) has_copy=1 ;; --file) has_file=1 ;; esac
+  done
+  capture_twice "$@"
+  # From a session, --copy and --file take a file only from the repository the command
+  # runs in or from a wikis folder. This comes first, before the ticket step copies a
+  # --file aside. It is a speed bump for an honest agent, not a guard: a note on stdin is
+  # taken from anywhere. At a terminal any file is taken. capture_run hands the same
+  # folders to the compiled helper, which checks them the same way.
+  if [ ! -t 0 ] && { [ "$has_copy" = 1 ] || [ "$has_file" = 1 ]; }; then
+    CAPTURE_ONLY=1
+    CAPTURE_FROM="$(capture_from)"
+    capture_only_from "$CAPTURE_FROM" "$@"
+  fi
+  # The ticket step's copies go on every way out, a die in a subshell or an interrupt included.
+  CAPTURE_TMP=""
+  trap '[ -z "${CAPTURE_TMP:-}" ] || rm -f "$CAPTURE_TMP" "$CAPTURE_TMP.in" 2>/dev/null || true' EXIT
   # A note taken in a folder, or on a branch, named for a ticket says which ticket, so
   # what the wikis keep can be tied to it later. Both implementations below are fed the
   # note with that line on its end, and neither knows about it. A copy of a file, and
   # a terminal on stdin, are left alone.
   tk="$(ticket_real "$(ticket_key "$PWD" 2>/dev/null || true)")"
-  for a in "$@"; do
-    case "$a" in --copy) has_copy=1 ;; --file) has_file=1 ;; esac
-  done
   if [ -z "$tk" ] || [ "$has_copy" = 1 ] || { [ "$has_file" = 0 ] && [ -t 0 ]; }; then
     capture_run "$@"
     return
@@ -2333,14 +2347,17 @@ cmd_capture() {
   if [ "$has_file" = 1 ]; then
     # The note is in a file: pass a copy with the line, and leave the file as it is.
     for a in "$@"; do
-      if [ "$prev" = --file ] && [ -f "$a" ] && tmp="$(mktemp)" && capture_ticketed "$a" "$tk" > "$tmp"; then a="$tmp"; fi
+      # --file is there once (capture_twice), so this is the path the check above passed.
+      if [ "$prev" = --file ] && [ -f "$a" ] && tmp="$(mktemp)" && CAPTURE_TMP="$tmp" && capture_ticketed "$a" "$tk" > "$tmp"; then a="$tmp"; fi
       argv[${#argv[@]}]="$a"
       prev="$a"
     done
-    ( capture_run "${argv[@]}" ) || rc=$?
+    # The file was checked above, and what is passed on is this script's own copy of it.
+    ( CAPTURE_ONLY=""; capture_run "${argv[@]}" ) || rc=$?
   else
     # Stdin is read here and handed on.
     tmp="$(mktemp)"
+    CAPTURE_TMP="$tmp"
     if cat > "$tmp.in" && capture_ticketed "$tmp.in" "$tk" > "$tmp"; then
       ( capture_run "$@" ) < "$tmp" || rc=$?
     else
@@ -2364,15 +2381,126 @@ capture_ticketed() {
   printf 'Ticket: %s\n' "$2"
 }
 
+# capture_from: the folders a session's capture may take a file from, one a line, as they
+# are named: the git work tree the command runs in, then each collection's folder.
+# capture_only_from, and internal/capture, take their real paths and pass over the root
+# folder, the home folder and any folder that holds it, so a session started at home, or in
+# a repository whose top is the home folder, has no project to copy from. GIT_DIR and
+# GIT_WORK_TREE would name another work tree, so git is asked without them. A collections
+# file that can't be read leaves the repository and $WIKIS_DIR. A folder whose name has a
+# line break is left out: it would be two folders here.
+capture_from() {
+  local top d nl=$'\n'
+  if top="$(unset GIT_DIR GIT_WORK_TREE; git rev-parse --show-toplevel 2>/dev/null)" && [ -n "$top" ]; then
+    case "$top" in *"$nl"*) ;; *) printf '%s\n' "$top" ;; esac
+  fi
+  { collections 2>/dev/null || true; } | cut -f 2
+  d="${WIKIS_DIR:-}"
+  case "$d" in "" | *"$nl"*) ;; *) printf '%s\n' "$d" ;; esac
+}
+
+# capture_real <path>: the real path of the file the path opens, resolved as the kernel
+# resolves it: each folder physically, with cd -P, so a link followed by .. goes where the
+# link points, and then the file's own link, if it is one. Fails when it can't be worked out.
+capture_real() {
+  local p="$1" d b t n=0
+  while :; do
+    case "$p" in */*) d="${p%/*}"; [ -n "$d" ] || d=/ ;; *) d=. ;; esac
+    b="${p##*/}"
+    case "$d" in -*) d="./$d" ;; esac
+    d="$(CDPATH='' cd -P "$d" 2>/dev/null && pwd -P)" || return 1
+    p="${d%/}/$b"
+    [ -L "$p" ] || break
+    n=$((n + 1))
+    [ "$n" -le 40 ] || return 1
+    t="$(readlink "$p")" || return 1
+    case "$t" in /*) p="$t" ;; *) p="${d%/}/$t" ;; esac
+  done
+  printf '%s' "$p"
+}
+
+# capture_twice <capture's arguments>: dies when --copy or --file is given more than once,
+# before anything is read. The ticket step and the check below pair each option with the
+# word after it, and a second one would pair them differently.
+capture_twice() {
+  local a copies=0 files=0
+  for a in "$@"; do
+    case "$a" in --copy) copies=$((copies + 1)) ;; --file) files=$((files + 1)) ;; esac
+  done
+  [ "$copies" -le 1 ] || die "capture takes --copy FILE once"
+  [ "$files" -le 1 ] || die "capture takes --file NOTE once"
+}
+
+# capture_home_holds <folder> <home>: the folder is the home folder or holds it, judged as
+# the same folder on disk, so a disk that ignores case can't tell them apart by spelling.
+capture_home_holds() {
+  local h="$2"
+  [ -n "$h" ] || return 1
+  while :; do
+    [ "$h" -ef "$1" ] && return 0
+    case "$h" in / | '') return 1 ;; esac
+    h="${h%/*}"
+    [ -n "$h" ] || h=/
+  done
+}
+
+# capture_only_from <folders> <capture's arguments>: dies when a --copy or --file names a
+# file outside the folders capture_from gave. Only a session gets here. This keeps an
+# honest agent from copying the wrong file in, and nothing more: the same file piped on
+# stdin is taken. internal/capture's onlyFrom says the same words: change both together.
+capture_only_from() {
+  local from="$1" prev="" a real d hp="" ok
+  shift
+  # With no home folder named in full, there is no home exception, and the root is still no project.
+  case "${HOME:-}" in /*) hp="$(CDPATH='' cd -P "$HOME" 2>/dev/null && pwd -P || true)" ;; esac
+  for a in "$@"; do
+    case "$prev" in
+      --copy | --file) ;;
+      *) prev="$a"; continue ;;
+    esac
+    # A control character can make a name read as something it isn't.
+    if [ "$(printf '%s' "$a" | LC_ALL=C tr -d '\001-\037\177')" != "$a" ]; then
+      die "capture $prev takes no path with a control character in it when no one is at a terminal, so nothing was saved. Do: ask the user to run the command in a terminal"
+    fi
+    # A file that isn't there, or an empty name, is refused further on, in its own words.
+    if [ -n "$a" ] && [ -f "$a" ]; then
+      ok=0
+      # Judged by what the path opens: the real path must name that same file.
+      if real="$(capture_real "$a")" && [ "$real" -ef "$a" ]; then
+        while IFS= read -r d; do
+          [ -n "$d" ] || continue
+          case "$d" in -*) d="./$d" ;; esac
+          d="$(CDPATH='' cd -P "$d" 2>/dev/null && pwd -P)" || continue
+          [ "$d" != / ] || continue
+          # The home folder, or one that holds it, is no project.
+          ! capture_home_holds "$d" "$hp" || continue
+          case "$real" in "${d%/}/"*) ok=1; break ;; esac
+        done <<FROMEOF
+$from
+FROMEOF
+      fi
+      [ "$ok" = 1 ] || die "capture $prev takes a file only from the repository it runs in, or from a wikis folder, when no one is at a terminal. $(tilde "$a") is in neither, so nothing was saved. This keeps a session from copying the wrong file in by mistake, and guards nothing: a note on stdin is taken from anywhere. Do: ask the user to run the command in a terminal, where any file is taken"
+    fi
+    prev=""
+  done
+}
+
 # capture_run: capture, by the compiled helper when it is built and in Bash when not.
 capture_run() {
-  local bin out tty="" nl=$'\n' line
+  local bin out tty="" nl=$'\n' line d capfrom=()
   # The compiled helper saves the note too. Its first line says which answer follows,
   # the line to print or what to refuse with. It fails only before it reads stdin, and
   # then capture_note answers. After a capture, each line past the second is a warning.
   [ ! -t 0 ] || tty=--tty
+  # cmd_capture's folders for a session's --copy and --file, which the helper checks too.
+  if [ -n "${CAPTURE_ONLY:-}" ]; then
+    capfrom=(--only-from)
+    while IFS= read -r d; do [ -z "$d" ] || capfrom[${#capfrom[@]}]="--from=$d"; done <<FROMEOF
+${CAPTURE_FROM:-}
+FROMEOF
+  fi
   # shellcheck disable=SC2086
-  if bin="$(go_helper)" && out="$("$bin" capture --wikis "$WIKIS_DIR" --home "$HOME" --pwd "$PWD" --wiki-cmd "$WIKI_CMD" $tty -- "$@" 2>/dev/null)"; then
+  if bin="$(go_helper)" && out="$("$bin" capture --wikis "$WIKIS_DIR" --home "$HOME" --pwd "$PWD" --wiki-cmd "$WIKI_CMD" $tty ${capfrom[@]+"${capfrom[@]}"} -- "$@" 2>/dev/null)"; then
     case "$out" in
       "captured$nl"?*)
         out="${out#*"$nl"}"
@@ -2453,8 +2581,9 @@ capture_note() {
   local wiki="" slug="" copy="" file="" root stamp name ext stem n=2 tmp="" held hold placed
   while [ $# -gt 0 ]; do
     case "$1" in
-      --copy) need_value "$@"; copy="${2:-}"; shift 2 ;;
-      --file) need_value "$@"; file="${2:-}"; shift 2 ;;
+      # An empty name is no file: without this, --file "" read the note from stdin.
+      --copy) need_value "$@"; [ -n "${2:-}" ] || die "--copy needs a value"; copy="$2"; shift 2 ;;
+      --file) need_value "$@"; [ -n "${2:-}" ] || die "--file needs a value"; file="$2"; shift 2 ;;
       -*) die "capture options: --file NOTE, --copy FILE" ;;
       *) if [ -z "$wiki" ]; then wiki="$1"; elif [ -z "$slug" ]; then slug="$1"; else die "capture takes a wiki and a slug"; fi; shift ;;
     esac
@@ -6274,7 +6403,7 @@ commit_lag() {
         if [ "$multi" = 1 ]; then printf '%s\tbare %s\n' "${f#"$root"/}" "$c"; continue; fi
         repo="${root##*/}"; hash="$c" ;;
     esac
-    path="$(printf '%s\n' "$map" | awk -F'\t' -v r="$repo" '$1 == r { print $2; exit }')"
+    path="$(printf '%s\n' "$map" | awk -F'\t' -v r="$repo" '$1 == r && !seen { print $2; seen = 1 }')"
     [ -n "$path" ] || continue
     if ! git -C "$path" cat-file -e "$hash^{commit}" 2>/dev/null; then
       printf '%s\tmissing %s %s\n' "${f#"$root"/}" "$hash" "$repo"
@@ -8897,7 +9026,9 @@ JOURNAL_KEYS="$(printf '%s\n' "$JOURNAL_SETTINGS" | cut -d '|' -f 1 | tr '\n' ' 
 
 # journal_field <key> <n>: field n of a setting. 2 type, 3 level, 4 default, 5 description.
 journal_field() {
-  printf '%s\n' "$JOURNAL_SETTINGS" | awk -F '|' -v k="$1" -v n="$2" '$1 == k { print $n; exit }'
+  # awk reads to the end: leaving at the first match closed the pipe on printf, which then
+  # at times printed "write error: Broken pipe" into whatever setup was printing.
+  printf '%s\n' "$JOURNAL_SETTINGS" | awk -F '|' -v k="$1" -v n="$2" '$1 == k && !seen { print $n; seen = 1 }'
 }
 
 journal_default() { journal_field "$1" 4; }
@@ -13224,6 +13355,9 @@ PY
 # session may not grant itself the permission. So setup offers allow rules for the
 # wiki commands that write, in the user's own ~/.claude/settings.json.
 PERM_SUBCOMMANDS="start capture lock log index sync"
+# What the rules for capture and sync allow, said where setup offers them. capture's check
+# on --copy and --file is a speed bump, and a note on stdin can be any file.
+PERM_REACH="With these, a session can save any file it can read into a wiki and push it."
 
 # perm_forms: each spelling sessions use for wiki.sh: the plugin's stable command
 # and this clone's script, with ~ and in full, and plain `wiki`.
@@ -13313,6 +13447,7 @@ setup_permissions() {
   ui_detail "Your assistant saves and backs up notes by running wiki commands. Claude Code stops to ask you each time,"
   ui_detail "and it can't give itself permission. Allowing these once lets it run them without asking, and nothing else:"
   echo "  $WIKI_CMD $(printf '%s' "$PERM_SUBCOMMANDS" | sed 's/ /, /g')"
+  ui_detail "$PERM_REACH"
   if ask_yn "Add $n allow rule(s) to ~/.claude/settings.json?" y; then
     if perm_add; then ui_item ok "added (backup beside it). New sessions use them."; else ui_item warn "couldn't change ~/.claude/settings.json."; fi
   fi
@@ -14185,6 +14320,8 @@ setup_agy_grants() {
   if [ "$SETUP_MODE" = new ] && setup_done antigravity.grants; then return 0; fi
   ui_detail "Gemini asks before each file it reads in the wikis and each wiki.sh command it runs, unless Antigravity has grants for them:"
   printf '%s\n' "$missing" | sed 's/^/  /'
+  # The grant of the wiki command covers capture and sync, so it reaches as far as Claude Code's rules.
+  if printf '%s\n' "$missing" | grep -q '^command('; then ui_detail "$PERM_REACH"; fi
   if ask_yn "Add them to Antigravity's grants?" y; then
     if agy_grants_add; then ui_item ok "added (backup beside $(tilde "$AGY_CONFIG")). Quit and reopen Antigravity, or it may save its old list over this."; else ui_item warn "couldn't change $(tilde "$AGY_CONFIG")."; fi
   fi

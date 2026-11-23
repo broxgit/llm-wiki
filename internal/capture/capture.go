@@ -9,6 +9,7 @@ import (
 	"github.com/broxgit/llm-wiki/internal/routing"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -22,10 +23,14 @@ type Options struct {
 	// WikiCmd is how the person runs wiki.sh, for the lines that name a command to run.
 	WikiCmd string
 	// TTY says stdin is a terminal, where there is no note to read.
-	TTY   bool
-	Args  []string         // the command's own arguments
-	Stdin io.Reader        // the note, when no --file or --copy names one
-	Now   func() time.Time // the clock; nil means time.Now
+	TTY bool
+	// OnlyFrom, with no terminal, takes a --copy or --file only from inside one of From:
+	// wiki.sh's capture_from, the repository the command runs in and each wikis folder.
+	OnlyFrom bool
+	From     []string
+	Args     []string         // the command's own arguments
+	Stdin    io.Reader        // the note, when no --file or --copy names one
+	Now      func() time.Time // the clock; nil means time.Now
 	// Warn, when it is set, is given each warning about the saved note, as Lint says them.
 	Warn func(string)
 }
@@ -41,6 +46,28 @@ func refuse(msg string) error { return &Refused{msg} }
 // own refusal. Any other error means this port isn't sure, nothing was read from Stdin
 // or written, and the Bash should answer.
 func Run(o Options) (string, error) {
+	// capture_twice in wiki.sh: an option given twice would pair with the wrong word.
+	copies, files := 0, 0
+	for _, a := range o.Args {
+		switch a {
+		case "--copy":
+			copies++
+		case "--file":
+			files++
+		}
+	}
+	if copies > 1 {
+		return "", refuse("capture takes --copy FILE once")
+	}
+	if files > 1 {
+		return "", refuse("capture takes --file NOTE once")
+	}
+	// Before the test for a line break, so a session's path with one gets the Bash's words.
+	if o.OnlyFrom && !o.TTY {
+		if msg := o.onlyFrom(); msg != "" {
+			return "", refuse(msg)
+		}
+	}
 	for _, a := range o.Args {
 		// A line break in a name: sed and $( ) treat it their own way.
 		if strings.ContainsAny(a, "\n\x00") {
@@ -52,7 +79,8 @@ func Run(o Options) (string, error) {
 		a := o.Args[i]
 		switch {
 		case a == "--copy" || a == "--file":
-			if i+1 >= len(o.Args) {
+			// An empty name is no file: it read the note from stdin.
+			if i+1 >= len(o.Args) || o.Args[i+1] == "" {
 				return "", refuse(a + " needs a value")
 			}
 			if a == "--copy" {
@@ -93,7 +121,7 @@ func Run(o Options) (string, error) {
 	}
 	ext := "md"
 	if copyFrom != "" {
-		if !isFile(copyFrom) {
+		if !isFile(o.abs(copyFrom)) {
 			return "", refuse("no file at " + copyFrom)
 		}
 		base := copyFrom[strings.LastIndex(copyFrom, "/")+1:]
@@ -112,7 +140,7 @@ func Run(o Options) (string, error) {
 			return "", refuse("capture needs a short slug for the name, such as decided-postgres")
 		}
 		if file != "" {
-			if !isFile(file) {
+			if !isFile(o.abs(file)) {
 				return "", refuse("no file at " + file)
 			}
 		} else if o.TTY {
@@ -163,11 +191,11 @@ func Run(o Options) (string, error) {
 	}
 	if copyFrom != "" {
 		// cp gives the copy the file's own permissions, less the umask.
-		info, err := os.Stat(copyFrom)
+		info, err := os.Stat(o.abs(copyFrom))
 		if err != nil {
 			return "", refuse(o.cantWrite(dest))
 		}
-		data, err := os.ReadFile(copyFrom)
+		data, err := os.ReadFile(o.abs(copyFrom))
 		if err != nil || place(data, info.Mode().Perm()) != nil {
 			return "", refuse(o.cantWrite(dest))
 		}
@@ -175,7 +203,7 @@ func Run(o Options) (string, error) {
 		var note []byte
 		var err error
 		if file != "" {
-			note, err = os.ReadFile(file)
+			note, err = os.ReadFile(o.abs(file))
 		} else if o.Stdin != nil {
 			note, err = io.ReadAll(o.Stdin)
 		}
@@ -317,6 +345,114 @@ func write(path string, data []byte, perm os.FileMode) error {
 		return err
 	}
 	return nil
+}
+
+// onlyFrom is capture_only_from in wiki.sh, with the same words: what to refuse a session's
+// --copy or --file with, or nothing. It keeps an honest agent from copying the wrong file
+// in, and nothing more: the same file piped on stdin is taken. A path is judged by what it
+// opens: its real path, resolved as the kernel resolves it, so a link inside a folder that
+// points out of it, or a link followed by "..", doesn't pass. The root folder, the home
+// folder and a folder that holds it are no project. With no home named in full there is no
+// home exception, and the root is still none.
+func (o Options) onlyFrom() string {
+	home := ""
+	if strings.HasPrefix(o.Home, "/") {
+		home = real(o.Home)
+	}
+	for i := 0; i+1 < len(o.Args); i++ {
+		opt := o.Args[i]
+		if opt != "--copy" && opt != "--file" {
+			continue
+		}
+		i++
+		p := o.Args[i]
+		for j := 0; j < len(p); j++ {
+			if p[j] < 0x20 || p[j] == 0x7f {
+				return "capture " + opt + " takes no path with a control character in it when no one is at a terminal, so nothing was saved. Do: ask the user to run the command in a terminal"
+			}
+		}
+		// A file that isn't there, or an empty name, is refused further on, in its own words.
+		if p == "" || !isFile(o.abs(p)) {
+			continue
+		}
+		file, err := filepath.EvalSymlinks(o.abs(p))
+		if err == nil && !sameFile(file, o.abs(p)) {
+			err = errors.New("the real path names another file")
+		}
+		ok := false
+		for _, d := range o.From {
+			if err != nil {
+				break
+			}
+			if d == "" {
+				continue
+			}
+			d, derr := filepath.EvalSymlinks(o.abs(d))
+			if derr != nil {
+				continue
+			}
+			if st, serr := os.Stat(d); serr != nil || !st.IsDir() {
+				continue
+			}
+			d = strings.TrimSuffix(d, "/")
+			if d == "" || holdsHome(d, home) {
+				continue
+			}
+			if strings.HasPrefix(file, d+"/") {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return "capture " + opt + " takes a file only from the repository it runs in, or from a wikis folder, when no one is at a terminal. " + o.tilde(p) + " is in neither, so nothing was saved. This keeps a session from copying the wrong file in by mistake, and guards nothing: a note on stdin is taken from anywhere. Do: ask the user to run the command in a terminal, where any file is taken"
+		}
+	}
+	return ""
+}
+
+// holdsHome is capture_home_holds in wiki.sh: the folder is home, or holds it, judged as the
+// same folder on disk, so a disk that ignores case can't tell them apart by spelling.
+func holdsHome(dir, home string) bool {
+	if home == "" {
+		return false
+	}
+	for h := home; ; {
+		if sameFile(h, dir) {
+			return true
+		}
+		if h == "/" {
+			return false
+		}
+		if h = h[:strings.LastIndex(h, "/")]; h == "" {
+			h = "/"
+		}
+	}
+}
+
+// sameFile is the shell's -ef: both are there, and are one file.
+func sameFile(a, b string) bool {
+	sa, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	sb, err := os.Stat(b)
+	return err == nil && os.SameFile(sa, sb)
+}
+
+// abs is a path from the folder the command runs in.
+func (o Options) abs(p string) string {
+	if strings.HasPrefix(p, "/") || o.Pwd == "" {
+		return p
+	}
+	return o.Pwd + "/" + p
+}
+
+// real is a folder's real path, as pwd -P gives it, or the path as it is.
+func real(path string) string {
+	if r, err := filepath.EvalSymlinks(path); err == nil {
+		return strings.TrimSuffix(r, "/")
+	}
+	return path
 }
 
 func isFile(path string) bool {
