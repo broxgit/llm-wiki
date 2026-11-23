@@ -336,8 +336,10 @@ Usage: $WIKI_CMD <command> [options]
   sync <wiki> [-m MSG] Commit this wiki's changes, pull with a merge, and push.
   index <wiki> [--check]  Bring index.md in step with the pages' frontmatter, in place.
   lint <wiki>... | --all  The mechanical lint checks. Reports, changes nothing.
-  harvest [--dry-run]  Copy Claude Code's own memory notes into the wikis, where every
-                       repo and teammate can use them.
+  harvest [--dry-run] [--with-user]
+                       Copy Claude Code's own memory notes into the wikis, where every
+                       repo and teammate can use them. Notes about you stay behind
+                       unless --with-user is given.
   pending [<wiki>] [--show] [--keep-inbox]
                        Notes waiting to be compiled. --show prints a wiki's in one go.
                        --keep-inbox counts without taking the notes in an inbox.
@@ -5092,41 +5094,143 @@ memory_project() {
   cwd="$(cat "$1"/*.jsonl 2>/dev/null | grep -m 1 -o '"cwd":"[^"]*"' | sed 's/^"cwd":"//; s/"$//' || true)"
   [ -n "$cwd" ] || return 0
   if top="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)"; then name="$(repo_name "$top")"; else name="${cwd##*/}"; fi
-  w="$(which_wiki "$name")"
+  # The name comes from a transcript or a remote's address: only a wiki name is looked
+  # up, so .. or a path can't reach a folder outside the collection.
+  w=""
+  ! valid_name "$name" || w="$(which_wiki "$name")"
   if [ -z "$w" ]; then
     # A scratch folder inside a project, such as myapp/sweeps/b41, belongs to it.
     local SPLIT
     split_list / "$cwd"
-    for part in ${SPLIT[@]+"${SPLIT[@]}"}; do [ -n "$part" ] && [ -n "$(which_wiki "$part")" ] && w="$(which_wiki "$part")"; done
+    for part in ${SPLIT[@]+"${SPLIT[@]}"}; do valid_name "$part" && [ -n "$(which_wiki "$part")" ] && w="$(which_wiki "$part")"; done
   fi
   printf '%s' "$w"
 }
 
-# memory_type <file>: user, feedback, project, reference, or nothing.
-memory_type() { sed -n '/^---$/,/^---$/s/^ *type: *\([a-z]*\).*/\1/p' "$1" | head -n 1; }
+# memory_type <file>: user, feedback, project, reference, or nothing when the type
+# can't be read. Only the frontmatter that opens the file counts, and the note is data:
+# nothing but one of the four words ever comes out. The type is a `type:` line at the
+# top level or directly under `metadata:`; its key and value may be quoted or
+# capitalised, and the line may end in spaces, a comment or a carriage return. Any other
+# line whose key is type, deeper, in a list or inside a block scalar, never gives the
+# type: it can only make the note unreadable. So do type lines that disagree, a value
+# that isn't one of the four, a NUL byte, and frontmatter that never closes. Read
+# bytewise, so a byte that isn't UTF-8 can't hide a line.
+memory_type() {
+  { LC_ALL=C tr '\000' '\001' < "$1"; } 2>/dev/null | LC_ALL=C awk -v q="'" '
+    function unq(s) {
+      if (length(s) >= 2 && (substr(s, 1, 1) == "\"" || substr(s, 1, 1) == q) && substr(s, length(s), 1) == substr(s, 1, 1)) s = substr(s, 2, length(s) - 2)
+      return s
+    }
+    function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+    BEGIN { soh = sprintf("%c", 1); blk = -1; mind = -1 }
+    { sub(/\r$/, "") }
+    NR == 1 { if ($0 !~ /^---[ \t]*$/) exit; next }
+    /^---[ \t]*$/ { closed = 1; exit }
+    index($0, soh) { bad = 1 }
+    {
+      match($0, /^[ \t]*/); ind = RLENGTH; s = substr($0, ind + 1)
+      if (s == "" || substr(s, 1, 1) == "#") next
+      inblock = (blk >= 0 && ind > blk)
+      if (!inblock) { blk = -1; if (ind == 0) { meta = 0; mind = -1 } else if (meta && mind < 0) mind = ind }
+      dash = 0
+      while (s ~ /^-([ \t]|$)/) { sub(/^-[ \t]*/, "", s); dash = 1 }
+      c = index(s, ":")
+      if (c == 0) next
+      k = tolower(unq(trim(substr(s, 1, c - 1))))
+      v = substr(s, c + 1); sub(/[ \t]+#.*$/, "", v)
+      v = trim(tolower(unq(trim(v))))
+      if (k == "type") {
+        if (seen && v != t) bad = 1
+        t = v; seen = 1
+        if (!inblock && !dash && (ind == 0 || (meta && ind == mind))) good = 1
+      }
+      if (inblock) next
+      if (ind == 0 && !dash && k == "metadata" && v == "") meta = 1
+      if (v ~ /^[|>][-+0-9]*$/) blk = ind
+    }
+    END { if (closed && good && !bad && (t == "user" || t == "feedback" || t == "project" || t == "reference")) print t }
+  ' 2>/dev/null || true
+}
 
-# harvest [--from DIR] [--dry-run]
+# remote_shown: the push address on standard input, as it may be shown. Anything up to
+# the last @ before the path, which can hold a name and a token, is dropped, and so are
+# a query and a fragment. When what is left isn't a plain address, only the host is
+# shown, in backticks, or "a remote" when even that can't be read. Bytewise.
+remote_shown() {
+  LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C awk 'NR == 1 {
+    u = $0; sep = ""; scheme = ""; host = ""; path = ""
+    if (match(u, /^[A-Za-z][A-Za-z0-9+.-]*:\/\//)) {
+      scheme = substr(u, 1, RLENGTH); rest = substr(u, RLENGTH + 1)
+      i = index(rest, "/"); if (i) { host = substr(rest, 1, i - 1); path = substr(rest, i) } else host = rest
+    } else if (u ~ /^[^\/]*:/ && u !~ /^\//) {
+      i = index(u, ":"); host = substr(u, 1, i - 1); path = substr(u, i + 1); sep = ":"
+      while ((j = index(host, "@")) > 0) host = substr(host, j + 1)
+    } else path = u
+    if (scheme != "") while ((j = index(host, "@")) > 0) host = substr(host, j + 1)
+    sub(/[?#].*$/, "", path)
+    hostok = host ~ /^[A-Za-z0-9.-]+(:[0-9]+)?$/
+    pathok = path ~ /^[A-Za-z0-9._~\/+:-]*$/
+    if (scheme == "" && sep == "") { if (path != "" && pathok) print "`" path "`"; else print "a remote" }
+    else if (scheme == "file://" && host == "" && path != "" && pathok) print "`" scheme path "`"
+    else if (!hostok) print "a remote"
+    else if (pathok) print "`" scheme host sep path "`"
+    else print "`" host "`"
+  }'
+}
+
+# harvest_remotes <file of wiki names>: a line for each remote the wikis named push to
+# at a sync, so the person knows where copied notes go before they are pushed.
+harvest_remotes() {
+  local g r url
+  for g in $(sort -u "$1"); do
+    r="$(wiki_repo "$WIKIS_DIR/$g")"
+    [ -n "$r" ] || continue
+    url="$(git -C "$r" remote get-url --push origin 2>/dev/null | head -n 1)" || true
+    [ -n "$url" ] || continue
+    printf '%s\t%s\n' "$(printf '%s\n' "$url" | remote_shown)" "$g"
+  done | awk -F '\t' '
+    { if (!($1 in w)) { order[++n] = $1; w[$1] = $2 } else w[$1] = w[$1] " and " $2 }
+    END { for (i = 1; i <= n; i++) printf "Notes copied into %s are pushed to %s at the next sync.\n", w[order[i]], order[i] }'
+}
+
+# harvest [--from DIR] [--dry-run] [--with-user]
 cmd_harvest() {
-  local from="$HOME/.claude/projects" dry=0 dir f type wiki slug stamp dest n=0 same=0 g d man
+  local from="$HOME/.claude/projects" dry=0 with_user=0 dir f type wiki slug stamp dest n=0 same=0 g d man dests shown mine=0 unread=0 odd=0 rel who were="were not"
   while [ $# -gt 0 ]; do
     case "$1" in
       --from) need_value "$@"; from="${2:-}"; shift 2 ;;
       --dry-run) dry=1; shift ;;
-      *) die_usage "harvest options: --from DIR, --dry-run" ;;
+      --with-user) with_user=1; shift ;;
+      *) die_usage "harvest options: --from DIR, --dry-run, --with-user" ;;
     esac
   done
   [ -d "$from" ] || die "no Claude Code projects at $(tilde "$from")"
   is_wiki "$WIKIS_DIR/$SHARED" || die "there's no shared wiki at $(tilde "$WIKIS_DIR/$SHARED"). Run: $WIKI_CMD setup"
   stamp="$(date -u +%Y-%m-%d-%H%M%S)"
-  man="$(mktemp)"
+  man="$(mktemp)"; dests="$(mktemp)"; shown="$(mktemp)"
   for dir in "$from"/*/; do
     dir="${dir%/}"
-    [ -d "$dir/memory" ] || continue
+    # A link is never followed, at any level: its target could be any file here.
+    [ ! -L "$dir" ] && [ ! -L "$dir/memory" ] && [ -d "$dir/memory" ] || continue
     wiki="$(memory_project "$dir")"
     for f in "$dir"/memory/*.md; do
-      [ -f "$f" ] || continue
-      [ "${f##*/}" = MEMORY.md ] && continue
+      [ ! -L "$f" ] && [ -f "$f" ] || continue
+      case "$(printf '%s' "${f##*/}" | LC_ALL=C tr '[:upper:]' '[:lower:]')" in memory.md) continue ;; esac
+      # A name with a control character or a line break would reach the output, the
+      # slug and the manifest as it is. Such a file is counted, never named.
+      rel="${f#"$from"/}"
+      if [ "$(printf '%s' "$rel" | LC_ALL=C tr -d '\001-\037\177')" != "$rel" ]; then odd=$((odd + 1)); continue; fi
       type="$(memory_type "$f")"
+      # A note about the person stays on this machine unless they ask: the shared wiki
+      # is pushed at the next sync (code review M8). So does one whose type can't be
+      # read, which could be one about them. This counts what is there, not what is new.
+      if [ "$with_user" = 0 ]; then
+        case "$type" in
+          user) mine=$((mine + 1)); continue ;;
+          "") mine=$((mine + 1)); unread=$((unread + 1)); continue ;;
+        esac
+      fi
       # Notes about the user, and corrections, are how agents should work everywhere.
       case "$type" in
         user | feedback) g="$SHARED" ;;
@@ -5139,14 +5243,18 @@ cmd_harvest() {
       done
       n=$((n + 1))
       dest="$stamp-harvest-$(printf '%02d' "$n")-$slug.md"
+      printf '%s\n' "$g" >> "$dests"
       if [ "$dry" = 1 ]; then
-        printf 'would copy: %s -> %s (%s, from %s)\n' "$(tilde "$f")" "$g" "${type:-untyped}" "${wiki:-an unknown project}"
+        printf 'would copy: %s -> %s (%s, from %s)\n' "$(tilde "$f")" "$g" "${type:-untyped}" "${wiki:-an unknown project}" >> "$shown"
       else
         cp "$f" "$WIKIS_DIR/$g/raw/$dest"
         printf '%s\t- raw/%s: %s note, saved while working in %s\n' "$g" "$dest" "${type:-untyped}" "${wiki:-an unknown project}" >> "$man"
       fi
     done
   done
+  # Where the copies go next comes first, before what is copied.
+  [ ! -s "$dests" ] || harvest_remotes "$dests"
+  cat "$shown"
   # One manifest per wiki, first in ingest order, saying where the copies came from.
   if [ "$dry" = 0 ] && [ -s "$man" ]; then
     for g in $(cut -f 1 "$man" | sort -u); do
@@ -5158,7 +5266,7 @@ cmd_harvest() {
       printf '%s: %s note(s)\n' "$g" "$(awk -F '\t' -v g="$g" '$1 == g' "$man" | wc -l | tr -d ' ')"
     done
   fi
-  rm -f "$man"
+  rm -f "$man" "$dests" "$shown"
   if [ "$dry" = 0 ]; then mkdir -p "${HARVEST_STAMP%/*}" && touch "$HARVEST_STAMP"; fi
   [ "$same" -eq 0 ] || echo "skipped $same already harvested"
   if [ "$n" -eq 0 ]; then
@@ -5168,6 +5276,14 @@ cmd_harvest() {
   else
     echo "$n note(s) copied into the wikis' raw/. The next sessions compile them; general ones end up in the shared wiki. Your Claude Code memory is unchanged."
   fi
+  [ "$dry" = 0 ] || were="would not be"
+  if [ "$mine" -gt 0 ]; then
+    if [ "$unread" -eq 0 ]; then who="$mine note(s) about you"
+    elif [ "$unread" -eq "$mine" ]; then who="$mine note(s) with no type harvest can read"
+    else who="$mine note(s) about you, $unread of them with no type harvest can read,"; fi
+    echo "$who are in Claude Code's memory and $were copied. To copy them too, run: $WIKI_CMD harvest --with-user"
+  fi
+  [ "$odd" -eq 0 ] || echo "$odd note(s) have a control character or a line break in their file name and $were copied. Do: rename them in $(tilde "$from")/<folder>/memory/"
 }
 
 # ---- seed -------------------------------------------------------------------
@@ -10515,15 +10631,29 @@ used() { [ -n "$(tip_get "used:$1")" ]; }
 # session hook runs them. $TIP_REPO is the repository the session works in.
 HARVEST_STAMP="${TIPS_STATE%/*}/harvested"
 
+# memory_shared: of the memory files named on standard input, the ones a harvest
+# without --with-user copies. A function, as bash 3.2 can't parse a case inside $( ).
+memory_shared() {
+  local f
+  while IFS= read -r f; do
+    case "$(memory_type "$f")" in feedback | project | reference) printf '%s\n' "$f" ;; esac
+  done
+}
+
 tip_harvest() {
-  local n folders newer=()
+  local n folders notes newer=()
   [ -d "$HOME/.claude/projects" ] || return 0
   # Memory notes never harvested, or changed since the last harvest, to the second.
   # The ${a[@]+...} form: bash 3.2 calls an empty array unbound under set -u.
   [ ! -f "$HARVEST_STAMP" ] || newer=(-newer "$HARVEST_STAMP")
-  n="$(find "$HOME/.claude/projects" -path '*/memory/*.md' ! -name MEMORY.md ${newer[@]+"${newer[@]}"} 2>/dev/null | wc -l | tr -d ' ')"
-  [ "$n" -gt 0 ] || return 0
-  folders="$(find "$HOME/.claude/projects" -path '*/memory/*.md' ! -name MEMORY.md ${newer[@]+"${newer[@]}"} 2>/dev/null | sed 's#/memory/[^/]*$##' | sort -u | wc -l | tr -d ' ')"
+  # Only the notes harvest copies: one about the user, or of no type it can read, stays
+  # behind unless they ask, so counting it would bring the tip back at every session.
+  # find doesn't follow links, -type f leaves out a linked note, as harvest does, and a
+  # folder find can't read doesn't end the tip.
+  notes="$({ find "$HOME/.claude/projects" -path '*/memory/*.md' -type f ! -iname memory.md ${newer[@]+"${newer[@]}"} 2>/dev/null || true; } | memory_shared)"
+  [ -n "$notes" ] || return 0
+  n="$(printf '%s\n' "$notes" | wc -l | tr -d ' ')"
+  folders="$(printf '%s\n' "$notes" | LC_ALL=C sed 's#/memory/[^/]*$##' | sort -u | wc -l | tr -d ' ')"
   echo "Claude Code holds $n note(s) of its own memory, across $folders project folder(s), that no other repository sees: working rules, corrections, project facts. \`wiki harvest\` copies them into the wikis, where every repository and teammate gets them. \`wiki harvest --dry-run\` shows where each would go first."
 }
 
@@ -12159,7 +12289,7 @@ cmd_complete() {
     seed) [ "$i" -eq 2 ] && echo __dirs__; printf -- '--wiki\n--max\n--dry-run\n' ;;
     stale) printf '30\n90\n180\n' ;;
     skills) echo link ;;
-    harvest) printf -- '--dry-run\n--from\n' ;;
+    harvest) printf -- '--dry-run\n--from\n--with-user\n' ;;
     tips) printf -- '--mute\n--unmute\n' ;;
     report) printf -- '--since\n' ;;
     news) printf -- '--all\n' ;;
