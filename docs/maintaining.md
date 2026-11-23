@@ -143,6 +143,8 @@ Merging to `main` is the release. The plugin has no version number, so every com
 
 Add a smoke test when you fix a bug or add a command. Each one is a line or two: see the helpers at the top of `tests/smoke.sh`.
 
+A test of something that needs a terminal runs the command at a real pseudo-terminal, through `tests/tty_run.py` (`tty_run` in the suite, `"$TTYRUN"` after `env` or in a `bash -c`). Its standard input is the answers, typed one line at a time as the command asks: give `</dev/null` for none. Nothing in the code stands in for a terminal, because anything that can set a variable, a session included, could set it too (code review M5). A smoke check fails if such a switch comes back.
+
 ### The smoke test's parts
 
 On macOS the whole suite took nine minutes in CI, so CI runs it in four parts, each its own job: `tests/smoke.sh --part <n>`. `tests/smoke.sh` with no option still runs everything, in order. `tests/smoke.sh --list` shows which part each section is in. `tests/smoke.sh --section "<name>"` runs one section and, without counting their checks, the earlier sections it uses.

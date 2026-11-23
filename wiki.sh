@@ -8126,7 +8126,9 @@ feedback_send() {
   local f draft title body repo url left
   f="$(feedback_find "${1:-}")"
   [ "$(feedback_mode)" = share ] || die "sharing is off, so nothing is sent from here. To turn it on, run: $WIKI_CMD setup feedback"
-  [ -t 0 ] || [ -n "${LLM_WIKI_TEST_TTY:-}" ] || die "feedback send asks before filing, so it needs a terminal. Agents: tell the user to run it."
+  # As uninstall and the GitHub extension's fix on: a person, at a terminal, in no agent's shell.
+  if un_agent_shell; then die "feedback send files an issue in the user's name, so it isn't taken from an agent's shell. Agents: tell the user to run it."; fi
+  [ -t 0 ] && [ -t 1 ] || die "feedback send asks before filing, so it needs a terminal. Agents: tell the user to run it."
   draft="$(feedback_draft "$f")"
   title="${draft%%$'\n'*}"; body="${draft#*$'\n'}"
   repo="$(feedback_repo)"
@@ -11410,6 +11412,12 @@ ext_setup() {
     ui_detail "$n has nothing to set up."
     return 0
   fi
+  # Its questions save the extension's settings, the sign-in among them, which a session never
+  # sets: so a person answers them, at a terminal, and not from an agent's shell. Checked before
+  # the extension is run.
+  if un_agent_shell || ! [ -t 0 ] || ! [ -t 1 ]; then
+    die "extensions setup asks questions and saves the sign-in, so a person answers them at a terminal, not from an agent's shell. Agents: run $WIKI_CMD setup --guide $n and follow it with the user in this session, or tell the user to run $WIKI_CMD extensions setup $n in a terminal."
+  fi
   ui_detail "These are questions for a terminal. Or ask your agent to walk you through it: it runs $(typed "$WIKI_CMD setup --guide $n")."
   ext_collections
   LLM_WIKI="$REPO/wiki.sh" LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" LLM_WIKI_EXTENSION="$EXT_API" \
@@ -13518,6 +13526,9 @@ setup_plugin() {
 # The record is per machine, outside the collection, so it never syncs.
 SETUP_STATE="${XDG_CONFIG_HOME:-$HOME/.config}/llm-wiki/setup"
 SETUP_MODE=all
+# Yes to every question. Only setup's --yes sets it: one from the environment would answer for
+# the person, feedback send's question included (code review M5).
+SETUP_YES=""
 
 setup_done() { [ -f "$SETUP_STATE" ] && grep -qxF -- "$1" "$SETUP_STATE"; }
 
@@ -14653,7 +14664,14 @@ setup_set_value() {
   case "$name:$val" in
     palette:default | palette:colorblind) palette_set "$val" || die "can't write $(tilde "$STYLE_PALETTE_FILE")" ;;
     theme:auto | theme:dark | theme:light) theme_set "$val" || die "can't write $(tilde "$STYLE_THEME_FILE")" ;;
-    feedback:off | feedback:notes | feedback:share) feedback_set "$val" || die "can't write $(tilde "$FEEDBACK_FILE")" ;;
+    feedback:share)
+      # A session can run this, and a note filed is public, so the person turns it on (code review M5).
+      # As feedback send: a person, at a terminal, in no agent's shell. A session that still has a
+      # terminal could hand this one on standard input, and it asks nothing.
+      { ! un_agent_shell && [ -t 0 ] && [ -t 1 ]; } || die "sharing files notes on a public tracker, so a person turns it on. Run: $WIKI_CMD setup feedback"
+      feedback_set "$val" || die "can't write $(tilde "$FEEDBACK_FILE")"
+      ;;
+    feedback:off | feedback:notes) feedback_set "$val" || die "can't write $(tilde "$FEEDBACK_FILE")" ;;
     palette:*) die_usage "palette takes default or colorblind" ;;
     theme:*) die_usage "theme takes auto, dark or light" ;;
     *) die_usage "feedback takes off, notes or share" ;;
@@ -14718,7 +14736,7 @@ guide_entry() {
     delegation.mode) echo "Whether sessions hand big work to cheaper sub-agents: off, ask or auto. Change: $c delegation <off|ask|auto>" ;;
     palette) echo "Terminal colours. Change: $c setup palette <default|colorblind>" ;;
     theme) echo "The terminal's background, for colours. Change: $c setup theme <auto|dark|light>" ;;
-    feedback) echo "Whether agents keep notes about llm-wiki itself: off, notes or share. Change: $c setup feedback <off|notes|share>" ;;
+    feedback) echo "Whether agents keep notes about llm-wiki itself: off, notes or share. Change: $c setup feedback <off|notes>. Share files notes on a public tracker, so only the user turns it on. Terminal only: $c setup feedback" ;;
     obsidian) echo "Starter settings so Obsidian can open the wikis as a vault. Change: $c obsidian --no-open" ;;
     extensions) echo "Optional commands, such as Jira and Confluence. Change: $c extensions add|remove <name>, $c extensions every <time>" ;;
     schedule) echo "Whether this machine checks on extensions by itself every few minutes, with no session open, so a failed CI run is noticed at once. It is off until the user turns it on. Change: $c extensions schedule on|off" ;;
@@ -15488,7 +15506,7 @@ cmd_uninstall() {
     if un_agent_shell; then
       die "uninstall is a person's decision, so it isn't taken from an agent's shell. Do: run it yourself in a terminal: $WIKI_CMD uninstall. To see what it would do: $WIKI_CMD uninstall --dry-run"
     fi
-    [ -t 0 ] || [ -n "${LLM_WIKI_TEST_TTY:-}" ] || die "uninstall asks before it changes anything, and there is no terminal to ask at. Do: run it in a terminal, or see what it would do: $WIKI_CMD uninstall --dry-run"
+    [ -t 0 ] && [ -t 1 ] || die "uninstall asks before it changes anything, and there is no terminal to ask at. Do: run it in a terminal, or see what it would do: $WIKI_CMD uninstall --dry-run"
   fi
   # Looking never stops it: what can't be read is taken as not there, and is left.
   sched="$( (sched_means 2>/dev/null || true) | tr '\n' ' ' | sed 's/ $//')"
@@ -15705,7 +15723,7 @@ Usage: $WIKI_CMD setup [--new | --fresh | --list | --pending | --guide [section]
   setup keep <topic>...
                    Leave a topic as it is and stop asking about it. Changes no setting.
   setup palette <default|colorblind>, setup theme <auto|dark|light>, setup feedback <off|notes|share>
-                   Set one without questions.
+                   Set one without questions. Feedback's share only at a terminal.
   setup <section>  Just one section: collection, collections, tools, git, workflows, claude, permissions, antigravity, codex, cursor, upgrade, delegation, feedback, palette, theme, chat, obsidian, extensions, journal.
   setup chat --yes Add the Chat tab's server without asking, for an agent the user told to. The app must be closed.
   setup microsoft-copilot --repo OWNER/REPO
@@ -15729,9 +15747,9 @@ EOF
     esac
   done
   [ -z "${SETUP_YES:-}" ] || [ "$what" = chat ] || die "--yes works only with: $WIKI_CMD setup chat"
-  # LLM_WIKI_TEST_TTY: the smoke tests answer setup's questions through a pipe.
   # setup tools asks nothing and writes nothing, so it needs no terminal: an agent may run it.
-  [ -n "${SETUP_YES:-}" ] || [ -t 0 ] || [ "$what" = tools ] || [ -n "${LLM_WIKI_TEST_TTY:-}" ] || die "setup asks questions, so it needs a terminal. $WIKI_CMD setup --list prints the current values. Run: $WIKI_CMD setup --guide, and follow it with the user in this session."
+  # Nothing stands in for a terminal: the smoke tests answer at a pseudo-terminal.
+  [ -n "${SETUP_YES:-}" ] || [ -t 0 ] || [ "$what" = tools ] || die "setup asks questions, so it needs a terminal. $WIKI_CMD setup --list prints the current values. Run: $WIKI_CMD setup --guide, and follow it with the user in this session."
   if [ -n "$fresh" ]; then
     [ -z "$what" ] && [ "$SETUP_MODE" != new ] || die_usage "--fresh goes through everything, so it takes no section and no --new"
     UN_FRESH=1 cmd_uninstall || die "the old set-up is only partly undone, so setup wasn't started. Do: see to the lines marked ! above, then run: $WIKI_CMD setup --fresh"

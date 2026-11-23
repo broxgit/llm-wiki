@@ -81,11 +81,15 @@ look() {
 INDEX="$T/index"
 : >"$INDEX"
 # render <name> <stdin> <args...>: run one command and keep what it printed, and its look.
-render() {
-  local name="$1" input="$2" tr="$T/trace" pieces
-  shift 2
+# render_tty: the same for a command that asks questions, so needs a terminal: it runs at a
+# pseudo-terminal of tests/tty_run.py's, 80 columns wide, with the stdin typed as its answers.
+render() { render_with "" "$@"; }
+render_tty() { render_with "$REPO/tests/tty_run.py" "$@"; }
+render_with() {
+  local run="$1" name="$2" input="$3" tr="$T/trace" pieces
+  shift 3
   : >"$tr"
-  printf '%b' "$input" | UI_TRACE="$tr" LLM_WIKI_STYLE=on LLM_WIKI_TEST_TTY=1 "$W" "$@" 2>&1 | normalize >"$DEST.new/wiki-$name.txt"
+  printf '%b' "$input" | UI_TRACE="$tr" LLM_WIKI_STYLE=on ${run:+"$run"} "$W" "$@" 2>&1 | normalize >"$DEST.new/wiki-$name.txt"
   pieces="$(grep '^ui_' "$tr" | sort -u | sed 's/^ui_//' | paste -sd ' ' -)"
   printf '%s\t%s\t%s\t%s\n' "wiki $*" "$(look "$tr" "$DEST.new/wiki-$name.txt")" "${pieces:--}" "wiki-$name.txt" >>"$INDEX"
 }
@@ -98,9 +102,9 @@ render open "" open
 render pages "" pages demo
 render news "" news --all
 render setup-list "" setup --list
-render setup-feedback 'notes\n' setup feedback
-render setup-delegation '\n\n' setup delegation
-render setup-workflows '4\n' setup workflows
+render_tty setup-feedback 'notes\n' setup feedback
+render_tty setup-delegation '\n\n' setup delegation
+render_tty setup-workflows '4\n' setup workflows
 render delegation "" delegation
 render feedback "" feedback
 render helper "" helper

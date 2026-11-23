@@ -343,7 +343,7 @@ def main():
     parser.add_argument("--update", action="store_true", help="update an existing agent on this machine: same agent, app and sign-in, with current instructions and wiki names")
     args = parser.parse_args()
 
-    if not (sys.stdin.isatty() or os.environ.get("LLM_WIKI_TEST_TTY")):
+    if not sys.stdin.isatty():
         die("This needs you at a terminal: you'll select Create and Install on GitHub and sign in to Microsoft 365. Agents: tell the user to run it.")
     if not re.fullmatch(r"[A-Za-z][A-Za-z0-9-]{0,24}", args.name):
         die("--name takes a letter, then up to 24 letters, digits or hyphens.")
