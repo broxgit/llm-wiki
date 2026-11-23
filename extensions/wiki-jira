@@ -14,14 +14,17 @@ for the changes that alter what someone should do, and for no others:
   closed without the work   the entry stays open, and a Waiting: asks the user to decide
   blocked or flagged        a Waiting: says so, once, and a Done: closes it when it clears
   reopened after closing    a Waiting: opens the entry again
+  one can't be read         the entry stays open; with no projects set, a Waiting: asks the user, once
 
-A ticket moving between in development, in testing and the like saves nothing.
+A ticket moving between in development, in testing and the like saves nothing, and so
+does one whose status wasn't read.
 
 With `auto_close = yes` in its settings it does that by itself on the tick event, once
 a day, with no session asking.
 """
 import base64
 import datetime
+import http.client
 import importlib.util
 import json
 import os
@@ -77,7 +80,8 @@ USAGE = f"""Usage: {CMD} jira [check] [--close] [<wiki>]
            the work, or blocked, opens an item saying so; a ticket reopened after its
            item closed opens the item again. An item tied to its tickets only by a
            Ticket: line isn't closed: an item asks you, once, whether it is finished
-           too. The next compile applies it.
+           too. Nor is one that names a ticket Jira won't show: with projects set
+           it stays open, and without, you are asked once. The next compile applies it.
   show     One line for each ticket: its status and summary.
   config   What is set, and whether Jira accepts the sign-in.
 
@@ -90,11 +94,16 @@ extension reads, one `name = value` a line:
 
 Jira's own settings go in {CONFIG}:
   url, email, token_cmd   only where Jira's differ from the shared ones. They win.
-  projects   optional: PROJ, OPS. Only keys in these projects count as tickets.
+  projects   optional: PROJ, OPS. Only keys in these projects count as tickets, and
+             then in any case: sec-9 is SEC-9. While auto_close is on, you change it
+             in a terminal.
   auto_close optional: yes. Then check --close runs by itself once a day, in the
              background, and a finished ticket closes its item with nobody asking.
+             You turn it on in a terminal; a session can only turn it off.
   done_statuses  optional: Released, Deployed. Then only a ticket in one of these
-             statuses counts as done, whatever Jira's own grouping says.
+             statuses counts as done, whatever Jira's own grouping says. While
+             auto_close is on, in this file or JIRA_AUTO_CLOSE, you change this and
+             projects in a terminal.
 The environment wins over the files: JIRA_URL, JIRA_EMAIL, JIRA_API_TOKEN, JIRA_PROJECTS,
 JIRA_AUTO_CLOSE, JIRA_DONE_STATUSES, and for every Atlassian extension ATLASSIAN_SITE,
 ATLASSIAN_EMAIL and ATLASSIAN_API_TOKEN, which Jira's own names win over.
@@ -300,6 +309,30 @@ def unfit(text):
     return ""
 
 
+def server_text(value):
+    """A string read from Jira, safe to print, compare and put in a note: every control character and line
+    separator, a line break or a carriage return among them, is a space, runs of space are one, and the
+    ends are stripped. Anyone who can edit a ticket writes its summary, and a line break in it would be a
+    line of its own in a note. "" for nothing, and None for a value that isn't a string."""
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        return None
+    return " ".join("".join(" " if c in SEPARATORS or unicodedata.category(c)[0] == "C"
+                            or unicodedata.category(c) in ("Zl", "Zp") else c for c in value).split())
+
+
+def who(me):
+    """The name /rest/api/2/myself gives, made safe, or ? for an answer of another shape."""
+    if not isinstance(me, dict):
+        return "?"
+    for k in ("displayName", "name", "emailAddress"):
+        name = server_text(me.get(k))
+        if name:
+            return name
+    return "?"
+
+
 def set_conf(path, key, value):
     """Set one `name = value` line in a settings file, or take it out when value is empty.
     Every other line stays as it is. The file is written beside itself and moved into place,
@@ -476,7 +509,7 @@ def setup():
             if me is None:
                 print("  " + warn(f"{conf['url']} has no Jira API at /rest/api/2. Is the site the address of Jira itself?"))
             else:
-                print("  " + done(f"Signed in to Jira as {me.get('displayName') or me.get('name') or me.get('emailAddress') or '?'}."))
+                print("  " + done(f"Signed in to Jira as {who(me)}."))
         except SystemExit:
             print("  " + warn("The sign-in didn't work. The line above says why."))
     print()
@@ -539,6 +572,8 @@ class Jira:
         self.headers = {"Authorization": auth, "Accept": "application/json"}
         self.done_names = conf["done_statuses"]
         self.flag_field = None
+        # True when the lookup of Jira's fields failed: then no ticket's flag was read in this run.
+        self.flags_unread = False
 
     def get(self, path, soft=False):
         """The JSON at path, or None where Jira says there is no such thing.
@@ -553,35 +588,58 @@ class Jira:
             if e.code in (401, 403):
                 die(f"Jira refused the sign-in ({e.code}) at {self.url}. Check the email and the token: {CMD} jira config shows what is set.")
             die(f"Jira answered {e.code} for {path}")
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
+        except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as e:
+            # A connection dropped in the middle of an answer is one that wasn't had: "later" during an event.
             no_answer(e, self.url)
-        except ValueError:
+        except (ValueError, RecursionError):
             die(f"{self.url} didn't answer with JSON. Is url the address of Jira itself?")
 
     def ticket(self, key):
-        """The ticket and what its state means here, or None for no such ticket.
-        state is done, abandoned (closed without the work), blocked or open."""
+        """The ticket and what its state means here, or None for no such ticket, or one this account
+        may not see: Jira answers 404 for both. state is done, abandoned (closed without the work),
+        blocked, open, or unknown when its status wasn't read. flagged is None when it wasn't read."""
         if self.flag_field is None:
             # "Flagged" is a custom field whose id differs from site to site.
             fields = self.get("/rest/api/2/field", soft=True)
-            found = [f.get("id") for f in fields if f.get("name") == "Flagged"] if isinstance(fields, list) else []
-            self.flag_field = found[0] if found else ""
+            found = [f.get("id") for f in fields if isinstance(f, dict) and f.get("name") == "Flagged"] \
+                if isinstance(fields, list) else None
+            if found is not None and (not found or (isinstance(found[0], str) and re.fullmatch(r"[A-Za-z0-9_]+", found[0]))):
+                self.flag_field = found[0] if found else ""
+            else:
+                # Not read, or an id that can't go in a request: not the same as a site with no such field.
+                self.flag_field = ""
+                self.flags_unread = True
         want = "summary,status,resolutiondate,resolution" + ("," + self.flag_field if self.flag_field else "")
         d = self.get(f"/rest/api/2/issue/{key}?fields={want}")
         if d is None:
             return None
-        f = d.get("fields") or {}
-        st = f.get("status") or {}
-        t = {
-            "key": key,
-            "status": st.get("name") or "?",
-            "category": (st.get("statusCategory") or {}).get("key") or "",
-            "resolution": (f.get("resolution") or {}).get("name") or "",
-            "resolved": (f.get("resolutiondate") or "")[:10],
-            "flagged": bool(f.get(self.flag_field)) if self.flag_field else False,
-            "summary": f.get("summary") or "",
-        }
-        t["state"] = state_of(t, self.done_names)
+        return self.read_ticket(key, d)
+
+    def read_ticket(self, key, d):
+        """A ticket from Jira's answer: the one place a ticket's text is read. Every string goes through
+        server_text. An answer of another shape than Jira's, a status or a name that isn't text among it,
+        reads as unknown, so nothing is decided on it."""
+        def part(obj, name):
+            """obj[name] when obj is a dict and that is a dict or missing ({}); None for any other shape."""
+            if not isinstance(obj, dict):
+                return None
+            v = obj.get(name)
+            return {} if v is None else (v if isinstance(v, dict) else None)
+        f = part(d, "fields")
+        st = part(f, "status")
+        cat = part(st, "statusCategory")
+        res = part(f, "resolution")
+        odd = any(x is None for x in (f, st, cat, res))
+        f, st, cat, res = f or {}, st or {}, cat or {}, res or {}
+        values = {"status": server_text(st.get("name")), "category": server_text(cat.get("key")),
+                  "resolution": server_text(res.get("name")), "resolved": server_text(f.get("resolutiondate")),
+                  "summary": server_text(f.get("summary"))}
+        odd = odd or any(v is None for v in values.values())
+        t = {k: v or "" for k, v in values.items()}
+        t["key"] = key
+        t["resolved"] = t["resolved"][:10]
+        t["flagged"] = None if self.flags_unread else (bool(f.get(self.flag_field)) if self.flag_field else False)
+        t["state"] = "unknown" if odd else state_of(t, self.done_names)
         return t
 
 
@@ -591,24 +649,51 @@ ABANDONED = re.compile(r"(?i)won.?t (do|fix)|duplicate|cancel|declined|rejected|
 OWN = "Jira: "
 # A note this extension saved. A second in the same second is named <stamp>-jira-done-2.md.
 OWN_NOTE = re.compile(r"-jira-done(-\d+)?\.md$")
+# The items this extension opens, each matched against the whole heading, in this order. A phrase found
+# anywhere would match inside the quoted heading of another item, or in a heading of the user's own.
+_K = r"[A-Z][A-Z0-9]{1,9}-[0-9]+"
+OWN_SHAPES = (
+    ("asked", re.compile(rf'Jira: ({_K}(?: and {_K})*) (?:is|are) done: is "(.*)" finished too\?')),
+    ("closed", re.compile(rf'Jira: ({_K}) was closed as .*, and "(.*)" still waits on it')),
+    ("blocked", re.compile(rf'Jira: ({_K}) is blocked, holding up "(.*)"')),
+)
+
+
+def own_shape(heading):
+    """(kind, keys, the heading it is about) for an item this extension opens, by its whole heading, or None."""
+    for kind, pattern in OWN_SHAPES:
+        m = pattern.fullmatch(heading)
+        if m:
+            return kind, m.group(1).split(" and "), m.group(2)
+    return None
 
 
 def state_of(t, done_names):
-    closed = t["category"] == "done"
-    if done_names and t["status"].lower() in done_names:
-        return "done"
-    if closed and (ABANDONED.search(t["resolution"]) or ABANDONED.search(t["status"])):
+    """What a ticket's state means here. A state that wasn't read is unknown, and nothing is closed,
+    cleared or opened again on it (code review L47)."""
+    named = bool(done_names) and t["status"].lower() in done_names
+    if not t["status"] or not (t["category"] or named):
+        return "unknown"
+    # Only a finished ticket is abandoned: a reopened one can keep the resolution it was first
+    # closed with. And a status in done_statuses is finished, so a resolution such as Won't Do
+    # still says the work didn't happen.
+    if (t["category"] == "done" or named) and (ABANDONED.search(t["resolution"]) or ABANDONED.search(t["status"])):
         return "abandoned"
-    if closed and not done_names:
+    if named or (t["category"] == "done" and not done_names):
         return "done"
     if t["flagged"] or re.search(r"(?i)\bblock", t["status"]):
         return "blocked"
     return "open"
 
 
+# With projects named, a key in any case and next to a hyphen counts, as in "sec-9" or "SEC-9-fix": a named
+# project is a real one. Without, only KEY's upper-case keys do, so utf-8 and sha-256 start no question.
+NAMED_KEY = re.compile(r"(?<![A-Za-z0-9])([A-Za-z][A-Za-z0-9]{1,9}-[0-9]+)(?![A-Za-z0-9])")
+
+
 def keys_in(text, projects):
     out = []
-    for k in KEY.findall(text):
+    for k in ([k.upper() for k in NAMED_KEY.findall(text)] if projects else KEY.findall(text)):
         if projects and k.split("-")[0] not in projects:
             continue
         if k not in out:
@@ -640,6 +725,8 @@ def ledger(wiki_cmd, only):
 def describe(t):
     if t is None:
         return "not found"
+    if t["state"] == "unknown":
+        return (t["status"] or "?") + ", its status not read in full, so nothing is decided on it"
     if t["state"] == "done":
         return t["status"] + (f", resolved {t['resolved']}" if t["resolved"] else "")
     if t["state"] == "abandoned":
@@ -704,7 +791,7 @@ def cmd_check(args):
 
     def via_notes(e):
         """The tickets an item has only through its notes, not in its heading."""
-        named = keys_in(e["heading"], [])
+        named = keys_in(e["heading"], conf["projects"])
         return [k for k in keys(e) if k not in named]
 
     # What to look at: open entries that name a ticket, and entries this extension
@@ -726,21 +813,27 @@ def cmd_check(args):
     seen = {}
 
     def tickets(e):
-        out = []
+        """The tickets that were read, and the keys that weren't: Jira answers 404 both for a key that
+        is no ticket and for a ticket this account may not see, so an unread key is never taken as done."""
+        out, unread = [], []
         for k in keys(e):
             if k not in seen:
                 seen[k] = jira.ticket(k)
-            if seen[k] is not None:
+            if seen[k] is None:
+                unread.append(k)
+            else:
                 out.append(seen[k])
-        return out
+        return out, unread
 
     notes = {}      # wiki -> [(kind, line, [tickets])]
     counts = {}
     tied = {}       # (wiki, heading) -> the tickets that item has only through its notes
+    unread_of = {}  # (wiki, heading) -> the keys Jira didn't show, for an item asked about for that
+    held = 0        # items left open because a key they name wasn't read
     last = None
     shown = False
     for wiki, e in watched:
-        found = tickets(e)
+        found, unread = tickets(e)
         if not found:
             continue
         h = e["heading"]
@@ -753,13 +846,24 @@ def cmd_check(args):
                 add(("reopened", f"Waiting: {e['who'] or 'user'} | {h}", found))
             continue
         if h.startswith(OWN):
-            # An item an earlier run opened: it closes when what it says stops being so.
-            t = found[0]
-            asked = re.search(r' done: is "(.*)" finished too\?$', h)
-            if (" is blocked, holding up " in h and t["state"] != "blocked") or \
-               (" was closed as " in h and t["state"] != "abandoned") or \
-               (asked and (asked.group(1) not in open_headings or any(x["state"] != "done" for x in found))):
-                add(("cleared", f"Done: {h}", [t]))
+            # An item an earlier run opened, known by its whole heading and by the note it came from: it
+            # closes when what it says stops being so, and only when that was read. Any other item that
+            # starts with "Jira: " is the user's, and is left alone.
+            shape = own_shape(h)
+            if not shape or not ours(e):
+                continue
+            kind, named, about = shape
+            # The ticket it is about is the first key of its heading. When that one wasn't read,
+            # another key in the heading doesn't stand in for it.
+            t = seen.get(named[0])
+            # With Jira's fields not read, a ticket that reads as open may still be flagged: the flag
+            # would decide, so an item saying it is blocked is left as it is.
+            unsure = t is None or t["state"] == "unknown" or (t["state"] == "open" and t["flagged"] is None)
+            if (kind == "blocked" and not unsure and t["state"] != "blocked") or \
+               (kind == "closed" and t is not None and t["state"] not in ("abandoned", "unknown")) or \
+               (kind == "asked" and (about not in open_headings
+                                     or any(x["state"] not in ("done", "unknown") for x in (seen.get(k) for k in named) if x))):
+                add(("cleared", f"Done: {h}", [t or found[0]]))
             continue
         if wiki != last:
             print(f"== {wiki}")
@@ -768,12 +872,27 @@ def cmd_check(args):
         print(f"  {h}")
         for t in found:
             print(f"      {t['key']:<12} {describe(t)}" + ("  (from a Ticket: line in its notes)" if t["key"] in tied[(wiki, h)] else ""))
-        if all(t["state"] == "done" for t in found):
-            if len(tied[(wiki, h)]) == len(found):
+        finished = all(t["state"] == "done" for t in found)
+        for k in unread:
+            # A key Jira won't show may be a ticket this account can't see, so it is never taken as done.
+            if finished and conf["projects"]:
+                why = " The item stays open."
+            elif finished:
+                why = f" The item stays open, and you are asked once whether it is finished. Naming your projects in {CONFIG} stops the question."
+            else:
+                why = ""
+            print(f"      {k:<12} not found, or not yours to see.{why}")
+        if finished:
+            if unread and conf["projects"]:
+                # The key is in a project the user named: a ticket this account can't see, or a typo.
+                held += 1
+            elif unread or len(tied[(wiki, h)]) == len(found):
                 # Tied to its tickets only by where its notes were taken, so it may be about
-                # something else: the person is asked, and the item stays open until they say.
+                # something else, or naming a key Jira won't show, which may be a ticket this account
+                # can't see: the person is asked, and the item stays open until they say.
                 names = " and ".join(t["key"] for t in found)
                 item = f"{OWN}{names} {'is' if len(found) == 1 else 'are'} done: is \"{h}\" finished too?"
+                unread_of[(wiki, h)] = unread
                 # Asked once: an answer of no closes the question and leaves the item open.
                 if item not in {x["heading"] for w_, es in books if w_ == wiki for x in es}:
                     add(("ask", f"Waiting: user | {item}", found))
@@ -812,6 +931,8 @@ def cmd_check(args):
     others = [f"{counts[k]} {words[k]}" for k in ("ask", "abandoned", "blocked", "cleared", "reopened") if counts.get(k)]
     if shown:
         print()
+    if jira.flags_unread:
+        print(warn("Couldn't read Jira's fields, so a flagged ticket reads as open in this run."))
     if not close:
         if counts.get("done"):
             print(f"{counts['done']} open item(s) have every ticket done.")
@@ -821,6 +942,8 @@ def cmd_check(args):
             print(f"To note them: {CMD} jira check --close")
         elif stale:
             print("Everything that changed is already noted, waiting for a compile.")
+        elif held:
+            print(f"{held} item(s) stay open: every ticket read is done, but a key they name can't be read.")
         else:
             print("None of them is done yet.")
         return 0
@@ -844,13 +967,19 @@ def cmd_check(args):
                     note.append(f"- {t['key']} \"{t['summary']}\": {describe(t)}. {jira.url}/browse/{t['key']}")
         # An item tied to a ticket only through its notes says why, as the heading doesn't.
         # The Done: and Waiting: lines below still go by the heading.
-        for kind, line, _ in fresh:
+        for kind, line, ts in fresh:
             h = line.split(" | ", 1)[1] if line.startswith("Waiting: ") else line.split(": ", 1)[-1]
             if kind in ("done", "reopened") and tied.get((wiki, h)):
                 note.append(f"- \"{h}\" carries {', '.join(tied[(wiki, h)])} in a Ticket: line of its notes.")
-            m = re.search(r' done: is "(.*)" finished too\?$', h) if kind == "ask" else None
-            if m:
-                note.append(f"- \"{m.group(1)}\" is tied to {', '.join(tied[(wiki, m.group(1))])} only by a Ticket: line of its notes, so it stays open until you say.")
+            shape = own_shape(h) if kind == "ask" else None
+            if not shape or shape[0] != "asked":
+                continue
+            asked = shape[2]
+            if unread_of.get((wiki, asked)):
+                note.append(f"- \"{asked}\" names {' and '.join(unread_of[(wiki, asked)])}, which Jira won't show to this account, so it stays open until you say.")
+            read_tied = [k for k in tied.get((wiki, asked), []) if k in {t["key"] for t in ts}]
+            if read_tied and len(read_tied) == len(ts):
+                note.append(f"- \"{asked}\" is tied to {', '.join(read_tied)} only by a Ticket: line of its notes, so it stays open until you say.")
         note.append("")
         note += [line for _, line, _ in fresh]
         # From the wikis' folder: a note taken in a folder named for a ticket gets a Ticket: line,
@@ -877,15 +1006,25 @@ def cmd_show(args):
         die_usage(f"show needs a ticket key, such as PROJ-123")
     conf = settings()
     need_sign_in(conf)
-    jira = Jira(conf)
+    jira = None
     missing = 0
     for k in args:
-        t = jira.ticket(k.upper())
+        key = k.strip().upper()
+        # The key goes in the request's path, so only a key is taken (code review L36).
+        if not KEY.fullmatch(key):
+            missing = 1
+            shown = "".join(c if c.isprintable() else "?" for c in k)
+            print(f"{shown}  isn't a ticket key, such as PROJ-123")
+            continue
+        jira = jira or Jira(conf)
+        t = jira.ticket(key)
         if t is None:
             missing = 1
-            print(f"{k.upper():<12} not found, or not yours to see")
+            print(f"{key:<12} not found, or not yours to see")
         else:
             print(f"{t['key']:<12} {describe(t)}  {t['summary']}")
+    if jira and jira.flags_unread:
+        print(warn("Couldn't read Jira's fields, so a flagged ticket reads as open here."))
     return missing
 
 
@@ -915,12 +1054,19 @@ def cmd_config(args):
     me = Jira(conf).get("/rest/api/2/myself")
     if me is None:
         die(f"{conf['url']} has no Jira API at /rest/api/2. Is url the address of Jira itself?")
-    print(f"\nSigned in as {me.get('displayName') or me.get('name') or me.get('emailAddress') or '?'}.")
+    print(f"\nSigned in as {who(me)}.")
     return 0
 
 
 def auto_on(conf):
     return conf.get("auto_close", "").lower() in ("yes", "true", "on", "1")
+
+
+def auto_guarded():
+    """Whether auto_close is on for the guard on what a session may change: when the file says so, or the
+    environment does. Either one counts, since the environment wins only for the run it is set in, and a
+    scheduled tick runs without a session's JIRA_AUTO_CLOSE=no."""
+    return auto_on(read_conf(CONFIG)) or auto_on({"auto_close": os.environ.get("JIRA_AUTO_CLOSE", "")})
 
 
 def on_event(args):
@@ -988,12 +1134,21 @@ def setting_rows():
     shown = "keychain" if cmd == KEYCHAIN_CMD else ("custom command" if cmd else "")
     what = "Where the token comes from: the keychain command the setup offers, or a command of your own. Part of that setup"
     rows.append(("token_cmd", shown, source_name(src["token_cmd"]) if cmd else "default", what, "terminal"))
-    for key, env_name, what in (
-            ("projects", "JIRA_PROJECTS", "Ticket project keys, such as PROJ, OPS; empty: any"),
-            ("auto_close", "JIRA_AUTO_CLOSE", "yes: finished tickets close their open items, checked in the background"),
-            ("done_statuses", "JIRA_DONE_STATUSES", "Statuses that mean finished, such as Released; empty: what Jira counts as done")):
+    # Closing items with nobody watching is turned on by the user, at a terminal, and so is a change to what
+    # counts as a ticket or as done while it is on. A session may turn off what the file turned on.
+    guarded = auto_guarded()
+    in_file = auto_on(own)
+    term_setup = f"{CMD} extensions setup jira"
+    while_on = f". With auto_close on, the user changes it, in a terminal: {term_setup}" if guarded else ""
+    for key, env_name, what, change in (
+            ("projects", "JIRA_PROJECTS", "Ticket project keys, such as PROJ, OPS; empty: any" + while_on, "terminal" if guarded else "set"),
+            ("auto_close", "JIRA_AUTO_CLOSE", "yes: finished tickets close their open items in the background, with nobody watching. "
+             + (f"A session may turn it off (no); the user turns it on, in a terminal: {term_setup}" if in_file
+                else f"The user turns it on, in a terminal: {term_setup}"), "set" if in_file else "terminal"),
+            ("done_statuses", "JIRA_DONE_STATUSES", "Statuses that mean finished, such as Released; empty: what Jira counts as done"
+             + while_on, "terminal" if guarded else "set")):
         value, where = own_value(own, env_name, key)
-        rows.append((key, value, where, what, "set"))
+        rows.append((key, value, where, what, change))
     return rows
 
 
@@ -1077,6 +1232,13 @@ def wiki_set(args):
         die_usage(f"{key} can't hold a #, which starts a comment in the settings file")
     clear = value == "-"
     path = CONFIG
+    # What counts as a ticket, and as done, decides what closes. While auto_close is on, in the file or in the
+    # environment, a change to either closes items with nobody watching: narrowing projects drops a ticket,
+    # widening or clearing it changes which keys are asked about.
+    if key in ("projects", "done_statuses") and auto_guarded():
+        what = "which keys count as tickets" if key == "projects" else "what counts as done"
+        die_usage(f"{key} decides {what}, and auto_close is on, so a change could close open items "
+                  f"with nobody watching. The user changes it in a terminal: {CMD} extensions setup jira")
     if key == "projects":
         parts = [x.strip() for x in value.split(",") if x.strip()]
         if not clear and (not parts or not all(re.fullmatch(r"[A-Za-z][A-Za-z0-9]{1,9}", x) for x in parts)):
@@ -1085,7 +1247,12 @@ def wiki_set(args):
     elif key == "auto_close":
         if not clear and value.lower() not in ("yes", "no"):
             die_usage("auto_close takes yes or no")
-        out = "yes" if value.lower() == "yes" else ""
+        # Turning it off is always safe. Turning it on closes items with nobody watching: the
+        # setter is run with no terminal, so the user does it in the terminal setup.
+        if value.lower() == "yes":
+            die_usage(f"auto_close closes open items with nobody watching, so a session never turns it on. "
+                      f"The user turns it on in a terminal: {CMD} extensions setup jira. A session may turn it off: no")
+        out = ""
     else:
         out = "" if clear else value
     file_key = key

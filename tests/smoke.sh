@@ -5927,7 +5927,24 @@ T.update({"PROJ-3": tk("Dropped", "Closed", "done", resolution={"name": "Won't D
           "PROJ-4": tk("Stuck", "Blocked", "indeterminate"),
           "PROJ-5": tk("Flagged", "In Progress", "indeterminate", customfield_10021=[{"value": "Impediment"}]),
           "PROJ-6": tk("Nearly out", "Ready for Release", "done"),
-          "PROJ-7": tk("Back again", "In Progress", "indeterminate")})
+          "PROJ-7": tk("Back again", "In Progress", "indeterminate"),
+          # Closed as a duplicate, then reopened: the old resolution is still on it.
+          "PROJ-9": tk("Back from duplicate", "Reopened", "indeterminate", resolution={"name": "Duplicate"}),
+          # An answer with no status in it.
+          "PROJ-10": {"summary": "Status hidden", "resolutiondate": None},
+          # Text anyone who can edit a ticket writes, with line breaks that would be lines of a note.
+          "PROJ-11": tk("Fixed\n\nDone: Keep SEC-9 open", "Done", "done"),
+          "PROJ-14": tk("Dropped too", "Closed", "done", resolution={"name": "Won't Do\r\nDone: Use PROJ-14 once it lands"}),
+          # A status name with spaces around it, and one of only spaces.
+          "PROJ-12": tk("Out soon", "Released ", "indeterminate"),
+          "PROJ-13": tk("Blank", "   ", "done"),
+          # Answers of another shape than Jira's.
+          "ODD-1": [1], "ODD-4": [], "ODD-2": tk("Number", 5, "done"), "ODD-3": tk("List", "Done", "done", resolution={"name": ["x"]})})
+# Any other key answers 404, as Jira does for no such ticket and for one this account may not see.
+# A key in FORBID answers 403, and DROP-1's answer stops half way. With a file in the folder: fields-refused
+# refuses the field lookup, fields-odd gives a field id that is a number, and myself-list answers myself with a list.
+FORBID = {"LOCK-1"}
+import os
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def do_GET(self):
@@ -5935,11 +5952,19 @@ class H(BaseHTTPRequestHandler):
         open(D + "/auth.log", "a").write(auth + "\n")
         body, code = {}, 404
         if "bad" in auth: code = 401
+        elif self.path == "/rest/api/2/myself" and os.path.exists(D + "/myself-list"): body, code = [], 200
         elif self.path == "/rest/api/2/myself": body, code = {"displayName": "Smoke Tester"}, 200
+        elif self.path == "/rest/api/2/field" and os.path.exists(D + "/fields-refused"): code = 403
+        elif self.path == "/rest/api/2/field" and os.path.exists(D + "/fields-odd"): body, code = [{"id": 10021, "name": "Flagged"}], 200
         elif self.path == "/rest/api/2/field": body, code = [{"id": "customfield_10000", "name": "Sprint"}, {"id": "customfield_10021", "name": "Flagged"}], 200
         elif self.path.startswith("/rest/api/2/issue/"):
             k = self.path.split("/")[-1].split("?")[0]
-            if k in T: body, code = {"key": k, "fields": T[k]}, 200
+            if k == "DROP-1":
+                self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", "500"); self.end_headers()
+                self.wfile.write(b'{"key": "DROP-1", "fie')
+                return
+            if k in FORBID: code = 403
+            elif k in T: body, code = {"key": k, "fields": T[k]}, 200
         self.send_response(code); self.send_header("Content-Type", "application/json"); self.end_headers()
         self.wfile.write(json.dumps(body).encode())
 import socketserver
@@ -6122,6 +6147,150 @@ lacks "and an item about a block isn't itself reported as blocked" "holding up \
 check "an item whose tickets are done still closes" grep -qxF "Done: Cut over at PROJ-6" "$note"
 check "the note says where each ticket stood" grep -q "PROJ-3 \"Dropped\": Closed as Won't Do, without the work done." "$note"
 expect "a second --close notes nothing again" "already noted, waiting for a compile" jst check --close
+# A ticket that can't be read keeps its item open (code review M15). Jira answers 404 for a key that is no
+# ticket and for a ticket this account may not see, and SEC-9 gets that answer from the stand-in.
+JU="$T/junread"
+WIKIS_DIR="$JU" "$W" new udemo >/dev/null 2>&1
+JM='Ship the audit fix once PROJ-1 and SEC-9 are both done'
+# junread <heading|status|from>...: open.md with those items, and no note of this extension's yet.
+junread() {
+  local x h r s f
+  rm -f "$JU/udemo/raw"/*-jira-done*.md
+  { printf '# Open\n'
+    for x in "$@"; do
+      h="${x%%|*}"; s=""; f=""
+      case "$x" in *"|"*) r="${x#*|}"; s="${r%%|*}"; case "$r" in *"|"*) f="${r#*|}" ;; esac ;; esac
+      printf '\n## %s\n- kind: waiting\n- who: user\n- status: %s\n- from: %s\n' "$h" "${s:-open}" "${f:-2026-11-10 raw/a.md}"
+    done; } > "$JU/udemo/open.md"
+}
+# A script, not a function, so that env can give one call a setting.
+JUN="$T/jun.sh"
+printf '#!/bin/sh\nexec env WIKIS_DIR="%s" JIRA_URL="http://127.0.0.1:%s" JIRA_EMAIL=me@example.com JIRA_API_TOKEN=smoke-token "%s" jira "$@"\n' "$JU" "$(cat "$J/port")" "$W" > "$JUN"
+chmod +x "$JUN"
+jun() { "$JUN" "$@"; }
+jnotes() { find "$JU/udemo/raw" -name '*-jira-done*.md' 2>/dev/null | wc -l | tr -d ' '; }
+jnote() { cat "$JU/udemo/raw"/*-jira-done*.md 2>/dev/null; }
+junread "$JM"
+out="$(env JIRA_PROJECTS="PROJ, SEC" "$JUN" check --close 2>&1)"
+case "$out" in *"PROJ-1       Done, resolved 2026-11-08"*"SEC-9        not found, or not yours to see. The item stays open."*) ok "with projects set, a key Jira won't show is said to keep its item open" ;; *) bad "with projects set, a key Jira won't show is said to keep its item open" "$out" ;; esac
+check "and the item isn't noted as done, though its other ticket is" test "$(jnotes)" = 0
+expect "check says why nothing is done" "1 item(s) stay open: every ticket read is done, but a key they name can't be read." env JIRA_PROJECTS="PROJ, SEC" "$JUN" check
+junread "$JM"
+out="$(jun check --close 2>&1)"
+case "$out" in *"SEC-9        not found, or not yours to see. The item stays open, and you are asked once whether it is finished. Naming your projects in "*"stops the question."*) ok "with no projects, the line says the user is asked, and how to stop the question" ;; *) bad "with no projects, the line says the user is asked, and how to stop the question" "$out" ;; esac
+check "with no projects, one item asks the user" grep -qxF "Waiting: user | Jira: PROJ-1 is done: is \"$JM\" finished too?" "$(ls "$JU/udemo/raw"/*-jira-done*.md 2>/dev/null | head -n 1)"
+lacks "and the item isn't closed" "Done:" jnote
+check "the note names the key, with no gap in its sentence" bash -c "cat '$JU/udemo/raw'/*-jira-done*.md | grep -qxF -- '- \"$JM\" names SEC-9, which Jira won'\''t show to this account, so it stays open until you say.'"
+lacks "and isn't worded for a Ticket: line" "only by a Ticket: line" jnote
+expect "a second run asks nothing more" "already noted, waiting for a compile" jun check --close
+check "so there is one note" test "$(jnotes)" = 1
+junread "$JM" "Jira: PROJ-1 is done: is \"$JM\" finished too?|open|2026-11-11 raw/2026-11-11-000000-jira-done.md"
+jun check --close >/dev/null 2>&1
+check "once the question is an open item, it isn't asked again, nor closed while the item is open" test "$(jnotes)" = 0
+junread "Ship PROJ-1 with the UTF-8 fix"
+expect "with projects set, a word that only looks like a key doesn't hold an item open" "udemo: noted 1 item(s) as done" env JIRA_PROJECTS=PROJ "$JUN" check --close
+check "its Done line is written, as before" grep -qxF "Done: Ship PROJ-1 with the UTF-8 fix" "$(ls "$JU/udemo/raw"/*-jira-done*.md 2>/dev/null | head -n 1)"
+junread "$JM"
+expect "and a key outside the projects named isn't a ticket, so it doesn't either" "udemo: noted 1 item(s) as done" env JIRA_PROJECTS=PROJ "$JUN" check --close
+junread "Ship PROJ-1 after LOCK-1"
+refuse "a ticket Jira refuses outright (403) stops the run" jun check --close
+check "with nothing noted" test "$(jnotes)" = 0
+# What wasn't read isn't acted on (code review L47). With the field lookup refused, a flag can't be read.
+junread "Jira: PROJ-2 is blocked, holding up \"Old thing\"||2026-11-10 raw/2026-11-10-000000-jira-done.md" \
+  "Jira: PROJ-4 is blocked, holding up \"Wait for PROJ-4\"||2026-11-10 raw/2026-11-10-000000-jira-done.md" \
+  "Jira: PROJ-1 is blocked, holding up \"Release it\"||2026-11-10 raw/2026-11-10-000000-jira-done.md" "Wait for PROJ-4"
+touch "$J/fields-refused"
+out="$(jun check --close 2>&1)"
+rm -f "$J/fields-refused"
+[ "$(printf '%s\n' "$out" | grep -c "Couldn't read Jira's fields, so a flagged ticket reads as open in this run.")" = 1 ] && ok "with Jira's fields not read, check says so, once" || bad "with Jira's fields not read, check says so, once" "$out"
+lacks "and an item saying a ticket is blocked stays open while only the flag could tell" "Done: Jira: PROJ-2" jnote
+lacks "a ticket whose status says blocked is judged as usual: still blocked" "Done: Jira: PROJ-4" jnote
+check "and so is one that is done: its item closes" bash -c "cat '$JU/udemo/raw'/*-jira-done*.md | grep -qxF 'Done: Jira: PROJ-1 is blocked, holding up \"Release it\"'"
+expect "a status in done_statuses with a resolution of Won't Do is closed without the work, in show" "PROJ-3       Closed as Won't Do, without the work done" env JIRA_DONE_STATUSES=Closed "$JUN" show PROJ-3
+junread "Use PROJ-3 once it lands"
+env JIRA_DONE_STATUSES=Closed "$JUN" check --close >/dev/null 2>&1
+check "and in check, which asks the user and doesn't close the item" bash -c "cat '$JU/udemo/raw'/*-jira-done*.md | grep -qxF 'Waiting: user | Jira: PROJ-3 was closed as Won'\''t Do, and \"Use PROJ-3 once it lands\" still waits on it'"
+lacks "no Done line for it" "Done: Use PROJ-3" jnote
+expect "a reopened ticket that kept its old resolution reads as open" "PROJ-9       Reopened  Back from duplicate" jun show PROJ-9
+expect "with done_statuses set too" "PROJ-9       Reopened  Back from duplicate" env JIRA_DONE_STATUSES=Released "$JUN" show PROJ-9
+expect "a ticket whose status wasn't read says so" "PROJ-10      ?, its status not read in full, so nothing is decided on it  Status hidden" jun show PROJ-10
+junread "Wait for PROJ-1 and PROJ-10" "Jira: PROJ-10 is blocked, holding up \"Old thing\"||2026-11-10 raw/2026-11-10-000000-jira-done.md" \
+  "Shipped PROJ-10|done $TODAY|2026-11-10 raw/2026-11-10-000000-jira-done.md" "Wait for PROJ-9"
+expect "and nothing is decided on it: not done, not cleared, not reopened, and a reopened ticket isn't closed as a duplicate" "Nothing to note." jun check --close
+check "so no note is saved" test "$(jnotes)" = 0
+# show takes a ticket key and nothing else, since the key goes in the request's path (code review L36).
+: > "$J/auth.log"
+out="$(jun show 'X/../Y' 2>&1)"
+code=$?
+case "$out" in *"X/../Y  isn't a ticket key, such as PROJ-123"*) ok "show says an argument that isn't a key isn't one" ;; *) bad "show says an argument that isn't a key isn't one" "$out" ;; esac
+[ "$code" = 1 ] && ok "and fails, as for a ticket that wasn't found" || bad "and fails, as for a ticket that wasn't found" "exit $code"
+check "and asks Jira nothing" test ! -s "$J/auth.log"
+expect "a key among others is still looked up" "PROJ-2       In Progress  Second step" jun show 'PROJ-1/../../myself' proj-2
+# With projects named, a key in any case or next to a hyphen is a ticket: a named project is a real one.
+for h in "Ship the fix once PROJ-1 and sec-9 are both done" "Ship PROJ-1--SEC-9" 'Ship PROJ-1 with `SEC-9-fix`'; do
+  junread "$h"
+  out="$(env JIRA_PROJECTS="PROJ, SEC" "$JUN" check --close 2>&1)"
+  case "$out" in *"SEC-9        not found, or not yours to see. The item stays open."*) ok "with projects, SEC-9 is found in: $h" ;; *) bad "with projects, SEC-9 is found in: $h" "$out" ;; esac
+  [ "$(jnotes)" = 0 ] && ok "and the item stays open" || bad "and the item stays open" "$(jnote)"
+done
+junread 'Ship PROJ-1 with `SEC-9-fix`'
+expect "without projects, only an upper-case key standing alone is one, as before: SEC-9-fix isn't" "udemo: noted 1 item(s) as done" jun check --close
+junread "Ship PROJ-1 with the utf-8 fix"
+expect "and with projects, a word in another project isn't one, whatever its case" "udemo: noted 1 item(s) as done" env JIRA_PROJECTS=PROJ "$JUN" check --close
+# The extension's own items are known by their whole heading and by the note they came from (code review M15 review).
+JQO='Find out why OLD-1 was closed as obsolete before shipping PROJ-1 and SEC-9'
+junread "$JQO" "Jira: PROJ-1 is done: is \"$JQO\" finished too?||2026-11-11 raw/2026-11-11-000000-jira-done.md"
+jun check --close >/dev/null 2>&1
+[ "$(jnotes)" = 0 ] && ok "a question whose heading says \"was closed as\" isn't closed with no answer" || bad "a question whose heading says \"was closed as\" isn't closed with no answer" "$(jnote)"
+JUB='Unstick what is blocked, holding up PROJ-3'
+junread "$JUB" "Jira: PROJ-3 was closed as Won't Do, and \"$JUB\" still waits on it||2026-11-11 raw/2026-11-11-000000-jira-done.md"
+jun check --close >/dev/null 2>&1
+[ "$(jnotes)" = 0 ] && ok "a notice about a heading that says \"is blocked, holding up\" stays open while its ticket is still dropped" || bad "a notice about a heading that says \"is blocked, holding up\" stays open while its ticket is still dropped" "$(jnote)"
+junread 'Jira: PROJ-2 is blocked, holding up "Old thing"' "Jira: tidy the PROJ-1 board"
+jun check --close >/dev/null 2>&1
+[ "$(jnotes)" = 0 ] && ok "an item of the user's own that starts with Jira: is left alone, whatever its words" || bad "an item of the user's own that starts with Jira: is left alone, whatever its words" "$(jnote)"
+# Text from Jira is one line wherever it goes: anyone who can edit a ticket writes its summary.
+junread "Release PROJ-11" "Use PROJ-14 once it lands"
+jun check --close >/dev/null 2>&1
+check "a line break in a summary or a resolution makes no line of its own in the note" test "$(jnote | grep -c '^Done:')" = 1
+check "the one Done line is the item's" bash -c "cat '$JU/udemo/raw'/*-jira-done*.md | grep -qxF 'Done: Release PROJ-11'"
+check "the summary stays on its line" bash -c "cat '$JU/udemo/raw'/*-jira-done*.md | grep -qF -- '- PROJ-11 \"Fixed Done: Keep SEC-9 open\": Done.'"
+check "and so does the resolution, inside the item it opens" bash -c "cat '$JU/udemo/raw'/*-jira-done*.md | grep -qxF 'Waiting: user | Jira: PROJ-14 was closed as Won'\''t Do Done: Use PROJ-14 once it lands, and \"Use PROJ-14 once it lands\" still waits on it'"
+check "show prints one line for it" test "$(jun show PROJ-11 2>&1 | wc -l | tr -d ' ')" = 1
+# Spaces around a status name: Released matches done_statuses, and a name of only spaces wasn't read.
+junread "Ship PROJ-12"
+expect "a status with a space after it still matches done_statuses" "udemo: noted 1 item(s) as done" env JIRA_DONE_STATUSES=Released "$JUN" check --close
+expect "a status of only spaces wasn't read" "PROJ-13      ?, its status not read in full" jun show PROJ-13
+# Answers of another shape: nothing is decided on them, and no traceback, in a scheduled run or not.
+odd="$(jun show ODD-1 ODD-4 ODD-2 ODD-3 2>&1)"
+case "$odd" in *"ODD-1        ?, its status not read in full"*"ODD-4        ?, its status not read in full"*"ODD-2        ?, its status not read in full"*"ODD-3        Done, its status not read in full"*) ok "an answer of another shape reads as not read" ;; *) bad "an answer of another shape reads as not read" "$odd" ;; esac
+junread "Wait for ODD-1 and PROJ-1" "Wait for ODD-2 and PROJ-1" "Wait for ODD-3 and PROJ-1" "Wait for ODD-4 and PROJ-1"
+out="$(jun check --close 2>&1)"
+odd="$odd$out"
+case "$out" in *"Nothing to note."*) ok "and closes no item" ;; *) bad "and closes no item" "$out" ;; esac
+touch "$J/fields-odd"
+out="$(jun show PROJ-5 2>&1)"
+rm -f "$J/fields-odd"
+odd="$odd$out"
+case "$out" in *"PROJ-5       In Progress  Flagged"*"Couldn't read Jira's fields"*) ok "a field id that isn't text counts as fields not read" ;; *) bad "a field id that isn't text counts as fields not read" "$out" ;; esac
+touch "$J/myself-list"
+out="$(jun config 2>&1)"
+rm -f "$J/myself-list"
+odd="$odd$out"
+case "$out" in *"Signed in as ?."*) ok "a myself answer of another shape gives no name" ;; *) bad "a myself answer of another shape gives no name" "$out" ;; esac
+out="$(jun show DROP-1 2>&1)"
+code=$?
+odd="$odd$out"
+case "$out" in *"can't reach http://127.0.0.1:"*) ok "a connection dropped in the middle of an answer is one that wasn't had" ;; *) bad "a connection dropped in the middle of an answer is one that wasn't had" "$out" ;; esac
+[ "$code" = 1 ] && ok "and fails" || bad "and fails" "exit $code"
+junread "Wait for DROP-1 and PROJ-1"
+out="$(env JIRA_AUTO_CLOSE=yes LLM_WIKI="$W" LLM_WIKI_CMD=wiki WIKIS_DIR="$JU" JIRA_URL="http://127.0.0.1:$(cat "$J/port")" JIRA_EMAIL=me@example.com JIRA_API_TOKEN=smoke-token "$REPO/extensions/wiki-jira" --wiki-event tick 2>&1)"
+code=$?
+odd="$odd$out"
+[ "$code" = 75 ] && ok "during a scheduled run it is for later (exit 75), as a network error is" || bad "during a scheduled run it is for later (exit 75), as a network error is" "exit $code: $out"
+case "$odd" in *Traceback*) bad "none of these ends in a traceback" "$odd" ;; *) ok "none of these ends in a traceback" ;; esac
+case "$odd" in *smoke-token*|*"$(printf 'me@example.com:smoke-token' | base64)"*) bad "and no message holds the token or the sign-in header" "$odd" ;; *) ok "and no message holds the token or the sign-in header" ;; esac
+rm -rf "$JU"
 # A ticket an item has only through its notes: a capture taken in a folder named for a ticket
 # ends with a Ticket: line, and the item that cites the note is tied to that ticket.
 JN="$T/jnotes"
@@ -14534,8 +14703,31 @@ printf 'site = https://acme.atlassian.net\n' > "$GCFG/atlassian"
 expect "settings shows the value and its source" "https://acme.atlassian.net  shared file" gw extensions settings jira
 gw extensions set jira projects "pay, ops" >/dev/null 2>&1
 check "projects go in jira's own file, as keys" grep -qx 'projects = PAY, OPS' "$GCFG/jira"
-gw extensions set jira auto_close yes >/dev/null 2>&1
-check "auto_close yes is written as the interactive setup writes it" grep -qx 'auto_close = yes' "$GCFG/jira"
+# Closing items with nobody watching is turned on at a terminal: the setter runs with none.
+check "a session can't turn auto_close on: exit 2" test "$(code_of gw extensions set jira auto_close yes)" = 2
+expect "and is told the user turns it on in a terminal" "The user turns it on in a terminal: wiki extensions setup jira" gw extensions set jira auto_close Yes
+lacks "so nothing is written" "auto_close" cat "$GCFG/jira"
+out="$(gw extensions settings jira 2>&1)"
+case "$out" in *"auto_close "*"terminal  "*"The user turns it on, in a terminal"*) ok "the settings list doesn't offer auto_close to a session while it is off" ;; *) bad "the settings list doesn't offer auto_close to a session while it is off" "$out" ;; esac
+case "$(gw setup --guide jira)" in *"auto_close = (not set): "*"Terminal only."*) ok "nor does the guide" ;; *) bad "nor does the guide" "$(gw setup --guide jira)" ;; esac
+# A user who turned it on keeps it: a session may turn it off, and can't change what counts as done meanwhile.
+printf 'auto_close = yes\n' >> "$GCFG/jira"
+raw_on="$(env HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_CMD=wiki "$JX" --wiki-settings 2>&1)"
+case "$raw_on" in *"auto_close${TB}yes${TB}file${TB}"*"A session may turn it off (no)"*"${TB}set"*"done_statuses${TB}"*"With auto_close on, the user changes it, in a terminal"*"${TB}terminal"*) ok "with auto_close on, the list says a session may turn it off, and done_statuses is for a terminal" ;; *) bad "with auto_close on, the list says a session may turn it off, and done_statuses is for a terminal" "$raw_on" ;; esac
+check "with auto_close on, done_statuses is refused from a session: exit 2" test "$(code_of gw extensions set jira done_statuses Closed)" = 2
+expect "saying the user changes it in a terminal" "The user changes it in a terminal: wiki extensions setup jira" gw extensions set jira done_statuses -
+check "and the file keeps auto_close, with no done_statuses" bash -c "grep -qx 'auto_close = yes' '$GCFG/jira' && ! grep -q done_statuses '$GCFG/jira'"
+check "JIRA_AUTO_CLOSE=no in a session's environment doesn't lift that: the next tick runs without it" test "$(code_of env JIRA_AUTO_CLOSE=no HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_CMD=wiki "$W" extensions set jira done_statuses "In Progress")" = 2
+# projects decides which keys are tickets, so it is the same lever: narrowing it drops a ticket.
+check "with auto_close on, projects is refused from a session: exit 2" test "$(code_of gw extensions set jira projects PROJ)" = 2
+expect "saying the user changes it in a terminal" "projects decides which keys count as tickets, and auto_close is on" gw extensions set jira projects -
+check "and the file keeps the projects it had" grep -qx 'projects = PAY, OPS' "$GCFG/jira"
+case "$raw_on" in *"projects${TB}PAY, OPS${TB}file${TB}"*"With auto_close on, the user changes it, in a terminal"*"${TB}terminal"*"auto_close${TB}"*) ok "and the list shows projects as for a terminal while auto_close is on" ;; *) bad "and the list shows projects as for a terminal while auto_close is on" "$raw_on" ;; esac
+check "auto_close no is taken" test "$(code_of gw extensions set jira auto_close no)" = 0
+check "on in the environment alone, projects is refused too" test "$(code_of env JIRA_AUTO_CLOSE=yes HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_CMD=wiki "$W" extensions set jira projects PROJ)" = 2
+check "and with it off everywhere, a session sets projects as before" test "$(code_of gw extensions set jira projects "pay, ops")" = 0
+lacks "and turns it off" "auto_close" cat "$GCFG/jira"
+printf 'auto_close = yes\n' >> "$GCFG/jira"
 gw extensions set jira auto_close - >/dev/null 2>&1
 lacks "and - clears it" "auto_close" cat "$GCFG/jira"
 gw extensions set jira done_statuses "Released, Deployed" >/dev/null 2>&1
