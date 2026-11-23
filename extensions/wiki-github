@@ -2285,18 +2285,11 @@ AGENT_SHELLS = ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CODEX_SANDBOX", "CODEX_
 
 
 def at_a_terminal():
-    """Whether a person is typing here. LLM_WIKI_TEST_TTY stands in for a terminal in the smoke tests only."""
+    """Whether a person is typing here. Nothing stands in for a terminal: the smoke tests run this at a
+    pseudo-terminal, so no variable can answer the question for the person (code review M5)."""
     if any(os.environ.get(v) for v in AGENT_SHELLS):
         return False
-    return test_terminal() or (sys.stdin.isatty() and sys.stdout.isatty())
-
-
-def test_terminal():
-    """LLM_WIKI_TEST_TTY counts only where the settings are not the person's own: with the settings file's folder
-    somewhere else than ~/.config/llm-wiki, as the smoke tests have it. (Its real path is compared, not
-    XDG_CONFIG_HOME, which a link or a trailing slash can dress up.) Set in a real setup it does nothing, so it
-    is no way for an agent to answer the question for the person."""
-    return bool(os.environ.get("LLM_WIKI_TEST_TTY")) and settings_not_real()
+    return sys.stdin.isatty() and sys.stdout.isatty()
 
 
 def fix_write(paths):
@@ -2430,6 +2423,14 @@ def cmd_fix(args):
 
 # ---- setup, and what a session can change ----------------------------------------------------------
 
+def input_ended():
+    """The input ended before an answer. A question is never answered with its default for that,
+    since a default can be yes: this stops here, and saves nothing more."""
+    print()
+    die("the input ended before an answer, so this stopped here and saved nothing more. "
+        "Run it again in a terminal, and answer each question.")
+
+
 def read_line():
     """One line from standard input, a byte at a time, so nothing meant for whoever
     reads next is taken. None when the input has ended."""
@@ -2448,8 +2449,7 @@ def ask_yn(prompt, default=False):
     sys.stdout.flush()
     line = read_line()
     if line is None:
-        print()
-        return default
+        input_ended()
     line = line.strip().lower()
     return default if line == "" else line.startswith("y")
 
@@ -2476,8 +2476,7 @@ def ask_text(prompt, default):
     sys.stdout.flush()
     line = read_line()
     if line is None:
-        print()
-        return default
+        input_ended()
     return line.strip() or default
 
 
@@ -2729,6 +2728,11 @@ def main(argv):
             print(msg)
         return 1 if msg else 0
     if argv and argv[0] == "--wiki-setup":
+        # Its answers are saved as settings, a sign-in among them, which a session never sets.
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            die(f"setup asks questions and saves what you answer, so a person answers them at a terminal. "
+                f"Agents: run {CMD} setup --guide github and follow it with the user in this session, "
+                f"or tell the user to run {CMD} extensions setup github in a terminal.")
         return setup()
     if argv and argv[0] == "--fix-run":
         return fix_run(argv[1] if len(argv) == 2 else "")

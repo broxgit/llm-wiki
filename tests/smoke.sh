@@ -153,6 +153,9 @@ export WIKIS_DIR="$T/wikis"
 export LLM_WIKI_STYLE=off
 # The colours come from the terminal and two settings: none of the runner's own may leak in.
 unset COLORTERM COLORFGBG LLM_PALETTE LLM_THEME
+# The suite is no agent's shell, even when an agent runs it: some steps refuse one. A test that is
+# about an agent's shell sets its variable itself.
+unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CODEX_SANDBOX CODEX_CI GEMINI_CLI CURSOR_AGENT
 # The fixtures are dated with `date -u`, and the report's range ends on the journal's
 # day, which is the local date, or the day before until day_starts. One clock for both:
 # UTC here, and day_starts 00:00 once the collection exists. Without it the report
@@ -304,8 +307,17 @@ assert d["hookEventName"] == "SessionStart"
 print(d["additionalContext"])'
 }
 mkskill() { mkdir -p "$1" && printf -- '---\nname: %s\ndescription: %s\n---\n\nSteps.\n' "${1##*/}" "$2" > "$1/SKILL.md"; }
-# setup wants a terminal for its questions. The tests answer through a pipe.
-in_tty() { LLM_WIKI_TEST_TTY=1 "$@"; }
+# tty_run <command...>: run it at a pseudo-terminal, as a person at a terminal would: standard
+# input, output and error, and /dev/tty, are a terminal 80 columns wide, with echo off. This
+# function's standard input is the answers, each line typed once the command asks: give </dev/null
+# for none, and a prompt past the last answer gets the end of input. What the command printed
+# comes back with plain line ends, and its exit code; after 20 seconds it is stopped, with exit 124.
+# Inside a bash -c, or after env, it is "$TTYRUN".
+TTYRUN="$REPO/tests/tty_run.py"
+tty_run() { python3 -I "$TTYRUN" "$@"; }
+# The name of the switch that once stood in for a terminal (code review M5), for the tests that
+# show it does nothing now. It is built here, so that a search for it finds no use in this file.
+OLD_TTY_SWITCH="LLM_WIKI_TEST""_TTY"
 # build_helper: the compiled helper, in $T/bin/llm-wiki, two stand-ins for a helper
 # gone wrong, one built for another protocol and one that fails, and a spy on a good one.
 build_helper() {
@@ -1555,24 +1567,9 @@ ofcap "$OF/VID-74010" of-tk-mine --file mine.md >/dev/null 2>&1
 check "in a folder named for a ticket, a file of its repository is taken, with the Ticket: line" grep -qxF "Ticket: VID-74010" "$(ls "$WIKIS_DIR"/demo/raw/*-of-tk-mine.md | tail -n 1)"
 out="$(cd "$OF/repo" && "$W" capture demo of-stdin < "$OF/outside/o.txt" 2>&1)"
 case "$out" in "captured: raw/"*) ok "the same file on stdin is taken, which is why the words say it guards nothing" ;; *) bad "the same file on stdin is taken, which is why the words say it guards nothing" "$out" ;; esac
-# At a terminal, any file is taken: run on a pseudo-terminal of Python's.
-on_pty() { python3 -I -c 'import os, pty, subprocess, sys
-m, s = pty.openpty()
-p = subprocess.Popen(sys.argv[1:], stdin=s, stdout=s, stderr=s, close_fds=True)
-os.close(s)
-out = b""
-while True:
-    try:
-        d = os.read(m, 4096)
-    except OSError:
-        break
-    if not d:
-        break
-    out += d
-sys.stdout.write(out.decode("utf-8", "replace").replace("\r\n", "\n"))
-sys.exit(p.wait())' "$@"; }
-expect "at a terminal, a file from anywhere is taken" "captured: raw/" on_pty bash -c "cd '$OF/repo' && '$W' capture demo --copy '$OF/outside/o.txt'"
-expect "with --file too" "captured: raw/" on_pty bash -c "cd '$HOME' && '$W' capture demo of-tty --file '$OF/outside/o.txt'"
+# At a terminal, any file is taken.
+expect "at a terminal, a file from anywhere is taken" "captured: raw/" tty_run bash -c "cd '$OF/repo' && '$W' capture demo --copy '$OF/outside/o.txt'" </dev/null
+expect "with --file too" "captured: raw/" tty_run bash -c "cd '$HOME' && '$W' capture demo of-tty --file '$OF/outside/o.txt'" </dev/null
 # From a review of the check (2026-11-21). A path is judged as the kernel opens it: a link
 # followed by .. goes where the link points. Here sub/out/../o.txt opens the o.txt beside the
 # outside folder, and sub/o.txt, which the shell would make of it, is a link to that file.
@@ -1597,7 +1594,7 @@ out="$(cd "$OF/repo" && printf 'a note\n' | "$W" capture demo of-nl --file "$(pr
 mkdir -p "$OF/tmp"; git -C "$OF/VID-74010" init -q
 out="$(cd "$OF/VID-74010" && TMPDIR="$OF/tmp" "$W" capture demo of-twice --file --file "$OF/outside/o.txt" </dev/null 2>&1)" && rc=0 || rc=$?
 [ "$rc:$out" = "1:error: capture takes --file NOTE once" ] && ok "--file given twice is refused, in a folder named for a ticket too" || bad "--file given twice is refused, in a folder named for a ticket too" "exit $rc: $out"
-out="$(on_pty bash -c "cd '$OF/VID-74010' && TMPDIR='$OF/tmp' '$W' capture demo of-twice --file --file '$OF/outside/o.txt'")" && rc=0 || rc=$?
+out="$(tty_run bash -c "cd '$OF/VID-74010' && TMPDIR='$OF/tmp' '$W' capture demo of-twice --file --file '$OF/outside/o.txt'" </dev/null)" && rc=0 || rc=$?
 case "$rc:$out" in "1:error: capture takes --file NOTE once"*) ok "and at a terminal" ;; *) bad "and at a terminal" "exit $rc: $out" ;; esac
 check "and the ticket step left no copy of the file behind" test -z "$(ls -A "$OF/tmp")"
 expect "--copy given twice is refused" "capture takes --copy FILE once" ofcap "$OF/repo" --copy sub/in.txt --copy sub/in.txt
@@ -2266,7 +2263,7 @@ lacks "with no Obsidian on the machine, setup has nothing to ask" "obsidian" ob 
 mkdir -p "$HOME/Library/Application Support/obsidian" "${XDG_CONFIG_HOME:-$HOME/.config}/obsidian"
 expect "where Obsidian has run, setup --new would ask" "theirs  <- new" bash -c "WIKIS_DIR='$OB' '$W' setup --list | grep '^obsidian'"
 rm "$OB/.obsidian/app.json"
-expect "setup obsidian writes the settings on a yes" "wrote: " bash -c "printf 'y\n' | WIKIS_DIR='$OB' LLM_WIKI_TEST_TTY=1 '$W' setup obsidian"
+expect "setup obsidian writes the settings on a yes" "wrote: " bash -c "printf 'y\n' | WIKIS_DIR='$OB' '$TTYRUN' '$W' setup obsidian"
 out="$(ob setup --list | grep '^obsidian')"
 case "$out" in *"ours"*) case "$out" in *"<- new"*) bad "and it isn't asked again" "$out" ;; *) ok "and it isn't asked again" ;; esac ;; *) bad "and it isn't asked again" "$out" ;; esac
 rm -rf "$HOME/Library/Application Support/obsidian" "${XDG_CONFIG_HOME:-$HOME/.config}/obsidian"
@@ -2882,7 +2879,7 @@ expect "once installed, the hook keeps the plugin current" "plugin current" fres
 if [ "$(id -u)" != 0 ]; then
   chmod 000 "$HOME/.gemini/config/plugins/llm-wiki/hooks.json"
   expect "a plugin file it can't read is unknown, not old" "antigravity         unknown, can't read ~/.gemini/config/plugins/llm-wiki/hooks.json" "$W" setup --list
-  expect "and setup antigravity changes nothing" "Nothing was changed" in_tty "$W" setup antigravity
+  expect "and setup antigravity changes nothing" "Nothing was changed" tty_run "$W" setup antigravity </dev/null
   chmod 644 "$HOME/.gemini/config/plugins/llm-wiki/hooks.json"
 else
   skipped "an Antigravity plugin file that can't be read (root can read anything)"
@@ -2918,7 +2915,7 @@ out="$("$W" permissions 2>&1)"
 case "$out" in *"Antigravity grants"*"\"read_file($WIKIS_DIR)\","*"\"write_file($WIKIS_DIR)\","*"command("*"wiki"*) ok "permissions lists Antigravity's grants for the wikis and wiki.sh" ;; *) bad "permissions lists Antigravity's grants for the wikis and wiki.sh" "$out" ;; esac
 # The grant of the wiki command covers capture and sync, so its offer says what they allow (code review M6).
 cp "$HOME/.gemini/config/config.json" "$T/agy-config.before"
-out="$(printf 'n\nn\nn\nn\n' | in_tty "$W" setup antigravity 2>&1)"
+out="$(printf 'n\nn\nn\nn\n' | tty_run "$W" setup antigravity 2>&1)"
 case "$out" in *"command("*"With these, a session can save any file it can read into a wiki and push it."*"Add them to Antigravity's grants?"*) ok "setup antigravity says what the grant of the wiki command allows, before it asks" ;; *) bad "setup antigravity says what the grant of the wiki command allows, before it asks" "$out" ;; esac
 check "and a no leaves the grants as they were" cmp -s "$T/agy-config.before" "$HOME/.gemini/config/config.json"
 rm -f "$T/agy-config.before"
@@ -3081,7 +3078,7 @@ esac
 EOF
 chmod +x "$T/bin/codex"
 printf '# Mine\n\nKeep this.\n\nMy knowledge wikis live in ~/old. Run the old line.\n\nAnd this.\n' > "$HOME/.codex/AGENTS.md"
-out="$(printf 'y\n' | PATH="$T/bin:$PATH" in_tty "$W" setup codex 2>&1)"
+out="$(printf 'y\n' | PATH="$T/bin:$PATH" tty_run "$W" setup codex 2>&1)"
 case "$out" in *"replaces the wiki line"*"/hooks and trust them all"*) ok "setup codex installs it and says to trust its hooks" ;; *) bad "setup codex installs it and says to trust its hooks" "$out" ;; esac
 check "it adds the marketplace and the plugin with the codex command" grep -qx "plugin add llm-wiki@llm-wiki" "$T/codex.log"
 check "its marketplace lists the plugin" python3 -c "import json,sys; p=json.load(open(sys.argv[1]))['plugins'][0]; assert p['name']=='llm-wiki' and p['source']=={'source':'local','path':'./plugins/llm-wiki'}" "$HOME/.codex/llm-wiki/.agents/plugins/marketplace.json"
@@ -3101,14 +3098,14 @@ if [ "$(id -u)" != 0 ]; then
   now="$(PATH="$T/bin:$PATH" "$W" status 2>&1 | grep 'new setting' || true)"
   [ "$now" = "$todo_was" ] && ok "and status doesn't count it as a new setting" || bad "and status doesn't count it as a new setting" "was: $todo_was now: $now"
   : > "$T/codex.log"
-  expect "and setup codex changes nothing" "Nothing was changed" env PATH="$T/bin:$PATH" LLM_WIKI_TEST_TTY=1 "$W" setup codex
+  expect "and setup codex changes nothing" "Nothing was changed" env PATH="$T/bin:$PATH" "$TTYRUN" "$W" setup codex </dev/null
   check "nor runs codex" test ! -s "$T/codex.log"
   chmod 644 "$HOME/.codex/config.toml"
 else
   skipped "a Codex file that can't be read (root can read anything)"
 fi
 : > "$T/codex.log"
-PATH="$T/bin:$PATH" in_tty "$W" setup codex </dev/null >/dev/null 2>&1
+PATH="$T/bin:$PATH" tty_run "$W" setup codex </dev/null >/dev/null 2>&1
 check "running setup again doesn't reinstall an unchanged plugin" test ! -s "$T/codex.log"
 mkskill "$WIKIS_DIR/global/skills/tidy-logs" "Tidy logs."
 expect "skills link links new team skills for Codex too" "tidy-logs (from global), for Codex" "$W" skills link
@@ -3130,19 +3127,19 @@ case "$msg" in *"Do not run start again"*"wiki: "*"/demo, for the repository web
 expect "bad input still gets a reply" "additional_context" bash -c "cd '$HOME' && printf 'not json' | '$W' __cursor-start"
 check "the hook doesn't install itself" test ! -e "$HOME/.cursor/hooks.json"
 printf '{"version":1,"hooks":{"afterFileEdit":[{"command":"./format.sh"}],"sessionStart":[{"command":"./mine.sh"}]}}\n' > "$HOME/.cursor/hooks.json"
-out="$(printf 'y\n' | in_tty "$W" setup cursor 2>&1)"
+out="$(printf 'y\n' | tty_run "$W" setup cursor 2>&1)"
 case "$out" in *"added."*"User Rules"*"llm-wiki hook in ~/.cursor/hooks.json runs"*) ok "setup cursor adds the hook and gives the user-rules line" ;; *) bad "setup cursor adds the hook and gives the user-rules line" "$out" ;; esac
 check "its hooks.json keeps the other hooks and adds ours" python3 -c "import json,sys; h=json.load(open(sys.argv[1])); s=h['hooks']['sessionStart']; assert h['version']==1 and h['hooks']['afterFileEdit'][0]['command']=='./format.sh' and s[0]['command']=='./mine.sh' and s[1]['command'].endswith(' __cursor-start') and len(s)==2" "$HOME/.cursor/hooks.json"
 expect "setup --list shows it current" "cursor              hook current" "$W" setup --list
 if [ "$(id -u)" != 0 ]; then
   chmod 000 "$HOME/.cursor/hooks.json"
   expect "a Cursor hooks file it can't read is unknown, not missing" "cursor              unknown, can't read ~/.cursor/hooks.json" "$W" setup --list
-  expect "and setup cursor changes nothing" "Nothing was changed" in_tty "$W" setup cursor
+  expect "and setup cursor changes nothing" "Nothing was changed" tty_run "$W" setup cursor </dev/null
   chmod 644 "$HOME/.cursor/hooks.json"
 else
   skipped "a Cursor hooks file that can't be read (root can read anything)"
 fi
-in_tty "$W" setup cursor </dev/null >/dev/null 2>&1
+tty_run "$W" setup cursor </dev/null >/dev/null 2>&1
 check "running setup again doesn't add it twice" python3 -c "import json,sys; assert len(json.load(open(sys.argv[1]))['hooks']['sessionStart'])==2" "$HOME/.cursor/hooks.json"
 check "it links the llm-wiki skill for Cursor" test -f "$HOME/.cursor/skills/llm-wiki/SKILL.md"
 check "and the slash commands as skills" test -f "$HOME/.cursor/skills/wiki-status/SKILL.md"
@@ -3170,7 +3167,23 @@ printf 'details\n' > "$T/fb.md"
 expect "while off, add saves nothing and says not to retry" "nothing was saved. Don't try again" "$W" feedback add bug "something" --file "$T/fb.md"
 check "and wrote no note" test ! -d "$FB"
 lacks "start has no Feedback section while it's off" "Feedback on llm-wiki" "$W" start web
-expect "setup feedback takes the answer" "feedback: share" bash -c "printf 'share\n' | LLM_WIKI_TEST_TTY=1 '$W' setup feedback"
+expect "setup feedback takes the answer" "feedback: share" bash -c "printf 'share\n' | '$TTYRUN' '$W' setup feedback"
+# Sharing files notes on a public tracker, so a person turns it on, at a terminal (code review M5).
+"$W" setup feedback off >/dev/null 2>&1
+out="$("$W" setup feedback share </dev/null 2>&1)" && rc=0 || rc=$?
+[ "$rc:$out" = "1:error: sharing files notes on a public tracker, so a person turns it on. Run: $W setup feedback" ] && ok "setup feedback share with no terminal is refused, with what to run" || bad "setup feedback share with no terminal is refused, with what to run" "exit $rc: $out"
+check "and sharing stays off" grep -qx 'mode=off' "$HOME/.config/llm-wiki/feedback"
+expect "notes is still taken with no terminal" "feedback: notes" "$W" setup feedback notes </dev/null
+expect "and so is off" "feedback: off" "$W" setup feedback off </dev/null
+# A session that still has a terminal could hand it on standard input, and share asks nothing: so
+# it takes what uninstall and fix on take, no agent's shell and output to a terminal too.
+"$W" setup feedback off >/dev/null 2>&1
+expect "from an agent's shell, even at a terminal, share is refused" "so a person turns it on" env CLAUDECODE=1 "$TTYRUN" "$W" setup feedback share </dev/null
+expect "and with only standard input a terminal, so is it" "so a person turns it on" tty_run bash -c "'$W' setup feedback share | cat" </dev/null
+check "and sharing is still off" grep -qx 'mode=off' "$HOME/.config/llm-wiki/feedback"
+expect "at a terminal, share is taken from the argument" "feedback: share" tty_run "$W" setup feedback share </dev/null
+out="$("$W" setup --guide feedback 2>&1)"
+case "$out" in *"setup feedback <off|notes|share>"*) bad "the guide no longer tells a session it can turn sharing on" "$out" ;; *"setup feedback <off|notes>. Share files notes on a public tracker, so only the user turns it on. Terminal only: $W setup feedback"*) ok "the guide no longer tells a session it can turn sharing on" ;; *) bad "the guide no longer tells a session it can turn sharing on" "$out" ;; esac
 expect "a bad kind is refused" "the kind is one of" "$W" feedback add oops "something" --file "$T/fb.md"
 expect "a note without details is refused" "the details go in --file" bash -c "'$W' feedback add bug 'something' </dev/null"
 cat > "$T/fb.md" <<EOF
@@ -3209,6 +3222,11 @@ case "$rc:$out" in 1:"error: name a note: "*) case "$out" in *sed:*|*"**Agent:**
 out="$("$W" feedback show no-such-note 2>&1)"
 case "$out" in *"**Agent:**"*|*sed:*) bad "and so does show with a name no note has" "$out" ;; *"no feedback note"*) ok "and so does show with a name no note has" ;; *) bad "and so does show with a name no note has" "$out" ;; esac
 expect "send needs a terminal, so an agent can't file one" "needs a terminal" bash -c "'$W' feedback send '$n' </dev/null"
+# The switch that once stood in for a terminal is none now (code review M5, T14).
+expect "and the old test switch is no terminal for send" "feedback send asks before filing, so it needs a terminal" env "$OLD_TTY_SWITCH=1" "$W" feedback send "$n" </dev/null
+expect "nor for setup" "setup asks questions, so it needs a terminal" env "$OLD_TTY_SWITCH=1" "$W" setup palette </dev/null
+expect "send from an agent's shell, even at a terminal, is refused" "isn't taken from an agent's shell" env CLAUDECODE=1 "$TTYRUN" "$W" feedback send "$n" </dev/null
+expect "and so is send with only standard input a terminal" "feedback send asks before filing, so it needs a terminal" tty_run bash -c "'$W' feedback send '$n' | cat" </dev/null
 cat > "$T/bin/gh" <<EOF
 #!/bin/sh
 case "\$1 \$2" in
@@ -3217,10 +3235,14 @@ case "\$1 \$2" in
 esac
 EOF
 chmod +x "$T/bin/gh"
-out="$(printf 'n\n' | PATH="$T/bin:$PATH" LLM_WIKI_TEST_TTY=1 "$W" feedback send "$n" 2>&1)"
+out="$(printf 'n\n' | PATH="$T/bin:$PATH" tty_run "$W" feedback send "$n" 2>&1)"
 case "$out" in *"This would be filed on broxgit/llm-wiki"*"Not filed"*) ok "send shows the draft and files nothing on a no" ;; *) bad "send shows the draft and files nothing on a no" "$out" ;; esac
 check "gh wasn't asked to file" test ! -e "$T/gh.log"
-expect "on a yes, it files it with gh" "filed: https://github.com/broxgit/llm-wiki/issues/999" bash -c "printf 'y\n' | PATH='$T/bin:$PATH' LLM_WIKI_TEST_TTY=1 '$W' feedback send '$n'"
+# SETUP_YES from the environment is no yes: only setup's --yes sets it (code review M5).
+out="$(printf '\n' | SETUP_YES=1 PATH="$T/bin:$PATH" tty_run "$W" feedback send "$n" 2>&1)"
+case "$out" in *"File it?"*"Not filed"*) ok "SETUP_YES in the environment answers nothing: Enter at send's question files nothing" ;; *) bad "SETUP_YES in the environment answers nothing: Enter at send's question files nothing" "$out" ;; esac
+check "and gh still wasn't asked to file" test ! -e "$T/gh.log"
+expect "on a yes, it files it with gh" "filed: https://github.com/broxgit/llm-wiki/issues/999" bash -c "printf 'y\n' | PATH='$T/bin:$PATH' '$TTYRUN' '$W' feedback send '$n'"
 check "on llm-wiki's repository, with the drafted title" grep -q -- "--repo broxgit/llm-wiki --title \[bug\] sync without a name" "$T/gh.log"
 lacks "and the scrubbed body" "acme" cat "$T/gh.body"
 check "the note is marked sent, with the issue" grep -q '^Status: sent .* https://github.com/broxgit/llm-wiki/issues/999' "$FB/$n.md"
@@ -3232,7 +3254,7 @@ check "dismiss marks a note dismissed" grep -q '^Status: dismissed' "$FB/$m.md"
 printf 'mode=notes\n' > "$HOME/.config/llm-wiki/feedback"
 printf 'x\n' | "$W" feedback add docs "a docs note" >/dev/null
 m="$(cd "$FB" && echo *-a-docs-note.md)"; m="${m%.md}"
-expect "in notes mode, send refuses" "sharing is off" bash -c "printf 'y\n' | LLM_WIKI_TEST_TTY=1 '$W' feedback send '$m'"
+expect "in notes mode, send refuses" "sharing is off" bash -c "printf 'y\n' | '$TTYRUN' '$W' feedback send '$m'"
 lacks "and start doesn't ask agents to point the user at it" "wait for the user to read" "$W" start web
 # Another collection's wiki names are private too, wherever this runs from.
 mkdir -p "$T/other-coll/client-secret-wiki" && printf 'Handbook version 1.\n' > "$T/other-coll/client-secret-wiki/AGENTS.md" && touch "$T/other-coll/client-secret-wiki/index.md"
@@ -3252,10 +3274,10 @@ out="$("$W" feedback show "$m" 2>&1)"
 case "$out" in "[bug] every time it breaks"*"**Seen:** 1 time(s)"*"This time the <private> wiki broke"*) ok "a wiki named for an ordinary word doesn't scrub the word" ;; *) bad "a wiki named for an ordinary word doesn't scrub the word" "$out" ;; esac
 case "$out" in *phoenix*|*"/time/"*|*"time:wiki"*) bad "but it is scrubbed where it stands as a name, and other names everywhere" "$out" ;; *) ok "but it is scrubbed where it stands as a name, and other names everywhere" ;; esac
 printf 'mode=share\n' > "$HOME/.config/llm-wiki/feedback"
-out="$(printf 'n\n' | LLM_WIKI_TEST_TTY=1 "$W" feedback send "$m" 2>&1)"
+out="$(printf 'n\n' | tty_run "$W" feedback send "$m" 2>&1)"
 case "$out" in *"Left as ordinary words, though a project or wiki of yours has the name: time. If one is a name here, edit the note."*"Not filed"*) ok "send names the words it left, before it asks" ;; *) bad "send names the words it left, before it asks" "$out" ;; esac
 rm -rf "$T/other-coll" "$HOME/.config/llm-wiki/collections"
-out="$(printf 'n\n' | LLM_WIKI_TEST_TTY=1 "$W" feedback send "$m" 2>&1)"
+out="$(printf 'n\n' | tty_run "$W" feedback send "$m" 2>&1)"
 case "$out" in *"Left as ordinary words"*) bad "and says nothing of it when no project has such a name" "$out" ;; *"Not filed"*) ok "and says nothing of it when no project has such a name" ;; *) bad "and says nothing of it when no project has such a name" "$out" ;; esac
 printf 'mode=notes\n' > "$HOME/.config/llm-wiki/feedback"
 "$W" feedback dismiss "$m" >/dev/null
@@ -3585,7 +3607,7 @@ expect "it sees the app when running inside it" "nothing was changed" "$T/fake-a
 rm -f "$T/fake-app-4242"
 sleep 4242 & FAKE=$!
 ( sleep 2; kill "$FAKE" 2>/dev/null ) &
-out="$(printf 'y\n' | LLM_WIKI_TEST_TTY=1 LLM_WIKI_DESKTOP_DIR="$D" LLM_WIKI_DESKTOP_PROC="^sleep 4242" "$W" setup chat 2>&1)"
+out="$(printf 'y\n' | LLM_WIKI_DESKTOP_DIR="$D" LLM_WIKI_DESKTOP_PROC="^sleep 4242" tty_run "$W" setup chat 2>&1)"
 wait "$FAKE" 2>/dev/null || true
 case "$out" in *"Quit the Claude app now"*"added. Open the Claude app"*) ok "asked with the app open, setup waits until it's closed, then writes" ;; *) bad "asked with the app open, setup waits until it's closed, then writes" "$out" ;; esac
 check "keeping everything else in the config" python3 -c "import json,sys; c=json.load(open(sys.argv[1])); assert c['preferences']=={'x':1} and c['mcpServers']['other']=={'command':'o'} and c['mcpServers']['llm-wiki']['args']==['mcp']" "$D/claude_desktop_config.json"
@@ -3594,11 +3616,16 @@ check "with a backup beside it" bash -c "ls '$D' | grep -q 'claude_desktop_confi
 printf '{"mcpServers":{}}\n' > "$D/claude_desktop_config.json"
 expect "--yes adds it with no terminal when the app is closed" "added. Open the Claude app" env LLM_WIKI_DESKTOP_DIR="$D" LLM_WIKI_DESKTOP_PROC="^no such process" "$W" setup chat --yes
 expect "--yes works only for chat" "--yes works only with" "$W" setup git --yes
+# SETUP_YES from the environment is not --yes: with no terminal, setup chat is refused (code review M5).
+cp "$D/claude_desktop_config.json" "$T/desktop.before"
+expect "SETUP_YES in the environment is no --yes" "setup asks questions, so it needs a terminal" env SETUP_YES=1 LLM_WIKI_DESKTOP_DIR="$D" LLM_WIKI_DESKTOP_PROC="^no such process" "$W" setup chat </dev/null
+check "and it changed nothing" cmp -s "$T/desktop.before" "$D/claude_desktop_config.json"
+rm -f "$T/desktop.before"
 expect "and setup --list shows it current" "server current" env LLM_WIKI_DESKTOP_DIR="$D" "$W" setup --list
 if [ "$(id -u)" != 0 ]; then
   chmod 000 "$D/claude_desktop_config.json"
   expect "a desktop config it can't read is unknown, not missing" "chat                unknown, can't read" env LLM_WIKI_DESKTOP_DIR="$D" "$W" setup --list
-  expect "and setup chat changes nothing" "Nothing was changed" env LLM_WIKI_DESKTOP_DIR="$D" LLM_WIKI_TEST_TTY=1 "$W" setup chat
+  expect "and setup chat changes nothing" "Nothing was changed" env LLM_WIKI_DESKTOP_DIR="$D" "$TTYRUN" "$W" setup chat </dev/null
   chmod 644 "$D/claude_desktop_config.json"
 else
   skipped "a desktop config that can't be read (root can read anything)"
@@ -3633,7 +3660,7 @@ done
 expect "setup --list counts the missing rules" "allow rule(s) missing" "$W" setup --list
 # The offer says what the rules for capture and sync allow (code review M6, choice A).
 cp "$HOME/.claude/settings.json" "$T/perm-settings.before"
-out="$(printf 'n\n' | in_tty "$W" setup permissions 2>&1)"
+out="$(printf 'n\n' | tty_run "$W" setup permissions 2>&1)"
 case "$out" in *"start, capture, lock, log, index, sync"*"With these, a session can save any file it can read into a wiki and push it."*"allow rule(s) to ~/.claude/settings.json?"*) ok "setup permissions says what the rules allow, before it asks" ;; *) bad "setup permissions says what the rules allow, before it asks" "$out" ;; esac
 check "and a no adds none" cmp -s "$T/perm-settings.before" "$HOME/.claude/settings.json"
 rm -f "$T/perm-settings.before"
@@ -3746,9 +3773,10 @@ case "$(awk '/^setup_tools\(\) \{/,/^}/' "$W")" in
   *ask_yn* | */dev/tty* | *claude_allow* | *agy_grant*) bad "setup_tools has no question and no call that writes a rule or a grant" "$(awk '/^setup_tools\(\) \{/,/^}/' "$W")" ;;
   *) ok "setup_tools has no question and no call that writes a rule or a grant" ;;
 esac
-# SETUP_YES from the environment answers yes to every question. It is refused before the step.
+# SETUP_YES from the environment would answer yes to every question. Only --yes sets it now
+# (code review M5), so one from the environment is no answer: the step lists, as it does without it.
 out4="$(env SETUP_YES=1 WIKIS_DIR="$TW4" "$W" setup tools </dev/null 2>&1)" && rc=0 || rc=$?
-case "$rc:$out4" in 1:*"--yes works only with: "*"setup chat"*) ok "SETUP_YES in the environment is refused for setup tools" ;; *) bad "SETUP_YES in the environment is refused for setup tools" "exit $rc: $out4" ;; esac
+case "$rc:$out4" in 0:*"Your wikis list these command-line tools:"*) ok "SETUP_YES in the environment is no answer: setup tools only lists" ;; *) bad "SETUP_YES in the environment is no answer: setup tools only lists" "exit $rc: $out4" ;; esac
 check "and the settings are still as they were" cmp -s "$T/tools-settings.before" "$HOME/.claude/settings.json"
 out4="$(env WIKIS_DIR="$TW4" LLM_WIKI_FIXED_DIR=1 "$W" update --wikis-only </dev/null 2>&1)"
 case "$out4" in *"NEXT  "*"setup tools"*) bad "wiki update's closing lines no longer suggest setup tools" "$out4" ;; *"NEXT  "*) ok "wiki update's closing lines no longer suggest setup tools" ;; *) bad "wiki update's closing lines no longer suggest setup tools (no NEXT)" "$out4" ;; esac
@@ -3857,7 +3885,7 @@ check "with two collections, a session in the second's folder leaves the Antigra
 gstart env -u WIKIS_DIR "$W" __codex-start
 check "and the Codex rule too" bash -c "grep -qF 'live in ~/wikis, ' '$GL/codex/AGENTS.md' && ! grep -qF '$CW' '$GL/codex/AGENTS.md' && grep -q '^# Mine' '$GL/codex/AGENTS.md'"
 printf 'AGY RULE\n' > "$GL/agy/config/plugins/llm-wiki/rules/AGENTS.md"
-LLM_WIKI_AGY_HOME="$GL/agy" in_tty env WIKIS_DIR="$CW" "$W" setup antigravity </dev/null >/dev/null 2>&1
+LLM_WIKI_AGY_HOME="$GL/agy" tty_run env WIKIS_DIR="$CW" "$W" setup antigravity </dev/null >/dev/null 2>&1
 check "setup antigravity still writes the rule, naming the default collection" bash -c "grep -qF 'live in ~/wikis, ' '$GL/agy/config/plugins/llm-wiki/rules/AGENTS.md'"
 GH="$T/gl/home"; mkdir -p "$GH"
 HOME="$GH" WIKIS_DIR="$CW" "$W" claude >/dev/null 2>&1
@@ -5271,8 +5299,9 @@ case "$1" in
 esac
 EOF
 chmod +x "$MC/atk"
-mc_run() { env MC="$MC" MC_FAIL="${MC_FAIL:-}" MC_TREE="${MC_TREE:-}" PATH="$MC/bin:$PATH" LLM_WIKI_TEST_TTY=1 LLM_WIKI_OPEN="$MC/open" LLM_WIKI_ATK="$MC/atk" LLM_WIKI_GITHUB_API="http://127.0.0.1:$(cat "$MC/port")" LLM_WIKI_APP_WAIT=20 "$W" setup microsoft-copilot "$@"; }
+mc_run() { env MC="$MC" MC_FAIL="${MC_FAIL:-}" MC_TREE="${MC_TREE:-}" PATH="$MC/bin:$PATH" LLM_WIKI_OPEN="$MC/open" LLM_WIKI_ATK="$MC/atk" LLM_WIKI_GITHUB_API="http://127.0.0.1:$(cat "$MC/port")" LLM_WIKI_APP_WAIT=20 "$TTYRUN" "$W" setup microsoft-copilot "$@"; }
 out="$(env LLM_WIKI_ATK="$MC/atk" "$W" setup microsoft-copilot --repo a/b </dev/null 2>&1)" && bad "setup microsoft-copilot needs a terminal" "$out" || case "$out" in *"Agents: tell the user to run it"*) ok "setup microsoft-copilot needs a terminal" ;; *) bad "setup microsoft-copilot needs a terminal" "$out" ;; esac
+out="$(env "$OLD_TTY_SWITCH=1" LLM_WIKI_ATK="$MC/atk" "$W" setup microsoft-copilot --repo a/b </dev/null 2>&1)" && bad "and the old test switch is no terminal for it (code review M5)" "$out" || case "$out" in *"Agents: tell the user to run it"*) ok "and the old test switch is no terminal for it (code review M5)" ;; *) bad "and the old test switch is no terminal for it (code review M5)" "$out" ;; esac
 out="$(printf 'n\n' | mc_run --repo acme/wikis --dir "$MC/a" 2>&1)"
 case "$out" in *"could read: global, journal, work"*"Stopped. Nothing was changed."*) ok "it names what the agent could read, and a no stops it" ;; *) bad "it names what the agent could read, and a no stops it" "$out" ;; esac
 check "a no opens nothing" test ! -e "$MC/opened"
@@ -5293,7 +5322,7 @@ if grep -rq -e 'pem-4242' -e 'hook-4242' "$MC/a"; then bad "the app's private ke
 check "the instructions name the repository and the wiki's index" grep -q 'repository acme/wikis.*' "$MC/a/notes/appPackage/instruction.txt"
 check "they start from the wiki named" grep -q 'read work/index.md with get_file_contents' "$MC/a/notes/appPackage/instruction.txt"
 check "the agent keeps its action" python3 -c "import json,sys; a=json.load(open(sys.argv[1])); assert a['actions'] and 'acme/wikis' in a['description']" "$MC/a/notes/appPackage/declarativeAgent.json"
-expect "it won't overwrite a project" "already exists" bash -c "printf 'y\n\n' | env MC='$MC' PATH='$MC/bin:$PATH' LLM_WIKI_TEST_TTY=1 LLM_WIKI_ATK='$MC/atk' '$W' setup microsoft-copilot --repo acme/wikis --name notes --dir '$MC/a' 2>&1 || true"
+expect "it won't overwrite a project" "already exists" bash -c "printf 'y\n\n' | env MC='$MC' PATH='$MC/bin:$PATH' LLM_WIKI_ATK='$MC/atk' '$TTYRUN' '$W' setup microsoft-copilot --repo acme/wikis --name notes --dir '$MC/a' 2>&1 || true"
 out="$(printf 'y\n\n' | MC_FAIL=1 mc_run --repo acme/wikis --name failed --dir "$MC/a" 2>&1)" && bad "a failed provision says so" "$out" || case "$out" in *"Provisioning failed"*"provision --env dev"*) ok "a failed provision says how to retry" ;; *) bad "a failed provision says how to retry" "$out" ;; esac
 check "a failed provision keeps the secret for the retry" grep -qx 'SECRET_MCP_DA_OAUTH_CLIENT_SECRET_APIGITHUBC=real-secret-4242' "$MC/a/failed/env/.env.dev.user"
 check "only the owner can read that file" python3 -c "import os,stat,sys; assert stat.S_IMODE(os.stat(sys.argv[1]).st_mode)==0o600" "$MC/a/failed/env/.env.dev.user"
@@ -5324,7 +5353,7 @@ out="$(mc_run --update --name notes --dir "$MC/a" </dev/null 2>&1)" && bad "an o
 mc_run --update --name notes --dir "$MC/a" --repo acme/wikis --wiki work </dev/null >/dev/null 2>&1
 check "provisioning an older agent sees a value, not a blank" grep -qx 'SECRET_MCP_DA_OAUTH_CLIENT_SECRET_APIGITHUBC=cleared-after-provisioning' "$MC/env-at-provision"
 check "--update saves settings for next time" python3 -c "import json,sys; s=json.load(open(sys.argv[1])); assert s=={'repo':'acme/wikis','wikis':['work']}" "$MC/a/notes/.llm-wiki.json"
-expect "a second setup points at --update" "add --update" bash -c "printf 'y\n\n' | env MC='$MC' PATH='$MC/bin:$PATH' LLM_WIKI_TEST_TTY=1 LLM_WIKI_ATK='$MC/atk' '$W' setup microsoft-copilot --repo acme/wikis --name notes --dir '$MC/a' 2>&1 || true"
+expect "a second setup points at --update" "add --update" bash -c "printf 'y\n\n' | env MC='$MC' PATH='$MC/bin:$PATH' LLM_WIKI_ATK='$MC/atk' '$TTYRUN' '$W' setup microsoft-copilot --repo acme/wikis --name notes --dir '$MC/a' 2>&1 || true"
 kill "$MC_PID" 2>/dev/null; wait "$MC_PID" 2>/dev/null || true
 fi
 
@@ -5450,21 +5479,21 @@ case "$(pal LANG=en_US.UTF-8 LLM_PALETTE=nonsense)" in *"${ESC}[34m✓"*) ok "pa
 case "$(pal LANG=en_US.UTF-8 LLM_PALETTE=colorblind | strip)" in "✓ done"*"x"*"error: oops"*) ok "palette: the words and marks are the same" ;; *) bad "palette: the words and marks are the same" ;; esac
 rm -rf "$SW/palcfg"
 # wiki setup palette: asked once per machine, kept where setup --list shows it.
-pw="$(printf 'colorblind\n' | sty XDG_CONFIG_HOME="$SW/palcfg" LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE=off "$W" setup palette 2>&1)"
+pw="$(printf 'colorblind\n' | sty XDG_CONFIG_HOME="$SW/palcfg" LLM_WIKI_STYLE=off "$TTYRUN" "$W" setup palette 2>&1)"
 case "$pw" in *"palette: colorblind"*) ok "setup palette takes the answer" ;; *) bad "setup palette takes the answer" "$pw" ;; esac
 grep -qx 'palette=colorblind' "$SW/palcfg/llm-wiki/palette" && ok "setup palette writes the setting" || bad "setup palette writes the setting"
 grep -qx 'palette' "$SW/palcfg/llm-wiki/setup" && ok "setup palette is recorded, so --new won't ask again" || bad "setup palette is recorded"
 case "$(sty XDG_CONFIG_HOME="$SW/palcfg" LLM_WIKI_STYLE=off "$W" setup --list 2>&1)" in *"palette             colorblind"*) ok "setup --list shows the palette" ;; *) bad "setup --list shows the palette" ;; esac
-pn="$(printf 'x\nbogus\ndefault\n' | sty XDG_CONFIG_HOME="$SW/palcfg2" LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE=off "$W" setup palette 2>&1)"
+pn="$(printf 'x\nbogus\ndefault\n' | sty XDG_CONFIG_HOME="$SW/palcfg2" LLM_WIKI_STYLE=off "$TTYRUN" "$W" setup palette 2>&1)"
 case "$pn" in *"Answer default or colorblind."*"palette: default"*) ok "setup palette refuses a value that is no palette" ;; *) bad "setup palette refuses a bad value" "$pn" ;; esac
 # wiki setup theme: the same, for the terminal's background, which ui.sh reads.
-tw="$(printf 'light\n' | sty XDG_CONFIG_HOME="$SW/thcfg" LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE=off "$W" setup theme 2>&1)"
+tw="$(printf 'light\n' | sty XDG_CONFIG_HOME="$SW/thcfg" LLM_WIKI_STYLE=off "$TTYRUN" "$W" setup theme 2>&1)"
 case "$tw" in *"theme: light"*) ok "setup theme takes the answer" ;; *) bad "setup theme takes the answer" "$tw" ;; esac
 grep -qx 'theme=light' "$SW/thcfg/llm-wiki/theme" && ok "setup theme writes the setting" || bad "setup theme writes the setting"
 grep -qx 'theme' "$SW/thcfg/llm-wiki/setup" && ok "setup theme is recorded, so --new won't ask again" || bad "setup theme is recorded"
 case "$(sty XDG_CONFIG_HOME="$SW/thcfg" LLM_WIKI_STYLE=off "$W" setup --list 2>&1)" in *"theme               light"*) ok "setup --list shows the theme" ;; *) bad "setup --list shows the theme" ;; esac
 case "$(env XDG_CONFIG_HOME="$SW/thcfg" LLM_WIKI_STYLE=on COLORTERM=truecolor bash -c "$blk"$'\n''ui_item ok done')" in *"38;2;0;135;60m"*) ok "and the kit reads it: ok is the light theme's green" ;; *) bad "and the kit reads it: ok is the light theme's green" ;; esac
-tn="$(printf 'grey\nauto\n' | sty XDG_CONFIG_HOME="$SW/thcfg2" LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE=off "$W" setup theme 2>&1)"
+tn="$(printf 'grey\nauto\n' | sty XDG_CONFIG_HOME="$SW/thcfg2" LLM_WIKI_STYLE=off "$TTYRUN" "$W" setup theme 2>&1)"
 case "$tn" in *"Answer auto, dark or light."*"theme: auto"*) ok "setup theme refuses a value that is no theme" ;; *) bad "setup theme refuses a bad value" "$tn" ;; esac
 # wiki setup, in its forms. A mark goes in front of a line, after any indent. With the
 # codes stripped and the marks taken off, what a terminal shows is the piped words.
@@ -5483,25 +5512,26 @@ case "$lplain" in *"Run: "*) case "$lstyled" in *"Run: ${ESC}[36m"*) ok "setup -
 case "$lplain" in *"${ESC}"*) bad "setup --list: off has no codes" ;; *) ok "setup --list: off has no codes" ;; esac
 case "$(sty -u LLM_WIKI_STYLE "$W" setup --list 2>&1)" in *"${ESC}"*) bad "setup --list: piped has no codes" ;; *) ok "setup --list: piped has no codes" ;; esac
 # A section: the heading is bold, a line that says something was done has the tick.
-fplain="$(printf 'off\n' | sty LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE=off "$W" setup feedback 2>&1)"
-fstyled="$(printf 'off\n' | sty LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE=on $UTF "$W" setup feedback 2>&1)"
+fplain="$(printf 'off\n' | sty LLM_WIKI_STYLE=off "$TTYRUN" "$W" setup feedback 2>&1)"
+fstyled="$(printf 'off\n' | sty LLM_WIKI_STYLE=on $UTF "$TTYRUN" "$W" setup feedback 2>&1)"
 case "$fstyled" in *" SETUP ${ESC}[0m  ${ESC}[1mFeedback on llm-wiki${ESC}[0m"*) ok "setup <section>: a section is a SETUP stage with its title" ;; *) bad "setup <section>: a section is a SETUP stage with its title" "$fstyled" ;; esac
 case "$fstyled" in *"✓"*"feedback: off"*) bad "setup <section>: a no answer's off line has no tick" "$fstyled" ;; *"feedback: off"*) ok "setup <section>: a no answer's off line has no tick" ;; *) bad "setup <section>: a no answer's off line has no tick (no line)" "$fstyled" ;; esac
-fyes="$(printf 'notes\n' | sty LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE=on $UTF "$W" setup feedback 2>&1)"
+fyes="$(printf 'notes\n' | sty LLM_WIKI_STYLE=on $UTF "$TTYRUN" "$W" setup feedback 2>&1)"
 case "$fyes" in *"${ESC}[32m✓${ESC}[0m feedback: notes"*) ok "setup <section>: what was written has a green tick" ;; *) bad "setup <section>: what was written has a green tick" "$fyes" ;; esac
-printf 'off\n' | sty LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE=off "$W" setup feedback >/dev/null 2>&1
+printf 'off\n' | sty LLM_WIKI_STYLE=off "$TTYRUN" "$W" setup feedback >/dev/null 2>&1
 case "$fstyled" in *"${ESC}[32m✓${ESC}[0m Done. "*) ok "setup <section>: the closing Done has the tick" ;; *) bad "setup <section>: the closing Done has the tick" "$fstyled" ;; esac
 case "$fstyled" in *"${ESC}[2m│${ESC}[0m   ${ESC}[1mFeedback${ESC}[0m [off] ${ESC}[1m${ESC}[33m›${ESC}[0m "*) ok "setup <section>: a prompt is on the rail, its words kept, the default in brackets" ;; *) bad "setup <section>: a prompt is on the rail, its words kept, the default in brackets" "$fstyled" ;; esac
 case "$fplain" in *"    Feedback [off] › "* | *"    Feedback [off] > "*) ok "setup <section>: plain, the prompt has the same words" ;; *) bad "setup <section>: plain, the prompt has the same words" "$fplain" ;; esac
 [ "$(printf '%s\n' "$fstyled" | kitw)" = "$(printf '%s\n' "$fplain" | kitw)" ] && ok "setup <section>: stripped, the words are the plain words" || bad "setup <section>: stripped, the words are the plain words" "$(diff <(printf '%s\n' "$fstyled" | kitw) <(printf '%s\n' "$fplain" | kitw))"
 case "$fplain" in *"${ESC}"*) bad "setup <section>: off has no codes" ;; *) ok "setup <section>: off has no codes" ;; esac
-case "$(printf 'off\n' | sty -u LLM_WIKI_STYLE LLM_WIKI_TEST_TTY=1 "$W" setup feedback 2>&1)" in *"${ESC}"*) bad "setup <section>: piped has no codes" ;; *) ok "setup <section>: piped has no codes" ;; esac
+# The questions need a terminal, so it is the output alone that is piped.
+case "$(printf 'off\n' | tty_run env -u LLM_WIKI_STYLE WIKIS_DIR="$SW/wikis" bash -c "'$W' setup feedback | cat" 2>&1)" in *"${ESC}"*) bad "setup <section>: piped has no codes" ;; *) ok "setup <section>: piped has no codes" ;; esac
 # A failure has the warning mark, and the command that fixes it is cyan.
 SG="$T/style-git"; mkdir -p "$SG"
 git -C "$SG" init -q && git -C "$SG" config user.name t && git -C "$SG" config --local user.email t@example.test
 git -C "$SG" commit -q --allow-empty -m x && git -C "$SG" remote add origin "$T/no-such-remote.git"
-gplain="$(printf '\ny\n' | sty WIKIS_DIR="$SG" LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE=off "$W" setup git.identity 2>&1)"
-gstyled="$(printf '\ny\n' | sty WIKIS_DIR="$SG" LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE=on $UTF "$W" setup git.identity 2>&1)"
+gplain="$(printf '\ny\n' | sty WIKIS_DIR="$SG" LLM_WIKI_STYLE=off "$TTYRUN" "$W" setup git.identity 2>&1)"
+gstyled="$(printf '\ny\n' | sty WIKIS_DIR="$SG" LLM_WIKI_STYLE=on $UTF "$TTYRUN" "$W" setup git.identity 2>&1)"
 case "$gstyled" in *"  ${ESC}[1m${ESC}[33m!${ESC}[0m push failed:"*) ok "setup: a failure has the bold yellow warning mark" ;; *) bad "setup: a failure has the bold yellow warning mark" "$gstyled" ;; esac
 case "$gstyled" in *"Then run the test again: ${ESC}[36mwiki setup git.identity${ESC}[0m"* | *"Then run the test again: ${ESC}[36m"*"setup git.identity${ESC}[0m"*) ok "setup: the command that fixes it is cyan" ;; *) bad "setup: the command that fixes it is cyan" "$gstyled" ;; esac
 [ "$(printf '%s\n' "$gstyled" | kitw)" = "$(printf '%s\n' "$gplain" | kitw)" ] && ok "setup git.identity: stripped, the words are the plain words" || bad "setup git.identity: stripped, the words are the plain words" "$(diff <(printf '%s\n' "$gstyled" | kitw) <(printf '%s\n' "$gplain" | kitw))"
@@ -5511,7 +5541,7 @@ walk() { # walk <style> <args...>: setup on a new HOME with the answers all Ente
   rm -rf "$SW/walk"; mkdir -p "$SW/walk/home"
   printf '[user]\n\tname = t\n\temail = t@example.test\n' > "$SW/walk/home/.gitconfig"
   printf '%.0s\n' $(seq 1 200) | env -u WIKIS_DIR HOME="$SW/walk/home" XDG_CONFIG_HOME="$SW/walk/home/.config" XDG_STATE_HOME="$SW/walk/state" \
-    PATH="/usr/bin:/bin" LLM_WIKI_NO_GO=1 LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE="$st" $UTF "$W" setup "$@" 2>&1
+    PATH="/usr/bin:/bin" LLM_WIKI_NO_GO=1 LLM_WIKI_STYLE="$st" $UTF "$TTYRUN" "$W" setup "$@" 2>&1
 }
 for form in "" "--new" "format"; do
   wplain="$(walk off $form)"; wstyled="$(walk on $form)"
@@ -5823,9 +5853,9 @@ expect "and that command is extensions setup" "extensions setup prep" "$W" statu
 expect "the list of extensions says it too" "not ready: no prep file yet" "$W" extensions
 expect "an event doesn't run it while it isn't set up" "prep: not set up" env LLM_WIKI_EVENTS=wait "$W" extensions tick
 check "at all" test ! -e "$HOME/prep-ticks"
-out="$(printf 'no\n' | "$W" extensions setup prep 2>&1)"
+out="$(printf 'no\n' | tty_run "$W" extensions setup prep 2>&1)"
 case "$out" in *"Make it?"*"prep isn't set up yet: no prep file yet. Run: "*) ok "extensions setup asks its questions, and says when it still isn't set up" ;; *) bad "extensions setup asks its questions, and says when it still isn't set up" "$out" ;; esac
-expect "and when it is" "prep is set up." bash -c "printf 'make\n' | '$W' extensions setup prep"
+expect "and when it is" "prep is set up." bash -c "printf 'make\n' | '$TTYRUN' '$W' extensions setup prep"
 lacks "status then says nothing about it" "extension prep" "$W" status
 expect "and events run it" "prep: ok" env LLM_WIKI_EVENTS=wait "$W" extensions tick
 rm "$HOME/prep-ready"
@@ -5857,7 +5887,7 @@ refuse "and doesn't run while it is off" "$W" jira --help
 expect "the error says how to turn it on" "extensions add jira" "$W" jira check
 lacks "completion leaves it out while it is off" "jira" "$W" __complete 1 ""
 expect "setup --list marks it as new" "on: none  <- new" bash -c "'$W' setup --list | grep '^extensions'"
-expect "setup --new would ask about it" "Turn on" bash -c "printf 'n\nn\nn\nn\nn\n' | LLM_WIKI_TEST_TTY=1 '$W' setup extensions"
+expect "setup --new would ask about it" "Turn on" bash -c "printf 'n\nn\nn\nn\nn\n' | '$TTYRUN' '$W' setup extensions"
 lacks "a no is remembered" "<- new" bash -c "'$W' setup --list | grep '^extensions'"
 refuse "it is still off" "$W" jira --help
 refuse "extensions add refuses a name that doesn't ship" "$W" extensions add nosuch
@@ -5874,7 +5904,7 @@ expect "setup --list names it" "on: jira" bash -c "'$W' setup --list | grep '^ex
 expect "completion offers it" "jira" "$W" __complete 1 ji
 expect "extensions add completes to shipped names" "jira" "$W" __complete 3 extensions add ""
 lacks "the list no longer says off" "jira           off." "$W" extensions
-expect "setup extensions keeps a yes" "on." bash -c "printf 'n\nn\ny\n' | LLM_WIKI_TEST_TTY=1 '$W' setup extensions"
+expect "setup extensions keeps a yes" "on." bash -c "printf 'n\nn\ny\n' | '$TTYRUN' '$W' setup extensions"
 refuse "and a no for another leaves that one off" "$W" confluence --help
 mkdir -p "$HOME/.local/share/llm-wiki/extensions"
 printf '#!/bin/sh\necho MINE\n' > "$HOME/.local/share/llm-wiki/extensions/wiki-jira"
@@ -6165,7 +6195,7 @@ rm -rf "$JN" "$T/jnfolder" "$T/jnshim"
 # Its guided setup: the shared sign-in, a test of it, then Jira's own settings.
 JH="$T/jhome"
 mkdir -p "$JH"
-jsetup() { env HOME="$JH" WIKIS_DIR="$JW" ATLASSIAN_API_TOKEN=smoke-token "$W" extensions setup jira; }
+jsetup() { env HOME="$JH" WIKIS_DIR="$JW" ATLASSIAN_API_TOKEN=smoke-token "$TTYRUN" "$W" extensions setup jira; }
 HOME="$JH" "$W" extensions add jira >/dev/null 2>&1
 out="$(printf 'http://127.0.0.1:%s\nme@example.com\nPROJ, OPS\ny\n' "$(cat "$J/port")" | jsetup 2>&1)"
 case "$out" in *"share one Atlassian sign-in"*"Site, such as"*"Email of your Atlassian account"*) ok "setup asks for the site and the email" ;; *) bad "setup asks for the site and the email" "$out" ;; esac
@@ -6184,27 +6214,27 @@ lacks "a dash clears a value, and a no turns the setting off" "projects\|auto_cl
 out="$(printf 'y\nnot-an-address\n\n' | jsetup 2>&1)"
 case "$out" in *"That address isn't an address: it starts with https:// and names a host, so it wasn't saved."*) ok "an answer that isn't an address is refused, and the old one kept" ;; *) bad "an answer that isn't an address is refused, and the old one kept" "$out" ;; esac
 check "which it was" grep -q "^site = http://127.0.0.1:" "$JH/.config/llm-wiki/atlassian"
-out="$(printf 'http://127.0.0.1:%s\nme@example.com\n' "$(cat "$J/port")" | env HOME="$T/jhome2" WIKIS_DIR="$JW" "$W" extensions setup jira 2>&1 || true)"
+out="$(printf 'http://127.0.0.1:%s\nme@example.com\n' "$(cat "$J/port")" | env HOME="$T/jhome2" WIKIS_DIR="$JW" "$TTYRUN" "$W" extensions setup jira 2>&1 || true)"
 case "$out" in *"jira is off. Turn it on: "*"extensions add jira"*) ok "setup of an extension that is off says how to turn it on" ;; *) bad "setup of an extension that is off says how to turn it on" "$out" ;; esac
 mkdir -p "$T/jhome2"
 HOME="$T/jhome2" "$W" extensions add jira >/dev/null 2>&1
-out="$(printf 'http://127.0.0.1:%s\nme@example.com\n' "$(cat "$J/port")" | env HOME="$T/jhome2" WIKIS_DIR="$JW" "$W" extensions setup jira 2>&1)"
+out="$(printf 'http://127.0.0.1:%s\nme@example.com\n' "$(cat "$J/port")" | env HOME="$T/jhome2" WIKIS_DIR="$JW" "$TTYRUN" "$W" extensions setup jira 2>&1)"
 case "$out" in *"id.atlassian.com/manage-profile/security/api-tokens"*) ok "with no token anywhere, setup says where to make one" ;; *) bad "with no token anywhere, setup says where to make one" "$out" ;; esac
 case "$out" in *smoke-token*) bad "and never asks for the token itself" "$out" ;; *) ok "and never asks for the token itself" ;; esac
 mkdir -p "$T/jhome3"
 HOME="$T/jhome3" "$W" extensions add jira >/dev/null 2>&1
-out="$(printf 'http://127.0.0.1:%s\n\n\n\n' "$(cat "$J/port")" | env HOME="$T/jhome3" WIKIS_DIR="$JW" ATLASSIAN_API_TOKEN=bad "$W" extensions setup jira 2>&1)"
+out="$(printf 'http://127.0.0.1:%s\n\n\n\n' "$(cat "$J/port")" | env HOME="$T/jhome3" WIKIS_DIR="$JW" ATLASSIAN_API_TOKEN=bad "$TTYRUN" "$W" extensions setup jira 2>&1)"
 case "$out" in *"refused the sign-in"*"The sign-in didn't work."*) ok "a sign-in Jira refuses is said during setup, and setup carries on" ;; *) bad "a sign-in Jira refuses is said during setup, and setup carries on" "$out" ;; esac
 case "$out" in *"Close open items by themselves?"*) ok "to Jira's own questions" ;; *) bad "to Jira's own questions" "$out" ;; esac
 # With no answer about the token, nothing is written that would look like one is set.
 mkdir -p "$T/jhome5"
 HOME="$T/jhome5" "$W" extensions add jira >/dev/null 2>&1
-printf 'http://127.0.0.1:%s\nme@example.com\n' "$(cat "$J/port")" | env HOME="$T/jhome5" WIKIS_DIR="$JW" "$W" extensions setup jira >/dev/null 2>&1
+printf 'http://127.0.0.1:%s\nme@example.com\n' "$(cat "$J/port")" | env HOME="$T/jhome5" WIKIS_DIR="$JW" "$TTYRUN" "$W" extensions setup jira >/dev/null 2>&1
 lacks "setup cut short before the token leaves no token command behind" "token_cmd" cat "$T/jhome5/.config/llm-wiki/atlassian"
 expect "so the extension still says it has no token" "no API token yet" env HOME="$T/jhome5" WIKIS_DIR="$JW" "$W" status
 # Through wiki setup: a yes goes straight on to the extension's own questions, then the offer of a schedule (n).
 mkdir -p "$T/jhome4"
-out="$(printf 'n\nn\nn\nn\ny\nhttp://127.0.0.1:%s\nme@example.com\n\nn\n\nn\n6h\n' "$(cat "$J/port")" | env HOME="$T/jhome4" WIKIS_DIR="$JW" ATLASSIAN_API_TOKEN=smoke-token LLM_WIKI_TEST_TTY=1 "$W" setup extensions 2>&1)"
+out="$(printf 'n\nn\nn\nn\ny\nhttp://127.0.0.1:%s\nme@example.com\n\nn\n\nn\n6h\n' "$(cat "$J/port")" | env HOME="$T/jhome4" WIKIS_DIR="$JW" ATLASSIAN_API_TOKEN=smoke-token "$TTYRUN" "$W" setup extensions 2>&1)"
 case "$out" in *"Turn on"*"jira?"*"share one Atlassian sign-in"*"Signed in to Jira as Smoke Tester."*"jira is set up."*"To go through this again:"*"extensions setup jira"*"tick: every 6h"*) ok "wiki setup turns it on, asks its questions, and carries on with its own" ;; *) bad "wiki setup turns it on, asks its questions, and carries on with its own" "$out" ;; esac
 # With auto_close, the tick event does the same with nobody asking.
 expect "jira asks for the tick event" "(runs on: tick)" "$W" extensions
@@ -6384,7 +6414,7 @@ CH="$T/chome"
 mkdir -p "$CH"
 HOME="$CH" "$W" extensions add confluence >/dev/null 2>&1
 expect "status lists confluence while it has no sign-in" "extension confluence: on, but not ready: no Confluence address yet. Run: " env HOME="$CH" WIKIS_DIR="$CW" "$W" status
-out="$(printf 'http://127.0.0.1:%s\nme@example.com\nhttp://127.0.0.1:%s\n\n\ny\nENG\ncdemo\n' "$(cat "$C/port")" "$(cat "$C/port")" | env -u CONFLUENCE_SPACE HOME="$CH" WIKIS_DIR="$CW" ATLASSIAN_API_TOKEN=smoke-token "$W" extensions setup confluence 2>&1)"
+out="$(printf 'http://127.0.0.1:%s\nme@example.com\nhttp://127.0.0.1:%s\n\n\ny\nENG\ncdemo\n' "$(cat "$C/port")" "$(cat "$C/port")" | env -u CONFLUENCE_SPACE HOME="$CH" WIKIS_DIR="$CW" ATLASSIAN_API_TOKEN=smoke-token "$TTYRUN" "$W" extensions setup confluence 2>&1)"
 case "$out" in *"Confluence's own address is needed"*"Signed in to Confluence as Smoke Tester."*"Key of the space to publish into"*"confluence is set up."*) ok "confluence's setup asks for its address where the site isn't Cloud, the space, and tests the sign-in" ;; *) bad "confluence's setup asks for its address where the site isn't Cloud, the space, and tests the sign-in" "$out" ;; esac
 case "$out" in *"to everyone who can read that space"*"Set up publishing?"*"Key of the space to publish into"*) ok "and says who can read what is published, before asking whether to publish at all" ;; *) bad "and says who can read what is published, before asking whether to publish at all" "$out" ;; esac
 check "the space is saved" grep -qx "space = ENG" "$CH/.config/llm-wiki/confluence"
@@ -6578,7 +6608,7 @@ expect "and that publishing is off" "Publishing is off: no space is set." wch co
 WH="$T/whome"
 mkdir -p "$WH"
 HOME="$WH" "$W" extensions add confluence >/dev/null 2>&1
-out="$(printf 'http://127.0.0.1:%s\n\nhttp://127.0.0.1:%s\nwdemo\n900, 99999, nope, space:ENG\nn\n\nn\n' "$cport" "$cport" | env -u CONFLUENCE_SPACE HOME="$WH" WIKIS_DIR="$WW" ATLASSIAN_API_TOKEN=smoke-token "$W" extensions setup confluence 2>&1)"
+out="$(printf 'http://127.0.0.1:%s\n\nhttp://127.0.0.1:%s\nwdemo\n900, 99999, nope, space:ENG\nn\n\nn\n' "$cport" "$cport" | env -u CONFLUENCE_SPACE HOME="$WH" WIKIS_DIR="$WW" ATLASSIAN_API_TOKEN=smoke-token "$TTYRUN" "$W" extensions setup confluence 2>&1)"
 case "$out" in *"It can do two separate things. Neither happens until you choose it here."*"Watch "*"Reads Confluence."*"Publish "*"Writes to Confluence."*) ok "setup opens by saying the two things it can do, and that neither happens unasked" ;; *) bad "setup opens by saying the two things it can do" "$out" ;; esac
 case "$out" in *"== Step 1 of 3: sign in"*"== Step 2 of 3: watch pages"*"== Step 3 of 3: publish (optional)"*) ok "in three numbered steps" ;; *) bad "in three numbered steps" "$out" ;; esac
 case "$out" in *"What it does "*"When it runs "*"What it costs "*"What it sends"*"Nothing. Watching only reads."*) ok "watching is explained before it is asked about: what it does, when, the cost, and that it sends nothing" ;; *) bad "watching is explained before it is asked about" "$out" ;; esac
@@ -6674,12 +6704,12 @@ mkdir -p "$M21H/.config/llm-wiki"
 HOME="$M21H" "$W" extensions add confluence >/dev/null 2>&1
 printf 'work %s\n' "$MK" > "$M21H/.config/llm-wiki/collections"
 printf 'watch.global = 900\n' > "$M21H/.config/llm-wiki/confluence"
-out="$(printf 'http://127.0.0.1:%s\n\nhttp://127.0.0.1:%s\nglobal\ny\nwork/global\n900\nn\n\nn\n' "$cport" "$cport" | env -u WIKIS_DIR -u CONFLUENCE_SPACE HOME="$M21H" LLM_WIKI_DEFAULT_DIR="$MD" ATLASSIAN_API_TOKEN=smoke-token "$W" extensions setup confluence 2>&1)"
+out="$(printf 'http://127.0.0.1:%s\n\nhttp://127.0.0.1:%s\nglobal\ny\nwork/global\n900\nn\n\nn\n' "$cport" "$cport" | env -u WIKIS_DIR -u CONFLUENCE_SPACE HOME="$M21H" LLM_WIKI_DEFAULT_DIR="$MD" ATLASSIAN_API_TOKEN=smoke-token "$TTYRUN" "$W" extensions setup confluence 2>&1)"
 case "$out" in *"Other collections: work. Name a wiki in one with its collection, such as work/global."*"two collections have a wiki called global: default, work, so nothing was saved for it. Name it with its collection, such as default/global."*) ok "setup says a bare global names neither, and how to name one" ;; *) bad "setup says a bare global names neither, and how to name one" "$out" ;; esac
 case "$out" in *"taken out"*) bad "and writing watch.work/global leaves watch.global, which named neither" "$out" ;; *) ok "and writing watch.work/global leaves watch.global, which named neither" ;; esac
 check "both are in the file" test "$(grep '^watch' "$M21H/.config/llm-wiki/confluence" | sort | tr '\n' ' ')" = "watch.global = 900 watch.work/global = 900 "
 printf 'watch.team = 900\n' > "$M21H/.config/llm-wiki/confluence"
-out="$(printf 'http://127.0.0.1:%s\n\nhttp://127.0.0.1:%s\nwork/team\n\nn\n\nn\n' "$cport" "$cport" | env -u WIKIS_DIR -u CONFLUENCE_SPACE HOME="$M21H" LLM_WIKI_DEFAULT_DIR="$MD" ATLASSIAN_API_TOKEN=smoke-token "$W" extensions setup confluence 2>&1)"
+out="$(printf 'http://127.0.0.1:%s\n\nhttp://127.0.0.1:%s\nwork/team\n\nn\n\nn\n' "$cport" "$cport" | env -u WIKIS_DIR -u CONFLUENCE_SPACE HOME="$M21H" LLM_WIKI_DEFAULT_DIR="$MD" ATLASSIAN_API_TOKEN=smoke-token "$TTYRUN" "$W" extensions setup confluence 2>&1)"
 case "$out" in *"watch.team taken out: watch.work/team names the same wiki with its collection."*) ok "setup's watch.work/team takes out watch.team, which named the same wiki, and says so" ;; *) bad "setup's watch.work/team takes out watch.team, which named the same wiki, and says so" "$out" ;; esac
 check "with the pages it watched kept" test "$(grep '^watch' "$M21H/.config/llm-wiki/confluence")" = "watch.work/team = 900"
 # Each collection's wiki has its own run, paths and status: a sync of work's global while the
@@ -7239,16 +7269,20 @@ expect "extensions settings lists them" "notice" "$W" extensions settings github
 
 # Setup, at a terminal.
 ghw unwatch "$GX/clone" >/dev/null
-expect "extensions setup says what it does, and that it only reads unless fixing is turned on" "UNLESS you turn fixing on for a clone" bash -c "printf 'n\nn\n' | '$W' extensions setup github"
-out="$(cd "$GX/clone" && printf 'y\ny\n' | "$W" extensions setup github 2>&1)"
+# The input ending is no answer: "Watch this folder?" is yes by default, and is not taken so.
+out="$(cd "$GX/clone" && tty_run "$W" extensions setup github </dev/null 2>&1)"
+case "$out" in *"Watch $GX/clone?"*"the input ended before an answer, so this stopped here and saved nothing more"*) ok "setup stops where the input ends, and takes no default for it" ;; *) bad "setup stops where the input ends, and takes no default for it" "$out" ;; esac
+check "so the folder isn't watched" bash -c "! grep -q 'watch = $GX/clone' '$CF'"
+expect "extensions setup says what it does, and that it only reads unless fixing is turned on" "UNLESS you turn fixing on for a clone" bash -c "printf 'n\nn\n' | '$TTYRUN' '$W' extensions setup github"
+out="$(cd "$GX/clone" && printf 'y\ny\n' | tty_run "$W" extensions setup github 2>&1)"
 case "$out" in *"gh is signed in to GitHub."*"Watch $GX/clone?"*"Save a note when a failure is fixed?"*"github is set up."*) ok "setup checks gh's sign-in, offers the current folder, and asks about notes" ;; *) bad "setup checks gh's sign-in, offers the current folder, and asks about notes" "$out" ;; esac
 check "yes to both is kept" bash -c "grep -qx 'remember = yes' '$CF' && grep -qx 'watch = $GX/clone' '$CF'"
-out="$(printf '\n\n' | "$W" extensions setup github 2>&1)"
+out="$(printf '\n\n' | tty_run "$W" extensions setup github 2>&1)"
 check "Enter keeps what is there" bash -c "grep -qx 'remember = yes' '$CF'"
 touch "$GX/fx/signedout"
-expect "setup says how to sign in when gh isn't" "gh auth login" bash -c "printf '\n\n' | '$W' extensions setup github"
+expect "setup says how to sign in when gh isn't" "gh auth login" bash -c "printf '\n\n' | '$TTYRUN' '$W' extensions setup github"
 rm -f "$GX/fx/signedout"
-out="$(printf 'n\n' | GH_BIN="$GX/nope" "$GEXT" --wiki-setup 2>&1)"
+out="$(printf 'n\n' | GH_BIN="$GX/nope" tty_run "$GEXT" --wiki-setup 2>&1)"
 case "$out" in *"isn't installed. Install it from https://cli.github.com"*) ok "and how to install it when it is missing" ;; *) bad "and how to install it when it is missing" "$out" ;; esac
 "$W" extensions set github remember - >/dev/null 2>&1
 
@@ -7505,9 +7539,10 @@ ftick() {
     OPENAI_API_KEY=sk-openai-stand-in DATABASE_URL=postgres://x DOCKER_HOST=tcp://x SOME_AUTH_X=1 MY_SESSION_ID=1 GIT_SSH_COMMAND=ssh \
     "$W" extensions tick
 }
-# The terminal: a person's, as the tests stand in for one. An agent's shell is named by variables the tests clear.
-fixenv() { env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u CODEX_SANDBOX -u CODEX_CI -u GEMINI_CLI -u CURSOR_AGENT LLM_WIKI_TEST_TTY=1 WIKIS_DIR="$GW" "$@"; }
-fixon() { fixenv "$W" github fix "$@"; }
+# A person's terminal: an agent's shell is named by variables the tests clear. fix on asks, so it
+# runs at a pseudo-terminal; the rest of fix asks nothing.
+fixenv() { env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u CODEX_SANDBOX -u CODEX_CI -u GEMINI_CLI -u CURSOR_AGENT WIKIS_DIR="$GW" "$@"; }
+fixon() { if [ "${1:-}" = on ]; then fixenv "$TTYRUN" "$W" github fix "$@"; else fixenv "$W" github fix "$@"; fi; }
 GCONF="$XDG_CONFIG_HOME/llm-wiki/github"
 GSTATE="$GLOGX/state.json"
 printf '%s' "$GSTATE" > "$GX/state.path"
@@ -7546,12 +7581,12 @@ printf 'fix_agent = %s\n' "$GX/agent.sh" >> "$GCONF"
 out="$("$W" github fix on "$FC" </dev/null 2>&1)"; code=$?
 [ "$code" = 1 ] && case "$out" in *"Do: run this yourself in a terminal: "*) true ;; *) false ;; esac && ok "fix on without a terminal exits 1 and says to run it in one" || bad "fix on without a terminal exits 1 and says to run it in one" "exit $code: $out"
 check "and nothing was turned on" bash -c "! grep -q '^fix = ' '$GCONF'"
-# The switch that stands in for a terminal in these tests does nothing in a real setup,
-# where the settings are the person's own: it is no way round the question.
-out="$(printf 'y\n' | env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u CODEX_SANDBOX -u CODEX_CI -u GEMINI_CLI -u CURSOR_AGENT LLM_WIKI_TEST_TTY=1 XDG_CONFIG_HOME="$HOME/.config" "$GEXT" fix on "$FC" 2>&1)"; rcode=$?
-check "with the settings in their real place, the test switch is not a terminal: fix on is refused" test "$rcode" = 1
+# The switch that stood in for a terminal in these tests is gone (code review M5): set, with
+# the settings somewhere other than ~/.config, where it used to count, it is no terminal.
+out="$(printf 'y\n' | env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u CODEX_SANDBOX -u CODEX_CI -u GEMINI_CLI -u CURSOR_AGENT "$OLD_TTY_SWITCH=1" "$GEXT" fix on "$FC" 2>&1)"; rcode=$?
+check "the old test switch is no terminal: fix on from a pipe is refused" test "$rcode" = 1
 case "$out" in *"Do: run this yourself in a terminal"*) ok "and says to run it in a terminal" ;; *) bad "and says to run it in a terminal" "$out" ;; esac
-out="$(printf 'y\n' | env CLAUDECODE=1 LLM_WIKI_TEST_TTY=1 "$W" github fix on "$FC" 2>&1)"; code=$?
+out="$(printf 'y\n' | env CLAUDECODE=1 "$TTYRUN" "$W" github fix on "$FC" 2>&1)"; code=$?
 [ "$code" = 1 ] && case "$out" in *"Do: run this yourself in a terminal"*) true ;; *) false ;; esac && ok "an agent's shell is no terminal, even when it has one" || bad "an agent's shell is no terminal, even when it has one" "exit $code: $out"
 check "and still nothing was turned on" bash -c "! grep -q '^fix = ' '$GCONF'"
 mkdir -p "$GX/unw"
@@ -7567,7 +7602,7 @@ check "Enter leaves it off" bash -c "! grep -q '^fix = ' '$GCONF'"
 printf '' | fixon on "$FC" >/dev/null 2>&1
 check "and so does the input ending" bash -c "! grep -q '^fix = ' '$GCONF'"
 expect "fix with nothing says it is off" "off  $FC" fixon
-out="$(printf 'y\n' | fixon on "$FC" 2>&1)"; code=$?
+out="$(printf 'y\n\n' | fixon on "$FC" 2>&1)"; code=$?
 check "y turns it on" bash -c "test $code = 0 && grep -qx 'fix = $FC' '$GCONF'"
 case "$out" in *"Off again: "*" github fix off $FC"*) ok "and says how to turn it off" ;; *) bad "and says how to turn it off" "$out" ;; esac
 expect "fix says which clones have it on, with the agent, what it may run and the limits" "on   $FC" fixon
@@ -7576,13 +7611,13 @@ expect "and that it may run no command of the user's choosing" "none of your cho
 fixon off "$FC" >/dev/null
 check "fix off turns it off" bash -c "! grep -q '^fix = ' '$GCONF'"
 expect "and says so" "Fixing wasn't on for $FC." fixon off "$FC"
-printf 'y\n' | fixon on "$FC" >/dev/null 2>&1
+printf 'y\n\n' | fixon on "$FC" >/dev/null 2>&1
 "$W" github fix off "$FC" </dev/null >/dev/null 2>&1
 check "fix off needs no terminal" bash -c "! grep -q '^fix = ' '$GCONF'"
 check "an unknown word exits 2" gexits 2 "$W" github fix frobnicate
 # A session can set none of the six settings, and the file is as it was.
 cp "$GCONF" "$GX/github.keep"
-printf 'y\n' | fixon on "$FC" >/dev/null 2>&1
+printf 'y\n\n' | fixon on "$FC" >/dev/null 2>&1
 cp "$GCONF" "$GX/github.fixon"
 for k in fix fix_agent fix_model fix_allow fix_max_files fix_max_lines fix_build; do
   gexits 2 "$GEXT" --wiki-set "$k" "$FC" && ok "--wiki-set $k exits 2" || bad "--wiki-set $k exits 2"
@@ -7597,18 +7632,19 @@ check "and the other five set" test "$(printf '%s\n' "$out" | awk -F '\t' '$1 !~
 expect "and the guide says each is a terminal's" "Terminal only." "$W" setup --guide github
 # Setup, at a terminal, asks after the existing questions, and keeps what is there on Enter.
 fixon off "$FC" >/dev/null
-out="$(cd "$FC" && printf 'n\ny\n\n\nnpm test, git push, ./deploy.sh\n5\n\n' | fixenv "$W" extensions setup github 2>&1)"
+out="$(cd "$FC" && printf 'n\ny\n\n\nnpm test, git push, ./deploy.sh\n5\n\n\n\n' | fixenv "$TTYRUN" "$W" extensions setup github 2>&1)"
 case "$out" in *"== Step 4 of 4: an unattended fix (off unless you say yes)"*"with nobody watching"*"Turn fixing on for acme/ghdemo ($FC)? [y/N]: "*"Which agent?"*"Not allowed, and left out: git push, ./deploy.sh"*"fixing    on, for $FC"*) ok "setup asks about fixing after the existing questions, with the same words, and drops a command it won't allow" ;; *) bad "setup asks about fixing after the existing questions, with the same words, and drops a command it won't allow" "$out" ;; esac
 check "and keeps the answers: on, the one command, five files, the agent as it was" bash -c "grep -qx 'fix = $FC' '$GCONF' && grep -qx 'fix_allow = npm test' '$GCONF' && grep -qx 'fix_max_files = 5' '$GCONF' && grep -qx 'fix_agent = $GX/agent.sh' '$GCONF'"
-out="$(cd "$FC" && printf 'n\n\n' | fixenv "$W" extensions setup github 2>&1)"
+out="$(cd "$FC" && printf 'n\n\n' | fixenv "$TTYRUN" "$W" extensions setup github 2>&1)"
 case "$out" in *"Keep fixing on for $FC? [Y/n]: "*) ok "run again, setup asks whether to keep it, and Enter keeps it" ;; *) bad "run again, setup asks whether to keep it, and Enter keeps it" "$out" ;; esac
 check "so it is still on" grep -qx "fix = $FC" "$GCONF"
-out="$(cd "$FC" && printf 'n\nn\n' | "$W" extensions setup github 2>&1)"
-case "$out" in *"offered at a terminal only"*) ok "setup with no terminal doesn't ask, and says to do it in one" ;; *) bad "setup with no terminal doesn't ask, and says to do it in one" "$out" ;; esac
+# wiki extensions setup refuses an agent's shell outright, so the extension's own guard is run directly.
+out="$(cd "$FC" && printf 'n\nn\n' | env CLAUDECODE=1 "$TTYRUN" "$GEXT" --wiki-setup 2>&1)"
+case "$out" in *"offered at a terminal only"*) ok "setup from an agent's shell, at a terminal, doesn't ask about fixing, and says to do it in one" ;; *) bad "setup from an agent's shell, at a terminal, doesn't ask about fixing, and says to do it in one" "$out" ;; esac
 check "and the file is as it was" bash -c "grep -qx 'fix = $FC' '$GCONF'"
 printf 'fix_agent = %s\n' "$GX/agent.sh" > "$GCONF"
 printf 'watch = %s\n' "$FC" >> "$GCONF"
-printf 'y\n' | fixon on "$FC" >/dev/null 2>&1
+printf 'y\n\n' | fixon on "$FC" >/dev/null 2>&1
 
 # With fixing off, nothing is started and stage 1 is as it was.
 fixon off "$FC" >/dev/null
@@ -7618,7 +7654,7 @@ check "leaves its notice as it did" test "$(ncount)" = 1
 case "$(fnotice)" in "CI failed on feat-x: \"CI / build / Run tests: $SIG\"."*) ok "and the notice is the failure's" ;; *) bad "and the notice is the failure's" "$(fnotice)" ;; esac
 check "and records no attempt" bash -c "! grep -q 'attempts' '$GSTATE'"
 check "and pushes nothing" test "$(ohead feat-x)" = "$FSHA_X"
-printf 'y\n' | fixon on "$FC" >/dev/null 2>&1
+printf 'y\n\n' | fixon on "$FC" >/dev/null 2>&1
 
 # A pull request's branch: one commit to it, by the clone's author, with the clone's own working tree untouched.
 echo "uncommitted" >> "$FC/wip.txt"
@@ -8096,18 +8132,13 @@ sys.exit(1 if fails else 0)
 PYX
 check "a push address is GitHub's, for exactly the repository, in one of the three forms, and not one with a login or another host" python3 -I "$GX/addr.py" "$GEXT"
 # unwatch takes fixing off, and watch never turns it on.
-printf 'y\n' | fixon on "$FC" >/dev/null 2>&1
+printf 'y\n\n' | fixon on "$FC" >/dev/null 2>&1
 check "fix is on" grep -qx "fix = $FC" "$GCONF"
 ghw unwatch "$FC" >/dev/null
 check "unwatch takes the clone out of fix as well" bash -c "! grep -q '^fix = ' '$GCONF' && ! grep -q '^watch = ' '$GCONF'"
 ghw watch "$FC" >/dev/null
 check "and watching it again doesn't turn fixing back on" bash -c "! grep -q '^fix = ' '$GCONF'"
-printf 'y\n' | fixon on "$FC" >/dev/null 2>&1
-# LLM_WIKI_TEST_TTY counts only when the settings file's folder isn't the real ~/.config/llm-wiki, even through a link.
-mkdir -p "$HOME/.config/llm-wiki"
-ln -s "$HOME/.config" "$GX/cfglink"
-out="$(printf 'y\n' | env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u CODEX_SANDBOX -u CODEX_CI -u GEMINI_CLI -u CURSOR_AGENT LLM_WIKI_TEST_TTY=1 XDG_CONFIG_HOME="$GX/cfglink" "$GEXT" fix on "$FC" 2>&1)"; code=$?
-[ "$code" = 1 ] && case "$out" in *"Do: run this yourself in a terminal"*) true ;; *) false ;; esac && ok "LLM_WIKI_TEST_TTY with the settings folder reached through a link to ~/.config is no terminal" || bad "LLM_WIKI_TEST_TTY with the settings folder reached through a link to ~/.config is no terminal" "exit $code: $out"
+printf 'y\n\n' | fixon on "$FC" >/dev/null 2>&1
 # The environments.
 fscen edit feat-x 4220
 check "an agent that isn't claude got the sign-in variables of every agent, and not a database, docker, ssh, auth, session or git-ssh one" bash -c "grep -qx 'ANTHROPIC_API_KEY=sk-ant-stand-in' '$GX/agent.env' && grep -qx 'OPENAI_API_KEY=sk-openai-stand-in' '$GX/agent.env' && ! cut -d= -f1 '$GX/agent.env' | grep -xE 'DATABASE_URL|DOCKER_HOST|SOME_AUTH_X|MY_SESSION_ID|GIT_SSH_COMMAND|SSH_AUTH_SOCK'"
@@ -8202,7 +8233,7 @@ ftick >/dev/null 2>&1
 check "a worktree whose run is running on the disk is left alone, with fixing off, by a tick that didn't start it" test -f "$GLOGX/fix/acme__ghdemo/4400/marker"
 check "and an abandoned one, read-only, is removed, though fixing is off" test ! -e "$GLOGX/fix/acme__ghdemo/4401"
 # fix off during a run stops the push, and marks the attempt.
-printf 'y\n' | fixon on "$FC" >/dev/null 2>&1
+printf 'y\n\n' | fixon on "$FC" >/dev/null 2>&1
 freset
 printf 'fixoff\n' > "$GX/agent.mode"
 runs feat-x "$(run_row 4410 CI 11 completed failure "$FSHA_X")"
@@ -8212,7 +8243,7 @@ check "fix off while a fix runs: nothing is pushed" test "$(ohead feat-x)" = "$F
 case "$(foutcome 4410)" in "skipped: fixing was turned off") ok "and the attempt says so, and the run did not overwrite it" ;; *) bad "and the attempt says so, and the run did not overwrite it" "$(foutcome 4410)" ;; esac
 check "and fixing is off in the settings" bash -c "! grep -q '^fix = ' '$GCONF'"
 fdone 4410 && ok "and the worktree is gone" || bad "and the worktree is gone"
-printf 'y\n' | fixon on "$FC" >/dev/null 2>&1
+printf 'y\n\n' | fixon on "$FC" >/dev/null 2>&1
 # An unlockable state folder starts no fix: the lock file is a folder.
 freset
 rm -f "$GLOGX/state.lock"
@@ -9101,12 +9132,12 @@ expect "extensions settings lists them" "notice" "$W" extensions settings gitlab
 
 # Setup, at a terminal, and the guide.
 glw unwatch "$GL/clone" >/dev/null
-out="$(cd "$GL/clone" && printf 'y\ny\n' | "$W" extensions setup gitlab 2>&1)"
+out="$(cd "$GL/clone" && printf 'y\ny\n' | tty_run "$W" extensions setup gitlab 2>&1)"
 case "$out" in *"glab is signed in to GitLab."*"Watch $GL/clone?"*"Save a note when a failure is fixed?"*"gitlab is set up."*) ok "setup checks glab's sign-in, offers the current folder, and asks about notes" ;; *) bad "setup checks glab's sign-in, offers the current folder, and asks about notes" "$out" ;; esac
 case "$out" in *"never starts, retries or"*"cancels a pipeline"*) ok "and says it only reads" ;; *) bad "and says it only reads" "$out" ;; esac
 check "yes to both is kept" bash -c "grep -qx 'remember = yes' '$GCF' && grep -qx 'watch = $GL/clone' '$GCF'"
 touch "$GL/fx/signedout"
-expect "setup says how to sign in when glab isn't" "glab auth login" bash -c "printf '\n\n' | '$W' extensions setup gitlab"
+expect "setup says how to sign in when glab isn't" "glab auth login" bash -c "printf '\n\n' | '$TTYRUN' '$W' extensions setup gitlab"
 rm -f "$GL/fx/signedout"
 "$W" extensions set gitlab remember - >/dev/null 2>&1
 out="$("$W" setup --guide gitlab)"
@@ -10347,7 +10378,7 @@ jkw watch "$JK/jkdemo" team/app >/dev/null 2>&1
   env JENKINS_URL="http://ci.example.com" WIKIS_DIR="$JKW" "$W" jenkins check "$JK/jkdemo" team/app
   env JENKINS_API_TOKEN="$JKFAKE" WIKIS_DIR="$JKW" "$JKEXT" --wiki-set token "$JKFAKE"
   env JENKINS_API_TOKEN="$JKFAKE" WIKIS_DIR="$JKW" "$JKEXT" --wiki-set url "http://ci.example.com"
-  printf '\n\n\n\n\n\n' | env JENKINS_API_TOKEN="$JKFAKE" WIKIS_DIR="$JKW" LLM_WIKI_TEST_TTY=1 "$W" extensions setup jenkins
+  printf '\n\n\n\n\n\n' | env JENKINS_API_TOKEN="$JKFAKE" WIKIS_DIR="$JKW" "$TTYRUN" "$W" extensions setup jenkins
   jktick
 } > "$JK/all.out" 2>&1
 check "no output of any of those holds the token" bash -c "! grep -aq '$JKFAKE' '$JK/all.out'"
@@ -10485,46 +10516,46 @@ if [ "\$n" -le 1 ]; then echo "oops not-the-token"; else cat "$JK/token"; fi
 FAKE
 chmod +x "$JK/kbin/security"; rm -f "$JK/kcount"
 : > "$JKCF"
-out="$(printf '%s\nsmoke-user\n\n\n\n\n\n' "$JKURL" | env -u JENKINS_API_TOKEN PATH="$JK/kbin:$PATH" LLM_WIKI_TEST_OS=darwin LLM_WIKI_TEST_TTY=1 "$JKEXT" --wiki-setup 2>&1)"
+out="$(printf '%s\nsmoke-user\n\n\n\n\n\n' "$JKURL" | env -u JENKINS_API_TOKEN PATH="$JK/kbin:$PATH" LLM_WIKI_TEST_OS=darwin "$TTYRUN" "$JKEXT" --wiki-setup 2>&1)"
 case "$out" in *"That doesn't look like a token: what is saved has a space or a line break in it, which no Jenkins token has."*"Copy the token in Jenkins again, and run the security command again."*"Press Enter to look again, or type skip: "*) ok "a wrong paste into the keychain is caught at once, and it says what is wrong and what to do" ;; *) bad "a wrong paste into the keychain is caught at once, and it says what is wrong and what to do" "$out" ;; esac
 case "$out" in *"oops"*|*"not-the-token"*|*"$JKFAKE"*) bad "nothing of what was saved, wrong or right, is printed" "$out" ;; *) ok "nothing of what was saved, wrong or right, is printed" ;; esac
 case "$out" in *"Signed in to Jenkins as smoke-user."*"  Sign-in   works: $JKURL, as smoke-user"*) ok "after the second paste it signs in, and the summary says the sign-in works" ;; *) bad "after the second paste it signs in, and the summary says the sign-in works" "$out" ;; esac
 : > "$JKCF"
-out="$(printf '%s\n\n' "$JKURL" | env -u JENKINS_API_TOKEN LLM_WIKI_TEST_OS=linux LLM_WIKI_TEST_TTY=1 "$JKEXT" --wiki-setup 2>&1)"
+out="$(printf '%s\n\n\n\n\n\n\n\n' "$JKURL" | env -u JENKINS_API_TOKEN LLM_WIKI_TEST_OS=linux "$TTYRUN" "$JKEXT" --wiki-setup 2>&1)"
 case "$out" in *"So the sign-in isn't tested. When it is all there, test it with: wiki jenkins config"*"  Sign-in   not set up: "*) ok "with something missing, it says the sign-in isn't tested, and how to test it later" ;; *) bad "with something missing, it says the sign-in isn't tested, and how to test it later" "$out" ;; esac
 # A paste that is never put right: skipping leaves no token set up, and nothing that isn't a token is sent.
 printf '#!/bin/sh\necho "my other password"\n' > "$JK/kbin/security"
 : > "$JKCF"; : > "$JK/requests.log"; : > "$JK/auth.log"
-out="$(printf '%s\nsmoke-user\n\nskip\n\n\n\n' "$JKURL" | env -u JENKINS_API_TOKEN PATH="$JK/kbin:$PATH" LLM_WIKI_TEST_OS=darwin LLM_WIKI_TEST_TTY=1 "$JKEXT" --wiki-setup 2>&1)"
+out="$(printf '%s\nsmoke-user\n\nskip\n\n\n\n' "$JKURL" | env -u JENKINS_API_TOKEN PATH="$JK/kbin:$PATH" LLM_WIKI_TEST_OS=darwin "$TTYRUN" "$JKEXT" --wiki-setup 2>&1)"
 case "$out" in *"No token is set up yet. Run this again when it is in the keychain: wiki extensions setup jenkins"*) ok "skipping after a wrong paste says no token is set up" ;; *) bad "skipping after a wrong paste says no token is set up" "$out" ;; esac
 check "and none is: the setting that says where the token comes from is not left behind" bash -c "! grep -q '^token_cmd' '$JKCF'"
 check "nothing was sent to Jenkins" bash -c "[ ! -s '$JK/requests.log' ] && [ ! -s '$JK/auth.log' ]"
 case "$out" in *"other password"*|*"17"*) bad "what was pasted is not printed, nor how long it is" "$out" ;; *) ok "what was pasted is not printed, nor how long it is" ;; esac
 printf 'url = %s\nuser = smoke-user\ntoken_cmd = echo my other password\n' "$JKURL" > "$JKCF"
 : > "$JK/requests.log"; : > "$JK/auth.log"
-out="$(printf '\n\n\n\n\n' | env -u JENKINS_API_TOKEN LLM_WIKI_TEST_OS=linux LLM_WIKI_TEST_TTY=1 "$JKEXT" --wiki-setup 2>&1)"
+out="$(printf '\n\n\n\n\n' | env -u JENKINS_API_TOKEN LLM_WIKI_TEST_OS=linux "$TTYRUN" "$JKEXT" --wiki-setup 2>&1)"
 case "$out" in *"The token doesn't look right: what is saved has a space or a line break in it"*"So nothing was sent to Jenkins."*"  Sign-in   not tested: what is saved as the token doesn't look like one"*) ok "a saved thing that isn't a token is never used to sign in, and the summary says the sign-in wasn't tested" ;; *) bad "a saved thing that isn't a token is never used to sign in, and the summary says the sign-in wasn't tested" "$out" ;; esac
 check "and it reached Jenkins in no request" bash -c "[ ! -s '$JK/requests.log' ] && [ ! -s '$JK/auth.log' ]"
 check "and the command that printed it is cleared, so the next command doesn't send it either" bash -c "! grep -q '^token_cmd' '$JKCF'"
 # From a review of the extensions: a saved command that prints a wrong thing is asked about again, and put right.
 printf 'url = %s\nuser = smoke-user\ntoken_cmd = echo my other password\n' "$JKURL" > "$JKCF"
-out="$(printf '\n\ncat %s\n\n\n\n' "$JK/token" | env -u JENKINS_API_TOKEN LLM_WIKI_TEST_OS=linux LLM_WIKI_TEST_TTY=1 "$JKEXT" --wiki-setup 2>&1)"
+out="$(printf '\n\ncat %s\n\n\n\n' "$JK/token" | env -u JENKINS_API_TOKEN LLM_WIKI_TEST_OS=linux "$TTYRUN" "$JKEXT" --wiki-setup 2>&1)"
 case "$out" in *"The token that is saved doesn't look right, so here it is again."*"Signed in to Jenkins as smoke-user."*) ok "with a wrong command already saved, setup asks for the command again, and then signs in" ;; *) bad "with a wrong command already saved, setup asks for the command again, and then signs in" "$out" ;; esac
 check "and the new command is the one that is saved" grep -qx "token_cmd = cat $JK/token" "$JKCF"
 # From a review of the extensions: a token typed at the wrong prompt is not saved, and not printed back.
 TYPED='Zq9Xw7madeupvalueZq9Xw7made123'
 : > "$JKCF"
-out="$(printf '%s\n\n' "$TYPED" | env -u JENKINS_API_TOKEN LLM_WIKI_TEST_OS=linux LLM_WIKI_TEST_TTY=1 "$JKEXT" --wiki-setup 2>&1)"
+out="$(printf '%s\n\n' "$TYPED" | env -u JENKINS_API_TOKEN LLM_WIKI_TEST_OS=linux "$TTYRUN" "$JKEXT" --wiki-setup 2>&1)"
 case "$out" in *"$TYPED"*) bad "a token typed at the address prompt is not printed back" "$out" ;; *"so it wasn't saved."*) ok "a token typed at the address prompt is not printed back" ;; *) bad "a token typed at the address prompt is not printed back" "$out" ;; esac
 : > "$JKCF"
-out="$(printf '%s\n%s\n\n' "$JKURL" "$TYPED" | env -u JENKINS_API_TOKEN LLM_WIKI_TEST_OS=linux LLM_WIKI_TEST_TTY=1 "$JKEXT" --wiki-setup 2>&1)"
+out="$(printf '%s\n%s\n\n' "$JKURL" "$TYPED" | env -u JENKINS_API_TOKEN LLM_WIKI_TEST_OS=linux "$TTYRUN" "$JKEXT" --wiki-setup 2>&1)"
 case "$out" in *"$TYPED"*) bad "something that looks like a token at the user prompt is refused, and not printed back" "$out" ;; *"looks like a token, not a user name"*"The token is never typed here."*) ok "something that looks like a token at the user prompt is refused, and not printed back" ;; *) bad "something that looks like a token at the user prompt is refused, and not printed back" "$out" ;; esac
 check "and it is not saved as the user" bash -c "! grep -q '$TYPED' '$JKCF' && ! grep -q '^user' '$JKCF'"
 : > "$JKCF"
-out="$(printf '%s\nsmoke-user\nsomeone@example.com\n' "$JKURL" | env -u JENKINS_API_TOKEN LLM_WIKI_TEST_OS=linux LLM_WIKI_TEST_TTY=1 "$JKEXT" --wiki-setup 2>&1)"
+out="$(printf '%s\nsmoke-user\nsomeone@example.com\n' "$JKURL" | env -u JENKINS_API_TOKEN LLM_WIKI_TEST_OS=linux "$TTYRUN" "$JKEXT" --wiki-setup 2>&1)"
 check "a user name with an @ is still taken" grep -qx 'user = smoke-user' "$JKCF"
 : > "$JKCF"
-out="$(printf '%s\nsmoke-user\n%s\n\n' "$JKURL" "$TYPED" | env -u JENKINS_API_TOKEN LLM_WIKI_TEST_OS=linux LLM_WIKI_TEST_TTY=1 "$JKEXT" --wiki-setup 2>&1)"
+out="$(printf '%s\nsmoke-user\n%s\n\n' "$JKURL" "$TYPED" | env -u JENKINS_API_TOKEN LLM_WIKI_TEST_OS=linux "$TTYRUN" "$JKEXT" --wiki-setup 2>&1)"
 case "$out" in *"$TYPED"*) bad "a token typed where a command is wanted is refused, and not printed back" "$out" ;; *"A command is wanted here, not the token"*) ok "a token typed where a command is wanted is refused, and not printed back" ;; *) bad "a token typed where a command is wanted is refused, and not printed back" "$out" ;; esac
 check "and it is not saved as the command" bash -c "! grep -q '$TYPED' '$JKCF' && ! grep -q '^token_cmd' '$JKCF'"
 printf 'url = %s\nuser = smoke-user\ntoken_cmd = cat %s\n' "$JKURL" "$JK/token" > "$JKCF"
@@ -10533,13 +10564,13 @@ rm -f "$JK/kcount" "$JK/shape"; cp "$JK/jenkins.signin" "$JKCF"
 bads=""
 for v in "${JKBADS[@]}"; do
   : > "$JKCF"
-  out="$(printf '%s\nsmoke-user\n' "$v" | env LLM_WIKI_TEST_TTY=1 "$JKEXT" --wiki-setup 2>&1)"
+  out="$(printf '%s\nsmoke-user\n' "$v" | tty_run "$JKEXT" --wiki-setup 2>&1)"
   case "$out" in *"so it wasn't saved."*) ;; *) bads="$bads [$v: not refused]" ;; esac
   ! grep -q '^url' "$JKCF" || bads="$bads [$v: saved]"
 done
 [ -z "$bads" ] && ok "jenkins' setup refuses each bad address a person types, and doesn't save it" || bad "jenkins' setup refuses each bad address a person types, and doesn't save it" "$bads"
 : > "$JKCF"
-printf 'https://ci.example.com/prefix\nsmoke-user\n' | env LLM_WIKI_TEST_TTY=1 "$JKEXT" --wiki-setup >/dev/null 2>&1
+printf 'https://ci.example.com/prefix\nsmoke-user\n' | tty_run "$JKEXT" --wiki-setup >/dev/null 2>&1
 check "and takes an https address with a path" grep -qx 'url = https://ci.example.com/prefix' "$JKCF"
 printf 'url = %s\nuser = smoke-user\ntoken_cmd = cat %s\n' "$JKURL" "$JK/token" > "$JKCF"
 # A console note that never ends costs no more than the line it is on.
@@ -10634,7 +10665,7 @@ for body in '{}' '{"name":"x","authenticated":false}' '{"authenticated":true}' '
   out="$(jkw config 2>&1)"; code=$?
   [ "$code" = 1 ] && case "$out" in *"This address doesn't answer as Jenkins, or Jenkins sees no signed-in user. Do: check that url is the address of Jenkins itself"*) true ;; *) false ;; esac && ok "config with whoAmI answering $body is not signed in: exit 1, with a fix" || bad "config with whoAmI answering $body is not signed in: exit 1, with a fix" "exit $code: $out"
 done
-out="$(cd "$JK/jkdemo" && printf '\n\nn\n' | env LLM_WIKI_TEST_TTY=1 "$W" extensions setup jenkins 2>&1)"
+out="$(cd "$JK/jkdemo" && printf '\n\nn\n' | tty_run "$W" extensions setup jenkins 2>&1)"
 case "$out" in *"doesn't answer as Jenkins, or sees no signed-in user"*) ok "setup says so too, and not that it signed in" ;; *) bad "setup says so too, and not that it signed in" "$out" ;; esac
 case "$out" in *"Signed in to Jenkins"*) bad "and never claims a sign-in" "$out" ;; *) ok "and never claims a sign-in" ;; esac
 rm -f "$JK/fx/whoami"
@@ -10679,7 +10710,7 @@ jkplain 12 FAILURE abc1234def00
 rm -f "$JKSTATE" "$JKST/notices"/*
 # Setup, at a terminal, and the guide.
 jkw unwatch "$JK/jkdemo" >/dev/null
-out="$(cd "$JK/jkdemo" && printf '\n\nteam/app\ny\n' | env JENKINS_API_TOKEN="$JKFAKE" LLM_WIKI_TEST_TTY=1 "$W" extensions setup jenkins 2>&1)"
+out="$(cd "$JK/jkdemo" && printf '\n\nteam/app\ny\n' | env JENKINS_API_TOKEN="$JKFAKE" "$TTYRUN" "$W" extensions setup jenkins 2>&1)"
 case "$out" in *"Signed in to Jenkins as smoke-user."*"The Jenkins job that builds $JK/jkdemo"*"Save a note when a failure is fixed?"*"jenkins is set up."*) ok "setup asks for the address and the user, tests the sign-in, asks which job builds this clone, and about notes" ;; *) bad "setup asks for the address and the user, tests the sign-in, asks which job builds this clone, and about notes" "$out" ;; esac
 case "$out" in *"never starts, aborts or rebuilds anything"*) ok "and says it only reads" ;; *) bad "and says it only reads" "$out" ;; esac
 case "$out" in *"$JKFAKE"*) bad "and never the token" "$out" ;; *) ok "and never the token" ;; esac
@@ -10812,9 +10843,9 @@ ew start >/dev/null 2>&1
 check "and then a tick 2 hours old isn't due" test "$(grep -c . "$REC/log")" = 4
 refuse "an interval needs an extension that is on" ew extensions every nosuch 4h
 refuse "and a length of time it can read" ew extensions every rec often
-out="$(printf 'n\nn\nn\nn\nn\n6h\n' | WIKIS_DIR="$EW" LLM_WIKI_TEST_TTY=1 "$W" setup extensions 2>&1)"
+out="$(printf 'n\nn\nn\nn\nn\n6h\n' | WIKIS_DIR="$EW" tty_run "$W" setup extensions 2>&1)"
 case "$out" in *"Time between runs"*"tick: every 6h"*) ok "setup asks how often, and keeps the answer" ;; *) bad "setup asks how often, and keeps the answer" "$out" ;; esac
-out="$(printf 'n\nn\nn\nn\nn\nsoon\n' | WIKIS_DIR="$EW" LLM_WIKI_TEST_TTY=1 "$W" setup extensions 2>&1)"
+out="$(printf 'n\nn\nn\nn\nn\nsoon\n' | WIKIS_DIR="$EW" tty_run "$W" setup extensions 2>&1)"
 case "$out" in *"isn't a length of time"*"tick: every 6h"*) ok "an answer that isn't a length of time changes nothing" ;; *) bad "an answer that isn't a length of time changes nothing" "$out" ;; esac
 ew extensions every 24h >/dev/null
 expect "completion offers every" "every" "$W" __complete 2 extensions ""
@@ -11150,7 +11181,7 @@ expect "and schedule itself" "schedule" "$W" __complete 2 extensions ""
 # setup asks once, after an extension that runs on tick is turned on. Enter means no.
 rm -f "$SX/ext/wiki-stk"
 reset_calls
-sxset() { env LLM_WIKI_TEST_OS=darwin LLM_WIKI_TEST_TTY=1 XDG_CONFIG_HOME="$SX/cfg-$1" "$W" setup extensions; }
+sxset() { env LLM_WIKI_TEST_OS=darwin XDG_CONFIG_HOME="$SX/cfg-$1" "$TTYRUN" "$W" setup extensions; }
 out="$(printf 'n\ny\ny\nn\n\n' | sxset yes 2>&1)"
 case "$out" in *"Check in the background every few minutes, with no session open?"*"schedule on: every 5 minutes, by launchd."*) ok "turning on an extension that runs on tick asks about the schedule, and yes installs it" ;; *) bad "turning on an extension that runs on tick asks about the schedule, and yes installs it" "$out" ;; esac
 check "the plist is there" test -f "$PLIST"
@@ -11160,7 +11191,7 @@ out="$(printf 'n\ny\n\nn\n\n' | sxset enter 2>&1)"
 case "$out" in *"Check in the background every few minutes, with no session open?"*) ok "Enter on that question is asked" ;; *) bad "Enter on that question is asked" "$out" ;; esac
 check "and means no: nothing was installed" test ! -e "$PLIST" -a -z "$(calls launchctl)"
 env LLM_WIKI_TEST_OS=darwin XDG_CONFIG_HOME="$SX/cfg-yes" "$W" extensions schedule on >/dev/null 2>&1
-lacks "it is not asked when a schedule is already on" "Check in the background" bash -c "printf 'n\ny\nn\n\n' | env LLM_WIKI_TEST_OS=darwin LLM_WIKI_TEST_TTY=1 XDG_CONFIG_HOME='$SX/cfg-yes' '$W' setup extensions 2>&1"
+lacks "it is not asked when a schedule is already on" "Check in the background" bash -c "printf 'n\ny\nn\n\n' | env LLM_WIKI_TEST_OS=darwin XDG_CONFIG_HOME='$SX/cfg-yes' '$TTYRUN' '$W' setup extensions 2>&1"
 sx extensions schedule off >/dev/null 2>&1
 
 # tick --due: only what is due, in the foreground, and nothing said when nothing was.
@@ -11627,6 +11658,8 @@ unset XDG_CONFIG_HOME XDG_STATE_HOME XDG_DATA_HOME
 printf '#!/bin/sh\necho "$*" >> "%s/launchctl.calls"\n' "$UN" > "$UN/bin/launchctl"; chmod +x "$UN/bin/launchctl"
 export LLM_WIKI_LAUNCHCTL="$UN/bin/launchctl"
 unw() { env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u CODEX_SANDBOX -u CODEX_CI -u GEMINI_CLI -u CURSOR_AGENT "$W" "$@"; }
+# unwt: the same at a pseudo-terminal, with the answers on its standard input.
+unwt() { env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u CODEX_SANDBOX -u CODEX_CI -u GEMINI_CLI -u CURSOR_AGENT "$TTYRUN" "$W" "$@"; }
 # unmake: a machine as setup leaves it, with things of the user's own beside each thing of llm-wiki's.
 unmake() {
   rm -rf "$UNH/.config" "$UNH/.local/state" "$UNH/.local/share" "$UNH"/llm-wiki-removed-* "$UN/launchctl.calls" "$UNH"/.zshrc* "$UNH"/.claude/*.bak "$UNH/dotfiles" "$UNH/llm-wiki"
@@ -11657,18 +11690,24 @@ case "$out" in *"KEPT  What is left as it is"*"Your wikis in "*"untouched."*"Thi
 [ "$(cd "$UNH" && find . | sort)" = "$tree_before" ] && ok "--dry-run changes nothing" || bad "--dry-run changes nothing"
 check "--dry-run works from an agent's shell" env CLAUDECODE=1 "$W" uninstall --dry-run
 # Who may run it.
-out="$(printf 'y\n' | env CLAUDECODE=1 LLM_WIKI_TEST_TTY=1 "$W" uninstall 2>&1)"; code=$?
+out="$(printf 'y\n' | env CLAUDECODE=1 "$TTYRUN" "$W" uninstall 2>&1)"; code=$?
 [ "$code" = 1 ] && case "$out" in *"uninstall is a person's decision, so it isn't taken from an agent's shell. Do: run it yourself in a terminal: wiki uninstall."*) true ;; *) false ;; esac && ok "from an agent's shell it is refused, with what to do" || bad "from an agent's shell it is refused, with what to do" "exit $code: $out"
 out="$(unw uninstall </dev/null 2>&1)"; code=$?
 [ "$code" = 1 ] && case "$out" in *"there is no terminal to ask at. Do: run it in a terminal, or see what it would do: wiki uninstall --dry-run"*) true ;; *) false ;; esac && ok "with no terminal to ask at it is refused" || bad "with no terminal to ask at it is refused" "exit $code: $out"
-out="$(printf 'n\n' | LLM_WIKI_TEST_TTY=1 unw uninstall 2>&1)"
+out="$(printf 'y\n' | env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u CODEX_SANDBOX -u CODEX_CI -u GEMINI_CLI -u CURSOR_AGENT "$OLD_TTY_SWITCH=1" "$W" uninstall 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"there is no terminal to ask at"*) true ;; *) false ;; esac && ok "and the old test switch is no terminal for it (code review M5)" || bad "and the old test switch is no terminal for it (code review M5)" "exit $code: $out"
+[ "$(cd "$UNH" && find . | sort)" = "$tree_before" ] && ok "so nothing was changed" || bad "so nothing was changed"
+out="$(printf 'y\n' | tty_run bash -c "'$W' uninstall | cat" 2>&1)"
+case "$out" in *"there is no terminal to ask at"*) ok "nor is a terminal on standard input alone, with the output piped away" ;; *) bad "nor is a terminal on standard input alone, with the output piped away" "$out" ;; esac
+[ "$(cd "$UNH" && find . | sort)" = "$tree_before" ] && ok "and nothing was changed" || bad "and nothing was changed"
+out="$(printf 'n\n' | unwt uninstall 2>&1)"
 case "$out" in *"Go ahead?"*"Nothing was changed."*) ok "it asks first, and a no changes nothing" ;; *) bad "it asks first, and a no changes nothing" "$out" ;; esac
 [ "$(cd "$UNH" && find . | sort)" = "$tree_before" ] && ok "after a no, every file is where it was" || bad "after a no, every file is where it was"
-out="$(printf '\n' | LLM_WIKI_TEST_TTY=1 unw uninstall 2>&1)"
+out="$(printf '\n' | unwt uninstall 2>&1)"
 case "$out" in *"Nothing was changed."*) ok "Enter is a no" ;; *) bad "Enter is a no" "$out" ;; esac
 check "an option there isn't is a usage error" bash -c "'$W' uninstall --purge >/dev/null 2>&1; [ \$? = 2 ]"
 # A yes.
-out="$(printf 'y\n' | LLM_WIKI_TEST_TTY=1 unw uninstall 2>&1)"; code=$?
+out="$(printf 'y\n' | unwt uninstall 2>&1)"; code=$?
 [ "$code" = 0 ] && case "$out" in *"background job removed"*"removed ~/.local/bin/wiki"*"tab completion line taken out of ~/.zshrc"*"copy: ~/.zshrc.llm-wiki-"*"allow rules taken out of ~/.claude/settings.json"*"wiki line taken out of ~/.claude/CLAUDE.md"*"1 link(s) to your wikis' skills removed"*"settings moved to ~/llm-wiki-removed-"*"DONE  llm-wiki's set-up on this machine is undone"*) true ;; *) false ;; esac && ok "a yes undoes each thing and says so" || bad "a yes undoes each thing and says so" "exit $code: $out"
 [ "$(unsum)" = "$before" ] && ok "the wikis are byte for byte what they were" || bad "the wikis are byte for byte what they were"
 check "the background job's file is gone, and another program's is not" bash -c "[ ! -e '$UNH/Library/LaunchAgents/io.github.llm-wiki.tick.plist' ] && [ -e '$UNH/Library/LaunchAgents/com.example.other.plist' ]"
@@ -11688,19 +11727,19 @@ check "the settings, state and data are moved, not deleted: every file is in the
 check "another tool's settings beside them are untouched" test -f "$UNH/.config/other-tool/keep"
 out="$(unw uninstall --dry-run 2>&1)"
 case "$out" in *"UNINSTALL  Nothing of llm-wiki's is set up on this machine"*) ok "run again, there is nothing left to undo" ;; *) bad "run again, there is nothing left to undo" "$out" ;; esac
-check "and a second yes changes nothing more" bash -c "printf 'y\n' | LLM_WIKI_TEST_TTY=1 env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT '$W' uninstall >/dev/null 2>&1 && [ \"\$(ls -d '$UNH'/llm-wiki-removed-* | wc -l | tr -d ' ')\" = 1 ]"
+check "and a second yes changes nothing more" bash -c "printf 'y\n' | env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT '$TTYRUN' '$W' uninstall >/dev/null 2>&1 && [ \"\$(ls -d '$UNH'/llm-wiki-removed-* | wc -l | tr -d ' ')\" = 1 ]"
 # Putting it back is one move each.
 mv "$aside/settings" "$UNH/.config/llm-wiki"; mv "$aside/state" "$UNH/.local/state/llm-wiki"; mv "$aside/data" "$UNH/.local/share/llm-wiki"
 check "moved back, the settings are read as before" bash -c "grep -q 'ci.example.com' '$UNH/.config/llm-wiki/jenkins'"
 # What isn't llm-wiki's is never taken.
 unmake
 rm -f "$UNH/.local/bin/wiki"; printf '#!/bin/sh\necho mine\n' > "$UNH/.local/bin/wiki"; chmod +x "$UNH/.local/bin/wiki"
-printf 'y\n' | LLM_WIKI_TEST_TTY=1 unw uninstall >/dev/null 2>&1
+printf 'y\n' | unwt uninstall >/dev/null 2>&1
 check "a command called wiki that isn't a link to llm-wiki is left alone" bash -c "[ -x '$UNH/.local/bin/wiki' ] && grep -q 'echo mine' '$UNH/.local/bin/wiki'"
 unmake
 ln -sfn "$UN/outside/skill" "$UNH/.local/bin/wiki"
 printf 'not json' > "$UNH/.claude/settings.json"
-printf 'y\n' | LLM_WIKI_TEST_TTY=1 unw uninstall >/dev/null 2>&1
+printf 'y\n' | unwt uninstall >/dev/null 2>&1
 check "a link called wiki that leads somewhere else is left alone" test -L "$UNH/.local/bin/wiki"
 check "a settings file that can't be read as JSON is left as it is" bash -c "[ \"\$(cat '$UNH/.claude/settings.json')\" = 'not json' ]"
 # What a review found: states where the cautious thing is to leave it.
@@ -11711,7 +11750,7 @@ printf 'my own backup\n' > "$UNH/.claude/settings.json.bak"
 printf 'my own backup\n' > "$UNH/.claude/CLAUDE.md.bak"
 printf '# Notes\n\nA note of mine: my knowledge wikis live in a shed.\nMy knowledge wikis live in Obsidian, which I like.\nMy knowledge wikis live in ~/wikis, one folder per project. Wherever their handbooks say `wiki.sh`, run it.\n' > "$UNH/.claude/CLAUDE.md"
 python3 -c "import json, sys; p = sys.argv[1]; s = json.load(open(p)); s['permissions']['allow'] += ['Bash(/opt/other/bin/wiki sync *)', 'Bash(/srv/tool/wiki.sh sync *)']; json.dump(s, open(p, 'w'))" "$UNH/.claude/settings.json"
-printf 'y\n' | LLM_WIKI_TEST_TTY=1 unw uninstall >/dev/null 2>&1
+printf 'y\n' | unwt uninstall >/dev/null 2>&1
 check "a startup file that is a link stays a link, and the file it leads to lost the line" bash -c "[ -L '$UNH/.zshrc' ] && ! grep -q 'completion.zsh' '$UNH/dotfiles/zshrc' && grep -q 'EDITOR=vim' '$UNH/dotfiles/zshrc'"
 check "a backup of your own beside a file is never written over" bash -c "[ \"\$(cat '$UNH/.claude/settings.json.bak')\" = 'my own backup' ] && [ \"\$(cat '$UNH/.claude/CLAUDE.md.bak')\" = 'my own backup' ]"
 check "lines of your own about your wikis are kept, even one that starts as setup's does, and setup's line is taken" bash -c "grep -q 'in a shed' '$UNH/.claude/CLAUDE.md' && grep -q 'live in Obsidian' '$UNH/.claude/CLAUDE.md' && ! grep -q 'wiki.sh' '$UNH/.claude/CLAUDE.md'"
@@ -11720,14 +11759,14 @@ check "an allow rule for another program called wiki is kept" bash -c "grep -q '
 unmake
 mkdir -p "$UNH/dotfiles/skills/mine"
 ln -sfn "$UNH/dotfiles/skills/mine" "$UNH/.claude/skills/mine"
-printf 'y\n' | WIKIS_DIR="$UNH" LLM_WIKI_TEST_TTY=1 unw uninstall >/dev/null 2>&1
+printf 'y\n' | WIKIS_DIR="$UNH" unwt uninstall >/dev/null 2>&1
 check "with the home folder as the collection, a skill link of your own is not removed" test -L "$UNH/.claude/skills/mine"
 rm -f "$UNH/.claude/skills/mine"
 # A folder of llm-wiki's that holds a wiki collection is left where it is.
 unmake
 mkdir -p "$UNH/.local/share/llm-wiki/wikis/global"
 printf 'a page\n' > "$UNH/.local/share/llm-wiki/wikis/global/page.md"
-out="$(printf 'y\n' | WIKIS_DIR="$UNH/.local/share/llm-wiki/wikis" LLM_WIKI_TEST_TTY=1 unw uninstall 2>&1)"
+out="$(printf 'y\n' | WIKIS_DIR="$UNH/.local/share/llm-wiki/wikis" unwt uninstall 2>&1)"
 case "$out" in *"~/.local/share/llm-wiki: left where it is, because it holds your wikis in ~/.local/share/llm-wiki/wikis."*|*"~/.local/share/llm-wiki: left where it is, because there is a wiki in it."*) ok "a folder that holds your wikis is left where it is, and it says why" ;; *) bad "a folder that holds your wikis is left where it is, and it says why" "$out" ;; esac
 check "the wikis in it are where they were" test -f "$UNH/.local/share/llm-wiki/wikis/global/page.md"
 check "and the other two folders were still moved" bash -c "[ ! -e '$UNH/.config/llm-wiki' ] && [ ! -e '$UNH/.local/state/llm-wiki' ]"
@@ -11735,14 +11774,14 @@ check "and the other two folders were still moved" bash -c "[ ! -e '$UNH/.config
 unmake
 mkdir -p "$UNH/.local/state/llm-wiki/My Wikis/notes"
 printf '# H\n\nHandbook version 1.\n' > "$UNH/.local/state/llm-wiki/My Wikis/notes/AGENTS.md"; printf '# I\n' > "$UNH/.local/state/llm-wiki/My Wikis/notes/index.md"
-out="$(printf 'y\n' | LLM_WIKI_TEST_TTY=1 unw uninstall 2>&1)"
+out="$(printf 'y\n' | unwt uninstall 2>&1)"
 case "$out" in *"~/.local/state/llm-wiki: left where it is, because there is a wiki in it."*) ok "a folder with a wiki in it that no collection names is still left, and it says why" ;; *) bad "a folder with a wiki in it that no collection names is still left, and it says why" "$out" ;; esac
 check "that wiki is where it was" test -f "$UNH/.local/state/llm-wiki/My Wikis/notes/index.md"
 # A collection reached through a link is still seen to be inside.
 unmake
 mkdir -p "$UN/real-share/llm-wiki/extensions" "$UN/real-share/llm-wiki/col/w"
 rm -rf "$UNH/.local/share"; ln -s "$UN/real-share" "$UNH/.local/share"
-out="$(printf 'y\n' | WIKIS_DIR="$UN/real-share/llm-wiki/col" LLM_WIKI_TEST_TTY=1 unw uninstall 2>&1)"
+out="$(printf 'y\n' | WIKIS_DIR="$UN/real-share/llm-wiki/col" unwt uninstall 2>&1)"
 case "$out" in *"~/.local/share/llm-wiki: left where it is, because it holds your wikis in "*) ok "a collection inside it by another path, through a link, is still seen" ;; *) bad "a collection inside it by another path, through a link, is still seen" "$out" ;; esac
 check "and it is where it was" test -d "$UN/real-share/llm-wiki/col/w"
 rm -f "$UNH/.local/share"; rm -rf "$UN/real-share"
@@ -11750,7 +11789,7 @@ rm -f "$UNH/.local/share"; rm -rf "$UN/real-share"
 if [ "$(id -u)" != 0 ]; then
   unmake
   printf 'work\t%s\n' "$UN/elsewhere" > "$UNH/.config/llm-wiki/collections"; chmod 000 "$UNH/.config/llm-wiki/collections"
-  out="$(printf 'y\n' | LLM_WIKI_TEST_TTY=1 unw uninstall 2>&1)"; code=$?
+  out="$(printf 'y\n' | unwt uninstall 2>&1)"; code=$?
   chmod 600 "$UNH/.config/llm-wiki/collections"
   case "$out" in *"left where it is, because the list of your collections can't be read"*) ok "when the list of collections can't be read, no folder is moved, and it says why" ;; *) bad "when the list of collections can't be read, no folder is moved, and it says why" "exit $code: $out" ;; esac
   check "the settings are where they were" test -f "$UNH/.config/llm-wiki/jenkins"
@@ -11762,25 +11801,25 @@ fi
 unmake
 mkdir -p "$UNW/some-project/skills/tool"
 ln -sfn "$UNW/some-project/skills/tool" "$UNH/.claude/skills/tool"
-printf 'y\n' | LLM_WIKI_TEST_TTY=1 unw uninstall >/dev/null 2>&1
+printf 'y\n' | unwt uninstall >/dev/null 2>&1
 check "a skill link into a folder beside the wikis that is no wiki is kept" test -L "$UNH/.claude/skills/tool"
 rm -f "$UNH/.claude/skills/tool"; rm -rf "$UNW/some-project"
 # Two runs in a second never write one copy over another.
 unmake
 : > "$UNH/.zshrc.llm-wiki-$(date +%Y%m%d-%H%M%S).bak"; : > "$UNH/.zshrc.llm-wiki-$(date -v+1S +%Y%m%d-%H%M%S 2>/dev/null || date -d '+1 second' +%Y%m%d-%H%M%S).bak"
-printf 'y\n' | LLM_WIKI_TEST_TTY=1 unw uninstall >/dev/null 2>&1
+printf 'y\n' | unwt uninstall >/dev/null 2>&1
 check "a copy is never written over a file that is already there" bash -c "n=0; for f in '$UNH'/.zshrc.llm-wiki-*.bak; do [ -s \"\$f\" ] && n=\$((n + 1)); done; [ \"\$n\" = 1 ] && [ \"\$(ls '$UNH'/.zshrc.llm-wiki-*.bak | wc -l | tr -d ' ')\" -ge 2 ]"
 # A folder called llm-wiki that holds nothing of llm-wiki's is somebody else's.
 unmake
 mkdir -p "$UNH/llm-wiki"; printf 'my notes\n' > "$UNH/llm-wiki/notes.txt"
-out="$(printf 'y\n' | XDG_DATA_HOME="$UNH" LLM_WIKI_TEST_TTY=1 unw uninstall 2>&1)"
+out="$(printf 'y\n' | XDG_DATA_HOME="$UNH" unwt uninstall 2>&1)"
 case "$out" in *"~/llm-wiki: left where it is, because nothing in it is something llm-wiki keeps there."*) ok "a folder with that name and nothing of llm-wiki's in it is left, and it says why" ;; *) bad "a folder with that name and nothing of llm-wiki's in it is left, and it says why" "$out" ;; esac
 check "and it is untouched" bash -c "[ \"\$(cat '$UNH/llm-wiki/notes.txt')\" = 'my notes' ]"
 # Something that can't be undone is said, the rest goes on, and it ends as unfinished.
 unmake
 mkdir -p "$UN/ro"; chmod 500 "$UN/ro"
 unmake
-out="$(printf 'y\n' | LLM_WIKI_REMOVED_DIR="$UN/ro" LLM_WIKI_TEST_TTY=1 unw uninstall 2>&1)"; code=$?
+out="$(printf 'y\n' | LLM_WIKI_REMOVED_DIR="$UN/ro" unwt uninstall 2>&1)"; code=$?
 chmod 700 "$UN/ro"
 if [ "$(id -u)" = 0 ]; then
   ok "when the settings can't be moved it exits 1 and says so (not checked as root, which can write anywhere)"
@@ -11792,7 +11831,7 @@ else
   check "and what could be undone was" bash -c "[ ! -L '$UNH/.local/bin/wiki' ]"
   unmake
   mkdir -p "$UN/ro"; chmod 500 "$UN/ro"
-  out="$(printf 'y\n' | LLM_WIKI_REMOVED_DIR="$UN/ro" LLM_WIKI_TEST_TTY=1 unw setup --fresh 2>&1)"; code=$?
+  out="$(printf 'y\n' | LLM_WIKI_REMOVED_DIR="$UN/ro" unwt setup --fresh 2>&1)"; code=$?
   chmod 700 "$UN/ro"
   [ "$code" = 1 ] && case "$out" in *"the old set-up is only partly undone, so setup wasn't started."*) true ;; *) false ;; esac && ok "setup --fresh stops there, and doesn't start setup on half-undone settings" || bad "setup --fresh stops there, and doesn't start setup on half-undone settings" "exit $code: $(printf '%s' "$out" | tail -4)"
   case "$out" in *"Setup for "*) bad "so setup's first line is never printed" "$out" ;; *) ok "so setup's first line is never printed" ;; esac
@@ -11835,11 +11874,12 @@ esac
 FAKE
 chmod +x "$UN/bin/codex"
 unwa() { env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u CODEX_SANDBOX -u CODEX_CI -u GEMINI_CLI -u CURSOR_AGENT -u CODEX_HOME -u LLM_WIKI_AGY_HOME -u LLM_WIKI_DESKTOP_DIR PATH="$UN/bin:$PATH" "$W" "$@"; }
+unwat() { env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u CODEX_SANDBOX -u CODEX_CI -u GEMINI_CLI -u CURSOR_AGENT -u CODEX_HOME -u LLM_WIKI_AGY_HOME -u LLM_WIKI_DESKTOP_DIR PATH="$UN/bin:$PATH" "$TTYRUN" "$W" "$@"; }
 unmake; unagents
 out="$(unwa uninstall --dry-run 2>&1)"
 case "$out" in *"the Codex plugin: its folder ~/.codex/llm-wiki, moved aside"*"the llm-wiki plugin and marketplace in Codex's own list, by asking Codex to remove them"*"the wiki line in ~/.codex/AGENTS.md"*"2 wiki skill(s) in ~/.codex/skills"*"the Antigravity plugin: its folder ~/.gemini/config/plugins/llm-wiki, moved aside"*"1 grant(s) for wiki commands in ~/.gemini/config/config.json"*"the Cursor hook in ~/.cursor/hooks.json"*"1 wiki skill(s) in ~/.cursor/skills"*"the connector for the Claude app in "*) ok "--dry-run lists what setup put into Codex, Antigravity, Cursor and the Claude app" ;; *) bad "--dry-run lists what setup put into Codex, Antigravity, Cursor and the Claude app" "$out" ;; esac
 check "and asks Codex nothing, and changes nothing" bash -c "[ ! -e '$UN/codex.calls' ] && grep -q 'marketplaces.llm-wiki' '$UNH/.codex/config.toml' && [ -d '$UNH/.codex/llm-wiki' ]"
-out="$(printf 'y\n' | LLM_WIKI_TEST_TTY=1 unwa uninstall 2>&1)"; code=$?
+out="$(printf 'y\n' | unwat uninstall 2>&1)"; code=$?
 [ "$code" = 0 ] && case "$out" in *"Codex was asked to remove the llm-wiki plugin and marketplace, and has"*"Codex plugin's folder moved to ~/llm-wiki-removed-"*"wiki line taken out of ~/.codex/AGENTS.md"*"2 wiki skill(s) removed from ~/.codex/skills"*"1 wiki skill(s) removed from ~/.cursor/skills"*"grants for wiki commands taken out of ~/.gemini/config/config.json"*"Antigravity plugin's folder moved to "*"Cursor hook taken out of ~/.cursor/hooks.json"*"connector for the Claude app taken out of "*"DONE  "*) true ;; *) false ;; esac && ok "a yes undoes each of them and says so" || bad "a yes undoes each of them and says so" "exit $code: $out"
 check "Codex was asked, with its own two commands" bash -c "[ \"\$(cat '$UN/codex.calls')\" = \"\$(printf 'plugin remove llm-wiki@llm-wiki\nplugin marketplace remove llm-wiki')\" ]"
 check "Codex's list lost ours and kept the rest" bash -c "[ \"\$(cat '$UNH/.codex/config.toml')\" = \"\$(printf 'model = \"x\"\n\n[other]\na = 1')\" ]"
@@ -11871,7 +11911,7 @@ printf 'extra\n' > "$UNH/.codex/skills/wiki-status/notes.txt"
 printf '{"mcpServers":{"llm-wiki":{"command":"/usr/bin/python3","args":["server.py"]}}}\n' > "$UNDESK/claude_desktop_config.json"
 printf 'not json' > "$UNH/.cursor/hooks.json"
 rm -f "$UNH/.codex/skills/llm-wiki"; ln -s "$UN/outside/skill" "$UNH/.codex/skills/llm-wiki"
-printf 'y\n' | LLM_WIKI_TEST_TTY=1 unwa uninstall >/dev/null 2>&1
+printf 'y\n' | unwat uninstall >/dev/null 2>&1
 check "a wiki-<command> skill folder with a file of your own in it is left whole" bash -c "[ -f '$UNH/.codex/skills/wiki-status/SKILL.md' ] && [ -f '$UNH/.codex/skills/wiki-status/notes.txt' ]"
 check "a server called llm-wiki that doesn't run a wiki command is left in the Claude app's settings" grep -q 'server.py' "$UNDESK/claude_desktop_config.json"
 check "a hooks file that isn't JSON is left as it is" bash -c "[ \"\$(cat '$UNH/.cursor/hooks.json')\" = 'not json' ]"
@@ -11882,7 +11922,7 @@ rm -rf "$UNH/.codex/llm-wiki" "$UNH/.gemini/config/plugins/llm-wiki"
 mkdir -p "$UNH/.codex/llm-wiki" "$UNH/.gemini/config/plugins/llm-wiki" "$UNH/dotfiles"
 printf 'my notes\n' > "$UNH/.codex/llm-wiki/notes.txt"; printf 'mine\n' > "$UNH/.gemini/config/plugins/llm-wiki/readme.txt"
 mv "$UNH/.cursor/hooks.json" "$UNH/dotfiles/hooks.json"; ln -s "$UNH/dotfiles/hooks.json" "$UNH/.cursor/hooks.json"
-out="$(printf 'y\n' | LLM_WIKI_TEST_TTY=1 unwa uninstall 2>&1)"
+out="$(printf 'y\n' | unwat uninstall 2>&1)"
 check "a folder at ~/.codex/llm-wiki that setup didn't make is not moved" bash -c "[ \"\$(cat '$UNH/.codex/llm-wiki/notes.txt')\" = 'my notes' ]"
 check "nor one where the Antigravity plugin would be" bash -c "[ \"\$(cat '$UNH/.gemini/config/plugins/llm-wiki/readme.txt')\" = 'mine' ]"
 case "$out" in *"~/.codex/llm-wiki: it is not the folder setup makes, or it holds a wiki, so it is left."*"~/.gemini/config/plugins/llm-wiki: it is not the folder setup makes"*) ok "and both are named among what is left, with why" ;; *) bad "and both are named among what is left, with why" "$out" ;; esac
@@ -11897,7 +11937,7 @@ printf "[ plugins.'llm-wiki@llm-wiki' ]\nenabled = true\n" > "$UNH/.codex/config
 expect "the plugin's table in single quotes, with spaces, is seen" "the llm-wiki plugin and marketplace in Codex's own list" unwa uninstall --dry-run
 # Codex keeps its own list: when it won't let go, or isn't there to ask, that is said.
 unmake; unagents; : > "$UN/codex-stuck"
-out="$(printf 'y\n' | LLM_WIKI_TEST_TTY=1 unwa uninstall 2>&1)"; code=$?
+out="$(printf 'y\n' | unwat uninstall 2>&1)"; code=$?
 rm -f "$UN/codex-stuck"
 [ "$code" = 1 ] && case "$out" in *"Codex still lists the llm-wiki plugin or its marketplace. Do: remove them in Codex: codex plugin remove llm-wiki@llm-wiki, then codex plugin marketplace remove llm-wiki"*"UNFINISHED"*) true ;; *) false ;; esac && ok "when Codex still lists the plugin after being asked, it says so, with the commands, and ends unfinished" || bad "when Codex still lists the plugin after being asked, it says so, with the commands, and ends unfinished" "exit $code: $out"
 unmake; unagents
@@ -11911,12 +11951,12 @@ fi
 rm -rf "$UNH/.codex" "$UNH/.gemini" "$UNH/.cursor" "$UNDESK"
 # setup --fresh: the same, then setup from the start.
 unmake
-check "--fresh takes no section" bash -c "LLM_WIKI_TEST_TTY=1 '$W' setup --fresh journal </dev/null >/dev/null 2>&1; [ \$? = 2 ]"
-out="$(printf 'n\n' | LLM_WIKI_TEST_TTY=1 unw setup --fresh 2>&1)"
+check "--fresh takes no section" bash -c "'$TTYRUN' '$W' setup --fresh journal </dev/null >/dev/null 2>&1; [ \$? = 2 ]"
+out="$(printf 'n\n' | unwt setup --fresh 2>&1)"
 case "$out" in *"Nothing was changed."*) ok "setup --fresh asks first, and a no stops there" ;; *) bad "setup --fresh asks first, and a no stops there" "$out" ;; esac
 case "$out" in *"Setup for "*) bad "after a no, setup doesn't start" "$out" ;; *) ok "after a no, setup doesn't start" ;; esac
 check "and nothing was moved" test -f "$UNH/.config/llm-wiki/setup"
-out="$(printf 'y\n' | LLM_WIKI_TEST_TTY=1 unw setup --fresh 2>&1 || true)"
+out="$(printf 'y\n' | unwt setup --fresh 2>&1 || true)"
 case "$out" in *"DONE  llm-wiki's set-up on this machine is undone"*"Setup for "*) ok "after a yes it undoes the set-up, then starts setup" ;; *) bad "after a yes it undoes the set-up, then starts setup" "$(printf '%s' "$out" | tail -5)" ;; esac
 case "$out" in *"claude plugin uninstall"*|*"Delete the folder to remove it."*) bad "and doesn't tell you to remove the program you are about to set up" "$out" ;; *) ok "and doesn't tell you to remove the program you are about to set up" ;; esac
 check "the old record of what setup had asked is in the folder moved aside, not where setup reads it" bash -c "ls '$UNH'/llm-wiki-removed-*/settings/setup >/dev/null 2>&1 && ! grep -qx theme '$UNH/.config/llm-wiki/setup' 2>/dev/null"
@@ -11994,32 +12034,6 @@ with open(run + "/port", "w") as f:
     f.write(str(s.server_address[1]))
 s.serve_forever()
 PY
-# The question is asked at a real terminal only, so the test gives the command one of its own.
-cat > "$TC/at_tty.py" <<'PY'
-import os, pty, select, sys, time
-answer = sys.argv[1]
-pid, fd = pty.fork()
-if pid == 0:
-    os.execvp(sys.argv[2], sys.argv[2:])
-out, sent, end = b"", False, time.time() + 90
-while time.time() < end:
-    r, _, _ = select.select([fd], [], [], 0.2)
-    if not r:
-        continue
-    try:
-        chunk = os.read(fd, 4096)
-    except OSError:
-        break
-    if not chunk:
-        break
-    out += chunk
-    if not sent and b"[y/N]" in out:
-        os.write(fd, answer.encode() + b"\n")
-        sent = True
-_, status = os.waitpid(pid, 0)
-sys.stdout.write(out.decode("utf-8", "replace").replace("\r\n", "\n"))
-sys.exit(os.waitstatus_to_exitcode(status))
-PY
 python3 -I "$TC/serve.py" "$TC/fx" "$TC/run" > "$TC/serve.log" 2>&1 &
 TCPID=$!
 i=0; while [ ! -s "$TC/run/port" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
@@ -12027,7 +12041,8 @@ TCO="https://localhost:$(cat "$TC/run/port" 2>/dev/null)"
 tcjk() { env JENKINS_URL="$TCO" JENKINS_USER=sam JENKINS_API_TOKEN=smoke-token-0123456789 LLM_WIKI_CMD=wiki "$REPO/extensions/wiki-jenkins" config; }
 tcji() { env JIRA_URL="$TCO" JIRA_EMAIL=me@example.com JIRA_API_TOKEN=smoke-token-0123456789 LLM_WIKI_CMD=wiki "$REPO/extensions/wiki-jira" config; }
 tccf() { env CONFLUENCE_URL="$TCO" CONFLUENCE_EMAIL=me@example.com CONFLUENCE_API_TOKEN=smoke-token-0123456789 LLM_WIKI_CMD=wiki "$REPO/extensions/wiki-confluence" config; }
-tcask() { local a="$1"; shift; python3 -I "$TC/at_tty.py" "$a" "$W" extensions certs "$@"; }
+# The question is asked at a real terminal only, so the command runs at a pseudo-terminal.
+tcask() { local a="$1"; shift; printf '%s\n' "$a" | tty_run "$W" extensions certs "$@"; }
 tchits() { grep -c "sign-in=$1" "$TC/run/hits" 2>/dev/null || true; }
 FIX="Run, in a terminal: wiki extensions certs $TCO"
 expect "Jenkins, refused the server's certificate, says why and names the command with the address" "can't check the certificate of $TCO: it is signed by an authority Python doesn't know, as it is behind a company proxy. $FIX" tcjk
@@ -12038,8 +12053,8 @@ check "and nothing reached the server" test ! -s "$TC/run/hits"
 # Only a person at a terminal answers.
 out="$("$W" extensions certs "$TCO" --from "$TC/fx/keychain.pem" < /dev/null 2>&1)"; code=$?
 [ "$code" = 1 ] && case "$out" in *"a question for a person, at a terminal, and an agent never answers it"*"Do: run it yourself, in a terminal: "*"extensions certs $TCO"*) true ;; *) false ;; esac && ok "with no terminal, certs asks nothing and exits 1, with what to do" || bad "with no terminal, certs asks nothing and exits 1, with what to do" "exit $code: $out"
-out="$(printf 'y\n' | in_tty "$W" extensions certs "$TCO" --from "$TC/fx/keychain.pem" 2>&1)"
-case "$out" in *"at a terminal"*) ok "a yes through a pipe is not an answer, even with the tests' own switch for setup" ;; *) bad "a yes through a pipe is not an answer, even with the tests' own switch for setup" "$out" ;; esac
+out="$(printf 'y\n' | env "$OLD_TTY_SWITCH=1" "$W" extensions certs "$TCO" --from "$TC/fx/keychain.pem" 2>&1)"
+case "$out" in *"at a terminal"*) ok "a yes through a pipe is not an answer, even with the old test switch set" ;; *) bad "a yes through a pipe is not an answer, even with the old test switch set" "$out" ;; esac
 check "and nothing was saved" test ! -e "$TRUSTED"
 # A no.
 out="$(tcask n "$TCO" --from "$TC/fx/keychain.pem" 2>&1)"; code=$?
@@ -12057,12 +12072,12 @@ mkfifo "$TC/fifo.pem"
 expect "a pipe in place of a file is refused, with no wait" "isn't a .pem file" tcask y "$TCO" --from "$TC/fifo.pem"
 cp "$TC/fx/other.pem" "$TC/this Mac's System keychain"
 expect "a file is called a file, whatever its name" "none of the 1 certificate authority in the file /" tcask y "$TCO" --from "$TC/this Mac's System keychain"
-expect "off a Mac, with no file, it says to get one" "get your company's root certificate as a .pem file" env LLM_WIKI_TEST_OS=linux python3 -I "$TC/at_tty.py" y "$W" extensions certs "$TCO"
+expect "off a Mac, with no file, it says to get one" "get your company's root certificate as a .pem file" env LLM_WIKI_TEST_OS=linux "$TTYRUN" "$W" extensions certs "$TCO" </dev/null
 check "none of that saved anything" test ! -e "$TRUSTED"
 # On a Mac it reads the System keychain. The stand-in prints three certificates.
 printf '#!/bin/sh\n[ "$1 $2 $3 $4" = "find-certificate -a -p /Library/Keychains/System.keychain" ] || exit 1\ncat "%s"\n' "$TC/fx/keychain.pem" > "$T/bin/tc-security"
 chmod +x "$T/bin/tc-security"
-out="$(env LLM_WIKI_TEST_OS=darwin SECURITY_BIN="$T/bin/tc-security" python3 -I "$TC/at_tty.py" y "$W" extensions certs "$TCO" 2>&1)"; code=$?
+out="$(printf 'y\n' | env LLM_WIKI_TEST_OS=darwin SECURITY_BIN="$T/bin/tc-security" "$TTYRUN" "$W" extensions certs "$TCO" 2>&1)"; code=$?
 [ "$code" = 0 ] && case "$out" in *"Acme Proxy Root"*"Trusted, for llm-wiki's extensions only. $TCO checks out now."*) true ;; *) false ;; esac && ok "on a Mac, a yes trusts the authority found in the keychain" || bad "on a Mac, a yes trusts the authority found in the keychain" "exit $code: $out"
 case "$out" in *"this Mac's System keychain"*) bad "and with another command in place of security it doesn't claim the keychain" "$out" ;; *"found in what the command in SECURITY_BIN printed"*) ok "and with another command in place of security it doesn't claim the keychain" ;; *) bad "and with another command in place of security it doesn't claim the keychain" "$out" ;; esac
 check "the file is the user's alone" bash -c "test -f '$TRUSTED' && [ \"\$(ls -l '$TRUSTED' | cut -c1-10)\" = '-rw-------' ]"
@@ -12202,6 +12217,49 @@ out="$("$REPO/tests/smoke.sh" --section "Nothing Like This" 2>&1)"; code=$?
 check "--section with no name exits 2" bash -c "'$REPO/tests/smoke.sh' --section >/dev/null 2>&1; [ \$? = 2 ]"
 check "--section and --part together exit 2" bash -c "'$REPO/tests/smoke.sh' --part 2 --section News >/dev/null 2>&1; [ \$? = 2 ]"
 check "an option it doesn't know exits 2" bash -c "'$REPO/tests/smoke.sh' --bogus >/dev/null 2>&1; [ \$? = 2 ]"
+# tests/tty_run.py, which runs a command at a pseudo-terminal for the tests that need one.
+printf '#!/bin/bash\n[ -t 0 ] && [ -t 1 ] && [ -t 2 ] && echo "all three"\necho "size $(stty size </dev/tty)"\nprintf "name? "; read -r n\nprintf "sure? "; read -r a\necho "got $n $a"\nread -r z || echo "then the end"\necho "to the terminal" >/dev/tty\n( sleep 1; echo on > "$1" ) &\nexit 3\n' > "$SU/ask.sh"
+out="$(printf 'ann\ny\n' | tty_run bash "$SU/ask.sh" "$SU/bg" 2>&1)"; code=$?
+[ "$out:$code" = "all three
+size 24 80
+name? sure? got ann y
+then the end
+to the terminal:3" ] && ok "tty_run: standard input, output and error and /dev/tty are a terminal 80 wide, the answers are typed and not echoed, then the input ends, and the exit code is the command's" || bad "tty_run: a terminal, the answers typed, the input's end and the exit code" "exit $code: $out"
+sleep 2
+check "and a job the command left in the background goes on" grep -qx on "$SU/bg"
+out="$(tty_run --timeout 2 bash -c 'echo asked; read -r x; read -r y; sleep 30' </dev/null 2>&1)"; code=$?
+[ "$code" = 124 ] && case "$out" in "asked"*"was stopped: it was still running after 2s"*) true ;; *) false ;; esac && ok "tty_run stops a command still running at its time limit, and says so" || bad "tty_run stops a command still running at its time limit, and says so" "exit $code: $out"
+# An answer is never lost: not to a command quiet for longer than tty_run waits, which then empties
+# the terminal's input as getpass does, nor to one that reads with no prompt at all.
+out="$(printf 'sekrit\n' | tty_run --timeout 10 python3 -c 'import getpass, time; time.sleep(2); print("got", getpass.getpass("token: "))' 2>&1)"; code=$?
+[ "$code:$out" = "0:token: "$'\n'"got sekrit" ] && ok "tty_run: after two silent seconds, getpass still gets its answer" || bad "tty_run: after two silent seconds, getpass still gets its answer" "exit $code: $out"
+out="$(printf 'plain\n' | tty_run --timeout 10 bash -c 'read -r x; echo "got $x"' 2>&1)"; code=$?
+[ "$code:$out" = "0:got plain" ] && ok "tty_run: a command that prints nothing before it reads gets its answer" || bad "tty_run: a command that prints nothing before it reads gets its answer" "exit $code: $out"
+out="$(printf 'y' | tty_run --timeout 10 bash -c 'printf "ok? "; read -r x && echo "got $x"' 2>&1)"; code=$?
+[ "$code:$out" = "0:ok? got y" ] && ok "tty_run: a last answer with no line break is a whole line" || bad "tty_run: a last answer with no line break is a whole line" "exit $code: $out"
+bads=""
+for bad_t in 0 -1 nan inf x; do
+  out="$(tty_run --timeout "$bad_t" true </dev/null 2>&1)"; code=$?
+  [ "$code" = 2 ] && case "$out" in *"--timeout takes a number of seconds above 0"*) true ;; *) false ;; esac || bads="$bads [$bad_t: exit $code: $out]"
+done
+[ -z "$bads" ] && ok "tty_run refuses a time limit that isn't a number above 0" || bad "tty_run refuses a time limit that isn't a number above 0" "$bads"
+out="$(head -c 1100000 /dev/zero | tty_run true 2>&1)"; code=$?
+[ "$code" = 2 ] && case "$out" in *"more than 1048576 bytes of answers"*) true ;; *) false ;; esac && ok "tty_run refuses more than 1 MiB of answers" || bad "tty_run refuses more than 1 MiB of answers" "exit $code: $out"
+# Sent INT, TERM or HUP, it stops the command, even one that ignores the hangup a closed terminal sends.
+for sg in INT TERM HUP; do
+  rm -f "$SU/sig.pid"
+  python3 -I "$TTYRUN" --timeout 60 bash -c "trap '' HUP; echo \$\$ > '$SU/sig.pid'; sleep 300; :" </dev/null >/dev/null 2>&1 &
+  tp=$!
+  i=0; while [ ! -s "$SU/sig.pid" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+  kill -"$sg" "$tp"; wait "$tp"; code=$?
+  sleep 0.3
+  cpid="$(cat "$SU/sig.pid" 2>/dev/null)"
+  if [ -n "$cpid" ] && ! kill -0 "$cpid" 2>/dev/null; then ok "tty_run sent $sg stops the command, which ignores a hangup (exit $code)"; else bad "tty_run sent $sg stops the command, which ignores a hangup" "exit $code, command ${cpid:-?}"; [ -z "$cpid" ] || kill -9 "$cpid" 2>/dev/null; fi
+done
+# No switch in the code stands in for a terminal (code review M5, T14): anything that can set a
+# variable, a session included, could set it. The tests use a real pseudo-terminal instead.
+out="$(grep -rlF "$OLD_TTY_SWITCH" "$REPO/wiki.sh" "$REPO/ui.sh" "$REPO/hooks" "$REPO/extensions" "$REPO/scripts" "$REPO/mcp" "$REPO/cmd" "$REPO/internal" "$REPO/tests/smoke.sh" "$REPO/tests/tty_run.py" 2>/dev/null)"
+[ -z "$out" ] && ok "nothing in the code, the hooks, the extensions, the scripts or the tests reads the old test switch for a terminal" || bad "nothing in the code, the hooks, the extensions, the scripts or the tests reads the old test switch for a terminal" "$out"
 fi
 
 if section "History without git"; then
@@ -12381,12 +12439,12 @@ hw history off >/dev/null 2>&1
 unlink "$HC/.llm-wiki-history-off" 2>/dev/null || true
 : > "$HT/home/.config/llm-wiki/setup"
 printf '{}\n' > "$HC/.obsidian/app.json"
-out="$(printf 'y\n\n' | env HOME="$HT/home" WIKIS_DIR="$HC" LLM_WIKI_TEST_TTY=1 "$W" setup git 2>&1)"
+out="$(printf 'y\n\n' | env HOME="$HT/home" WIKIS_DIR="$HC" "$TTYRUN" "$W" setup git 2>&1)"
 case "$out" in *"Does an app carry this folder to your other devices?"*"Which one"*"A history of "*) ok "setup git asks whether an app carries the vault, and a yes turns the history on" ;; *) bad "setup git asks whether an app carries the vault, and a yes turns the history on" "$out" ;; esac
 check "with the app it offered, Obsidian Sync" grep -qx 'carried=Obsidian Sync' "$HC/.llm-wiki-history"
 check "and no git was made" test ! -e "$HC/.git"
-printf 'y\n--force\n' | env HOME="$HT/n2" WIKIS_DIR="$HT/n2/wikis" LLM_WIKI_TEST_TTY=1 "$W" setup git >/dev/null 2>&1 || true
-expect "run again, setup git says the history is kept and asks nothing" "A history of your wikis is kept on this machine. Obsidian Sync carries them to your other devices. Git isn't needed." env HOME="$HT/home" WIKIS_DIR="$HC" LLM_WIKI_TEST_TTY=1 "$W" setup git
+printf 'y\n--force\n' | env HOME="$HT/n2" WIKIS_DIR="$HT/n2/wikis" "$TTYRUN" "$W" setup git >/dev/null 2>&1 || true
+expect "run again, setup git says the history is kept and asks nothing" "A history of your wikis is kept on this machine. Obsidian Sync carries them to your other devices. Git isn't needed." env HOME="$HT/home" WIKIS_DIR="$HC" "$TTYRUN" "$W" setup git </dev/null
 expect "the guide's git row names the history" "history on" hw setup --guide git
 # A collection inside someone's larger repository, such as a home folder kept in git, has no git of its own.
 mkdir -p "$HT/p/home/wikis"
@@ -13484,6 +13542,8 @@ mkdir -p "$FC/bin"
 printf '#!/bin/sh\nexit 1\n' > "$FC/bin/brew"
 chmod +x "$FC/bin/brew"
 fcw() { local h="$1"; shift; env HOME="$h" WIKIS_DIR="$h/wikis" GIT_CONFIG_NOSYSTEM=1 PATH="$FC/bin:$PATH" "$W" "$@"; }
+# fcwt: the same at a pseudo-terminal, for setup's questions.
+fcwt() { local h="$1"; shift; env HOME="$h" WIKIS_DIR="$h/wikis" GIT_CONFIG_NOSYSTEM=1 PATH="$FC/bin:$PATH" "$TTYRUN" "$W" "$@"; }
 fcg() { local h="$1"; shift; env HOME="$h" GIT_CONFIG_NOSYSTEM=1 git "$@"; }
 fcid() { mkdir -p "$1" && fcg "$1" config --global user.email t@example.invalid && fcg "$1" config --global user.name T && fcg "$1" config --global init.defaultBranch main; }
 # The files a commit holds, one per line.
@@ -13499,7 +13559,7 @@ out="$(fcw "$FA" init --git 2>&1)"
 case "$out" in *"first commit made: WIKIS.md, .gitignore and 1 wiki(s)"*) ok "init --git in a clone of an empty remote makes the first commit, and says what went in" ;; *) bad "init --git in a clone of an empty remote makes the first commit, and says what went in" "$out" ;; esac
 check "and leaves one commit" test "$(fcg "$FA" -C "$FA/wikis" rev-list --count HEAD 2>/dev/null)" = 1
 fcw "$FA" journal note demo "A private line about my day." >/dev/null 2>&1
-printf '\n\n\n\n\n\n' | in_tty fcw "$FA" setup git >/dev/null 2>&1
+printf '\n\n\n\n\n\n' | fcwt "$FA" setup git >/dev/null 2>&1
 out="$(fcg "$FA" -C "$FA/wikis" ls-files)"
 check "the clone's commits hold no journal, delegation or stats file" test -z "$(printf '%s\n' "$out" | fcmine)"
 check "and they hold WIKIS.md" bash -c "printf '%s\n' '$out' | grep -qx WIKIS.md"
@@ -13512,7 +13572,7 @@ printf 'Our wikis.\n' > "$FB/wikis/README.md"
 out="$(fcw "$FB" init --git 2>&1)"
 case "$out" in *"no commit name or email set yet, so nothing is committed"*) ok "init --git with no name in a clone commits nothing, and says so" ;; *) bad "init --git with no name in a clone commits nothing, and says so" "$out" ;; esac
 fcw "$FB" journal note demo "A private line." >/dev/null 2>&1
-printf '\nT\nt@example.invalid\n\n\n\n' | in_tty fcw "$FB" setup git >/dev/null 2>&1
+printf '\nT\nt@example.invalid\n\n\n\n' | fcwt "$FB" setup git >/dev/null 2>&1
 out="$(fcfiles "$FB")"
 case "$out" in *global/AGENTS.md*) ok "setup's first commit holds the shared wiki" ;; *) bad "setup's first commit holds the shared wiki" "$out" ;; esac
 check "and WIKIS.md and .gitignore" bash -c "printf '%s\n' '$out' | grep -qx WIKIS.md && printf '%s\n' '$out' | grep -qx .gitignore"
@@ -13525,7 +13585,7 @@ FJ="$FC/j"; fcclone "$FJ"
 fcw "$FJ" init --git >/dev/null 2>&1
 fcw "$FJ" journal set commit yes >/dev/null 2>&1
 fcid "$FJ"
-printf '\n\n\n\n\n\n' | in_tty fcw "$FJ" setup git >/dev/null 2>&1
+printf '\n\n\n\n\n\n' | fcwt "$FJ" setup git >/dev/null 2>&1
 expect "with the journal's commit set to yes, the first commit holds journal/config" "journal/config" fcfiles "$FJ"
 
 # An existing .gitignore keeps the user's lines, in order, with the new ones after.
@@ -13538,7 +13598,7 @@ check "and the new lines come after them" bash -c "sed -n '3,\$p' '$FG/wikis/.gi
 # A wikis folder inside a larger repository with no commit: a home folder kept in git.
 FH="$FC/h"; mkdir -p "$FH"; fcid "$FH"; fcg "$FH" init -q "$FH"; echo private > "$FH/taxes.txt"
 fcw "$FH" init >/dev/null 2>&1
-out="$(printf '\n\n\n\n\n\n\n\n' | in_tty fcw "$FH" setup git 2>&1)"
+out="$(printf '\n\n\n\n\n\n\n\n' | fcwt "$FH" setup git 2>&1)"
 case "$out" in *"the wikis folder is inside another repository, ~. llm-wiki leaves that one alone"*) ok "setup git in a larger repository says it isn't the wikis' own, and leaves it alone" ;; *) bad "setup git in a larger repository says it isn't the wikis' own, and leaves it alone" "$out" ;; esac
 check "that repository has no commit" bash -c "! env HOME='$FH' git -C '$FH' rev-parse -q --verify HEAD"
 check "no remote" test -z "$(fcg "$FH" -C "$FH" remote)"
@@ -13547,7 +13607,7 @@ check "and no hook" test ! -e "$FH/.git/hooks/pre-commit"
 check "the .gitignore in the wikis folder still keeps the journal out" grep -qxF /journal/ "$FH/wikis/.gitignore"
 expect "init --git there says the same" "inside another repository" fcw "$FH" init --git
 check "and adds no hook either" test ! -e "$FH/.git/hooks/pre-commit"
-expect "setup git.identity there refuses" "inside another repository" in_tty fcw "$FH" setup git.identity
+expect "setup git.identity there refuses" "inside another repository" fcwt "$FH" setup git.identity </dev/null
 lacks "and setup doesn't count the name as a question for it" "git.identity" fcw "$FH" setup --pending
 
 # L48: no name when the collection is made, a name set by hand afterwards, then a sync.
@@ -13923,7 +13983,7 @@ cp "$HOME/.gitconfig" "$GH/.gitconfig"
 # These run as a Mac wherever the suite runs, and glinux as anything else.
 gw() { env HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_CMD=wiki LLM_WIKI_TEST_OS=darwin "$W" "$@"; }
 glinux() { env HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_CMD=wiki LLM_WIKI_TEST_OS=linux "$W" "$@"; }
-gwtty() { env HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_CMD=wiki LLM_WIKI_TEST_TTY=1 LLM_WIKI_TEST_OS=darwin "$W" "$@"; }
+gwtty() { env HOME="$GH" WIKIS_DIR="$GH/wikis" LLM_WIKI_CMD=wiki LLM_WIKI_TEST_OS=darwin "$TTYRUN" "$W" "$@"; }
 GXD="$GH/.local/share/llm-wiki/extensions"
 GCFG="$GH/.config/llm-wiki"
 gw init >/dev/null 2>&1
@@ -13933,7 +13993,7 @@ TB="$(printf '\t')"
 
 # Every place that reminds about setup says the guide is there, before anything is answered.
 expect "status, with setup never run, says the guide exists" 'setup: never run on this machine. Run: wiki setup. Or ask an agent: "run wiki setup --guide and walk me through it"' gw status
-expect "the opening of setup says it" "Or ask your agent to walk you through it in its session: it runs wiki setup --guide. In Claude Code, /llm-wiki:setup does." bash -c "printf '' | env HOME='$GH' WIKIS_DIR='$GH/wikis' LLM_WIKI_CMD=wiki LLM_WIKI_TEST_TTY=1 '$W' setup palette"
+expect "the opening of setup says it" "Or ask your agent to walk you through it in its session: it runs wiki setup --guide. In Claude Code, /llm-wiki:setup does." bash -c "printf '' | env HOME='$GH' WIKIS_DIR='$GH/wikis' LLM_WIKI_CMD=wiki '$TTYRUN' '$W' setup palette"
 expect "init's next steps say it" "ask it to run wiki setup --guide" env HOME="$GH" WIKIS_DIR="$GH/other" LLM_WIKI_CMD=wiki "$W" init
 expect "the session hook, with no collection, offers the guide before the terminal" "offer to walk them through setup: run $T/data/bin/wiki setup --guide and follow it. Or they run $T/data/bin/wiki setup in a terminal" bash -c "$(declare -f hook context); T='$T' REPO='$REPO'; export WIKIS_DIR='$T/none'; hook '$T' | context"
 
@@ -14023,7 +14083,7 @@ check "it changes nothing" test "$(jd journal | grep -c 'depth.*4')" -ge 1
 jd journal set depth 7 >/dev/null 2>&1
 expect "at the value it gave, nothing is missed" "depth 7 reaches all 2 repositories found. The deepest needs 7: ~/dev/a/b/c/d/e/far" jd journal depth
 expect "the guide tells the agent not to guess the number" "Don't guess a number: wiki journal depth says what reaches every repository" jd setup --guide journal.depth
-out="$(printf '\n' | env HOME="$JD/home" WIKIS_DIR="$JD/home/wikis" LLM_WIKI_CMD=wiki LLM_WIKI_TEST_TTY=1 "$W" setup journal.depth 2>&1)"
+out="$(printf '\n' | env HOME="$JD/home" WIKIS_DIR="$JD/home/wikis" LLM_WIKI_CMD=wiki "$TTYRUN" "$W" setup journal.depth 2>&1)"
 case "$out" in *"Now, depth 7 reaches all 2 repositories found."*) ok "setup's own question says what the number reaches on this machine" ;; *) bad "setup's own question says what the number reaches on this machine" "$out" ;; esac
 jd journal set code_dirs "$JD/home/nowhere" >/dev/null 2>&1
 expect "with no repository found it says where it looked, and how to say where the code is" "No repository found under" jd journal depth
@@ -14105,6 +14165,7 @@ lacks "nor does setting anything else" "repositories found" kq journal set forma
 # From a review by Gemini, each finding reproduced before it was fixed (2026-11-18).
 RV="$T/review"; RVH="$RV/home"; mkdir -p "$RVH/.claude/skills" "$RVH/.local/bin" "$RVH/.config/llm-wiki" "$RV/cwd"
 rv() { (cd "$RV/cwd" && env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u CODEX_SANDBOX -u CODEX_CI -u GEMINI_CLI -u CURSOR_AGENT HOME="$RVH" WIKIS_DIR="$RVH/wikis" XDG_CONFIG_HOME="$RVH/.config" XDG_STATE_HOME="$RVH/.local/state" XDG_DATA_HOME="$RVH/.local/share" LLM_WIKI_CMD=wiki LLM_WIKI_TEST_OS=darwin "$W" "$@"); }
+rvt() { (cd "$RV/cwd" && env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u CODEX_SANDBOX -u CODEX_CI -u GEMINI_CLI -u CURSOR_AGENT HOME="$RVH" WIKIS_DIR="$RVH/wikis" XDG_CONFIG_HOME="$RVH/.config" XDG_STATE_HOME="$RVH/.local/state" XDG_DATA_HOME="$RVH/.local/share" LLM_WIKI_CMD=wiki LLM_WIKI_TEST_OS=darwin "$TTYRUN" "$W" "$@"); }
 cp "$HOME/.gitconfig" "$RVH/.gitconfig" 2>/dev/null || true
 lacks "setup --pending with no wikis at all doesn't say every topic is answered" "Every setup topic is answered" rv setup --pending
 expect "it says to make them first" "so setup has nothing to ask about. Make them first: wiki init" rv setup --pending
@@ -14172,7 +14233,7 @@ echo mine > "$RV/cwd/victim.txt"
 ln -s "$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$W" "$RVH/.local/bin")" "$RVH/.local/bin/wiki"
 rm -rf "$RVH/.config/llm-wiki"; mkdir -p "$RVH/.config/llm-wiki"; echo on > "$RVH/.config/llm-wiki/compile"
 printf 'work %s\n' "$RVH/wikis/work" > "$RVH/.config/llm-wiki/collections"
-out="$(printf 'y\n' | LLM_WIKI_TEST_TTY=1 rv uninstall 2>&1)"
+out="$(printf 'y\n' | rvt uninstall 2>&1)"
 check "uninstall removes the link to a wiki's skill" test ! -L "$RVH/.claude/skills/team"
 check "a link whose name has a line break in it is left, and no file named by its second line is touched" bash -c "[ \"\$(cat '$RV/cwd/victim.txt')\" = mine ] && [ -L '$RVH/.claude/skills/odd
 victim.txt' ]"
@@ -14185,28 +14246,30 @@ check "a settings folder that holds only the compile setting is moved aside with
 # and how to help. A fresh machine, and every answer Enter.
 SF="$T/sflow"; mkdir -p "$SF/home"
 printf '[user]\n\tname = t\n\temail = t@example.test\n' > "$SF/home/.gitconfig"
-sf() { env -u WIKIS_DIR HOME="$SF/home" XDG_CONFIG_HOME="$SF/home/.config" XDG_STATE_HOME="$SF/state" XDG_DATA_HOME="$SF/data" PATH="/usr/bin:/bin" LLM_WIKI_NO_GO=1 LLM_WIKI_TEST_TTY=1 LLM_WIKI_STYLE=off LLM_WIKI_CMD=wiki "$W" "$@" 2>&1; }
-out="$(printf '%.0s\n' $(seq 1 200) | sf setup)"
+sf() { env -u WIKIS_DIR HOME="$SF/home" XDG_CONFIG_HOME="$SF/home/.config" XDG_STATE_HOME="$SF/state" XDG_DATA_HOME="$SF/data" PATH="/usr/bin:/bin" LLM_WIKI_NO_GO=1 LLM_WIKI_STYLE=off LLM_WIKI_CMD=wiki "$W" "$@" 2>&1; }
+# sft: the same at a pseudo-terminal, for setup's questions.
+sft() { env -u WIKIS_DIR HOME="$SF/home" XDG_CONFIG_HOME="$SF/home/.config" XDG_STATE_HOME="$SF/state" XDG_DATA_HOME="$SF/data" PATH="/usr/bin:/bin" LLM_WIKI_NO_GO=1 LLM_WIKI_STYLE=off LLM_WIKI_CMD=wiki "$TTYRUN" "$W" "$@" 2>&1; }
+out="$(printf '%.0s\n' $(seq 1 200) | sft setup)"
 case "$out" in *"WELCOME  llm-wiki gives your AI assistant a memory that lasts"*"SETUP  Collection"*) ok "a whole setup opens by saying what llm-wiki is, before any question" ;; *) bad "a whole setup opens by saying what llm-wiki is, before any question" "$out" ;; esac
 case "$out" in *"press Enter to keep it"*) ok "and says Enter keeps an answer" ;; *) bad "and says Enter keeps an answer" "$out" ;; esac
 case "$out" in *"SETUP  Collection"*"SETUP  How you work"*"Where do you usually start (1, 2, 3 or 4) [4]"*) ok "it asks how the person works, once the collection is there" ;; *) bad "it asks how the person works, once the collection is there" "$out" ;; esac
 case "$out" in *"Done."*"TIPS  A few things worth knowing"*'Say "remember this"'*"IMPROVE  llm-wiki gets better when you say what got in your way"*"https://github.com/broxgit/llm-wiki/issues"*) ok "it ends with tips, then how to help improve it" ;; *) bad "it ends with tips, then how to help improve it" "$out" ;; esac
 check "Enter at how-you-work records no pattern" test ! -e "$SF/home/wikis/global/workflows.md"
 check "and counts as answered" grep -qx workflows "$SF/home/.config/llm-wiki/setup"
-out="$(printf '%.0s\n' $(seq 1 200) | sf setup --new)"
+out="$(printf '%.0s\n' $(seq 1 200) | sft setup --new)"
 case "$out" in *WELCOME*) bad "setup --new doesn't repeat the welcome on a machine that has seen it" "$out" ;; *) ok "setup --new doesn't repeat the welcome on a machine that has seen it" ;; esac
 case "$out" in *"How you work"*) bad "or ask again how the person works" "$out" ;; *) ok "or ask again how the person works" ;; esac
-out="$(printf 'notes\n' | sf setup feedback)"
+out="$(printf 'notes\n' | sft setup feedback)"
 case "$out" in *TIPS* | *WELCOME*) bad "one section alone has no welcome and no tips" "$out" ;; *"Done."*) ok "one section alone has no welcome and no tips" ;; *) bad "one section alone has no welcome and no tips" "$out" ;; esac
 # More than one way of working: task folders, then one folder with a wiki that doesn't exist yet.
-out="$(printf '9\n2\n~/tickets\ny\n3\n~/Documents/work\nAcme Holdings\ny\nn\n' | sf setup workflows)"
+out="$(printf '9\n2\n~/tickets\ny\n3\n~/Documents/work\nAcme Holdings\ny\nn\n' | sft setup workflows)"
 case "$out" in *"Answer 1, 2, 3 or 4."*) ok "an answer that isn't a choice is asked again" ;; *) bad "an answer that isn't a choice is asked again" "$out" ;; esac
 check "task folders are recorded as a pattern for the folders inside" grep -qxF -- '- in `~/tickets/*`: the wikis of the repositories inside.' "$SF/home/wikis/global/workflows.md"
 check "asked whether they also work another way, a second is recorded" grep -qxF -- '- in `~/Documents/work`: `Acme-Holdings`.' "$SF/home/wikis/global/workflows.md"
 check "and the wiki it names is created, under a name that works" test -f "$SF/home/wikis/Acme-Holdings/AGENTS.md"
-out="$(printf '3\n~/notes\nnone\nn\n' | sf setup workflows)"
+out="$(printf '3\n~/notes\nnone\nn\n' | sft setup workflows)"
 check "one folder can be told to use no wiki" grep -qxF -- '- in `~/notes`: no wiki.' "$SF/home/wikis/global/workflows.md"
-out="$(printf '2\nnot-a-path\n4\n' | sf setup workflows)"
+out="$(printf '2\nnot-a-path\n4\n' | sft setup workflows)"
 case "$out" in *"a pattern is a full path"*"Where do you usually start (1, 2, 3 or 4) [4]"*) ok "a folder that isn't a full path is refused, and the question comes back" ;; *) bad "a folder that isn't a full path is refused, and the question comes back" "$out" ;; esac
 expect "setup --list has the patterns" "workflows           3 pattern(s) for where sessions outside a project belong" sf setup --list
 # A machine that set up before this question existed is asked once, and a session can answer it.
@@ -14294,7 +14357,7 @@ gw extensions add jira >/dev/null 2>&1
 expect "jira says, with nothing set, that it isn't set up, and names the guide" 'Or ask an agent: "run wiki setup --guide jira and walk me through it"' gw jira config
 expect "so does the status line for it" 'extension jira: on, but not ready: no Atlassian site yet. Run: wiki extensions setup jira. Or ask an agent: "run wiki setup --guide jira and walk me through it"' gw status
 expect "and the list of extensions" 'not ready: no Atlassian site yet. Run: wiki extensions setup jira. Or ask an agent: "run wiki setup --guide jira' gw extensions
-expect "extensions setup says it at its opening" "it runs wiki setup --guide jira" bash -c "printf '\n\n\n\n\n\n\n' | env HOME='$GH' WIKIS_DIR='$GH/wikis' LLM_WIKI_CMD=wiki LLM_WIKI_TEST_TTY=1 '$W' extensions setup jira"
+expect "extensions setup says it at its opening" "it runs wiki setup --guide jira" bash -c "printf '\n\n\n\n\n\n\n' | env HOME='$GH' WIKIS_DIR='$GH/wikis' LLM_WIKI_CMD=wiki '$TTYRUN' '$W' extensions setup jira"
 out="$(gw setup --guide jira)"
 case "$out" in *"- jira: on, not ready (no Atlassian site yet). Change one: wiki extensions set jira <key> <value> (a - clears it)"*) ok "the jira section says what is missing and how to change one setting" ;; *) bad "the jira section says what is missing and how to change one setting" "$out" ;; esac
 for k in site email token token_cmd projects auto_close done_statuses; do
@@ -14419,7 +14482,7 @@ for n in jira confluence; do
   bads=""
   for v in "${BADS[@]}"; do
     rm -f "$GCFG/atlassian" "$GCFG/jira" "$GCFG/confluence"
-    out="$(printf '%s\n\n' "$v" | sx env LLM_WIKI_TEST_TTY=1 "$REPO/extensions/wiki-$n" --wiki-setup 2>&1)"
+    out="$(printf '%s\n\n' "$v" | sx "$TTYRUN" "$REPO/extensions/wiki-$n" --wiki-setup 2>&1)"
     case "$out" in *"so it wasn't saved."*) ;; *) bads="$bads [$v: not refused]" ;; esac
     ! grep -q '^site' "$GCFG/atlassian" 2>/dev/null || bads="$bads [$v: saved]"
   done
@@ -14427,10 +14490,33 @@ for n in jira confluence; do
 done
 rm -f "$GCFG/atlassian" "$GCFG/jira" "$GCFG/confluence"
 for v in 'https://acme.example/jira' 'http://127.0.0.1:8080'; do
-  printf '%s\n\n\n' "$v" | sx env LLM_WIKI_TEST_TTY=1 "$JX" --wiki-setup >/dev/null 2>&1
+  printf '%s\n\n\n' "$v" | sx "$TTYRUN" "$JX" --wiki-setup >/dev/null 2>&1
   check "jira's setup takes $v" grep -qx "site = $v" "$GCFG/atlassian"
   rm -f "$GCFG/atlassian"
 done
+# An extension's setup saves the sign-in, which a session never sets, so it takes a person at a
+# terminal: through wiki and run directly, with no terminal it is refused and writes nothing.
+cp "$GCFG/extensions-on" "$GH/extensions-on.keep2"
+printf 'jira\nconfluence\njenkins\ngithub\ngitlab\n' >> "$GCFG/extensions-on"
+cfgsum() { (cd "$GCFG" && find . -type f -exec cksum {} + | sort); }
+before="$(cfgsum)"
+bads=""
+for n in jira confluence jenkins github gitlab; do
+  out="$(printf 'https://sandbox.invalid\nme@sandbox.invalid\nskip\n\n\n\n' | sx "$W" extensions setup "$n" 2>&1)" && bads="$bads [$n through wiki: exit 0]"
+  case "$out" in *"error: extensions setup asks questions and saves the sign-in, so a person answers them at a terminal"*"wiki setup --guide $n"*) ;; *) bads="$bads [$n through wiki: $out]" ;; esac
+  out="$(printf 'https://sandbox.invalid\nme@sandbox.invalid\nskip\n\n\n\n' | sx "$REPO/extensions/wiki-$n" --wiki-setup 2>&1)" && bads="$bads [$n run directly: exit 0]"
+  case "$out" in *"error: setup asks questions and saves what you answer, so a person answers them at a terminal"*"wiki setup --guide $n"*) ;; *) bads="$bads [$n run directly: $out]" ;; esac
+done
+[ -z "$bads" ] && ok "with no terminal, each extension's setup is refused, through wiki and run directly" || bad "with no terminal, each extension's setup is refused, through wiki and run directly" "$bads"
+out="$(printf 'https://sandbox.invalid\nme@sandbox.invalid\n' | sx env CLAUDECODE=1 "$TTYRUN" "$W" extensions setup jira 2>&1)"
+case "$out" in *"not from an agent's shell"*) ok "and so is an agent's shell, even at a terminal" ;; *) bad "and so is an agent's shell, even at a terminal" "$out" ;; esac
+[ "$(cfgsum)" = "$before" ] && ok "and no settings file was written or changed" || bad "and no settings file was written or changed" "$(diff <(printf '%s\n' "$before") <(cfgsum))"
+# At a terminal, the input ending stops the setup there: what comes after is not saved.
+out="$(printf 'https://acme.example/jira\n' | sx "$TTYRUN" "$JX" --wiki-setup 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"the input ended before an answer, so this stopped here and saved nothing more"*) true ;; *) false ;; esac && ok "jira's setup stops where the input ends" || bad "jira's setup stops where the input ends" "exit $code: $out"
+check "with the site it was given, and no email after it" bash -c "grep -qx 'site = https://acme.example/jira' '$GCFG/atlassian' && ! grep -q '^email' '$GCFG/atlassian'"
+rm -f "$GCFG/atlassian"
+cp "$GH/extensions-on.keep2" "$GCFG/extensions-on"; rm -f "$GH/extensions-on.keep2"
 cat > "$GH/cloud.py" <<'PYX'
 import importlib.machinery, importlib.util, sys
 sys.dont_write_bytecode = True
@@ -15649,7 +15735,7 @@ if command -v go >/dev/null 2>&1 && [ -n "$HPLAT" ]; then
   expect "helper auto on turns it back on" "helper auto: on" "$HW" helper auto on
   refuse "helper auto needs on or off" "$HW" helper auto maybe
   lacks "helper auto counts as answering the question, so setup --list doesn't mark it new" "<- new" bash -c "'$HW' setup --list | grep '^helper'"
-  out="$(printf 'n\n' | in_tty "$HW" setup helper 2>&1)"
+  out="$(printf 'n\n' | tty_run "$HW" setup helper 2>&1)"
   case "$out" in *"Fetch it automatically at session start?"*"helper auto: off"*) ok "setup helper asks, and a no turns it off" ;; *) bad "setup helper asks, and a no turns it off" "$out" ;; esac
   lacks "and the question isn't new any more" "<- new" bash -c "'$HW' setup --list | grep '^helper'"
   "$HW" helper auto on >/dev/null

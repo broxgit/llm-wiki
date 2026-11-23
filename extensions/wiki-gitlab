@@ -1000,6 +1000,14 @@ def on_event(args):
 
 # ---- setup, and what a session can change ----------------------------------------------------------
 
+def input_ended():
+    """The input ended before an answer. A question is never answered with its default for that,
+    since a default can be yes: this stops here, and saves nothing more."""
+    print()
+    die("the input ended before an answer, so this stopped here and saved nothing more. "
+        "Run it again in a terminal, and answer each question.")
+
+
 def read_line():
     """One line from standard input, a byte at a time, so nothing meant for whoever
     reads next is taken. None when the input has ended."""
@@ -1018,8 +1026,7 @@ def ask_yn(prompt, default=False):
     sys.stdout.flush()
     line = read_line()
     if line is None:
-        print()
-        return default
+        input_ended()
     line = line.strip().lower()
     return default if line == "" else line.startswith("y")
 
@@ -1234,6 +1241,11 @@ def main(argv):
             print(msg)
         return 1 if msg else 0
     if argv and argv[0] == "--wiki-setup":
+        # Its answers are saved as settings, a sign-in among them, which a session never sets.
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            die(f"setup asks questions and saves what you answer, so a person answers them at a terminal. "
+                f"Agents: run {CMD} setup --guide gitlab and follow it with the user in this session, "
+                f"or tell the user to run {CMD} extensions setup gitlab in a terminal.")
         return setup()
     if argv and argv[0] in ("-h", "--help", "help"):
         print(USAGE, end="")

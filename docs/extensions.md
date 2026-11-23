@@ -233,7 +233,7 @@ The settings, set only by `wiki github fix on` and `wiki extensions setup github
 | `fix_max_lines` | The most lines, added plus removed: 400 |
 | `fix_build` | `yes` lets a fix change dependency and build files; `no` (the default) refuses them. `wiki github fix on` asks, again if it is already on |
 
-`wiki github unwatch` also turns fixing off for that clone, and `wiki github watch` never turns it on. `LLM_WIKI_TEST_TTY`, which the smoke tests use for a terminal, counts only when the settings file's folder is not the real `~/.config/llm-wiki`.
+`wiki github unwatch` also turns fixing off for that clone, and `wiki github watch` never turns it on.
 
 Read every fix before you rely on it. A pull request it opens says so, and so does the commit.
 
