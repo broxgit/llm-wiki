@@ -2814,6 +2814,24 @@ case "$out" in *"- ls (cli): listing  [installed]"*) ok "start marks a listed to
 case "$out" in *"nosuchtool123 (cli): never installed  [NOT FOUND on this shell's PATH"*) ok "and one that isn't" ;; *) bad "and one that isn't" "$out" ;; esac
 case "$out" in *"jira (mcp): tickets  [an MCP server"*) ok "and asks the agent to check an MCP itself" ;; *) bad "and asks the agent to check an MCP itself" "$out" ;; esac
 check "nothing in the page is run" test ! -e "$T/pwned"
+# A name is read as setup tools reads it, looked for on PATH only, and what is printed has
+# no control character but a tab.
+printf -- '## For agents\n\n- Rule one.\033]0;title\007\n\n## Tools\n\n- ask (cli): a function of wiki.sh\n- -v (cli): a leading dash\n- ls (cli): with a carriage return\r\n- tabbed (mcp):\ta tab\n' > "$WIKIS_DIR/demo/wiki/conventions.md"
+out="$("$W" start web 2>&1)"
+case "$out" in *"- ask (cli): a function of wiki.sh  [NOT FOUND on this shell's PATH"*) ok "start looks a tool up on PATH, never among wiki.sh's own functions" ;; *) bad "start looks a tool up on PATH, never among wiki.sh's own functions" "$out" ;; esac
+case "$out" in *"- -v (cli): a leading dash"*) ok "start prints a line whose name has a leading dash" ;; *) bad "start prints a line whose name has a leading dash" "$out" ;; esac
+case "$out" in *"- -v (cli): a leading dash  ["*) bad "and doesn't look it up" "$out" ;; *) ok "and doesn't look it up" ;; esac
+case "$out" in *"- ls (cli): with a carriage return  [installed]"*"- Rule one.]0;title"*) bad "start's sections keep their order" "$out" ;; *"- Rule one.]0;title"*"- ls (cli): with a carriage return  [installed]"*) ok "start strips the escape and the carriage return, and keeps the words" ;; *) bad "start strips the escape and the carriage return, and keeps the words" "$out" ;; esac
+case "$out" in *"$(printf '\033')"* | *"$(printf '\r')"* | *"$(printf '\007')"*) bad "and no control character reaches the agent" "$out" ;; *) ok "and no control character reaches the agent" ;; esac
+case "$out" in *"$(printf -- '- tabbed (mcp):\ta tab')"*) ok "a tab is kept" ;; *) bad "a tab is kept" "$out" ;; esac
+if [ "$(id -u)" != 0 ]; then
+  chmod 000 "$WIKIS_DIR/demo/wiki/conventions.md"
+  out="$("$W" start web 2>&1)" && rc=0 || rc=$?
+  case "$rc:$out" in "0:"*"demo/wiki/conventions.md can't be read from this shell, so its For agents and Tools sections were left out"*) ok "a conventions page start can't read is said in one line, and start goes on" ;; *) bad "a conventions page start can't read is said in one line, and start goes on" "exit $rc: $out" ;; esac
+  chmod 644 "$WIKIS_DIR/demo/wiki/conventions.md"
+else
+  skipped "a conventions page start can't read (root can read anything)"
+fi
 rm -f "$WIKIS_DIR/demo/wiki/conventions.md"
 expect "start with no wiki for the repository uses the shared one" "No wiki covers brand-new yet" "$W" start brand-new
 git -C "$WIKIS_DIR" remote set-url origin "$T/nowhere.git"
@@ -3638,6 +3656,104 @@ else
   skipped "settings that can't be read (root can read anything)"
 fi
 rm -f "$HOME/.claude/settings.json"
+
+# setup tools lists the tools the wikis name and adds no rule (code review M4). It used to
+# offer Bash(<tool> *), yes at Enter: a whole program, from a line any session can write.
+TW4="$T/tools-wikis"; TA4="$T/tools-agy"
+mkdir -p "$TA4/config"
+# A wiki, as is_wiki takes one: an index and a handbook.
+twiki() { mkdir -p "$TW4/$1/wiki" && printf '# Index\n' > "$TW4/$1/index.md" && cp "$REPO/template/AGENTS.md" "$TW4/$1/AGENTS.md"; }
+for n in tl tm lk lw ur; do twiki "$n"; done
+twiki "bad name"; twiki "$(printf 'bidi\342\200\256x')"
+# Folders that are read for no tool: one that is no wiki, two whose names valid_name refuses,
+# a wiki whose conventions page is a link, and one whose wiki folder is a link.
+mkdir -p "$TW4/nw/wiki" "$T/tools-elsewhere/wiki"
+printf -- '## Tools\n\n- notawiki (cli): x\n' > "$TW4/nw/wiki/conventions.md"
+printf -- '## Tools\n\n- oddname (cli): x\n' > "$TW4/bad name/wiki/conventions.md"
+printf -- '## Tools\n\n- bidiname (cli): x\n' > "$TW4/$(printf 'bidi\342\200\256x')/wiki/conventions.md"
+printf -- '## Tools\n\n- linkedpage (cli): x\n' > "$T/tools-elsewhere/conventions.md"
+ln -s "$T/tools-elsewhere/conventions.md" "$TW4/lk/wiki/conventions.md"
+printf -- '## Tools\n\n- linkeddir (cli): x\n' > "$T/tools-elsewhere/wiki/conventions.md"
+rm -rf "$TW4/lw/wiki" && ln -s "$T/tools-elsewhere/wiki" "$TW4/lw/wiki"
+printf -- '## Tools\n\n- unreadabletool (cli): x\n' > "$TW4/ur/wiki/conventions.md"
+[ "$(id -u)" = 0 ] || chmod 000 "$TW4/ur/wiki/conventions.md"
+printf -- '---\ntitle: Conventions\n---\n\n## Tools\n\n- bash (cli): a shell\n- python3.14 (cli): a newer Python\n- nosuchtool123 (cli): never installed\n- ask (cli): a name this script also has for a function\n- -rf (cli): a leading dash\n- $(touch %s/tools-pwned) (cli): shell characters\n- two words (cli): a space\n- a\033[31mb (cli): a control character\n- jira (mcp): tickets\n\n## Other\n\n- zzz (cli): outside the section\n' "$T" > "$TW4/tl/wiki/conventions.md"
+printf -- '## Tools\n\n- bash (cli): here too\n' > "$TW4/tm/wiki/conventions.md"
+printf '{"permissions":{"allow":["Bash(ls *)","Bash(git:*)","Bash(git status *)","Bash(npm*)","Bash(*)","Bash","Bash(make)","Bash(echo h\303\251)"]},"theme":"dark"}\n' > "$HOME/.claude/settings.json"
+printf '{"userSettings":{"globalPermissionGrants":{"allow":["command(git)","read_file(/x)"]}}}\n' > "$TA4/config/config.json"
+cp "$HOME/.claude/settings.json" "$T/tools-settings.before"; cp "$TA4/config/config.json" "$T/tools-agy.before"
+# No terminal: the step asks nothing, so it runs from a pipe, as an agent would run it.
+tsetup() { printf 'y\ny\ny\ny\ny\ny\n' | env WIKIS_DIR="$TW4" LLM_WIKI_AGY_HOME="$TA4" "$W" setup tools 2>&1; }
+out="$(tsetup)" && rc=0 || rc=$?
+case "$rc:$out" in "0:"*"SETUP  Tools"*"Your wikis list these command-line tools:"*) ok "setup tools runs with no terminal, and lists" ;; *) bad "setup tools runs with no terminal, and lists" "exit $rc: $out" ;; esac
+case "$out" in *"Enter keeps the value in brackets"* | *"walk you through it"* | *"needs a terminal"*) bad "with no line about brackets or questions" "$out" ;; *"SETUP  Tools"*) ok "with no line about brackets or questions" ;; *) bad "with no line about brackets or questions" "$out" ;; esac
+expect "a neighbouring step still needs a terminal" "setup asks questions, so it needs a terminal" env WIKIS_DIR="$TW4" "$W" setup collections </dev/null
+expect "and so does a whole setup" "setup asks questions, so it needs a terminal" env WIKIS_DIR="$TW4" "$W" setup </dev/null
+out4="$(env WIKIS_DIR="$TW4" "$W" setup --guide tools 2>&1)"
+case "$out4" in *"- tools: lists the command-line tools the wikis name"*"It asks nothing and changes nothing, so you may run it: "*"setup tools"*) ok "the guide says an agent may run setup tools, and that it only lists" ;; *) bad "the guide says an agent may run setup tools, and that it only lists" "$out4" ;; esac
+case "$out4" in *"- tools: Terminal only"*) bad "and no longer calls it terminal only" "$out4" ;; *) ok "and no longer calls it terminal only" ;; esac
+out4="$(env WIKIS_DIR="$TW4" "$W" setup --guide 2>&1)"
+case "$out4" in *"- Also terminal only: "*"setup plugin | skills | upgrade | collections"*"with no question asked: "*"setup tools"*) ok "the whole guide names it apart from the terminal-only steps" ;; *) bad "the whole guide names it apart from the terminal-only steps" "$out4" ;; esac
+expect "the guide still calls a neighbouring step terminal only" "- collections: Terminal only: " env WIKIS_DIR="$TW4" "$W" setup --guide collections
+# The parts of a line are joined by " - ", or by a middle dot where the locale has one, as CI's does.
+# These checks are about the words, so they read the line with the plain separator.
+TL_DOT="$(printf '\302\267')"
+tl_plain() { printf '%s' "$1" | LC_ALL=C sed "s/ $TL_DOT / - /g"; }
+case "$(tl_plain "$out")" in *"bash - installed - listed by tl, tm"*) ok "setup tools lists a tool, which wikis list it, and that it is installed" ;; *) bad "setup tools lists a tool, which wikis list it, and that it is installed" "$out" ;; esac
+case "$(tl_plain "$out")" in *"nosuchtool123 - not installed here - listed by tl"*) ok "and one that is missing" ;; *) bad "and one that is missing" "$out" ;; esac
+case "$(tl_plain "$out")" in *"python3.14 - installed"*) ok "a name with a dot and digits is a name" ;; *) bad "a name with a dot and digits is a name" "$out" ;; esac
+case "$(tl_plain "$out")" in *"ask - not installed here"*) ok "a name is looked for on PATH, never among the script's own functions" ;; *) bad "a name is looked for on PATH, never among the script's own functions" "$out" ;; esac
+n4="$(printf '%s\n' "$out" | grep -c 'tl: line [0-9]* of wiki/conventions.md names no plain program, so it was left out. Do: ' || true)"
+[ "$n4" = 4 ] && ok "a line whose name has a leading dash, shell characters, a space or a control character is named by its line, and left out" || bad "a line whose name has a leading dash, shell characters, a space or a control character is named by its line, and left out" "$n4 named: $out"
+case "$out" in *"-rf"* | *'$(touch'* | *"two words"* | *"$(printf '\033')"* | *zzz* | *jira*) bad "and no text of those lines reaches the terminal, nor a tool outside the section" "$out" ;; *) ok "and no text of those lines reaches the terminal, nor a tool outside the section" ;; esac
+check "and nothing in them was run" test ! -e "$T/tools-pwned"
+case "$out" in *"Allow "* | *"[Y/n]"* | *"[y/N]"*) bad "setup tools asks nothing" "$out" ;; *) ok "setup tools asks nothing" ;; esac
+check "and writes no rule to ~/.claude/settings.json, with yes typed at every line" cmp -s "$T/tools-settings.before" "$HOME/.claude/settings.json"
+check "nor to Antigravity's grants" cmp -s "$T/tools-agy.before" "$TA4/config/config.json"
+check "and leaves no backup, since it wrote nothing" test ! -e "$HOME/.claude/settings.json.bak"
+case "$out" in *"Setup adds no rule for these."*"such as Bash(git status *). A rule such as Bash(git *) lets them run anything git can do."*"Antigravity can't allow part of a command"*) ok "it shows a rule for one command, and says what a rule for a whole program allows" ;; *) bad "it shows a rule for one command, and says what a rule for a whole program allows" "$out" ;; esac
+case "$out" in *"Bash(bash "* | *"Bash(python3.14"*) bad "and no rule is built from a listed name" "$out" ;; *) ok "and no rule is built from a listed name" ;; esac
+# A rule for a whole program that is already there, as an earlier setup tools wrote, is named and kept.
+case "$out" in *"Claude Code: Bash(ls *) in ~/.claude/settings.json lets agents run anything ls can do, without asking."*"Do: if you didn't mean that, remove it there."*) ok "a rule for a whole program already in the settings is named, with what it allows" ;; *) bad "a rule for a whole program already in the settings is named, with what it allows" "$out" ;; esac
+case "$out" in *"Bash(git:*) in ~/.claude/settings.json lets agents run anything git can do"*) ok "in the colon form too" ;; *) bad "in the colon form too" "$out" ;; esac
+case "$out" in *"Antigravity: command(git) in "*"lets agents run anything git can do"*) ok "and an Antigravity grant for a whole program" ;; *) bad "and an Antigravity grant for a whole program" "$out" ;; esac
+case "$out" in *"Bash(git status *) in"* | *"read_file(/x) in"* | *"Bash(make) in"*) bad "a rule for one command, one exact command, or a grant that runs nothing, isn't named" "$out" ;; *"Bash(ls *) in"*) ok "a rule for one command, one exact command, or a grant that runs nothing, isn't named" ;; *) bad "a rule for one command, one exact command, or a grant that runs nothing, isn't named" "$out" ;; esac
+case "$out" in *"Bash(npm*) in ~/.claude/settings.json lets agents run anything npm can do"*) ok "a rule with no space before its star is named" ;; *) bad "a rule with no space before its star is named" "$out" ;; esac
+case "$out" in *"Claude Code: Bash(*) in ~/.claude/settings.json lets agents run any command at all"*) ok "Bash(*) is named as any command at all" ;; *) bad "Bash(*) is named as any command at all" "$out" ;; esac
+case "$out" in *"Claude Code: Bash in ~/.claude/settings.json lets agents run any command at all"*) ok "and so is a bare Bash" ;; *) bad "and so is a bare Bash" "$out" ;; esac
+# The settings file holds a character outside ASCII: it is read as UTF-8 under an ASCII locale too.
+out4="$(printf '' | env LC_ALL=C PYTHONUTF8=0 WIKIS_DIR="$TW4" "$W" setup tools 2>&1)"
+case "$out4" in *"Claude Code: Bash(ls *) in ~/.claude/settings.json lets agents run"*) ok "under an ASCII locale, a settings file with a character outside ASCII is still read" ;; *) bad "under an ASCII locale, a settings file with a character outside ASCII is still read" "$out4" ;; esac
+# Which folders are read: wikis only, with names valid_name takes, and no page or wiki folder that is a link.
+case "$(tl_plain "$out")" in *"notawiki"* | *"oddname"* | *"bidiname"* | *"linkedpage"* | *"linkeddir"* | *"bad name"* | *"$(printf '\342\200\256')"*) bad "no tool is read from a folder that is no wiki, has an odd name, or reaches through a link" "$out" ;; *"bash - installed"*) ok "no tool is read from a folder that is no wiki, has an odd name, or reaches through a link" ;; *) bad "no tool is read from a folder that is no wiki, has an odd name, or reaches through a link" "$out" ;; esac
+case "$out" in *"lk: wiki/conventions.md is a link, so its tools weren't read. Do: "*) ok "a conventions page that is a link is named in one line" ;; *) bad "a conventions page that is a link is named in one line" "$out" ;; esac
+if [ "$(id -u)" != 0 ]; then
+  case "$out" in *"ur: wiki/conventions.md can't be read from this shell, so its tools weren't read. Do: "*) ok "a conventions page that can't be read is named in one line, and the step goes on" ;; *) bad "a conventions page that can't be read is named in one line, and the step goes on" "$out" ;; esac
+  case "$out" in *unreadabletool*) bad "and nothing of it is listed" "$out" ;; *) ok "and nothing of it is listed" ;; esac
+  # The same page last in the folder, where a failed read once ended the step.
+  mkdir -p "$T/tools-last/zz/wiki"; printf '# Index\n' > "$T/tools-last/zz/index.md"; cp "$REPO/template/AGENTS.md" "$T/tools-last/zz/AGENTS.md"
+  printf -- '## Tools\n\n- unreadabletool (cli): x\n' > "$T/tools-last/zz/wiki/conventions.md"; chmod 000 "$T/tools-last/zz/wiki/conventions.md"
+  out4="$(env WIKIS_DIR="$T/tools-last" "$W" setup tools </dev/null 2>&1)" && rc=0 || rc=$?
+  case "$rc:$out4" in "0:"*"zz: wiki/conventions.md can't be read"*) ok "when it is the last wiki in the folder too" ;; *) bad "when it is the last wiki in the folder too" "exit $rc: $out4" ;; esac
+  chmod 644 "$T/tools-last/zz/wiki/conventions.md" "$TW4/ur/wiki/conventions.md"; rm -rf "$T/tools-last"
+else
+  skipped "a conventions page that can't be read (root can read anything)"
+fi
+# Where no terminal is to be had, as here, the old step's question failed before it was asked.
+# So the step's own code is read too: nothing in it asks, or writes a rule or a grant.
+case "$(awk '/^setup_tools\(\) \{/,/^}/' "$W")" in
+  "") bad "setup_tools is found in wiki.sh" ;;
+  *ask_yn* | */dev/tty* | *claude_allow* | *agy_grant*) bad "setup_tools has no question and no call that writes a rule or a grant" "$(awk '/^setup_tools\(\) \{/,/^}/' "$W")" ;;
+  *) ok "setup_tools has no question and no call that writes a rule or a grant" ;;
+esac
+# SETUP_YES from the environment answers yes to every question. It is refused before the step.
+out4="$(env SETUP_YES=1 WIKIS_DIR="$TW4" "$W" setup tools </dev/null 2>&1)" && rc=0 || rc=$?
+case "$rc:$out4" in 1:*"--yes works only with: "*"setup chat"*) ok "SETUP_YES in the environment is refused for setup tools" ;; *) bad "SETUP_YES in the environment is refused for setup tools" "exit $rc: $out4" ;; esac
+check "and the settings are still as they were" cmp -s "$T/tools-settings.before" "$HOME/.claude/settings.json"
+out4="$(env WIKIS_DIR="$TW4" LLM_WIKI_FIXED_DIR=1 "$W" update --wikis-only </dev/null 2>&1)"
+case "$out4" in *"NEXT  "*"setup tools"*) bad "wiki update's closing lines no longer suggest setup tools" "$out4" ;; *"NEXT  "*) ok "wiki update's closing lines no longer suggest setup tools" ;; *) bad "wiki update's closing lines no longer suggest setup tools (no NEXT)" "$out4" ;; esac
+lacks "and its source has no such suggestion" "To let agents run the tools your wikis list" cat "$W"
+rm -rf "$TW4" "$TA4" "$T/tools-elsewhere" "$T/tools-settings.before" "$T/tools-agy.before" "$HOME/.claude/settings.json"
 fi
 
 if section "Collections"; then
