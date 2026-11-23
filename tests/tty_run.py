@@ -131,6 +131,63 @@ def answers(timeout):
     return lines
 
 
+# Linux tells the master nothing when a command empties the terminal's input, as getpass does
+# before it asks: the answer typed into a silence was lost there, and the command then met the
+# end of the input. So on Linux an answer goes into a silence only once a command in the
+# foreground is seen blocked in a read of this terminal, or after BLIND seconds when that can't
+# be told. A read is recognised by its system call's number, which the machine's kind decides.
+LINUX = sys.platform.startswith("linux")
+BLIND = 5.0
+READ_CALLS = {"x86_64": 0, "aarch64": 63, "arm64": 63, "riscv64": 63, "loongarch64": 63}
+
+
+def reading_terminal(master, slave, command):
+    """True when a foreground process is blocked reading the terminal, False when none is,
+    and None when it can't be told (not Linux, a machine not listed, or /proc not readable)."""
+    nr = READ_CALLS.get(os.uname().machine)
+    if not LINUX or nr is None:
+        return None
+    try:
+        tty = os.ttyname(slave)
+    except OSError:
+        return None
+    try:
+        front = os.tcgetpgrp(master)
+    except OSError:
+        try:
+            front = os.getpgid(command) if command else None
+        except OSError:
+            front = None
+    if not front:
+        return None
+    seen = False
+    try:
+        names = os.listdir("/proc")
+    except OSError:
+        return None
+    for name in names:
+        if not name.isdigit():
+            continue
+        try:
+            with open("/proc/%s/stat" % name) as f:
+                fields = f.read().rsplit(")", 1)[1].split()
+            if int(fields[2]) != front:
+                continue
+            with open("/proc/%s/syscall" % name) as f:
+                call = f.read().split()
+        except (OSError, IndexError, ValueError):
+            continue
+        seen = True
+        try:
+            if int(call[0]) != nr:
+                continue
+            if os.readlink("/proc/%s/fd/%d" % (name, int(call[1], 16))) == tty:
+                return True
+        except (OSError, IndexError, ValueError):
+            continue
+    return False if seen else None
+
+
 def pending_input(fd):
     """Bytes typed that the command has not read yet, or 0 when that can't be told."""
     try:
@@ -289,6 +346,8 @@ def main():
     typed = None  # the last answer typed, as (bytes, how): how is "prompt" or "idle"
     unread = False  # it was typed, and not yet seen read
     eofs = 0
+    looked_at = 0.0  # when a process blocked in a read was last looked for (Linux)
+    reading = None
     command = None
     code = None
     stopped = None
@@ -339,6 +398,11 @@ def main():
                 quiet = now - last_out
                 prompt = bool(tail) and tail != b"\n" and tail in PROMPT_ENDS and quiet >= QUIET
                 idle = not prompt and quiet >= IDLE and now - typed_at >= IDLE
+                if idle and LINUX and quiet < BLIND and now - looked_at >= 0.1:
+                    looked_at = now
+                    reading = reading_terminal(master, slave, command)
+                if idle and LINUX and reading is False and quiet < BLIND:
+                    idle = False
                 if prompt or idle:
                     if lines:
                         to_type = lines.pop(0)
