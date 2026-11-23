@@ -985,26 +985,35 @@ which_miss() {
 # needs, from its wiki/conventions.md: the "## For agents" and "## Tools" sections.
 # A Tools line reads "- <name> (<kind>): what it's for". A cli tool is looked up on
 # PATH, so the agent knows at once what's missing. MCP servers can't be seen from
-# here: the agent checks its own. Nothing in the page is ever run.
+# here: the agent checks its own. Nothing in the page is ever run. A name is one plain
+# program name, as setup tools reads it, looked for on PATH only, never among this
+# script's functions. Control characters other than a tab are taken out of what is
+# printed, so an escape sequence or a carriage return in the page never reaches the
+# agent's terminal. A page this shell can't read is said in one line, and start goes on.
 print_conventions() {
   local f="$1/wiki/conventions.md" sec line name kind
   [ -f "$f" ] || return 0
+  if ! can_read "$f"; then
+    echo
+    echo "===== $(tilde "$f") can't be read from this shell, so its For agents and Tools sections were left out"
+    return 0
+  fi
   # A citation is for people reading the page. A session gets the rule without it.
-  sec="$(awk '/^## For agents/ { on = 1; next } on && /^## / { exit } on' "$f" | sed -E 's/ *[[(]raw\/[^])]*[])]//g')"
+  sec="$({ awk '/^## For agents/ { on = 1; next } on && /^## / { exit } on' "$f" 2>/dev/null || true; } | sed -E 's/ *[[(]raw\/[^])]*[])]//g' | LC_ALL=C tr -d '\000-\010\013-\037\177')"
   if [ -n "$(printf '%s' "$sec" | tr -d '[:space:]')" ]; then
     echo
     echo "===== For agents, from $(tilde "$f")"
     printf '%s\n' "$sec"
   fi
-  sec="$(awk '/^## Tools/ { on = 1; next } on && /^## / { exit } on' "$f" | sed -E 's/ *[[(]raw\/[^])]*[])]//g')"
+  sec="$({ awk '/^## Tools/ { on = 1; next } on && /^## / { exit } on' "$f" 2>/dev/null || true; } | sed -E 's/ *[[(]raw\/[^])]*[])]//g' | LC_ALL=C tr -d '\000-\010\013-\037\177')"
   [ -n "$(printf '%s' "$sec" | tr -d '[:space:]')" ] || return 0
   echo
   echo "===== Tools this work needs, from $(tilde "$f")"
   while IFS= read -r line; do
-    name="$(printf '%s' "$line" | sed -n 's/^- \([A-Za-z0-9._-]*\) (\([a-z]*\)).*/\1/p')"
-    kind="$(printf '%s' "$line" | sed -n 's/^- \([A-Za-z0-9._-]*\) (\([a-z]*\)).*/\2/p')"
+    name="$(printf '%s' "$line" | LC_ALL=C sed -n 's/^- \([A-Za-z0-9_][A-Za-z0-9._-]*\) (\([a-z]*\)).*/\1/p')"
+    kind="$(printf '%s' "$line" | LC_ALL=C sed -n 's/^- \([A-Za-z0-9_][A-Za-z0-9._-]*\) (\([a-z]*\)).*/\2/p')"
     case "$kind" in
-      cli) if command -v "$name" >/dev/null 2>&1; then line="$line  [installed]"; else line="$line  [NOT FOUND on this shell's PATH: tell the user before you work around it]"; fi ;;
+      cli) if type -P "$name" >/dev/null 2>&1; then line="$line  [installed]"; else line="$line  [NOT FOUND on this shell's PATH: tell the user before you work around it]"; fi ;;
       mcp) line="$line  [an MCP server: check your tools for it]" ;;
     esac
     printf '%s\n' "$line"
@@ -8991,7 +9000,6 @@ EOF2
   _UI_RAIL=yes
   ui_stage NEXT "what to do now"
   [ -t 0 ] || [ -z "$(setup_pending)" ] || ui_item warn "New settings to look at: $(typed "$WIKI_CMD setup --new"). Or ask an agent: $(typed "\"run $WIKI_CMD setup --guide and walk me through it\"")"
-  [ -z "$(listed_cli_tools)" ] || ui_item warn "To let agents run the tools your wikis list without asking: $(typed "$WIKI_CMD setup tools")"
   session_update_note
 }
 
@@ -14328,44 +14336,166 @@ setup_agy_grants() {
   setup_mark antigravity.grants
 }
 
-# setup tools: offer each agent permission to run the command-line tools the wikis
-# list under "## Tools", one tool at a time. Only tools a person listed, and only
-# with a person at the terminal: a session never grants itself a tool.
-listed_cli_tools() {
-  local d
+# setup tools: list the command-line tools the wikis name under "## Tools", which wikis
+# name each, and whether it is installed here. It asks nothing and writes nothing, so it
+# runs without a terminal too. A name comes from a wiki page, which any session or
+# teammate can write, so it never becomes a rule that lets agents run a whole program
+# (code review M4). A rule for a whole program that is already in place is named, and
+# taking it out is left to the person.
+#
+# A name is one plain program name: a letter, digit or _, then letters, digits, ., _
+# and -. Anything else, such as a space, a control character, a shell character or a
+# leading dash, is left out, and tools_unread names its line.
+TOOLS_NAME_RE='^- [A-Za-z0-9_][A-Za-z0-9._-]* \(cli\):'
+
+# tools_pages: "<state><TAB><wiki>" for each wiki in the collection with a conventions
+# page. Only a folder is_wiki takes, whose name valid_name takes, so no odd byte of a
+# folder's name reaches the terminal or shifts a field. The state is ok, link (the page
+# is a link, so it isn't read) or unreadable.
+tools_pages() {
+  local d n f
   for d in "$WIKIS_DIR"/*/; do
     d="${d%/}"
-    [ -f "$d/wiki/conventions.md" ] || continue
-    awk '/^## Tools/ { on = 1; next } on && /^## / { exit } on' "$d/wiki/conventions.md" \
-      | sed -n "s/^- \([A-Za-z0-9._-]*\) (cli):.*/\1\t${d##*/}/p"
-  done | awk -F'\t' '{ w[$1] = w[$1] ? w[$1] ", " $2 : $2 } END { for (t in w) print t "\t" w[t] }' | sort
+    n="${d##*/}"
+    valid_name "$n" || continue
+    is_wiki "$d" || continue
+    f="$d/wiki/conventions.md"
+    if [ -L "$f" ]; then
+      printf 'link\t%s\n' "$n"
+    elif [ ! -f "$f" ]; then
+      continue
+    elif can_read "$f"; then
+      printf 'ok\t%s\n' "$n"
+    else
+      printf 'unreadable\t%s\n' "$n"
+    fi
+  done
+}
+
+# tools_awk <wiki> <action>: run an awk action over each line of the Tools section of a
+# wiki's conventions page, which tools_pages found readable. A read that fails all the
+# same prints nothing and never ends the command.
+tools_awk() {
+  TOOLS_WIKI="$1" TOOLS_RE="$TOOLS_NAME_RE" LC_ALL=C awk '
+    /^## Tools/ { on = 1; next }
+    on && /^## / { exit }
+    on { '"$2"' }' "$WIKIS_DIR/$1/wiki/conventions.md" 2>/dev/null || true
+}
+
+# listed_cli_tools: "<tool><TAB><wikis that list it>", one tool a line, sorted.
+listed_cli_tools() {
+  local s n
+  tools_pages | while IFS="$TAB" read -r s n; do
+    [ "$s" = ok ] || continue
+    tools_awk "$n" 'if ($0 ~ ENVIRON["TOOLS_RE"]) print $2 "\t" ENVIRON["TOOLS_WIKI"]'
+  done | LC_ALL=C awk -F'\t' '{ w[$1] = w[$1] ? w[$1] ", " $2 : $2 } END { for (t in w) print t "\t" w[t] }' | LC_ALL=C sort
+}
+
+# tools_unread: "<wiki><TAB><line number>" for each line under "## Tools" that says
+# (cli) and names no plain program, so it was left out of the list.
+tools_unread() {
+  local s n
+  tools_pages | while IFS="$TAB" read -r s n; do
+    [ "$s" = ok ] || continue
+    tools_awk "$n" 'if ($0 ~ /\(cli\)/ && $0 !~ ENVIRON["TOOLS_RE"]) print ENVIRON["TOOLS_WIKI"] "\t" NR'
+  done
+}
+
+# tools_whole_rules: the rules already in place that let agents run any command of one
+# program, or any command at all, as "<agent><TAB><rule><TAB><file><TAB><program>", with
+# * for the program when it is any command. Claude Code's Bash(<name> *), Bash(<name>:*)
+# and Bash(<name>*), and Bash(*) and Bash for any command; Antigravity's command(<name>),
+# other than llm-wiki's own grants. Bash(<name>) alone is one exact command, and is left
+# out. An earlier version of setup tools wrote Bash(<name> *) and command(<name>). Only a
+# rule whose name is a plain program name is read, so what is printed is never more than
+# one line. The files are read as UTF-8, whatever the locale. Project settings aren't read.
+tools_whole_rules() {
+  command -v python3 >/dev/null 2>&1 || return 0
+  if [ -f "$HOME/.claude/settings.json" ] && can_read "$HOME/.claude/settings.json"; then
+    python3 -c '
+import json, re, sys
+try:
+    allow = json.load(open(sys.argv[1], encoding="utf-8"))["permissions"]["allow"]
+except Exception:
+    allow = []
+for r in allow if isinstance(allow, list) else []:
+    if not isinstance(r, str):
+        continue
+    if r in ("Bash", "Bash(*)"):
+        print("Claude Code\t" + r + "\t~/.claude/settings.json\t*")
+        continue
+    m = re.fullmatch(r"Bash\(([A-Za-z0-9_][A-Za-z0-9._-]*)(?: \*|:\*|\*)\)", r)
+    if m:
+        print("Claude Code\t" + r + "\t~/.claude/settings.json\t" + m.group(1))' "$HOME/.claude/settings.json" 2>/dev/null || true
+  fi
+  if [ "$(agy_state)" != none ] && [ -f "$AGY_CONFIG" ] && can_read "$AGY_CONFIG"; then
+    agy_grants 2>/dev/null | python3 -c '
+import json, re, sys
+ours = set(sys.stdin.read().splitlines())
+try:
+    allow = json.load(open(sys.argv[1], encoding="utf-8"))["userSettings"]["globalPermissionGrants"]["allow"]
+except Exception:
+    allow = []
+for g in allow if isinstance(allow, list) else []:
+    m = re.fullmatch(r"command\(([A-Za-z0-9_][A-Za-z0-9._-]*)\)", g) if isinstance(g, str) and g not in ours else None
+    if m:
+        print("Antigravity\t" + g + "\t" + sys.argv[2] + "\t" + m.group(1))' "$AGY_CONFIG" "$(tilde "$AGY_CONFIG")" 2>/dev/null || true
+  fi
 }
 
 setup_tools() {
-  local all t wikis claude=0 agy=0 picked=""
+  local all bad old skip t wikis who rule file prog
   section "Tools"
+  skip="$(tools_pages | grep -v '^ok' || true)"
   all="$(listed_cli_tools)"
-  if [ -z "$all" ]; then
+  bad="$(tools_unread)"
+  old="$(tools_whole_rules)"
+  if [ -z "$all$bad$skip" ]; then
     ui_detail "No wiki lists command-line tools yet. Add them under \"## Tools\" in a wiki's wiki/conventions.md, as \"- gh (cli): what it's for\"."
-    return 0
   fi
-  [ -d "$HOME/.claude" ] && command -v python3 >/dev/null 2>&1 && claude=1
-  [ "$(agy_state)" != none ] && agy_grants_missing >/dev/null 2>&1 && agy=1
-  [ "$claude$agy" != 00 ] || { ui_detail "Neither Claude Code nor Antigravity is set up here, so there's nothing to grant."; return 0; }
-  ui_detail "Your wikis list these command-line tools. For each, agents can be allowed to run it without asking:"
-  while IFS="$TAB" read -r t wikis; do
-    command -v "$t" >/dev/null 2>&1 || { echo "  $t ($wikis): not installed here, skipped"; continue; }
-    ask_yn "  Allow $t (listed by $wikis)?" y </dev/tty && picked="$picked $t"
-  done <<EOF2
+  if [ -n "$all" ]; then
+    ui_detail "Your wikis list these command-line tools:"
+    while IFS="$TAB" read -r t wikis; do
+      # type -P looks on PATH only, never at this script's own functions.
+      if type -P "$t" >/dev/null 2>&1; then
+        ui_detail "$t" "installed" "listed by $wikis"
+      else
+        ui_detail "$t" "not installed here" "listed by $wikis"
+      fi
+    done <<EOF2
 $all
 EOF2
-  [ -n "$picked" ] || return 0
-  if [ "$claude" = 1 ]; then
-    for t in $picked; do printf 'Bash(%s *)\n' "$t"; done | claude_allow && ui_item ok "Claude Code: allowed$picked (backup beside ~/.claude/settings.json)."
   fi
-  if [ "$agy" = 1 ]; then
-    for t in $picked; do printf 'command(%s)\n' "$t"; done | agy_grant && ui_item ok "Antigravity: allowed$picked. Restart it, or it may save its old list over this."
+  while IFS="$TAB" read -r t wikis; do
+    case "$t" in
+      link) ui_item warn "$wikis: wiki/conventions.md is a link, so its tools weren't read. Do: put the page itself in the wiki." ;;
+      unreadable) ui_item warn "$wikis: wiki/conventions.md can't be read from this shell, so its tools weren't read. Do: check the file's permissions, or run this in your own terminal." ;;
+    esac
+  done <<EOF2
+$skip
+EOF2
+  while IFS="$TAB" read -r wikis t; do
+    [ -n "$t" ] || continue
+    ui_item warn "$wikis: line $t of wiki/conventions.md names no plain program, so it was left out. Do: write it as \"- <name> (cli): what it's for\", with a name of letters, digits, ., _ and -."
+  done <<EOF2
+$bad
+EOF2
+  if [ -n "$all" ]; then
+    ui_detail "Setup adds no rule for these. A name in a wiki page could otherwise let agents run anything that program can do."
+    [ ! -d "$HOME/.claude" ] || ui_detail "To let agents run one command without asking, add a rule for that command alone to permissions.allow in ~/.claude/settings.json, such as $(typed "Bash(git status *)"). A rule such as Bash(git *) lets them run anything git can do."
+    [ "$(agy_state)" = none ] || ui_detail "Antigravity can't allow part of a command, so approve each one when Gemini asks."
   fi
+  while IFS="$TAB" read -r who rule file prog; do
+    [ -n "$prog" ] || continue
+    if [ "$prog" = "*" ]; then
+      ui_item warn "$who: $rule in $file lets agents run any command at all, without asking. Setup leaves it as it is. Do: if you didn't mean that, remove it there."
+    else
+      ui_item warn "$who: $rule in $file lets agents run anything $prog can do, without asking. Earlier versions of setup tools added rules like it, and setup leaves it as it is. Do: if you didn't mean that, remove it there."
+    fi
+  done <<EOF2
+$old
+EOF2
+  return 0
 }
 
 # setup collections: add a collection, such as one for work beside a personal one.
@@ -14713,7 +14843,8 @@ EOF2
   fi
   if [ "$any" = 0 ]; then
     case "$sec" in
-      plugin | skills | upgrade | tools | collections) echo "- $sec: Terminal only: $c setup $sec" ;;
+      tools) echo "- tools: lists the command-line tools the wikis name, whether each is installed, and any rule in place that lets agents run a whole program. It asks nothing and changes nothing, so you may run it: $c setup tools" ;;
+      plugin | skills | upgrade | collections) echo "- $sec: Terminal only: $c setup $sec" ;;
       *) echo "- $sec: not on this machine, so there is nothing to set. $c setup --list shows what is." ;;
     esac
   fi
@@ -14721,7 +14852,8 @@ EOF2
     if [ "$jpend" -gt 0 ]; then mark=" [not answered yet]"; else mark=" [answered]"; fi
     echo "- journal, $jdef more settings, all as they come$mark: the report's shape and range, where your code is, which days are working days. Ask once whether to keep them as they are. Keep them: $c journal keep. To go through them: $c setup --guide journal"
   fi
-  [ -n "$sec" ] || echo "- Also terminal only: $c setup plugin | skills | upgrade | tools | collections"
+  [ -n "$sec" ] || echo "- Also terminal only: $c setup plugin | skills | upgrade | collections"
+  [ -n "$sec" ] || echo "- Also, to list the tools the wikis name and any rule that lets agents run a whole program, with no question asked: $c setup tools"
   return 0
 }
 
@@ -15598,7 +15730,8 @@ EOF
   done
   [ -z "${SETUP_YES:-}" ] || [ "$what" = chat ] || die "--yes works only with: $WIKI_CMD setup chat"
   # LLM_WIKI_TEST_TTY: the smoke tests answer setup's questions through a pipe.
-  [ -n "${SETUP_YES:-}" ] || [ -t 0 ] || [ -n "${LLM_WIKI_TEST_TTY:-}" ] || die "setup asks questions, so it needs a terminal. $WIKI_CMD setup --list prints the current values. Run: $WIKI_CMD setup --guide, and follow it with the user in this session."
+  # setup tools asks nothing and writes nothing, so it needs no terminal: an agent may run it.
+  [ -n "${SETUP_YES:-}" ] || [ -t 0 ] || [ "$what" = tools ] || [ -n "${LLM_WIKI_TEST_TTY:-}" ] || die "setup asks questions, so it needs a terminal. $WIKI_CMD setup --list prints the current values. Run: $WIKI_CMD setup --guide, and follow it with the user in this session."
   if [ -n "$fresh" ]; then
     [ -z "$what" ] && [ "$SETUP_MODE" != new ] || die_usage "--fresh goes through everything, so it takes no section and no --new"
     UN_FRESH=1 cmd_uninstall || die "the old set-up is only partly undone, so setup wasn't started. Do: see to the lines marked ! above, then run: $WIKI_CMD setup --fresh"
@@ -15608,6 +15741,8 @@ EOF
     export WIKIS_DIR LLM_WIKI_CMD="$WIKI_CMD"
     exec "$REPO/wiki.sh" setup
   fi
+  # It only lists, so it has no brackets to keep and no questions to walk through.
+  if [ "$what" = tools ]; then setup_tools; return 0; fi
   if [ "$SETUP_MODE" = new ] && [ -d "$WIKIS_DIR" ] && [ "$(claude_state)" = current ] && ! plugin_pending; then
     n="$(setup_pending | wc -l | tr -d ' ')"
     [ "$n" -gt 0 ] || [ -n "$(setup_upgrade_needed)" ] || { ui_item ok "Nothing new to set up."; return 0; }

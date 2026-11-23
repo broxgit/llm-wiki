@@ -4,6 +4,13 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. The date is the day the entry is written, in UTC, and several entries can share a day. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-11-23: setup tools lists the tools and adds no rule
+
+- `wiki setup tools` no longer offers to let agents run a whole program, such as `Bash(git *)`. A tool's name comes from a wiki page anyone can write.
+- It lists each tool your wikis name, which wikis name it, and whether it's installed. It asks nothing, so an agent may run it too.
+- It names any rule for a whole program already in your settings, and leaves it there. `wiki update` no longer suggests the step.
+- Do: run `wiki setup tools` once, and remove any rule it names that you didn't mean to give.
+
 ## 2026-11-21: a session's capture takes a file of its project only
 
 - With no terminal, `wiki capture --copy` and `--file` take a file only from the repository they run in or from a wikis folder.
