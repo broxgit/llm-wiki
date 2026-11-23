@@ -10,6 +10,12 @@ Format: one `## YYYY-MM-DD: title` section per entry, newest first. The date is 
 - It keeps an agent from copying the wrong file in by mistake. It is no guard: a note piped in is taken from anywhere.
 - At a terminal, any file is taken, as before. Setup's offer of allow rules now says they let a session save any file it can read and push it.
 
+## 2026-11-20: harvest leaves notes about you on this machine
+
+- `wiki harvest` no longer copies Claude Code's memory notes about you into the shared wiki, which a sync pushes. It ends with how many it left.
+- A note whose type harvest can't read is left too. `wiki harvest --with-user` copies them all, as before.
+- With a remote, harvest's first line says where the notes it copies are pushed at the next sync.
+
 ## 2026-11-20: a Confluence setting names a wiki in one collection
 
 - Every collection has a `global` wiki, so a Confluence setting can name one with its collection, such as `auto = work/global` or `watch.work/global`.

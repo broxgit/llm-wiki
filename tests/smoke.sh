@@ -847,6 +847,7 @@ expect "a choice setting completes its values" "summary" "$W" __complete 4 journ
 expect "tips --mute completes tip names" "share-skill" "$W" __complete 3 tips --mute ""
 expect "upgrade completes wiki names" "demo" "$W" __complete 2 upgrade ""
 expect "seed completes directories" "__dirs__" "$W" __complete 2 seed ""
+expect "harvest completes --with-user" "--with-user" "$W" __complete 2 harvest ""
 expect "open completes add and done" "done" "$W" __complete 2 open ""
 expect "open add completes its options" "--who" "$W" __complete 5 open add demo "Heading" ""
 expect "patterns completes seen" "seen" "$W" __complete 2 patterns ""
@@ -2298,12 +2299,40 @@ printf '# Memory index\n' > "$M/memory/MEMORY.md"
 printf -- '---\nname: no-push\nmetadata:\n  type: feedback\n---\n\nNever push without asking.\n' > "$M/memory/no-push.md"
 printf -- '---\nname: deploy-host\nmetadata:\n  type: reference\n---\n\nDeploys go through the canary host.\n' > "$M/memory/deploy-host.md"
 printf -- '---\nname: stray\nmetadata:\n  type: project\n---\n\nA fact from a folder with no project.\n' > "$HOME/.claude/projects/-x-unknown/memory/stray.md"
+# Notes about the person stay on the machine (code review M8), however the type is written.
+# One whose type can't be read could be one, and its body can't say otherwise.
+printf -- '---\nname: me\nmetadata:\n  type: user\n---\n\nPat zzlives on Elm Street.\n' > "$M/memory/me.md"
+printf -- '---\nname: quoted\ntype: "user"\n---\n\nPat zzquoted.\n' > "$M/memory/quoted.md"
+printf -- '---\nname: capital\nType: User  \r\n---\r\n\nPat zzcapital.\n' > "$M/memory/capital.md"
+printf -- '---\nname: notype\n---\n\n---\ntype: project\n---\nPat zznotype.\n' > "$M/memory/notype.md"
+mine="4 note(s) about you, 1 of them with no type harvest can read, are in Claude Code's memory"
 rm -f "$HOME/.config/llm-wiki/tips"
 expect "the harvest tip counts memory notes" "3 note(s) of its own memory" "$W" tips
 expect "a dry run shows where each note would go" "deploy-host.md -> demo (reference, from demo)" "$W" harvest --dry-run
+out="$("$W" harvest --dry-run 2>&1)"
+case "$out" in *"me.md"* | *"quoted.md"* | *"capital.md"* | *"notype.md"*) bad "a dry run leaves out notes about you, however their type is written" "$out" ;; *) ok "a dry run leaves out notes about you, however their type is written" ;; esac
+case "$out" in *"$mine and would not be copied. To copy them too, run: "*"harvest --with-user") ok "and counts them, with the option that copies them" ;; *) bad "and counts them, with the option that copies them" "$out" ;; esac
+out="$("$W" harvest --dry-run --with-user 2>&1)"
+case "$out" in *"me.md -> global (user, from demo)"*"quoted.md"*) ok "a dry run with --with-user lists them" ;; *) bad "a dry run with --with-user lists them" "$out" ;; esac
+case "$out" in *"notype.md -> demo (untyped, from demo)"*) ok "with a note of no type, untyped as before" ;; *) bad "with a note of no type, untyped as before" "$out" ;; esac
+case "$out" in *"7 note(s) would be copied"*) ok "and would copy all seven" ;; *) bad "and would copy all seven" "$out" ;; esac
 check "a dry run copies nothing" bash -c "! ls '$WIKIS_DIR'/*/raw/ | grep -q harvest"
+# Where copied notes are pushed is the first thing harvest says, and only with a remote.
+old_origin="$(git -C "$WIKIS_DIR" remote get-url origin 2>/dev/null || true)"
+git -C "$WIKIS_DIR" remote remove origin 2>/dev/null || true
+lacks "with no remote, harvest names none" "are pushed to" "$W" harvest --dry-run
+git -C "$WIKIS_DIR" remote add origin "https://zztoken@example.com/me/wikis.git"
+out="$("$W" harvest --dry-run 2>&1)"
+case "$out" in "Notes copied into demo and global are pushed to \`https://example.com/me/wikis.git\` at the next sync."*) ok "with one, a dry run names it first" ;; *) bad "with one, a dry run names it first" "$out" ;; esac
+case "$out" in *zztoken*) bad "without what the address holds before an @" "$out" ;; *) ok "without what the address holds before an @" ;; esac
 out="$("$W" harvest 2>&1)"
+git -C "$WIKIS_DIR" remote remove origin
+[ -z "$old_origin" ] || git -C "$WIKIS_DIR" remote add origin "$old_origin"
+case "$out" in "Notes copied into demo and global are pushed to"*) ok "and so does harvest" ;; *) bad "and so does harvest" "$out" ;; esac
 case "$out" in *"3 note(s) copied"*) ok "harvest copies the notes" ;; *) bad "harvest copies the notes" "$out" ;; esac
+check "no note about you is copied" bash -c "! grep -l 'Pat zz' '$WIKIS_DIR'/*/raw/*"
+first="$(printf '%s\n' "$out" | tail -n 1)"
+case "$first" in "$mine and were not copied. To copy them too, run: "*"harvest --with-user") ok "harvest ends with how many it left" ;; *) bad "harvest ends with how many it left" "$out" ;; esac
 check "a correction goes to the shared wiki" bash -c "grep -l 'Never push without asking' '$WIKIS_DIR'/global/raw/*-harvest-*no-push.md"
 check "a reference goes to the project's wiki" bash -c "grep -l 'canary host' '$WIKIS_DIR'/demo/raw/*-harvest-*deploy-host.md"
 check "a note from an unknown folder goes to the shared wiki" bash -c "ls '$WIKIS_DIR'/global/raw/ | grep -q 'harvest-[0-9]*-stray.md'"
@@ -2311,7 +2340,88 @@ check "MEMORY.md, the index, is left out" bash -c "! ls '$WIKIS_DIR'/*/raw/ | gr
 check "each wiki gets a manifest naming the source project" bash -c "grep -q 'saved while working in demo' '$WIKIS_DIR'/global/raw/*-harvest-00-manifest.md"
 check "the memory notes are untouched" grep -q 'Never push without asking' "$M/memory/no-push.md"
 expect "harvesting again copies nothing new" "skipped 3 already harvested" "$W" harvest
+out="$("$W" harvest 2>&1)"
+case "$out" in *"$first") ok "and says the same count of notes about you" ;; *) bad "and says the same count of notes about you" "$out" ;; esac
 lacks "after a harvest, its tip goes away" "of its own memory" "$W" tips
+touch -t 209901010000 "$M/memory/me.md"
+lacks "a note about you doesn't bring the tip back" "of its own memory" "$W" tips
+out="$("$W" harvest --with-user 2>&1)"
+case "$out" in *"4 note(s) copied"*) ok "harvest --with-user copies them too" ;; *) bad "harvest --with-user copies them too" "$out" ;; esac
+case "$out" in *"about you"*) bad "and leaves none behind" "$out" ;; *) ok "and leaves none behind" ;; esac
+check "a note about you goes to the shared wiki" bash -c "grep -l 'Pat zzlives' '$WIKIS_DIR'/global/raw/*-harvest-*-me.md"
+expect "harvest without it still counts them, harvested or not" "$mine and were not copied" "$W" harvest
+# A type counts only at the top or directly under metadata:. Any other type line, a byte
+# that isn't UTF-8 or a NUL byte can only make a note unreadable, and it stays.
+HU8=()
+u8="$(locale -a 2>/dev/null | grep -i -m 1 -E '^(en_US|C)\.utf-?8$' || true)"
+[ -z "$u8" ] || HU8=(env LC_ALL="$u8")
+HX="$T/harvest-x"; mkdir -p "$HX/a/memory" "$HX/b/memory" "$HX/c/memory" "$HX/d/memory"
+printf -- "---\ntype: feedback\nmetadata:\n  'type': user\n---\n\nzzsqkey\n" > "$HX/a/memory/sqkey.md"
+printf -- '---\nname: b\ndescription: |\n  type: feedback\n---\n\nzzblock\n' > "$HX/a/memory/block.md"
+printf -- '---\ntype: feedback\nmetadata:\n  type: user # \377\n---\n\nzzbyte\n' > "$HX/a/memory/byte.md"
+printf -- '---\ntype: feedback\n\000type: user\n---\n\nzznul\n' > "$HX/a/memory/nul.md"
+out="$(${HU8[@]+"${HU8[@]}"} "$W" harvest --dry-run --from "$HX" 2>&1)"
+case "$out" in *sqkey.md*) bad "a quoted type key under metadata: is a type line" "$out" ;; *) ok "a quoted type key under metadata: is a type line" ;; esac
+case "$out" in *block.md*) bad "a type inside a block scalar never gives the type" "$out" ;; *) ok "a type inside a block scalar never gives the type" ;; esac
+case "$out" in *byte.md*) bad "a type line with a byte that isn't UTF-8 is still read" "$out" ;; *) ok "a type line with a byte that isn't UTF-8 is still read" ;; esac
+case "$out" in *nul.md*) bad "frontmatter with a NUL byte is unreadable" "$out" ;; *) ok "frontmatter with a NUL byte is unreadable" ;; esac
+case "$out" in *"4 note(s) with no type harvest can read are in Claude Code's memory and would not be copied"*) ok "when every note left is unreadable, the count says so plainly" ;; *) bad "when every note left is unreadable, the count says so plainly" "$out" ;; esac
+rm -rf "$HX/a"
+printf -- '---\n"Type": User\n---\n\nzzdqkey\n' > "$HX/b/memory/dqkey.md"
+expect "a quoted key is the key" "1 note(s) about you are in Claude Code's memory" "$W" harvest --dry-run --from "$HX"
+rm -rf "$HX/b"
+# A link is never followed: a project folder, a memory folder or a note.
+printf -- '---\ntype: feedback\n---\n\nzzlinked\n' > "$T/harvest-target.md"
+mkdir -p "$T/harvest-targets/memory" && cp "$T/harvest-target.md" "$T/harvest-targets/memory/t.md"
+ln -s "$T/harvest-targets" "$HX/plink"
+rm -rf "$HX/c/memory" && ln -s "$T/harvest-targets/memory" "$HX/c/memory"
+ln -s "$T/harvest-target.md" "$HX/d/memory/linked.md"
+printf -- '---\ntype: feedback\n---\n\nzzindex\n' > "$HX/d/memory/Memory.md"
+printf -- '---\ntype: feedback\n---\n\nzzplain\n' > "$HX/d/memory/plain.md"
+out="$("$W" harvest --from "$HX" 2>&1)"
+case "$out" in *"1 note(s) copied"*) ok "harvest copies the plain note alone" ;; *) bad "harvest copies the plain note alone" "$out" ;; esac
+check "and nothing reached through a link" bash -c "! grep -l zzlinked '$WIKIS_DIR'/*/raw/*"
+check "and no memory.md in any case" bash -c "! grep -l zzindex '$WIKIS_DIR'/*/raw/*"
+# The tip counts the same, and a folder it can't read doesn't end it.
+H2="$T/harvest-home"; mkdir -p "$H2/.claude/projects/p/memory" "$H2/.claude/projects/locked"
+cp "$T/harvest-target.md" "$H2/.claude/projects/p/memory/real.md"
+ln -s "$T/harvest-target.md" "$H2/.claude/projects/p/memory/linked.md"
+ln -s "$T/harvest-targets" "$H2/.claude/projects/plink"
+chmod 000 "$H2/.claude/projects/locked"
+expect "the tip leaves out links, and a folder it can't read doesn't end it" "Claude Code holds 1 note(s)" env HOME="$H2" XDG_CONFIG_HOME="$H2/config" "$W" tips
+chmod 755 "$H2/.claude/projects/locked"
+rm -rf "$H2" "$HX/c" "$HX/plink" "$HX/d/memory/linked.md" "$HX/d/memory/Memory.md"
+# A file name with a control character or a line break is counted, never printed.
+printf -- '---\ntype: feedback\n---\n\nzzodd1\n' > "$HX/d/memory/bad
+name.md"
+printf -- '---\ntype: feedback\n---\n\nzzodd2\n' > "$HX/d/memory/$(printf 'esc\033[31m').md"
+out="$("$W" harvest --dry-run --from "$HX" 2>&1)"
+case "$out" in *"bad"* | *"$(printf '\033')"*) bad "a dry run doesn't print such a name" "$out" ;; *) ok "a dry run doesn't print such a name" ;; esac
+case "$out" in *"2 note(s) have a control character or a line break in their file name and would not be copied. Do: rename them"*) ok "and counts them in a line of their own" ;; *) bad "and counts them in a line of their own" "$out" ;; esac
+"$W" harvest --from "$HX" >/dev/null 2>&1
+check "and harvest copies neither" bash -c "! grep -l 'zzodd' '$WIKIS_DIR'/*/raw/*"
+rm -rf "$HX"/d/memory/*
+# A folder name from a transcript is only looked up when it is a wiki name: .. could
+# otherwise match the folder above the collection.
+cp "$WIKIS_DIR/demo/AGENTS.md" "$WIKIS_DIR/demo/index.md" "$T/" && mkdir -p "$T/raw"
+printf '{"type":"user","cwd":"/zz-nowhere/..","sessionId":"h9"}\n' > "$HX/d/h9.jsonl"
+printf -- '---\ntype: project\n---\n\nzzdotdot\n' > "$HX/d/memory/dotdot.md"
+out="$("$W" harvest --dry-run --from "$HX" 2>&1)"
+rm -f "$T/AGENTS.md" "$T/index.md"; rmdir "$T/raw"
+case "$out" in *"dotdot.md -> global (project, from an unknown project)"*) ok "a cwd ending in .. is not a wiki name" ;; *) bad "a cwd ending in .. is not a wiki name" "$out" ;; esac
+# The remote line reads the push address, and shows no name, token, query or odd byte.
+old_origin="$(git -C "$WIKIS_DIR" remote get-url origin 2>/dev/null || true)"
+git -C "$WIKIS_DIR" remote remove origin 2>/dev/null || true
+git -C "$WIKIS_DIR" remote add origin "https://fetch.example/me/wikis.git"
+git -C "$WIKIS_DIR" config remote.origin.pushurl "https://pat@example.com:zzTOKEN@host.example/me/w.git?zzq=1#zzf"
+out="$("$W" harvest --dry-run --from "$HX" 2>&1)"
+case "$out" in "Notes copied into global are pushed to \`https://host.example/me/w.git\` at the next sync."*) ok "the remote line names the push address, after the last @, without a query" ;; *) bad "the remote line names the push address, after the last @, without a query" "$out" ;; esac
+git -C "$WIKIS_DIR" config remote.origin.pushurl "$(printf 'https://zzu:zzp@example.com/a\377b.git')"
+out="$(${HU8[@]+"${HU8[@]}"} "$W" harvest --dry-run --from "$HX" 2>&1)"
+case "$out" in "Notes copied into global are pushed to \`example.com\` at the next sync."*) ok "an address it can't read whole shows the host alone" ;; *) bad "an address it can't read whole shows the host alone" "$out" ;; esac
+git -C "$WIKIS_DIR" remote remove origin
+[ -z "$old_origin" ] || git -C "$WIKIS_DIR" remote add origin "$old_origin"
+rm -rf "$HX" "$T/harvest-targets" "$T/harvest-target.md"
 fi
 
 if section "Setup fixes"; then
