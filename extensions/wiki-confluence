@@ -27,8 +27,10 @@ import base64
 import datetime
 import importlib.util
 import difflib
+import email.utils
 import hashlib
 import html.parser
+import http.client
 import json
 import os
 import posixpath
@@ -333,6 +335,17 @@ def unfit(text):
         if c in SEPARATORS or cat[0] == "C" or cat in ("Zl", "Zp"):
             return "can't hold a control character or a line separator"
     return ""
+
+
+def server_text(value):
+    """A string read from Confluence, safe to print, compare and put in a note: every control character and
+    line separator, a line break or a carriage return among them, is a space, runs of space are one, and the
+    ends are stripped. Anyone who can edit a page writes its title, and a line break in it would be a line of
+    its own in a note, such as one that says which version was noted. "" for nothing or what isn't a string."""
+    if not isinstance(value, str):
+        return ""
+    return " ".join("".join(" " if c in SEPARATORS or unicodedata.category(c)[0] == "C"
+                            or unicodedata.category(c) in ("Zl", "Zp") else c for c in value).split())
 
 
 def set_conf(path, key, value, drop=()):
@@ -744,41 +757,53 @@ class Confluence:
         else:
             auth = "Bearer " + tok
         self.headers = {"Authorization": auth, "Accept": "application/json", "Content-Type": "application/json"}
+        self.date = ""
 
     def call(self, method, path, body=None):
-        """The JSON Confluence answers with. Raises Refused for a 400, 404 or 409."""
+        """The JSON object Confluence answers with. Raises Refused for a 400, 403, 404 or 409, and for an answer
+        that couldn't be read: one that isn't a JSON object, or one cut off. Either way the caller has nothing."""
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(self.url + path, data=data, headers=self.headers, method=method)
         try:
             with OPENER.open(req, timeout=30) as r:
+                # The server's own time, for a space's watch: see space_pages.
+                self.date = r.headers.get("Date") or ""
                 raw = r.read()
-                return json.loads(raw) if raw.strip() else {}
+            got = json.loads(raw) if raw.strip() else {}
         except urllib.error.HTTPError as e:
-            text = e.read().decode("utf-8", "replace")
             try:
-                msg = json.loads(text).get("message") or text
+                text = e.read().decode("utf-8", "replace")
+            except (OSError, http.client.HTTPException):
+                text = ""
+            try:
+                parsed = json.loads(text)
             except ValueError:
-                msg = text
+                parsed = None
+            msg = server_text(parsed.get("message") if isinstance(parsed, dict) else None) or server_text(text)
             if e.code == 401:
                 die(f"Confluence refused the sign-in (401) at {self.url}. Check the email and the token: {CMD} confluence config shows what is set.")
             if e.code in (400, 403, 404, 409):
-                raise Refused(e.code, " ".join(msg.split())[:300])
-            die(f"Confluence answered {e.code} for {method} {path.split('?')[0]}: {' '.join(msg.split())[:200]}")
+                raise Refused(e.code, msg[:300] or f"Confluence answered {e.code}")
+            die(f"Confluence answered {e.code} for {method} {path.split('?')[0]}: {msg[:200]}")
         except (urllib.error.URLError, TimeoutError, OSError) as e:
             no_answer(e, self.url)
+        except http.client.HTTPException:
+            raise Refused(0, UNREADABLE)
         except ValueError:
             die(f"{self.url} didn't answer with JSON. Is url the address of Confluence itself? On Cloud it ends in /wiki.")
+        if not isinstance(got, dict):
+            raise Refused(0, UNREADABLE)
+        return got
 
     def find(self, space, title):
         q = urllib.parse.urlencode({"spaceKey": space, "title": title, "type": "page", "expand": "version,metadata.labels"})
-        res = self.call("GET", "/rest/api/content?" + q).get("results") or []
+        res = results(self.call("GET", "/rest/api/content?" + q))
         return res[0] if res else None
 
-    def children(self, page_id):
+    def children(self, pid):
         out, start = [], 0
         while True:
-            d = self.call("GET", f"/rest/api/content/{page_id}/child/page?expand=version,metadata.labels&limit=100&start={start}")
-            res = d.get("results") or []
+            res = results(self.call("GET", f"/rest/api/content/{pid}/child/page?expand=version,metadata.labels&limit=100&start={start}"))
             out += res
             if len(res) < 100:
                 return out
@@ -791,24 +816,105 @@ class Confluence:
         if parent:
             page["ancestors"] = [{"id": str(parent)}]
         made = self.call("POST", "/rest/api/content", page)
-        self.call("POST", f"/rest/api/content/{made['id']}/label", [{"prefix": "global", "name": LABEL}])
+        if not page_id(made.get("id")):
+            raise Refused(0, f"{UNREADABLE}, so the page may have been made. {AFTER_HALF}")
+        made["id"] = page_id(made.get("id"))
+        try:
+            self.label(made["id"])
+        except Refused as e:
+            raise Refused(e.code, f"the page was made, but Confluence refused its label: {e.message}. The next publish finishes it")
         return made
 
+    def label(self, pid):
+        self.call("POST", f"/rest/api/content/{pid}/label", [{"prefix": "global", "name": LABEL}])
+
+    def unlabel(self, pid):
+        self.call("DELETE", f"/rest/api/content/{pid}/label?" + urllib.parse.urlencode({"name": LABEL}))
+
     def update(self, page, title, body, digest):
-        n = int((page.get("version") or {}).get("number") or 1) + 1
+        n = version_of(page)
+        if n is None:
+            raise Refused(0, UNREADABLE)
         return self.call("PUT", f"/rest/api/content/{page['id']}", {
             "id": page["id"], "type": "page", "title": title,
             "body": {"storage": {"value": body, "representation": "storage"}},
-            "version": {"number": n, "message": f"{LABEL} {digest}"}})
+            "version": {"number": n + 1, "message": f"{LABEL} {digest}"}})
+
+
+UNREADABLE = "Confluence's answer couldn't be read"
+AFTER_HALF = ("If an earlier publish made it, add the label llm-wiki to it in Confluence, or delete it there, "
+              "then publish again.")
+
+
+def obj(value):
+    """value if it is a JSON object, else an empty one: an answer of another shape reads as having nothing."""
+    return value if isinstance(value, dict) else {}
+
+
+def page_id(value):
+    """A page's id as Confluence gives it, or "" for one that isn't digits. It goes into request paths, file
+    names and a note's record lines, so nothing else is taken."""
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        value = str(value)
+    return value if isinstance(value, str) and re.fullmatch(r"[0-9]{1,30}", value) else ""
+
+
+def version_of(page):
+    """A page's version number, or None where it isn't a whole number."""
+    n = obj(page.get("version")).get("number")
+    return n if isinstance(n, int) and not isinstance(n, bool) and n >= 0 else None
+
+
+def results(answer):
+    """The pages in a list answer, each an object whose id is digits. Refused for any other shape."""
+    res = answer.get("results")
+    res = [] if res is None else res
+    if not isinstance(res, list) or not all(isinstance(r, dict) and page_id(r.get("id")) for r in res):
+        raise Refused(0, UNREADABLE)
+    for r in res:
+        r["id"] = page_id(r["id"])
+    return res
+
+
+def labels_of(page):
+    """The names of a page's labels, or None where the answer doesn't say: that is not the same as none."""
+    labels = obj(page.get("metadata")).get("labels")
+    found = labels.get("results") if isinstance(labels, dict) else None
+    if not isinstance(found, list):
+        return None
+    return [server_text(obj(l).get("name")) for l in found]
 
 
 def ours(page):
-    labels = (((page.get("metadata") or {}).get("labels") or {}).get("results")) or []
-    return any(l.get("name") == LABEL for l in labels)
+    return LABEL in (labels_of(page) or [])
+
+
+def looks_published(page):
+    """Whether a page's version message is the one publish writes."""
+    msg = obj(page.get("version")).get("message")
+    return isinstance(msg, str) and bool(re.fullmatch(rf"{LABEL} [0-9a-f]{{16}}", msg))
+
+
+def half_made(c, page):
+    """Whether a page without the label is one an earlier run made and then couldn't label: Confluence makes a
+    page and labels it in two calls. It says it has no labels, it is still version 1, so nobody has edited it,
+    the version's message is the one publish writes, and its text has publish's banner. A page a person
+    made, or edited since, fails at least one of those, and is never taken."""
+    if labels_of(page) != [] or version_of(page) != 1 or not looks_published(page):
+        return False
+    try:
+        d = c.call("GET", f"/rest/api/content/{page['id']}?expand=version,body.storage,metadata.labels")
+    except Refused:
+        return False
+    if labels_of(d) != [] or version_of(d) != 1 or page_id(d.get("id")) != page["id"]:
+        return False
+    # Folded, as Confluence may break the sentence across lines: that changes no decision about whose page it is.
+    return BANNER in " ".join(page_text(obj(obj(d.get("body")).get("storage")).get("value")).split())
 
 
 def digest_of(page):
-    m = re.match(rf"{LABEL} ([0-9a-f]+)$", ((page.get("version") or {}).get("message") or "").strip())
+    msg = obj(page.get("version")).get("message")
+    m = re.match(rf"{LABEL} ([0-9a-f]+)$", msg.strip()) if isinstance(msg, str) else None
     return m.group(1) if m else ""
 
 
@@ -830,6 +936,65 @@ INLINE = re.compile(
 
 def cdata(text):
     return "<![CDATA[" + text.replace("]]>", "]]]]><![CDATA[>") + "]]>"
+
+
+ITEM = re.compile(r"(\s*)([-*+]|\d+[.)])\s+")
+# The one rule for a line that opens a fenced block, wherever one is recognised: the mark, then at most a
+# language word. A line such as "```foo``` is inline code" opens nothing.
+FENCE_OPENER = re.compile(r"(\s*)(`{3,}|~{3,})\s*([A-Za-z0-9_+#.-]*)\s*$")
+
+
+def fence_opens(line, any_indent=False):
+    """The mark a line opens a fenced block with, or "". At the top level the fence is indented three spaces at
+    most; inside a list item, as far as the item's text is, so any indent counts there."""
+    m = FENCE_OPENER.match(line)
+    return m.group(2) if m and (any_indent or len(m.group(1)) <= 3) else ""
+
+
+def fence_closes(line, mark, any_indent=False):
+    """Whether a line ends the block `mark` opened: the same mark, as long or longer, and nothing else on it."""
+    m = re.match(rf"(\s*){re.escape(mark[0])}{{{len(mark)},}}\s*$", line)
+    return bool(m) and (any_indent or len(m.group(1)) <= 3)
+
+
+def marked(line):
+    """(mark, column, what follows it, on an item's line) for a line that carries a fence's mark, after a list
+    item's marker if it has one, or None."""
+    m = ITEM.match(line)
+    start = m.end() if m else 0
+    f = re.match(r"(\s*)(`{3,}|~{3,})(.*)$", line[start:])
+    return (f.group(2), start + len(f.group(1)), f.group(3), bool(m)) if f else None
+
+
+class Fences:
+    """Where a fenced block that opens inside a list closes. Only the lines that carry a fence's mark are looked
+    at, once each to find them, so a page with many lines costs one pass."""
+    def __init__(self, lines):
+        self.lines = lines
+        self.marks = [i for i, l in enumerate(lines) if marked(l)]
+        self.at = {i: k for k, i in enumerate(self.marks)}
+
+    def close(self, i):
+        """The index of the line that closes the block lines[i] opens, or None when it opens none, or none that
+        closes. The close is the first later line with the same mark, as long or longer: it closes the block
+        if nothing else is on it, it isn't an item's line, and it is indented at least as far as the opening
+        mark. Any other such line, such as another block's opening mark, means this one is never closed, and
+        it then ends with its item, as it always did."""
+        if i not in self.at:
+            return None
+        mark, col, after, _ = marked(self.lines[i])
+        if not re.fullmatch(r"\s*[A-Za-z0-9_+#.-]*\s*", after):
+            return None
+        for j in range(self.at[i] + 1, len(self.marks)):
+            m2, col2, after2, on_item = marked(self.lines[self.marks[j]])
+            k = self.marks[j]
+            if m2[0] == mark[0] and len(m2) >= len(mark):
+                return k if not after2.strip() and not on_item and col2 >= col else None
+        return None
+
+
+def indent_of(line):
+    return len(line) - len(line.lstrip())
 
 
 class Renderer:
@@ -876,9 +1041,11 @@ class Renderer:
         out.append(escape(text[pos:]))
         return "".join(out)
 
-    def blocks(self, lines):
+    def blocks(self, lines, in_item=False):
+        """in_item: the lines are what a list item holds, where a fence may be indented further."""
         out, i, n = [], 0, len(lines)
         para = []
+        fences = None   # where a block in a list closes, read the first time a list is met
 
         def flush():
             if para:
@@ -887,13 +1054,15 @@ class Renderer:
 
         while i < n:
             line = lines[i]
-            fence = re.match(r"\s{0,3}(```+|~~~+)\s*([A-Za-z0-9_+#.-]*)", line)
+            fence = FENCE_OPENER.match(line) if fence_opens(line, in_item) else None
             if fence:
                 flush()
-                mark, lang, code = fence.group(1), fence.group(2), []
+                mark, lang, code = fence.group(2), fence.group(3), []
+                # In an item, the block's lines lose the indent its fence has, as far as each has it.
+                cut = len(fence.group(1)) if in_item else 0
                 i += 1
-                while i < n and not re.match(rf"\s{{0,3}}{re.escape(mark[0])}{{{len(mark)},}}\s*$", lines[i]):
-                    code.append(lines[i])
+                while i < n and not fence_closes(lines[i], mark, in_item):
+                    code.append(lines[i][min(cut, indent_of(lines[i])):])
                     i += 1
                 i += 1
                 param = f'<ac:parameter ac:name="language">{escape(lang)}</ac:parameter>' if lang else ""
@@ -936,7 +1105,15 @@ class Renderer:
                 flush()
                 item = []
                 first = re.match(r"(\s*)([-*+]|\d+[.)])\s+", line)
+                fences = fences or Fences(lines)
+                until = -1
                 while i < n:
+                    if i <= until:
+                        # From the line that opens a fenced block to the one that closes it, every line is the
+                        # item's, a blank one, an unindented one, or one that looks like an item.
+                        item.append(lines[i])
+                        i += 1
+                        continue
                     # A bulleted item after a numbered one, or the reverse, starts a new list.
                     m = re.match(r"(\s*)([-*+]|\d+[.)])\s+", lines[i])
                     if (m and item and len(m.group(1).expandtabs(4)) <= len(first.group(1).expandtabs(4))
@@ -954,6 +1131,8 @@ class Renderer:
                         break
                     if not re.match(r"\s*([-*+]|\d+[.)])\s+", lines[i]) and not re.match(r"\s+\S", lines[i]) and item and not item[-1].strip():
                         break
+                    shut = fences.close(i)
+                    until = until if shut is None else shut
                     item.append(lines[i])
                     i += 1
                 out.append(self.list(item))
@@ -982,22 +1161,39 @@ class Renderer:
         first = re.match(r"(\s*)([-*+]|\d+[.)])\s+", lines[0])
         indent = len(first.group(1).expandtabs(4))
         tag = "ol" if first.group(2)[0].isdigit() else "ul"
-        items, cur = [], None
-        for line in lines:
+        fences = Fences(lines)
+        items, cur, until = [], None, -1
+        for k, line in enumerate(lines):
             m = re.match(r"(\s*)([-*+]|\d+[.)])\s+(.*)", line)
+            if k <= until:
+                # A line in a fenced block is code, though it looks like an item.
+                cur.append(line)
+                continue
+            shut = fences.close(k)
             if m and len(m.group(1).expandtabs(4)) <= indent:
-                cur = [m.group(3)]
+                # An item whose text is a fence's opening mark: the block is its body, at the column of its text.
+                cur = [" " * m.start(3) + m.group(3), True] if shut is not None else [m.group(3), False]
                 items.append(cur)
             elif cur is not None:
                 cur.append(line)
+            until = until if shut is None else shut
         out = [f"<{tag}>"]
         for item in items:
-            head, rest = [item[0]], item[1:]
-            while rest and rest[0].strip() and not re.match(r"\s*([-*+]|\d+[.)])\s+", rest[0]) and not re.match(r"\s*(```|~~~)", rest[0]):
-                head.append(rest.pop(0).strip())
-            # What is left belongs to the item: take off the indent it shares.
-            pad = min((len(l) - len(l.lstrip()) for l in rest if l.strip()), default=0)
-            body = self.blocks([l[pad:] for l in rest]) if any(l.strip() for l in rest) else ""
+            if item[1]:
+                head, rest = [], [item[0]] + item[2:]
+            else:
+                head, rest = [item[0]], item[2:]
+                while rest and rest[0].strip() and not re.match(r"\s*([-*+]|\d+[.)])\s+", rest[0]) and not re.match(r"\s*(```|~~~)", rest[0]):
+                    head.append(rest.pop(0).strip())
+            # What is left belongs to the item: take off the indent it shares, measured on the lines outside a
+            # fenced block. A line inside one loses at most that much.
+            inner, inside, until = Fences(rest), [], -1
+            for k in range(len(rest)):
+                inside.append(k <= until)
+                shut = None if k <= until else inner.close(k)
+                until = until if shut is None else shut
+            pad = min((indent_of(l) for l, code in zip(rest, inside) if l.strip() and not code), default=0)
+            body = self.blocks([l[min(pad, indent_of(l)):] for l in rest], True) if any(l.strip() for l in rest) else ""
             out.append("<li>" + self.inline(" ".join(head)) + body + "</li>")
         out.append(f"</{tag}>")
         return "".join(out)
@@ -1030,6 +1226,11 @@ def title_of(front, body, fallback):
     return fallback
 
 
+# Every page publish writes opens with it. A page with no label is taken as one an earlier run left half made
+# only if its text has it.
+BANNER = "published by llm-wiki. Changes made here are overwritten: ask an agent to change the wiki."
+
+
 def render(text, wiki="", source_path="", titles=None):
     front, body = split_front(text)
     # Confluence shows the title itself, so the page's own first heading goes.
@@ -1040,7 +1241,7 @@ def render(text, wiki="", source_path="", titles=None):
         body = body[k + 1:]
     banner = ('<ac:structured-macro ac:name="info"><ac:rich-text-body><p>'
               + (f"This page is a copy of <code>{escape(source_path)}</code> in the <strong>{escape(wiki)}</strong> wiki, " if wiki else "This page is a copy, ")
-              + "published by llm-wiki. Changes made here are overwritten: ask an agent to change the wiki."
+              + BANNER
               + "</p></ac:rich-text-body></ac:structured-macro>")
     meta = " · ".join(f"{k.capitalize()} {escape(front[k])}" for k in ("updated", "verified") if front.get(k))
     return banner + (f"<p><em>{meta}</em></p>" if meta else "") + Renderer(source_path, titles).blocks(body)
@@ -1099,29 +1300,46 @@ class PageText(html.parser.HTMLParser):
             self.out.append(data[6:].replace("\n", "\n    "))
 
 
+# What str.splitlines() ends a line at, besides a newline.
+LINE_ENDS = re.compile(r"\r\n?|[\x0b\x0c\x1c-\x1e\x85  ]")
+
+
 def page_text(storage, limit=30000):
     parser = PageText()
     try:
-        parser.feed(storage or "")
+        parser.feed(storage if isinstance(storage, str) else "")
         parser.close()
     except Exception:
         return ""
-    lines = [re.sub(r"[ \t]+", " ", l).rstrip() for l in "".join(parser.out).split("\n")]
+    # Every character any reader takes for a line's end is one, so a line of the page is a line of the note and
+    # of its diff. Any other control character is a space.
+    text = LINE_ENDS.sub("\n", "".join(parser.out))
+    text = "".join(" " if unicodedata.category(ch) == "Cc" and ch not in "\n\t" else ch for ch in text)
+    lines = [re.sub(r"[ \t]+", " ", l).rstrip() for l in text.split("\n")]
     text = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
     return text if len(text) <= limit else text[:limit] + "\n(cut here: the page is longer)"
 
 
 def fetch_page(c, pid):
-    """{id, title, version, by, when, link, text}, or None for a page that can't be read."""
+    """{id, title, version, by, when, link, text}, or None for a page that can't be read, and for an answer
+    that isn't that page: one whose id isn't the one asked for, or whose version isn't a number."""
     try:
         d = c.call("GET", f"/rest/api/content/{pid}?expand=version,body.storage")
     except Refused:
         return None
-    v = d.get("version") or {}
-    return {"id": str(d.get("id") or pid), "title": d.get("title") or f"page {pid}", "version": int(v.get("number") or 0),
-            "by": (v.get("by") or {}).get("displayName") or "", "when": v.get("when") or "",
-            "link": c.url + ((d.get("_links") or {}).get("webui") or f"/pages/viewpage.action?pageId={pid}"),
-            "text": page_text(((d.get("body") or {}).get("storage") or {}).get("value") or "")}
+    v = obj(d.get("version"))
+    if page_id(d.get("id")) != pid or version_of(d) is None:
+        return None
+    # What the server says goes into a note and a printed line, one line each: see server_text.
+    return {"id": pid, "title": server_text(d.get("title")) or f"page {pid}", "version": version_of(d),
+            "by": server_text(obj(v.get("by")).get("displayName")), "when": server_text(v.get("when")),
+            "link": c.url + (web_path(obj(d.get("_links")).get("webui")) or f"/pages/viewpage.action?pageId={pid}"),
+            "text": page_text(obj(obj(d.get("body")).get("storage")).get("value"))}
+
+
+def web_path(value):
+    """A link Confluence gives, as one line with no spaces in it, for printing and for a note."""
+    return server_text(value).replace(" ", "%20")
 
 
 def page_state(c, pid):
@@ -1130,7 +1348,7 @@ def page_state(c, pid):
         d = c.call("GET", f"/rest/api/content/{pid}/state")
     except Refused:
         return ""
-    return ((d.get("contentState") or {}).get("name") or "") if isinstance(d, dict) else ""
+    return server_text(obj(d.get("contentState")).get("name"))
 
 
 def available_states(c, pid):
@@ -1138,24 +1356,86 @@ def available_states(c, pid):
         d = c.call("GET", f"/rest/api/content/{pid}/state/available")
     except Refused:
         return []
-    return [x.get("name") for x in (d.get("spaceContentStates") or []) + (d.get("customContentStates") or []) if x.get("name")]
+    found = [x for k in ("spaceContentStates", "customContentStates") if isinstance(d.get(k), list) for x in d[k]]
+    return [obj(x).get("name") for x in found if isinstance(obj(x).get("name"), str) and obj(x).get("name")]
+
+
+# A space's next check starts this long before the time its last one began, by the earlier of the two clocks,
+# this machine's and Confluence's. A change the search hadn't taken in yet, or one stamped by a clock behind
+# the other, is still found. A page read again is noted only if its version or its status is new to the wiki.
+OVERLAP = datetime.timedelta(minutes=10)
+# Confluence's clock is believed when it is at most this far from this machine's. Further off, the date is
+# wrong, and this machine's time is used.
+SANE_CLOCK = datetime.timedelta(hours=24)
+# The most requests one check makes for one space's changes: 200 pages of results.
+MOST_REQUESTS = 200
+
+
+def server_time(c, began):
+    """The time Confluence's answer was sent, when its Date says one within SANE_CLOCK of this machine's."""
+    try:
+        t = email.utils.parsedate_to_datetime(c.date)
+        t = t if t.tzinfo else t.replace(tzinfo=datetime.timezone.utc)
+        return t if abs(t - began) <= SANE_CLOCK else None
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+
+
+def first_mark(c, key):
+    """The time a space is watched from, the first time: now, by the earlier of the two clocks, as every later
+    check's time is. None when the space can't be read."""
+    began = datetime.datetime.now(datetime.timezone.utc)
+    q = urllib.parse.urlencode({"cql": f'space = "{key}" and type = page', "limit": 1})
+    try:
+        results(c.call("GET", "/rest/api/content/search?" + q))
+    except Refused:
+        return None
+    return min(began, server_time(c, began) or began)
 
 
 def space_pages(c, key, since):
-    """Ids of the pages in a space changed at or after `since`. The search is asked for a
-    day earlier, since it reads dates in the account's own time zone, and narrowed here."""
+    """({page id: version} for the pages in a space changed at or after `since`, the time the next check of
+    the space starts from), with every page of results read. (None, why) when a request is refused, an
+    answer can't be read, or the results don't end, and then nothing in the space counts as read. The search
+    is asked for a day earlier, since it reads dates in the account's own time zone, and narrowed here."""
     asked = (since - datetime.timedelta(days=1)).strftime("%Y-%m-%d %H:%M")
-    q = urllib.parse.urlencode({"cql": f'space = "{key}" and type = page and lastmodified >= "{asked}"', "expand": "version", "limit": 100})
-    try:
-        res = c.call("GET", "/rest/api/content/search?" + q).get("results") or []
-    except Refused:
-        return None
-    out = []
-    for r in res:
-        when = parse_when(((r.get("version") or {}).get("when")) or "")
-        if when is None or when >= since:
-            out.append(str(r.get("id")))
-    return out
+    # Newest first: a page changed while the results are read moves to the front, not past the place
+    # already read, and the next check finds it.
+    cql = f'space = "{key}" and type = page and lastmodified >= "{asked}" order by lastmodified desc'
+    began = datetime.datetime.now(datetime.timezone.utc)
+    server = None
+    out, seen, start = {}, set(), 0
+    for n in range(MOST_REQUESTS):
+        # Every request is built here. A next link Confluence gives only says there is more: the path in it
+        # isn't followed, so a link that drops the search can't stand in for it.
+        path = "/rest/api/content/search?" + urllib.parse.urlencode({"cql": cql, "expand": "version", "limit": 100, "start": start})
+        try:
+            d = c.call("GET", path)
+            res = results(d)
+        except Refused as e:
+            if n == 0:
+                return None, "can't be read"
+            if e.code == 0:
+                return None, f"was read only in part: page {n + 1} of its changes couldn't be read"
+            return None, f"was read only in part: Confluence refused page {n + 1} of its changes"
+        if n == 0:
+            server = server_time(c, began)
+        if not res:
+            # The end is a page with nothing on it. One that says there is more, with nothing on it, is no end.
+            if obj(d.get("_links")).get("next"):
+                return None, f"was read only in part: page {n + 1} of its changes was empty, and Confluence said there were more"
+            mark = min(began, server or began) - OVERLAP
+            return out, max(mark, since)
+        if n > 0 and all(r["id"] in seen for r in res):
+            return None, f"was read only in part: page {n + 1} of its changes held only pages already read"
+        for r in res:
+            seen.add(r["id"])
+            v = obj(r.get("version"))
+            when = parse_when(server_text(v.get("when")))
+            if when is None or when >= since:
+                out.setdefault(r["id"], version_of(r) or 0)
+        start += len(res)
+    return None, f"has more changes than one check reads ({MOST_REQUESTS} pages of results)"
 
 
 def parse_when(text):
@@ -1172,6 +1452,26 @@ def note_order(name):
     return (m.group(1), int(m.group(2) or 1)) if m else (name, 0)
 
 
+def note_lines(text):
+    """The lines of a note outside its fenced blocks, as a markdown reader finds them. The page's text, and the
+    diff of it, are in fenced blocks: a line there that reads as a record or a Done: line is the page's, and
+    never the note's. A block left open runs to the note's end."""
+    out, mark = [], ""
+    for line in text.splitlines():
+        if mark:
+            mark = "" if fence_closes(line, mark) else mark
+        elif fence_opens(line):
+            mark = fence_opens(line)
+        else:
+            out.append(line)
+    return out
+
+
+def fence_for(*texts):
+    """A fence of backticks that no line of the texts can close: longer than any run of backticks in them."""
+    return "`" * max([4] + [len(r) + 1 for t in texts for r in re.findall(r"`+", t)])
+
+
 def noted(root):
     """{page id: (version, status)} as the wiki's own notes last recorded it. The notes
     are in git, so every machine that syncs the wiki reads the same answer."""
@@ -1184,17 +1484,18 @@ def noted(root):
     for n in names:
         try:
             with open(os.path.join(raw, n), encoding="utf-8", errors="replace") as f:
-                for line in f:
-                    m = NOTED.match(line.rstrip("\n"))
-                    if m:
-                        out[m.group(1)] = (int(m.group(2)), m.group(3).strip())
+                text = f.read()
         except OSError:
-            pass
+            continue
+        for line in note_lines(text):
+            m = NOTED.match(line)
+            if m:
+                out[m.group(1)] = (int(m.group(2)), m.group(3).strip())
     return out
 
 
 def waiting_lines(wiki_cmd, root, wiki, wikis_dir):
-    """The lines of this extension's notes that no compile has taken yet."""
+    """The lines of this extension's notes that no compile has taken yet, outside their fenced blocks."""
     r = subprocess.run([wiki_cmd, "pending", wiki], capture_output=True, text=True, env=in_collection(wikis_dir))
     names = [l.split()[0][len("raw/"):] for l in r.stdout.splitlines() if l.startswith("raw/")] if r.returncode == 0 else []
     lines = set()
@@ -1202,13 +1503,15 @@ def waiting_lines(wiki_cmd, root, wiki, wikis_dir):
         if OWN_NOTE.search(n):
             try:
                 with open(os.path.join(root, "raw", n), encoding="utf-8", errors="replace") as f:
-                    lines.update(f.read().splitlines())
+                    lines.update(note_lines(f.read()))
             except OSError:
                 pass
     return lines
 
 
 def cache_path(pid):
+    if not page_id(pid):
+        raise ValueError("a page's id is digits")
     return os.path.join(STATE, "pages", f"{pid}.txt")
 
 
@@ -1244,7 +1547,10 @@ def cmd_check(args):
     closes = {}    # (collection, wiki) -> [heading]
     waiting = {}   # (collection, wiki) -> the lines of its notes no compile has taken yet
     bad = 0
-    seen_spaces = []
+    # Space key -> the time its next check starts from. A space that wasn't read whole in this run, for any
+    # wiki, keeps the time it had, so every change in it is read again.
+    marks = {}
+    unread = set()
 
     # What each watch.<wiki> names, in the collection it names. Each wiki's notes go into it there.
     lists = {}     # (collection, wiki) -> [what it watches]
@@ -1270,10 +1576,13 @@ def cmd_check(args):
         root = os.path.join(collection_folder(coll), wiki)
         known = noted(root)
         ids = []
+        named_ids = []
+        space_of = {}   # page id -> the space it was found in
         for ref in refs:
             kind, val = target(ref)
             if kind == "page":
                 ids.append(val)
+                named_ids.append(val)
             elif kind == "space":
                 try:
                     with open(since_path(val), encoding="utf-8") as f:
@@ -1281,24 +1590,46 @@ def cmd_check(args):
                 except OSError:
                     since = None
                 if since is None:
+                    first = first_mark(c, val)
+                    if first is None:
+                        unread.add(val)
+                        print("  " + warn(f"the space {val} can't be read. Check it in watch.{shown} in {CONFIG}."))
+                        bad = 1
+                        continue
                     print(f"  space {val}: watched from now on. Pages changed after this will be noted.")
-                    seen_spaces.append(val)
+                    marks[val] = min(first, marks.get(val, first))
                     continue
-                got = space_pages(c, val, since)
+                got, why = space_pages(c, val, since)
                 if got is None:
-                    print("  " + warn(f"the space {val} can't be read. Check it in watch.{shown} in {CONFIG}."))
+                    unread.add(val)
+                    if why == "can't be read":
+                        print("  " + warn(f"the space {val} can't be read. Check it in watch.{shown} in {CONFIG}."))
+                    else:
+                        print("  " + warn(f"the space {val} {why}. Nothing in it is noted, and the next check reads it again."))
                     bad = 1
                     continue
-                seen_spaces.append(val)
-                print(f"  space {val}: {len(got)} page(s) changed since {since:%Y-%m-%d %H:%M} UTC")
-                ids += [i for i in got if i not in ids]
+                marks[val] = min(why, marks.get(val, why))
+                # A page read again, from the overlap, whose version and status the wiki has noted is left out.
+                # Its status is asked for: a status changes with no new version.
+                fresh = [i for i, v in got.items()
+                         if not (i in known and v and v <= known[i][0] and page_state(c, i) == known[i][1])]
+                print(f"  space {val}: {len(fresh)} page(s) changed since {since:%Y-%m-%d %H:%M} UTC")
+                for i in fresh:
+                    space_of.setdefault(i, val)
+                ids += [i for i in fresh if i not in ids]
             else:
                 print("  " + warn(f"{ref} isn't a page's address, an id, or space:KEY. Fix watch.{shown} in {CONFIG}."))
                 bad = 1
         for pid in ids:
             page = fetch_page(c, pid)
             if page is None:
-                print("  " + warn(f"{pid} isn't a page you can read. Take it out of watch.{shown} in {CONFIG}."))
+                if pid in space_of:
+                    # The space's time stays, so the page is read again next time, or no longer listed.
+                    unread.add(space_of[pid])
+                if pid in named_ids or pid not in space_of:
+                    print("  " + warn(f"{pid} isn't a page you can read. Take it out of watch.{shown} in {CONFIG}."))
+                else:
+                    print("  " + warn(f"{pid}, changed in the space {space_of[pid]}, can't be read now. The next check reads the space again."))
                 bad = 1
                 continue
             page["status"] = page_state(c, pid)
@@ -1367,6 +1698,8 @@ def cmd_check(args):
                     f"Source: {c.url}, read by `wiki confluence` on {now:%Y-%m-%d %H:%M} UTC.", ""]
             for page in pages:
                 old = read_cache(page["id"])
+                # Saved by an earlier version, it may hold line ends that page_text now makes plain ones.
+                old = None if old is None else LINE_ENDS.sub("\n", old)
                 note += [f"## {page['title']}", "", f"- page: {page['link']}",
                          f"- change: {page['kind']}" + (f", version {page['version']}" if "version" not in page["kind"] else ""),
                          "- status: " + (page["status"] or "none")
@@ -1375,10 +1708,13 @@ def cmd_check(args):
                     diff = None
                     if old is not None and old != page["text"]:
                         diff = "\n".join(difflib.unified_diff(old.split("\n"), page["text"].split("\n"), "before", "now", lineterm="", n=2))
+                    # A fence the text can't close, so nothing in the page reads as the note's own line.
                     if diff and len(diff) < len(page["text"]):
-                        note += ["What changed in the page's text:", "", "````diff", diff, "````", ""]
+                        fence = fence_for(diff)
+                        note += ["What changed in the page's text:", "", fence + "diff", diff, fence, ""]
                     else:
-                        note += ["The page's text:", "", "````text", page["text"], "````", ""]
+                        fence = fence_for(page["text"])
+                        note += ["The page's text:", "", fence + "text", page["text"], fence, ""]
             for page in pages:
                 note.append(f"Confluence-page: {page['id']} | version {page['version']} | status {page['status']}")
             for h, st in closes.get(key, []):
@@ -1403,11 +1739,14 @@ def cmd_check(args):
                     pass
             print(f"{shown}: noted {len(pages) + len(closes.get(key, []))} change(s). The next compile works them into the wiki.")
     if save:
-        for key in seen_spaces:
+        # Only once every wiki's note is saved: a run that stops before then reads the same changes again.
+        for key, mark in marks.items():
+            if key in unread:
+                continue
             try:
                 os.makedirs(STATE, exist_ok=True)
                 with open(since_path(key), "w", encoding="utf-8") as f:
-                    f.write(now.isoformat())
+                    f.write(mark.isoformat())
             except OSError:
                 pass
     return bad
@@ -1486,9 +1825,48 @@ def cmd_publish(args, target=None):
     made = changed = same = 0
     problems = []
 
-    def taken(title):
+    def taken(title, page=None):
+        if page is not None and looks_published(page):
+            # Its version message is publish's, but it fails another test of a page an earlier run left half
+            # made, such as a label something else added, a line break in the banner, or another parent.
+            return (f"{title}: a page of that name is in the space with publish's version note but not the llm-wiki label, "
+                    f"so it isn't taken as llm-wiki's. {AFTER_HALF}")
         return (f"{title}: a page of that name is already in the space, and llm-wiki didn't make it. "
                 "Rename that page in Confluence, or change this page's title in the wiki.")
+    finished = set()   # ids of the pages this run labelled, for a change that then fails
+
+    def finish(page, title):
+        """Label a page an earlier run made and didn't label, and go on with it as one of ours. The label call
+        has no version check, so the page is read again after it: one a person saved a new version of in the
+        meantime has the label taken off again, and is theirs. Refused, saying so, for that."""
+        if not dry:
+            c.label(page["id"])
+            try:
+                now_v = version_of(c.call("GET", f"/rest/api/content/{page['id']}?expand=version"))
+            except Refused:
+                now_v = None
+            if now_v != 1:
+                try:
+                    c.unlabel(page["id"])
+                    undone = "and its llm-wiki label was taken off again"
+                except Refused:
+                    undone = "and publish couldn't take its llm-wiki label off again: take it off in Confluence"
+                raise Refused(0, f"someone saved a new version of it while publish was finishing it, so it is left as theirs, {undone}")
+            finished.add(page["id"])
+        print(f"  {'would finish' if dry else 'finished'}: {title} (an earlier run made it and didn't label it)")
+        metadata = page["metadata"] = obj(page.get("metadata"))
+        metadata["labels"] = {"results": [{"name": LABEL}]}
+
+    def unfinish(page):
+        """Take the label off a page this run labelled, whose change then failed: a person may have saved it."""
+        if page is not None and page.get("id") in finished:
+            try:
+                c.unlabel(page["id"])
+                return ". Its llm-wiki label was taken off again, as someone may have saved it in the meantime"
+            except Refused:
+                return ". Someone may have saved it in the meantime: take its llm-wiki label off in Confluence"
+        return ""
+
     clashes = [0]
     root_title = pages[0][1]
     try:
@@ -1496,11 +1874,22 @@ def cmd_publish(args, target=None):
     except Refused as e:
         die(f"can't read the space {space}: {e.message}. Check space in {CONFIG}, or run: {CMD} extensions setup confluence. {GUIDE}")
     if top is not None and not ours(top):
-        die(f"the space {space} already has a page called \"{root_title}\" that llm-wiki didn't make. Rename it, or publish to another space.")
+        if not half_made(c, top):
+            if looks_published(top):
+                die(f"the space {space} already has a page called \"{root_title}\" with publish's version note but not the "
+                    f"llm-wiki label, so it isn't taken as llm-wiki's. {AFTER_HALF}")
+            die(f"the space {space} already has a page called \"{root_title}\" that llm-wiki didn't make. Rename it, or publish to another space.")
+        try:
+            finish(top, root_title)
+        except Refused as e:
+            die(f"couldn't publish \"{root_title}\": {e.message}")
     existing = {}
     if top is not None:
-        for p in c.children(top["id"]):
-            existing[p.get("title", "")] = p
+        try:
+            for p in c.children(top["id"]):
+                existing[server_text(p.get("title"))] = p
+        except Refused as e:
+            die(f"couldn't read the pages under \"{root_title}\": {e.message}")
 
     def put(rel, title, text, page, parent_id):
         nonlocal made, changed, same
@@ -1508,14 +1897,27 @@ def cmd_publish(args, target=None):
         digest = hashlib.sha256((title + "\n" + body).encode()).hexdigest()[:16]
         if page is not None:
             if not ours(page):
-                problems.append(taken(title))
-                return page
+                if not half_made(c, page):
+                    problems.append(taken(title, page))
+                    return page
+                try:
+                    finish(page, title)
+                except Refused as e:
+                    problems.append(f"{title}: {e.message}" if e.code == 0 else f"{title}: Confluence refused its label: {e.message}")
+                    return page
             if digest_of(page) == digest:
                 same += 1
                 return page
             changed += 1
             print(f"  {'would update' if dry else 'updated'}: {title}")
-            return page if dry else (c.update(page, title, body, digest) or page)
+            if dry:
+                return page
+            try:
+                done_page = c.update(page, title, body, digest)
+            except Refused as e:
+                raise Refused(e.code, e.message + unfinish(page))
+            # Its answer is used only if it is this page.
+            return done_page if page_id(done_page.get("id")) == page["id"] else page
         if dry:
             # A page of that name anywhere in the space stops the real run, so look now.
             if c.find(space, title) is not None:
@@ -1549,7 +1951,7 @@ def cmd_publish(args, target=None):
     for p in problems:
         print(f"  not published: {p}")
     if top and not dry:
-        link = ((top.get("_links") or {}).get("webui")) or f"/pages/viewpage.action?pageId={top['id']}"
+        link = web_path(obj(top.get("_links")).get("webui")) or f"/pages/viewpage.action?pageId={top['id']}"
         print(f"{c.url}{link}")
     if problems and EVENT and clashes[0] == len(problems):
         return 75

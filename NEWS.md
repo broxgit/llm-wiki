@@ -9,6 +9,13 @@ Format: one `## YYYY-MM-DD: title` section per entry, newest first. The date is 
 - A session hook that fails still lets the session go on, and now leaves a line in `hooks.log`, in llm-wiki's state folder on this machine.
 - `wiki status` has a To do line when that happened in the last 7 days: how many times, the last hook, its error, and the command that shows the log.
 
+## 2026-11-24: Confluence reads all of a space's changes, and finishes a half-made page
+
+- A watched space has every change read, past the first 100, before its time moves. One read only in part is read again at the next check.
+- A page publish made but couldn't label is finished by the next publish, not refused. A page someone else made is still never overwritten.
+- A code block in a list item stays in it when published, with its blank and unindented lines, and the text after the list is no longer code.
+- Nothing in a watched page, its title or its text, can pass for a line of the wiki's note, such as a Done: line.
+
 ## 2026-11-23: wiki ignores a GIT_DIR or GIT_WORK_TREE in the environment
 
 - With `GIT_DIR` or `GIT_WORK_TREE` exported, as a dotfiles setup does, `wiki` acts on your collection and leaves that other repository alone.

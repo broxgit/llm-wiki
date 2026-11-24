@@ -6486,23 +6486,70 @@ case "$out" in *'ac:name="code"><ac:parameter ac:name="language">sh</ac:paramete
 case "$out" in *"<h1>Demo</h1>"* | *"title: Demo"*) bad "the frontmatter and the page's own title are left out" "$out" ;; *) ok "the frontmatter and the page's own title are left out" ;; esac
 expect "and the page says it is a copy" "Changes made here are overwritten" "$W" confluence render "$C/page.md"
 expect "with its dates" "Updated 2026-11-01" "$W" confluence render "$C/page.md"
+# A fenced block in a list item stays in it (L46), with a blank line and an unindented line inside it.
+printf -- '- Step one:\n\n  ```sh\n  echo a\n\necho b\n  ```\n\nAfter the list.\n' > "$C/fenced.md"
+out="$("$W" confluence render "$C/fenced.md" 2>&1)"
+case "$out" in *'<ul><li>Step one:<ac:structured-macro ac:name="code"><ac:parameter ac:name="language">sh</ac:parameter><ac:plain-text-body><![CDATA[echo a
+
+echo b]]></ac:plain-text-body></ac:structured-macro></li></ul><p>After the list.</p>') ok "a fenced block in a list item keeps its blank and unindented lines, and the text after the list isn't code" ;; *) bad "a fenced block in a list item keeps its blank and unindented lines, and the text after the list isn't code" "$out" ;; esac
+printf -- '- Step one:\n\n  ```text\n- not an item\n  ```\n\n- Step two\n' > "$C/fenced.md"
+out="$("$W" confluence render "$C/fenced.md" 2>&1)"
+case "$out" in *'<ul><li>Step one:<ac:structured-macro ac:name="code"><ac:parameter ac:name="language">text</ac:parameter><ac:plain-text-body><![CDATA[- not an item]]></ac:plain-text-body></ac:structured-macro></li><li>Step two</li></ul>') ok "a line in the block that looks like an item is code, and the list has its two items" ;; *) bad "a line in the block that looks like an item is code, and the list has its two items" "$out" ;; esac
+printf -- '1. Run:\n\n   Then:\n\n    ```sh\n    make\n    ```\n\nAfter.\n' > "$C/fenced.md"
+out="$("$W" confluence render "$C/fenced.md" 2>&1)"
+case "$out" in *'<ol><li>Run:<p>Then:</p><ac:structured-macro ac:name="code"><ac:parameter ac:name="language">sh</ac:parameter><ac:plain-text-body><![CDATA[make]]></ac:plain-text-body></ac:structured-macro></li></ol><p>After.</p>') ok "a fence indented four spaces under a numbered item is a code block, its lines without the fence's indent" ;; *) bad "a fence indented four spaces under a numbered item is a code block, its lines without the fence's indent" "$out" ;; esac
+printf -- '- Build it:\n  ```sh\n  make all\n  ```\n- Then test:\n  ~~~\n  make test\n  ~~~\n\nAfter.\n' > "$C/fenced.md"
+check "a fenced block in a list item with no blank line renders as it did, byte for byte" test "$("$W" confluence render "$C/fenced.md" 2>&1)" = '<ac:structured-macro ac:name="info"><ac:rich-text-body><p>This page is a copy, published by llm-wiki. Changes made here are overwritten: ask an agent to change the wiki.</p></ac:rich-text-body></ac:structured-macro><ul><li>Build it:<ac:structured-macro ac:name="code"><ac:parameter ac:name="language">sh</ac:parameter><ac:plain-text-body><![CDATA[make all]]></ac:plain-text-body></ac:structured-macro></li><li>Then test:<ac:structured-macro ac:name="code"><ac:plain-text-body><![CDATA[make test]]></ac:plain-text-body></ac:structured-macro></li></ul><p>After.</p>'
+printf -- '- a\n  ```\n  never closed\n- b\n\nAfter.\n' > "$C/fenced.md"
+case "$("$W" confluence render "$C/fenced.md" 2>&1)" in *'<![CDATA[never closed]]></ac:plain-text-body></ac:structured-macro></li><li>b</li></ul><p>After.</p>') ok "a block in a list item that is never closed ends with its item, as before" ;; *) bad "a block in a list item that is never closed ends with its item, as before" "$("$W" confluence render "$C/fenced.md" 2>&1)" ;; esac
+printf -- '- a\n  ```\n  never closed\n- b\n\nBetween.\n\n```sh\nlater\n```\n\nEnd.\n' > "$C/fenced.md"
+out="$("$W" confluence render "$C/fenced.md" 2>&1)"
+case "$out" in *'<ul><li>a<ac:structured-macro ac:name="code"><ac:plain-text-body><![CDATA[never closed]]></ac:plain-text-body></ac:structured-macro></li><li>b</li></ul><p>Between.</p><ac:structured-macro ac:name="code"><ac:parameter ac:name="language">sh</ac:parameter><ac:plain-text-body><![CDATA[later]]></ac:plain-text-body></ac:structured-macro><p>End.</p>') ok "a block never closed in a list item doesn't take a later block's opening mark for its close" ;; *) bad "a block never closed in a list item doesn't take a later block's opening mark for its close" "$out" ;; esac
+printf -- '- a\n\n  ```foo``` is inline code\n  more text\n- b\n\n```foo``` at the top\n' > "$C/fenced.md"
+out="$("$W" confluence render "$C/fenced.md" 2>&1)"
+case "$out" in *'<ul><li>a<p><code>foo</code> is inline code more text</p></li><li>b</li></ul><p><code>foo</code> at the top</p>') ok "a line that starts with inline code in three backticks opens no block, in a list or out" ;; *) bad "a line that starts with inline code in three backticks opens no block, in a list or out" "$out" ;; esac
+printf -- '- ```sh\n  make\n  ```\n- next\n' > "$C/fenced.md"
+out="$("$W" confluence render "$C/fenced.md" 2>&1)"
+case "$out" in *'<ul><li><ac:structured-macro ac:name="code"><ac:parameter ac:name="language">sh</ac:parameter><ac:plain-text-body><![CDATA[make]]></ac:plain-text-body></ac:structured-macro></li><li>next</li></ul>') ok "a list item whose text is a block's opening mark holds the block" ;; *) bad "a list item whose text is a block's opening mark holds the block" "$out" ;; esac
+python3 -c "import sys; open(sys.argv[1], 'w').write(''.join('- item %d\n  \`\`\`sh\n  code\n' % i for i in range(4000)))" "$C/fenced.md"
+check "a list of 4000 items, each with a block never closed, renders in a few seconds" python3 -c "
+import subprocess, sys, time
+t = time.time()
+subprocess.run(sys.argv[1:], stdout=subprocess.DEVNULL, check=True)
+assert time.time() - t < 4, time.time() - t" "$W" confluence render "$C/fenced.md"
 
 # A stand-in for Confluence: pages in memory, written out after every change.
 cat > "$C/server.py" <<'PY'
-import json, sys, urllib.parse
+import datetime, json, os, sys, urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 D = sys.argv[1]
+# D/clock: how many seconds the server's clock is off from this machine's. D/fail: "METHOD text CODE", and the
+# next request whose method is METHOD and whose path holds text is answered CODE, once. D/search-cap: the most
+# results a search gives, whatever it asks for, as Cloud does. D/no-next: a search doesn't say where its next page is.
+def clock():
+    off = float(open(D + "/clock").read()) if os.path.exists(D + "/clock") else 0
+    return datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=off)
+def when_of(p):
+    return datetime.datetime.fromisoformat(p.get("when", "2026-11-01T00:00:00.000Z").replace("Z", "+00:00"))
 P = {"900": {"id": "900", "title": "Team home", "space": "ENG", "parent": "", "labels": [], "n": 1, "msg": "", "body": ""},
      "901": {"id": "901", "title": "cdemo: Taken", "space": "ENG", "parent": "900", "labels": [], "n": 1, "msg": "", "body": "by hand"}}
 NEXT = [1000]
+# A page's show_id, webui and meta, when set, stand in for the id, the link and the metadata it is shown with.
 def view(p):
-    return {"id": p["id"], "title": p["title"], "version": {"number": p["n"], "message": p["msg"], "when": p.get("when", "2026-11-01T00:00:00.000Z"), "by": {"displayName": "Ann Author"}},
-            "body": {"storage": {"value": p["body"]}},
-            "metadata": {"labels": {"results": [{"name": l} for l in p["labels"]]}}, "_links": {"webui": "/spaces/%s/pages/%s" % (p["space"], p["id"])}}
+    v = {"id": p.get("show_id", p["id"]), "title": p["title"], "version": {"number": p["n"], "message": p["msg"], "when": p.get("when", "2026-11-01T00:00:00.000Z"), "by": {"displayName": "Ann Author"}},
+         "body": {"storage": {"value": p["body"]}},
+         "metadata": {"labels": {"results": [{"name": l} for l in p["labels"]]}}, "_links": {"webui": p.get("webui", "/spaces/%s/pages/%s" % (p["space"], p["id"]))}}
+    if "meta" in p: v["metadata"] = p["meta"]
+    return v
 def save():
     json.dump(P, open(D + "/state.json", "w"), indent=1)
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
+    def date_time_string(self, timestamp=None):
+        # D/date: the Date every answer carries, as it is written there.
+        if os.path.exists(D + "/date"): return open(D + "/date").read().strip()
+        import email.utils
+        return email.utils.format_datetime(clock(), usegmt=True)
     def reply(self, code, body):
         self.send_response(code); self.send_header("Content-Type", "application/json"); self.end_headers()
         self.wfile.write(json.dumps(body).encode())
@@ -6513,14 +6560,44 @@ class H(BaseHTTPRequestHandler):
         u = urllib.parse.urlparse(self.path); q = urllib.parse.parse_qs(u.query); parts = u.path.strip("/").split("/")
         if method != "GET": open(D + "/writes.log", "a").write(method + " " + u.path + "\n")
         if parts[:2] != ["rest", "api"]: return self.reply(404, {"message": "not here"})
+        if os.path.exists(D + "/fail"):
+            # "METHOD text CODE [BODY]": BODY is the answer's text as it is, or cut for one that stops short.
+            f = open(D + "/fail").read().strip().split(None, 3)
+            if f[0] == method and f[1] in self.path:
+                # The request is read first: an answer to one not read can reach the client as a reset connection.
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                os.remove(D + "/fail")
+                if len(f) < 4: return self.reply(int(f[2]), {"message": "failed on purpose"})
+                self.send_response(int(f[2])); self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", "100" if f[3] == "cut" else str(len(f[3].encode()))); self.end_headers()
+                self.wfile.write(b'{"mes' if f[3] == "cut" else f[3].encode()); self.close_connection = True
+                return
         if method == "GET" and parts[2:] == ["user", "current"]: return self.reply(200, {"displayName": "Smoke Tester"})
         if method == "POST" and parts[2:] == ["__set"]:
             b = self.body(); P[b["id"]].update({k: v for k, v in b.items() if k != "id"})
             save(); return self.reply(200, {})
+        if method == "POST" and parts[2:] == ["__make"]:
+            # {"space", "titles", "when"}: pages someone made in a space, changed at when, or now by the server's clock.
+            b = self.body()
+            for t in b["titles"]:
+                i = str(NEXT[0]); NEXT[0] += 1
+                P[i] = {"id": i, "title": t, "space": b["space"], "parent": "", "labels": [], "n": 1, "msg": "", "body": "<p>Made by hand.</p>",
+                        "when": b.get("when") or clock().isoformat()}
+            save(); return self.reply(200, {})
         if method == "GET" and parts[2:] == ["content", "search"]:
             import re
             m = re.search(r'space = "([^"]+)"', q.get("cql", [""])[0])
-            return self.reply(200, {"results": [view(p) for p in P.values() if m and p["space"] == m.group(1)]})
+            found = sorted((p for p in P.values() if m and p["space"] == m.group(1)), key=when_of, reverse=True)
+            start = int(q.get("start", ["0"])[0])
+            limit = min(int(q.get("limit", ["25"])[0]), int(open(D + "/search-cap").read()) if os.path.exists(D + "/search-cap") else 1000)
+            res = {"results": [view(p) for p in found[start:start + limit]], "start": start, "limit": limit, "_links": {}}
+            if start + limit < len(found) and not os.path.exists(D + "/no-next"):
+                res["_links"]["next"] = "/rest/api/content/search?" + urllib.parse.urlencode({"cql": q["cql"][0], "limit": limit, "start": start + limit})
+                # D/bad-next: the next link, as it is written there, such as one that drops the search.
+                if os.path.exists(D + "/bad-next"): res["_links"]["next"] = open(D + "/bad-next").read().strip()
+            # D/echo-limit: the answer says the limit asked for, though it gave fewer.
+            if os.path.exists(D + "/echo-limit"): res["limit"] = int(q.get("limit", ["25"])[0])
+            return self.reply(200, res)
         if method == "GET" and len(parts) == 6 and parts[4:] == ["state", "available"]:
             return self.reply(200, {"spaceContentStates": [{"name": "In progress"}, {"name": "Verified"}], "customContentStates": []})
         if method == "GET" and len(parts) == 5 and parts[4] == "state":
@@ -6545,19 +6622,28 @@ class H(BaseHTTPRequestHandler):
                     "labels": [], "n": 1, "msg": b.get("version", {}).get("message", ""), "body": b["body"]["storage"]["value"]}
             save(); return self.reply(200, view(P[i]))
         if method == "POST" and len(parts) == 5 and parts[4] == "label":
+            # D/save-before-label: a person saves the page just before the label lands.
+            if os.path.exists(D + "/save-before-label"):
+                os.remove(D + "/save-before-label"); P[parts[3]].update(n=P[parts[3]]["n"] + 1, body="<p>Saved by a person.</p>", msg="")
             P[parts[3]]["labels"] += [l["name"] for l in self.body()]
+            save(); return self.reply(200, {})
+        if method == "DELETE" and len(parts) == 5 and parts[4] == "label" and parts[3] in P:
+            P[parts[3]]["labels"] = [l for l in P[parts[3]]["labels"] if l not in q.get("name", [])]
             save(); return self.reply(200, {})
         if method == "PUT" and len(parts) == 4 and parts[3] in P:
             b = self.body(); p = P[parts[3]]
+            # D/save-before-put: a person saves the page just before the change lands.
+            if os.path.exists(D + "/save-before-put"):
+                os.remove(D + "/save-before-put"); p.update(n=p["n"] + 1, body="<p>Saved by a person.</p>", msg="")
             if b["version"]["number"] != p["n"] + 1: return self.reply(409, {"message": "Version must be incremented"})
-            import datetime
             p.update(title=b["title"], n=b["version"]["number"], msg=b["version"].get("message", ""), body=b["body"]["storage"]["value"],
-                     when=datetime.datetime.now(datetime.timezone.utc).isoformat())
+                     when=clock().isoformat())
             save(); return self.reply(200, view(p))
         self.reply(404, {"message": "not here"})
     def do_GET(self): self.handle_one("GET")
     def do_POST(self): self.handle_one("POST")
     def do_PUT(self): self.handle_one("PUT")
+    def do_DELETE(self): self.handle_one("DELETE")
 import socketserver
 class S(HTTPServer):
     # HTTPServer's own bind looks the host's name up, which can take seconds on a Mac.
@@ -6669,6 +6755,129 @@ urllib.request.urlopen(req).read()
 PY3
 expect "a page with the wiki's own title that someone else made stops the publish" "that llm-wiki didn't make" conf publish team
 refuse "and it fails" conf publish team
+# A page is made, then labelled, in two calls (L44). A run stopped between them leaves a page the next finishes.
+# cjson '<json>': change a page on the stand-in. cmade <title> <parent> <version message> [<body>]: a page someone made.
+cjson() { python3 -c "
+import sys, urllib.request
+urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:$(cat "$C/port")/rest/api/__set', method='POST', data=sys.argv[1].encode())).read()" "$1"; }
+cmade() { python3 -c "
+import json, sys, urllib.request
+urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:$(cat "$C/port")/rest/api/content', method='POST', headers={'Content-Type': 'application/json'},
+    data=json.dumps({'title': sys.argv[1], 'space': {'key': 'ENG'}, 'ancestors': [{'id': sys.argv[2]}], 'version': {'number': 1, 'message': sys.argv[3]},
+                     'body': {'storage': {'value': sys.argv[4] if len(sys.argv) > 4 else '<p>Written by hand.</p>'}}}).encode())).read()" "$@"; }
+pid_of() { state x "print([p['id'] for p in P.values() if p['title'] == '$1'][0])"; }
+WIKIS_DIR="$CW" "$W" new half >/dev/null 2>&1
+mkdir -p "$CW/half/wiki/concepts"
+printf -- '---\ntitle: One\n---\n\nFirst.\n' > "$CW/half/wiki/concepts/one.md"
+echo "POST /label 500" > "$C/fail"
+conf publish half >/dev/null 2>&1
+check "with the label call failing, the wiki's own page is made without its label" state x "
+t = [p for p in P.values() if p['title'] == 'half wiki']
+assert len(t) == 1 and t[0]['labels'] == [] and t[0]['n'] == 1, t"
+: > "$C/writes.log"
+expect "a dry run says it would finish that page" "would finish: half wiki (an earlier run made it and didn't label it)" conf publish half --dry-run
+check "and writes nothing" test ! -s "$C/writes.log"
+out="$(conf publish half 2>&1)"
+code=$?
+case "$out" in *"finished: half wiki (an earlier run made it and didn't label it)"*"created: half: One"*"half: 1 created, 0 updated, 1 unchanged."*) ok "the next publish finishes the wiki's own page, and goes on" ;; *) bad "the next publish finishes the wiki's own page, and goes on" "$out" ;; esac
+[ "$code" -eq 0 ] && ok "and succeeds" || bad "and succeeds" "exit $code: $out"
+check "the page then has its label" state x "assert [p for p in P.values() if p['title'] == 'half wiki'][0]['labels'] == ['llm-wiki']"
+printf -- '---\ntitle: Two\n---\n\nSecond.\n' > "$CW/half/wiki/concepts/two.md"
+echo "POST /label 403" > "$C/fail"
+expect "a page whose label is refused is said to be made, and that the next publish finishes it" "not published: half: Two: the page was made, but Confluence refused its label: failed on purpose. The next publish finishes it" conf publish half
+printf -- '---\ntitle: Two\n---\n\nSecond, revised.\n' > "$CW/half/wiki/concepts/two.md"
+out="$(conf publish half 2>&1)"
+case "$out" in *"finished: half: Two (an earlier run made it and didn't label it)"*"updated: half: Two"*"half: 0 created, 1 updated, 2 unchanged."*) ok "the next publish labels that page and updates it" ;; *) bad "the next publish labels that page and updates it" "$out" ;; esac
+check "with its label and its new text" state x "
+p = [p for p in P.values() if p['title'] == 'half: Two'][0]
+assert p['labels'] == ['llm-wiki'] and 'revised' in p['body'] and p['n'] == 2, p"
+# A page with no label that a person made, or one edited since, is never taken, whatever its title.
+top="$(pid_of 'half wiki')"
+cmade "half: Three" "$top" ""
+cmade "half: Four" "$top" "llm-wiki 0123456789abcdef"
+printf -- '---\ntitle: Three\n---\n\nThird.\n' > "$CW/half/wiki/concepts/three.md"
+printf -- '---\ntitle: Four\n---\n\nFourth.\n' > "$CW/half/wiki/concepts/four.md"
+cjson "{\"id\": \"$(pid_of 'half: One')\", \"labels\": [], \"n\": 2}"
+printf -- '---\ntitle: One\n---\n\nFirst, revised.\n' > "$CW/half/wiki/concepts/one.md"
+out="$(conf publish half 2>&1)"
+code=$?
+case "$out" in *"not published: half: Four: a page of that name is in the space with publish's version note but not the llm-wiki label"*"not published: half: One: a page of that name is in the space with publish's version note"*"not published: half: Three: a page of that name is already in the space, and llm-wiki didn't make it"*) ok "a page someone made under the wiki's, with publish's message or none, and one of publish's edited since and stripped of its label, are each refused" ;; *) bad "a page someone made under the wiki's, with publish's message or none, and one of publish's edited since and stripped of its label, are each refused" "$out" ;; esac
+case "$out" in *finished*) bad "and none is finished" "$out" ;; *) ok "and none is finished" ;; esac
+[ "$code" -eq 1 ] && ok "and publish fails" || bad "and publish fails" "exit $code"
+check "they are as they were" state x "
+for t in ('half: Three', 'half: Four'):
+    p = [p for p in P.values() if p['title'] == t][0]
+    assert p['body'] == '<p>Written by hand.</p>' and p['labels'] == [] and p['n'] == 1, p
+p = [p for p in P.values() if p['title'] == 'half: One'][0]
+assert 'revised' not in p['body'] and p['labels'] == [] and p['n'] == 2, p"
+# A person who saves a half-made page while publish finishes it keeps it: the label comes off again, whether
+# their save lands before the label or before the change.
+WIKIS_DIR="$CW" "$W" new race >/dev/null 2>&1
+conf publish race >/dev/null 2>&1
+rtop="$(pid_of 'race wiki')"
+rpage() { mkdir -p "$CW/race/wiki/concepts"; printf -- '---\ntitle: %s\n---\n\n%s\n' "$1" "$2" > "$CW/race/wiki/concepts/$(echo "$1" | tr 'A-Z' 'a-z').md"; }
+rpage Five "Fifth."
+echo "POST /label 403" > "$C/fail"
+conf publish race >/dev/null 2>&1
+: > "$C/save-before-label"
+out="$(conf publish race 2>&1)"
+case "$out" in *"not published: race: Five: someone saved a new version of it while publish was finishing it, so it is left as theirs, and its llm-wiki label was taken off again"*) ok "a person's save that lands before the label: the page is refused as theirs, and says so" ;; *) bad "a person's save that lands before the label: the page is refused as theirs, and says so" "$out" ;; esac
+check "with the label off again, and their text kept" state x "
+p = [p for p in P.values() if p['title'] == 'race: Five'][0]
+assert p['labels'] == [] and p['body'] == '<p>Saved by a person.</p>', p"
+rpage Six "Sixth."
+echo "POST /label 403" > "$C/fail"
+conf publish race >/dev/null 2>&1
+rpage Six "Sixth, revised."
+: > "$C/save-before-put"
+out="$(conf publish race 2>&1)"
+case "$out" in *"finished: race: Six"*"not published: race: Six: Version must be incremented. Its llm-wiki label was taken off again, as someone may have saved it in the meantime"*) ok "a person's save that lands before the change: the change fails, and the label publish added comes off again" ;; *) bad "a person's save that lands before the change: the change fails, and the label publish added comes off again" "$out" ;; esac
+check "so the next publish doesn't overwrite their save" state x "
+p = [p for p in P.values() if p['title'] == 'race: Six'][0]
+assert p['labels'] == [] and p['body'] == '<p>Saved by a person.</p>', p"
+# An answer that doesn't say what labels a page has isn't an answer that it has none.
+banner='<p>This page is a copy, published by llm-wiki. Changes made here are overwritten: ask an agent to change the wiki.</p>'
+cmade "race: Seven" "$rtop" "llm-wiki 0123456789abcdef" "$banner"
+cjson "{\"id\": \"$(pid_of 'race: Seven')\", \"meta\": null}"
+rpage Seven "Seventh."
+out="$(conf publish race 2>&1)"
+case "$out" in *"finished: race: Seven"*) bad "a page whose answer has no labels field is not finished" "$out" ;; *"not published: race: Seven: a page of that name is in the space with publish's version note but not the llm-wiki label"*) ok "a page whose answer has no labels field is not finished" ;; *) bad "a page whose answer has no labels field is not finished" "$out" ;; esac
+check "and isn't labelled" state x "assert [p for p in P.values() if p['title'] == 'race: Seven'][0]['labels'] == []"
+# The banner is compared with its line breaks and runs of spaces folded.
+cmade "race: Eight" "$rtop" "llm-wiki 0123456789abcdef" "$(printf '<p>This page is a copy, published by llm-wiki. Changes made here\n   are overwritten: ask an agent to change the wiki.</p>')"
+rpage Eight "Eighth."
+expect "a half-made page whose banner Confluence broke across lines is still finished" "finished: race: Eight" conf publish race
+# A refused page that carries publish's version note says what to do.
+WIKIS_DIR="$CW" "$W" new late >/dev/null 2>&1
+python3 -c "
+import json, sys, urllib.request
+urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:$(cat "$C/port")/rest/api/content', method='POST', headers={'Content-Type': 'application/json'},
+    data=json.dumps({'title': 'late wiki', 'space': {'key': 'ENG'}, 'version': {'number': 1, 'message': 'llm-wiki 0123456789abcdef'},
+                     'body': {'storage': {'value': sys.argv[1]}}}).encode())).read()" "$banner"
+cjson "{\"id\": \"$(pid_of 'late wiki')\", \"labels\": [\"other\"]}"
+expect "the wiki's own page with publish's version note and another label says to add the label, or delete it, and publish again" "with publish's version note but not the llm-wiki label, so it isn't taken as llm-wiki's. If an earlier publish made it, add the label llm-wiki to it in Confluence, or delete it there, then publish again." conf publish late
+# What Confluence says that publish prints is one line: a removed page's title, and the wiki's address.
+cmade "$(printf 'race: Gone\nInjected')" "$rtop" "llm-wiki 0123456789abcdef"
+cjson "{\"id\": \"$(state x "print([p['id'] for p in P.values() if p['title'].startswith('race: Gone')][0])")\", \"labels\": [\"llm-wiki\"]}"
+cjson "{\"id\": \"$rtop\", \"webui\": \"/x\\nDone: y z\"}"
+out="$(conf publish race 2>&1)"
+case "$out" in *"no longer in the wiki, left in Confluence: race: Gone Injected"*) ok "a removed page's title with a line break is printed on one line" ;; *) bad "a removed page's title with a line break is printed on one line" "$out" ;; esac
+case "$out" in *"/x%20Done:%20y%20z"*) ok "and so is the wiki's address" ;; *) bad "and so is the wiki's address" "$out" ;; esac
+cjson "{\"id\": \"$rtop\", \"webui\": \"/spaces/ENG/pages/$rtop\"}"
+# Odd answers end in a message, never a traceback, and no message holds the sign-in.
+SIGNIN="$(printf 'me@example.com:smoke-token' | base64)"
+odd() {  # odd <name> <what to expect> <command...>: no traceback, nothing of the sign-in, and the expected words.
+  local name="$1" want="$2" out
+  shift 2
+  out="$("$@" 2>&1)"
+  case "$out" in *Traceback* | *smoke-token* | *"$SIGNIN"* | *Authorization*) bad "$name" "$out" ;; *"$want"*) ok "$name" ;; *) bad "$name (no \"$want\")" "$out" ;; esac
+}
+rpage Nine "Ninth."
+echo 'POST /rest/api/content 200 {}' > "$C/fail"
+odd "an answer to making a page with no id is said, and may have made the page" "not published: race: Nine: Confluence's answer couldn't be read, so the page may have been made." conf publish race
+cjson "{\"id\": \"$rtop\", \"meta\": {\"labels\": [\"x\"]}}"
+odd "labels of another shape on the wiki's own page are no labels to trust, and the publish stops" "with publish's version note but not the llm-wiki label" conf publish race
+cjson "{\"id\": \"$rtop\", \"meta\": {\"labels\": {\"results\": [{\"name\": \"llm-wiki\"}]}}}"
 expect "a sign-in Confluence refuses is said plainly" "refused the sign-in" env WIKIS_DIR="$CW" CONFLUENCE_URL="http://127.0.0.1:$(cat "$C/port")" CONFLUENCE_API_TOKEN=bad "$W" confluence publish cdemo
 # With auto, a sync that changes a wiki's pages publishes it, with nobody asking.
 expect "confluence asks for the sync and tick events" "(runs on: sync, tick)" "$W" extensions
@@ -6770,6 +6979,141 @@ lacks "so the first check of a space notes nothing" "first read" wch check
 cput 901 "<p>Edited after the watch began.</p>"
 out="$(wch check 2>&1)"
 case "$out" in *"space ENG: 1 page(s) changed since "*"cdemo: Taken"*"first read"*) ok "a page changed in a watched space after that is found" ;; *) bad "a page changed in a watched space after that is found" "$out" ;; esac
+# Every change in a space is read before its time moves (L45): more than a page of results, a page of them
+# refused, a change at the very time saved, and a server whose clock is behind this machine's.
+CST="$HOME/.local/state/llm-wiki/extensions/confluence"
+# cmake <space> <title> <how many> [<when>]: pages someone made in a space, titled <title> 000 and on.
+cmake() { python3 -c "
+import json, sys, urllib.request
+titles = ['%s %03d' % (sys.argv[2], i) for i in range(int(sys.argv[3]))]
+urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:$cport/rest/api/__make', method='POST',
+    data=json.dumps({'space': sys.argv[1], 'titles': titles, 'when': sys.argv[4] if len(sys.argv) > 4 else ''}).encode())).read()" "$@"; }
+headings() { grep -h "^## $1 " "$WW/wdemo/raw"/*-confluence*.md 2>/dev/null | sort -u | wc -l | tr -d ' '; }
+printf 'watch.wdemo = space:BIG\n' > "$HOME/.config/llm-wiki/confluence"
+wch check --save >/dev/null 2>&1
+cmake BIG Big 150 "$(python3 -c 'import datetime; print(datetime.datetime.now(datetime.timezone.utc).isoformat())')"
+out="$(wch check --save 2>&1)"
+case "$out" in *"space BIG: 150 page(s) changed since "*"wdemo: noted 150 change(s)."*) ok "a space with 150 changed pages has every one read, past the first page of results" ;; *) bad "a space with 150 changed pages has every one read, past the first page of results" "$out" ;; esac
+check "and noted, though all changed at the same moment" test "$(headings Big)" = 150
+out="$(wch check --save 2>&1)"
+case "$out" in *"space BIG: 0 page(s) changed since "*"Nothing changed."*) ok "a check soon after reads the overlap again and notes none of it twice" ;; *) bad "a check soon after reads the overlap again and notes none of it twice" "$out" ;; esac
+python3 -c "
+import datetime, sys
+open(sys.argv[1], 'w').write((datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)).isoformat())" "$CST/space-BIG.since"
+wch check --save >/dev/null 2>&1
+check "the time saved is the check's own, less the overlap" python3 -c "
+import datetime, sys
+gap = datetime.datetime.now(datetime.timezone.utc) - datetime.datetime.fromisoformat(open(sys.argv[1]).read().strip())
+assert datetime.timedelta(minutes=9) < gap < datetime.timedelta(minutes=12), gap" "$CST/space-BIG.since"
+cjson "{\"id\": \"$(pid_of 'Big 000')\", \"when\": \"$(cat "$CST/space-BIG.since")\", \"n\": 2}"
+out="$(wch check --save 2>&1)"
+case "$out" in *"space BIG: 1 page(s) changed since "*"Big 000"*"changed by Ann Author"*) ok "a change at the very time saved is read" ;; *) bad "a change at the very time saved is read" "$out" ;; esac
+cmake BIG Bigger 120
+before="$(cat "$CST/space-BIG.since")"
+echo "GET start=100 403" > "$C/fail"
+out="$(wch check --save 2>&1)"
+code=$?
+case "$out" in *"the space BIG was read only in part: Confluence refused page 2 of its changes. Nothing in it is noted, and the next check reads it again."*) ok "a page of a space's changes refused part way is said" ;; *) bad "a page of a space's changes refused part way is said" "$out" ;; esac
+check "and none of its changes is noted" test "$(headings Bigger)" = 0
+check "and the space's time is as it was" test "$(cat "$CST/space-BIG.since")" = "$before"
+[ "$code" -eq 1 ] && ok "and the check fails" || bad "and the check fails" "exit $code"
+expect "the next check reads them all" "space BIG: 120 page(s) changed since " wch check --save
+check "and notes each" test "$(headings Bigger)" = 120
+echo 40 > "$C/search-cap"
+: > "$C/no-next"
+cmake BIG Capped 90
+expect "with fewer results a page than asked for, and no word of where the next page is, every page of them is read" "space BIG: 90 page(s) changed since " wch check --save
+check "and noted" test "$(headings Capped)" = 90
+: > "$C/echo-limit"
+cmake BIG Echoed 90
+expect "and so when the answer says it gave the 100 it was asked for" "space BIG: 90 page(s) changed since " wch check --save
+check "and noted" test "$(headings Echoed)" = 90
+rm "$C/search-cap" "$C/no-next" "$C/echo-limit"
+echo '/rest/api/content/search?start=100&x=a b' > "$C/bad-next"
+cmake BIG Dropped 120
+out="$(wch check --save 2>&1)"
+case "$out" in *"space BIG: 120 page(s) changed since "*) ok "a next link that drops the search, and has a space in it, isn't followed: every page is read" ;; *) bad "a next link that drops the search, and has a space in it, isn't followed: every page is read" "$out" ;; esac
+check "and noted" test "$(headings Dropped)" = 120
+rm "$C/bad-next"
+# A status changed with no new version is noted, for a page the search gives again.
+cset "$(pid_of 'Capped 000')" state Verified
+out="$(wch check --save 2>&1)"
+case "$out" in *"space BIG: 1 page(s) changed since "*"Capped 000"*"status changed"*) ok "a status changed with no new version, on a page the search gives, is noted" ;; *) bad "a status changed with no new version, on a page the search gives, is noted" "$out" ;; esac
+cmake BIG Gone 1
+before="$(cat "$CST/space-BIG.since")"
+echo "GET $(pid_of 'Gone 000')?expand=version,body 404" > "$C/fail"
+expect "a page changed in a space that can't be read now is said" "changed in the space BIG, can't be read now. The next check reads the space again." wch check --save
+check "and the space's time stays, so the page is read again" test "$(cat "$CST/space-BIG.since")" = "$before"
+expect "as the next check does" "space BIG: 1 page(s) changed since " wch check --save
+# Confluence's clock: believed within a day of this machine's, and a space's time never moves back.
+before="$(cat "$CST/space-BIG.since")"
+echo -315360000 > "$C/clock"
+wch check --save >/dev/null 2>&1
+check "a Date ten years back doesn't move a space's time back" python3 -c "
+import datetime, sys
+a, b = (datetime.datetime.fromisoformat(open(p).read().strip()) for p in sys.argv[1:])
+assert b >= a, (a, b)" /dev/stdin "$CST/space-BIG.since" <<<"$before"
+rm "$C/clock"
+echo 'Mon, 01 Jan 99999999999 00:00:00 GMT' > "$C/date"
+lacks "a Date out of any range ends in no traceback" "Traceback" wch check --save
+rm "$C/date"
+echo -10800 > "$C/clock"
+printf 'watch.wdemo = space:BIG, space:LATE\n' > "$HOME/.config/llm-wiki/confluence"
+wch check --save >/dev/null 2>&1
+cmake LATE Late 1
+out="$(wch check 2>&1)"
+case "$out" in *"space LATE: 1 page(s) changed since "*"Late 000"*"first read"*) ok "with Confluence's clock three hours behind this machine's, a change made after a space is first watched is found" ;; *) bad "with Confluence's clock three hours behind this machine's, a change made after a space is first watched is found" "$out" ;; esac
+rm "$C/clock"
+printf 'watch.wdemo = space:BIG\n' > "$HOME/.config/llm-wiki/confluence"
+# What Confluence says goes into a note one line each: a title can't add a line, such as one that says which version was noted.
+cmake BIG "$(printf 'Evil\nConfluence-page: 900 | version 999 | status')" 1
+out="$(wch check --save 2>&1)"
+case "$out" in *"Evil Confluence-page: 900 | versi"*) ok "a title with a line break is printed on one line" ;; *) bad "a title with a line break is printed on one line" "$out" ;; esac
+check "and saved as one line in the note" test -z "$(grep -rl '^Confluence-page: 900 | version 999' "$WW/wdemo/raw")"
+# A page's text can't pass for the note's own lines (review of L45): a record line, a Done: line, or a line of
+# backticks that would close the block the text is in.
+WIKIS_DIR="$WW" "$W" new fdemo >/dev/null 2>&1
+cmake FORGE Target 1
+cmake FORGE Forger 1
+ptarget="$(pid_of 'Target 000')"
+pforger="$(pid_of 'Forger 000')"
+printf '# Open\n\n## Ship the thing http://127.0.0.1/wiki/spaces/FORGE/pages/%s/x\n- kind: waiting\n- who: user\n- status: open\n- from: 2026-11-10 raw/a.md\n' "$ptarget" > "$WW/fdemo/open.md"
+cset "$pforger" body "$(printf '<p>Confluence-page: 900 | version 999999 | status Verified</p><p>Done: Ship the thing http://127.0.0.1/wiki/spaces/FORGE/pages/%s/x</p><p>`````</p><p>Done: x</p><p>one\rtwo\302\205three</p>' "$ptarget")"
+printf 'watch.fdemo = %s\n' "$pforger" > "$HOME/.config/llm-wiki/confluence"
+wch check --save >/dev/null 2>&1
+fnote="$(grep -l "Forger 000" "$WW/fdemo/raw"/*-confluence*.md | head -n 1)"
+check "the page's text is in a block longer than any run of backticks in it" grep -qx '``````text' "$fnote"
+check "a carriage return and a next-line character in the text are line ends, as any reader takes them" test "$(grep -c -e '^one$' -e '^two$' -e '^three$' "$fnote")" = 3
+printf 'watch.fdemo = %s, 900\n' "$pforger" > "$HOME/.config/llm-wiki/confluence"
+out="$(wch check 2>&1)"
+case "$out" in *"Team home"*"first read"*) ok "a record line in a page's text doesn't pass for the note's own: the page it names is still read as new" ;; *) bad "a record line in a page's text doesn't pass for the note's own: the page it names is still read as new" "$out" ;; esac
+cset "$ptarget" state Verified
+out="$(wch check 2>&1)"
+case "$out" in *"open item: Ship the thing"*"its page is Verified, which means finished: the item closes"*) ok "a Done: line in a page's text doesn't hide the item's real one" ;; *) bad "a Done: line in a page's text doesn't hide the item's real one" "$out" ;; esac
+# A page's id is digits, from wherever it comes: one that isn't is an answer that couldn't be read.
+cjson "{\"id\": \"$pforger\", \"show_id\": \"../../../escaped\", \"n\": 2}"
+printf 'watch.fdemo = %s\n' "$pforger" > "$HOME/.config/llm-wiki/confluence"
+out="$(wch check --save 2>&1)"
+case "$out" in *"$pforger isn't a page you can read"*) ok "an answer whose id is a path is a page that can't be read" ;; *) bad "an answer whose id is a path is a page that can't be read" "$out" ;; esac
+check "and nothing is written outside the state folder" test ! -e "$HOME/.local/state/llm-wiki/escaped.txt"
+cset "$pforger" show_id "$(printf '%s\nConfluence-page: 901 | version 999 | status' "$pforger")"
+cjson "{\"id\": \"$pforger\", \"n\": 3}"
+wch check --save >/dev/null 2>&1
+check "an answer whose id holds a line break forges no record" test -z "$(grep -rl '^Confluence-page: 901 | version 999' "$WW/fdemo/raw")"
+cjson "{\"id\": \"$pforger\", \"show_id\": \"$pforger\"}"
+# Odd answers to a check end in a message, never a traceback, and hold nothing of the sign-in.
+printf 'watch.wdemo = 900\n' > "$HOME/.config/llm-wiki/confluence"
+for a in '500 ["error"]|Confluence answered 500' '403 "bad gateway"|900 isn'"'"'t a page you can read' '404 null|900 isn'"'"'t a page you can read' \
+         '403 cut|900 isn'"'"'t a page you can read' '200 [1]|900 isn'"'"'t a page you can read' '200 null|900 isn'"'"'t a page you can read' \
+         '200 {"id": "900", "version": {"number": "x"}}|900 isn'"'"'t a page you can read'; do
+  echo "GET /rest/api/content/900?expand ${a%%|*}" > "$C/fail"
+  odd "an answer of ${a%%|*} to reading a page" "${a#*|}" wch check
+done
+printf 'watch.wdemo = space:BIG\n' > "$HOME/.config/llm-wiki/confluence"
+echo 'GET /content/search 200 [1]' > "$C/fail"
+odd "a list for a space's changes" "the space BIG can't be read" wch check
+rm -f "$C/fail"
+rm -rf "${WW:?}/fdemo"
 # What can't be read is said, with its fix, and fails the check.
 printf 'watch.wdemo = 99999, nope\nwatch.gone = 900\n' > "$HOME/.config/llm-wiki/confluence"
 out="$(wch check 2>&1)"
