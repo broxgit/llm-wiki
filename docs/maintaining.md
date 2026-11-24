@@ -65,6 +65,8 @@ Nobody needs it. `wiki.sh` uses it when it's there and prints the protocol numbe
 
 `LLM_WIKI_NO_GO=1` makes `wiki.sh` ignore the helper, and `LLM_WIKI_GO=<path>` points it at another build.
 
+Both start the same way, `wiki.sh` at its top and the helper in `main` (`gitSafe`, `gitClean`): every git they start gets `safe.bareRepository=explicit`, and none sees `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE` or the other variables that name a repository. A dotfiles setup exports some, git exports some to its hooks, and git answers for the repository they name before it looks at the folder. The list is also in `mcp/server.py`, `hooks/session-start.sh`, `hooks/reminders.py` and `scripts/migrate-to-plugin.sh`, and a smoke test checks they agree. Code that needs one, as the history store and `links_take_out` do, sets it on that one command. The promise is narrow: nothing in the environment makes the tool act on a repository or work tree other than the one a folder belongs to. A caller who can set what runs a program (`GIT_SSH_COMMAND`, `GIT_EXEC_PATH`, `core.hooksPath` and the like) can run programs anyway, and that is not guarded against. `GIT_CONFIG_COUNT` entries are kept: git reads `core.worktree` and `core.bare` only from a repository's own config, so none of them can redirect it.
+
 ### Releasing the helper
 
 People who don't build the helper get it from a GitHub release. `wiki update` and `wiki helper fetch` download the one for their platform and keep it only if its SHA-256 is the one in `helper.lock`, which came with the code they already run. So a download is trusted no further than the code is, and no binary lives in git.

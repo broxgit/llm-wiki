@@ -4,6 +4,13 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. The date is the day the entry is written, in UTC, and several entries can share a day. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-11-23: wiki ignores a GIT_DIR or GIT_WORK_TREE in the environment
+
+- With `GIT_DIR` or `GIT_WORK_TREE` exported, as a dotfiles setup does, `wiki` acts on your collection and leaves that other repository alone.
+- A `wiki` command run from another project's git hook no longer commits into that project or its index.
+- Session start and `wiki which` name the repository you're in, not the one those variables name.
+- A wikis folder kept in git only through those variables now has no git to `wiki`: `sync` and `init --git` say how to keep that repository in the folder.
+
 ## 2026-11-23: Jira keeps an item open while a ticket can't be read
 
 - An item no longer closes while Jira won't show a ticket it names. With `projects` set it stays open; without, you're asked once.
