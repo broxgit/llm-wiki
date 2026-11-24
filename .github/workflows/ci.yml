@@ -48,7 +48,7 @@ jobs:
         # Without its data-flow analysis: with it, shellcheck took about 14 GB of memory on
         # tests/smoke.sh, and the runner was shut down part way (2026-11-19). The checks that
         # analysis adds are few, and the file passes with them when run where there is room.
-        run: shellcheck --extended-analysis=false -S warning wiki.sh ui.sh tests/ui-lint.sh scripts/gallery.sh hooks/session-start.sh hooks/pre-tool-use.sh hooks/user-prompt.sh hooks/pre-commit scripts/migrate-to-plugin.sh scripts/helper.sh scripts/ci-changes.sh tests/smoke.sh tests/smoke-parts.sh tests/budget.sh
+        run: shellcheck --extended-analysis=false -S warning wiki.sh ui.sh tests/ui-lint.sh scripts/gallery.sh hooks/session-start.sh hooks/pre-tool-use.sh hooks/user-prompt.sh hooks/hook-note.sh hooks/pre-commit scripts/migrate-to-plugin.sh scripts/helper.sh scripts/ci-changes.sh tests/smoke.sh tests/smoke-parts.sh tests/budget.sh
       - name: The smoke matrix runs every part of the suite
         run: test "$(tests/smoke.sh --list | cut -f 1 | sort -un | paste -sd ' ' -)" = "1 2 3 4"
       - uses: actions/setup-node@v4
@@ -171,9 +171,17 @@ jobs:
         with:
           go-version: ${{ steps.toolchain.outputs.version }}
           cache: false
+      # On macOS, in the locale a terminal sets: LANG, with LC_ALL and LC_CTYPE unset. The
+      # runner's own is UTF-8 too, but by LC_ALL, it seems: seven checks that fail under LANG
+      # alone passed here, and with LC_ALL already exported a function's `local LC_ALL=C`
+      # reaches the commands it runs, which hid the fault (code review M2, T16). So macOS no
+      # longer runs the suite in the runner's own locale. `locale` shows what each run had.
+      # Linux keeps the runner's.
       - name: Smoke tests
         run: |
+          if [ "$RUNNER_OS" = macOS ]; then unset LC_ALL LC_CTYPE; export LANG=en_US.UTF-8; fi
           bash --version | head -n 1
+          locale
           SMOKE_TIMES=1 tests/smoke.sh --part ${{ matrix.part }}
 
   # Branch protection requires checks named smoke (ubuntu-latest) and smoke (macos-latest),

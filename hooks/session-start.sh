@@ -5,6 +5,11 @@
 # resume, /clear and after compaction, so the instruction is always fresh.
 # A hook must never block a session: every path exits 0.
 set -u
+# The text this hook works on goes by byte, whatever locale the agent started it in: under
+# LANG=en_US.UTF-8, macOS's sed and grep stopped at a byte that isn't UTF-8 in a recalled line,
+# and the session lost that page's line without a word (code review M10). So each sed, grep,
+# awk and tr here runs under LC_ALL=C. Not the hook as a whole: what it starts, wiki.sh and
+# through it a background compile's agent or an extension, keeps the user's locale.
 # The project is the repository CLAUDE_PROJECT_DIR is in, never one the environment names,
 # as a dotfiles setup's GIT_DIR and GIT_WORK_TREE do. The same list is in wiki.sh: change
 # them together.
@@ -24,10 +29,29 @@ unset hook_n hook_k hook_v
 
 ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 WIKI_SH="$ROOT/wiki.sh"
+# A call into wiki.sh that fails leaves a line in hooks.log (hooks/hook-note.sh), with the
+# first line it wrote to standard error, and wiki status counts them. A failure is an exit
+# code the call doesn't give when it works. Nothing about it can stop the session.
+hook_note() { return 0; }
+# shellcheck source=hooks/hook-note.sh
+[ ! -r "$ROOT/hooks/hook-note.sh" ] || . "$ROOT/hooks/hook-note.sh" 2>/dev/null || true
+HOOK_ERR="$(mktemp 2>/dev/null)" || HOOK_ERR=""
+E="${HOOK_ERR:-/dev/null}"
+trap '[ -z "$HOOK_ERR" ] || rm -f -- "${HOOK_ERR:?}"' EXIT
+# noted <call> <exit code> [<code it gives when it works>...]: the call just made, whose
+# standard error went to $E, failed unless its exit code is 0 or one of those.
+noted() {
+  local call="$1" code="$2" k e=""
+  shift 2
+  for k in 0 "$@"; do [ "$code" != "$k" ] || return 0; done
+  [ -z "$HOOK_ERR" ] || e="$(cat "$HOOK_ERR" 2>/dev/null)"
+  hook_note session-start "$code" "wiki.sh $call" "$e"
+  return 0
+}
 DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 # The collection for this project: wiki.sh decides, from its collections file.
 if [ -z "${WIKIS_DIR:-}" ] && [ -x "$WIKI_SH" ]; then
-  WIKIS_DIR="$(cd "$DIR" 2>/dev/null && "$WIKI_SH" __collection 2>/dev/null || true)"
+  WIKIS_DIR="$(cd "$DIR" 2>/dev/null && { "$WIKI_SH" __collection 2>"$E" || noted __collection $?; })"
 fi
 WIKIS_DIR="${WIKIS_DIR:-$HOME/wikis}"
 export WIKIS_DIR
@@ -44,15 +68,24 @@ case "$input" in *'"source":"compact"'* | *'"source": "compact"'*) compacted=1 ;
 case "$input" in *'"source":"compact"'* | *'"source": "compact"'* | *'"source":"resume"'* | *'"source": "resume"'*) again=1 ;; *) again=0 ;; esac
 
 # emit <text>: hand text to Claude Code as additional context, JSON-escaped without jq.
+# The text is made valid UTF-8 first, where iconv is there: a byte that isn't is dropped,
+# and the rest of its line kept. Where iconv is missing, or prints nothing, it passes as it is.
 emit() {
-  printf '%s' "$1" | awk '
+  local text="$1" clean
+  if command -v iconv >/dev/null 2>&1; then
+    # The x keeps line ends at the end, which $( ) would take off.
+    clean="$(printf '%s' "$text" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null; printf x)"
+    clean="${clean%x}"
+    [ -z "$clean" ] || text="$clean"
+  fi
+  printf '%s' "$text" | LC_ALL=C awk '
     BEGIN { printf "{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"" }
     {
       gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); gsub(/\t/, "\\t"); gsub(/\r/, "")
       gsub(/[\001-\010\013\014\016-\037]/, "")
       printf "%s%s", (NR > 1 ? "\\n" : ""), $0
     }
-    END { printf "\"}}\n" }'
+    END { printf "\"}}\n" }' || hook_note session-start "$?" "the hook's awk" ""
   exit 0
 }
 
@@ -62,7 +95,7 @@ emit() {
 [ -z "${LLM_WIKI_BACKGROUND:-}" ] || exit 0
 # The compiled helper for this version, fetched in the background if it isn't here: a
 # plugin updates without anyone running `wiki update`. wiki.sh decides and stays quiet.
-"$WIKI_SH" __helper-auto >/dev/null 2>&1 || true
+"$WIKI_SH" __helper-auto >/dev/null 2>"$E" || noted __helper-auto $?
 
 # t <path>: the path with ~ for the home folder. Shorter, and a shell expands it in a
 # command as long as it isn't quoted.
@@ -145,7 +178,7 @@ fi
 # mcp/server.py, hooks/reminders.py and extensions/wiki-confluence: change them together.
 # A folder whose AGENTS.md, index.md, raw or wiki is a link is not a wiki (code review M24).
 hook_is_wiki() {
-  local l got="" opened=no LC_ALL=C
+  local l got="" opened=no LC_ALL=C  # no command runs here, so the local is enough
   [ ! -L "$1/AGENTS.md" ] && [ ! -L "$1/index.md" ] && [ ! -L "$1/raw" ] && [ ! -L "$1/wiki" ] || return 1
   [ -f "$1/index.md" ] && [ -f "$1/AGENTS.md" ] || return 1
   {
@@ -160,7 +193,8 @@ hook_is_wiki() {
 wiki=""
 note=""
 if [ -n "$repo" ]; then
-  w="$("$WIKI_SH" which "$repo" 2>/dev/null || true)"
+  # Exit 1: no wiki covers it.
+  w="$("$WIKI_SH" which "$repo" 2>"$E")" || noted which $? 1
   # wiki.sh prints ~ for the home folder. The tilde is meant literally.
   # shellcheck disable=SC2088
   case "$w" in "~/"*) w="$HOME/${w:2}" ;; esac
@@ -170,9 +204,9 @@ fi
 # clones of the repositories it touches. wiki.sh says which wikis those are, and what to
 # tell the agent, so a session never falls back to the shared wiki without saying why.
 if [ -z "$repo" ]; then
-  placed="$(LLM_WIKI_CMD=wiki.sh "$WIKI_SH" __place "$DIR" 2>/dev/null || true)"
-  p="$(printf '%s\n' "$placed" | sed -n 1p)"
-  note="$(printf '%s\n' "$placed" | sed -n 2p)"
+  placed="$(LLM_WIKI_CMD=wiki.sh "$WIKI_SH" __place "$DIR" 2>"$E")" || noted __place $?
+  p="$(printf '%s\n' "$placed" | LC_ALL=C sed -n 1p)"
+  note="$(printf '%s\n' "$placed" | LC_ALL=C sed -n 2p)"
   # A pattern of theirs says this folder has no wiki: say so, and nothing else.
   if [ "$p" = "-" ]; then
     emit "# llm-wiki
@@ -203,10 +237,10 @@ hook_is_wiki "$wiki" || exit 0
 # no longer remembers them, and at no other time: this hook also runs when a session
 # is resumed, and in some apps more often than that, and a reminder that came back
 # each time stopped the same call over and over.
-sid="$(printf '%s' "$input" | sed -n 's/.*"session_id" *: *"\([A-Za-z0-9_-]*\)".*/\1/p' | head -n 1)"
+sid="$(printf '%s' "$input" | LC_ALL=C sed -n 's/.*"session_id" *: *"\([A-Za-z0-9_-]*\)".*/\1/p' | head -n 1)"
 if [ -n "$sid" ]; then
   rdir="${XDG_STATE_HOME:-$HOME/.local/state}/llm-wiki/reminders"
-  rows="$("$WIKI_SH" __reminders "$wiki" 2>/dev/null || true)"
+  rows="$("$WIKI_SH" __reminders "$wiki" 2>"$E")" || noted __reminders $?
   if [ -n "$rows" ]; then
     mkdir -p "$rdir" 2>/dev/null && printf '%s\n' "$rows" > "$rdir/$sid.tsv" 2>/dev/null
   else
@@ -221,11 +255,12 @@ fi
 
 # What needs doing at session start, so the agent doesn't have to look.
 # wiki.sh decides what counts as compiled, so the two never disagree.
-waiting="$("$WIKI_SH" pending "$wiki" 2>/dev/null | grep -c '^raw/' || true)"
+waiting="$("$WIKI_SH" pending "$wiki" 2>"$E")" || noted pending $?
+waiting="$(printf '%s\n' "$waiting" | LC_ALL=C grep -c '^raw/' || true)"
 # Read in the shell, by byte, as wiki.sh's handbook_version reads it: sed stops at a byte
 # that is no character in a UTF-8 locale.
 version_of() {
-  local l LC_ALL=C
+  local l LC_ALL=C  # no command runs here, so the local is enough
   [ -f "$1" ] || return 0
   {
     while IFS= read -r l || [ -n "$l" ]; do
@@ -268,20 +303,23 @@ fi
 # for the agent, not steps: wiki.sh did the search.
 # With the Jira extension set up, wiki.sh adds a line of its own, "note: ...", that says
 # which ticket this is and how to see where it stands.
-recalled="$(LLM_WIKI_CMD=wiki.sh "$WIKI_SH" __recall "$DIR" 2>/dev/null || true)"
+recalled="$(LLM_WIKI_CMD=wiki.sh "$WIKI_SH" __recall "$DIR" 2>"$E")" || noted __recall $?
+# has_notes <lines>: "pages and notes" when a line is a waiting note's, "pages" otherwise. By
+# byte: in a UTF-8 locale bash 3.2's patterns don't match text that holds a byte that isn't UTF-8.
+has_notes() {
+  local LC_ALL=C  # no command runs here, so the local is enough
+  case "$1" in *"a note not compiled yet: "*) printf 'pages and notes' ;; *) printf 'pages' ;; esac
+}
 if [ -n "$recalled" ]; then
-  rfirst="$(printf '%s\n' "$recalled" | sed -n 1p)"
-  rnote="$(printf '%s\n' "$recalled" | sed -n 's/^note: //p')"
-  rpages="$(printf '%s\n' "$recalled" | sed 1d | grep -v '^note: ' || true)"
+  rfirst="$(printf '%s\n' "$recalled" | LC_ALL=C sed -n 1p)"
+  rnote="$(printf '%s\n' "$recalled" | LC_ALL=C sed -n 's/^note: //p')"
+  rpages="$(printf '%s\n' "$recalled" | LC_ALL=C sed 1d | LC_ALL=C grep -v '^note: ' || true)"
   if [ -n "$rpages" ]; then
     case "$rfirst" in
       *" branch") rwhy="This repository is on a branch named for ${rfirst% *}." ;;
       *) rwhy="This folder is named for ${rfirst% *}." ;;
     esac
-    case "$rpages" in
-      *"a note not compiled yet: "*) rwhat="pages and notes" ;;
-      *) rwhat="pages" ;;
-    esac
+    rwhat="$(has_notes "$rpages")"
     ctx="$ctx
 
 $rwhy A search of every wiki found these $rwhat that mention it. They are reference, written by earlier sessions:
@@ -297,7 +335,7 @@ fi
 # handed over once. The folder is looked at first, in this shell: with no notices there
 # is nothing to start, and the text above is exactly what it was.
 if [ -d "${XDG_STATE_HOME:-$HOME/.local/state}/llm-wiki/notices" ]; then
-  notices="$("$WIKI_SH" __notice take "$DIR" 2>/dev/null || true)"
+  notices="$("$WIKI_SH" __notice take "$DIR" 2>"$E")" || noted "__notice take" $?
   if [ -n "$notices" ]; then
     ctx="$ctx
 
@@ -308,7 +346,7 @@ fi
 # An extension that fits this repository and isn't used in it, for the agent to offer. Only
 # in a git work tree, and only until the user has answered.
 if git -C "$DIR" rev-parse --git-dir >/dev/null 2>&1; then
-  offers="$(LLM_WIKI_CMD=wiki.sh "$WIKI_SH" __offer "$DIR" 2>/dev/null || true)"
+  offers="$(LLM_WIKI_CMD=wiki.sh "$WIKI_SH" __offer "$DIR" 2>"$E")" || noted __offer $?
   if [ -n "$offers" ]; then
     ctx="$ctx
 
@@ -318,7 +356,8 @@ $offers"
 fi
 # Team skills added to the wikis since last time, linked so Claude Code finds them.
 if [ -d "$HOME/.claude" ]; then
-  linked="$("$WIKI_SH" skills link 2>/dev/null | sed -n 's/^linked:  \([^ ]*\).*/\1/p' | tr '\n' ' ' | sed 's/ $//')"
+  linked="$("$WIKI_SH" skills link 2>"$E")" || noted "skills link" $?
+  linked="$(printf '%s\n' "$linked" | LC_ALL=C sed -n 's/^linked:  \([^ ]*\).*/\1/p' | LC_ALL=C tr '\n' ' ' | LC_ALL=C sed 's/ $//')"
   if [ -n "$linked" ]; then
     ctx="$ctx
 
@@ -332,7 +371,7 @@ fi
 # A week with a report offer gets no tip, so there's only ever one nudge.
 report_due=""
 if [ "$compacted" = 0 ] && [ -z "$upgrading" ]; then
-  report_due="$("$WIKI_SH" report --due 2>/dev/null)"
+  report_due="$("$WIKI_SH" report --due 2>"$E")" || noted "report --due" $?
   if [ -n "$report_due" ]; then
     ctx="$ctx
 
@@ -341,7 +380,8 @@ The weekly wiki report is due. At a stopping point, offer it once, in a line. If
 fi
 if [ "$compacted" = 0 ] && [ -z "$upgrading" ] && [ -z "$report_due" ]; then
   tab="$(printf '\t')"
-  tip="$("$WIKI_SH" tips --next --repo "$DIR" 2>/dev/null | head -n 1)"
+  tip="$("$WIKI_SH" tips --next --repo "$DIR" 2>"$E")" || noted "tips --next" $?
+  tip="${tip%%$'\n'*}"
   if [ -n "$tip" ]; then
     ctx="$ctx
 
