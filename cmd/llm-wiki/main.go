@@ -51,8 +51,29 @@ func gitSafe() {
 	os.Setenv("GIT_CONFIG_COUNT", strconv.Itoa(n+1))
 }
 
+// gitRepoVars are git's variables that point it at a repository, work tree, index or object
+// store other than the one a folder belongs to. wiki.sh clears the same list at its top, as
+// do mcp/server.py, hooks/session-start.sh, hooks/reminders.py and
+// scripts/migrate-to-plugin.sh: change them together. A dotfiles setup exports GIT_DIR and
+// GIT_WORK_TREE, and git exports GIT_DIR and GIT_INDEX_FILE to its hooks and aliases, and
+// any of them would have git answer for that repository.
+var gitRepoVars = []string{
+	"GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+	"GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_QUARANTINE_PATH", "GIT_GRAFT_FILE", "GIT_SHALLOW_FILE", "GIT_REPLACE_REF_BASE",
+	"GIT_NAMESPACE", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_PREFIX",
+}
+
+// gitClean is wiki.sh's step after gitSafe's, for a helper started without it: no git this
+// process starts, nor wiki.sh when the MCP server runs it, is told of another repository.
+func gitClean() {
+	for _, k := range gitRepoVars {
+		os.Unsetenv(k)
+	}
+}
+
 func main() {
 	gitSafe()
+	gitClean()
 	if len(os.Args) < 2 {
 		fail("usage: llm-wiki protocol | report-tokens|report-tokens-gemini <transcripts> <start> <end> <day-starts> <wikis> <exclude> | standup-activity <options> | journal-backfill <transcripts> <start> <end> <day-starts> <wikis> <exclude> <out> <brain> | which <options> | find <options> | status <options> | capture <options> -- <arguments> | feedback-add <options> -- <arguments> | mcp")
 	}

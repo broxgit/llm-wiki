@@ -12,6 +12,15 @@ import sys
 import tempfile
 import time
 
+# Git takes the repository from these before it looks at a folder: a dotfiles setup exports
+# GIT_DIR and GIT_WORK_TREE, and git exports GIT_DIR and GIT_INDEX_FILE to its hooks. None
+# reaches wiki.sh, or a git started here. The same list is in wiki.sh: change them together.
+GIT_REPO_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+                 "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_QUARANTINE_PATH", "GIT_GRAFT_FILE", "GIT_SHALLOW_FILE", "GIT_REPLACE_REF_BASE",
+                 "GIT_NAMESPACE", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_PREFIX")
+for _k in GIT_REPO_VARS:
+    os.environ.pop(_k, None)
+
 WIKI_SH = os.environ.get("LLM_WIKI_SH", "")
 PROTOCOL = "2025-06-18"
 TIMEOUT = 90

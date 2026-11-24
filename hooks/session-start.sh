@@ -5,6 +5,22 @@
 # resume, /clear and after compaction, so the instruction is always fresh.
 # A hook must never block a session: every path exits 0.
 set -u
+# The project is the repository CLAUDE_PROJECT_DIR is in, never one the environment names,
+# as a dotfiles setup's GIT_DIR and GIT_WORK_TREE do. The same list is in wiki.sh: change
+# them together.
+unset GIT_DIR GIT_WORK_TREE GIT_IMPLICIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_QUARANTINE_PATH GIT_GRAFT_FILE GIT_SHALLOW_FILE GIT_REPLACE_REF_BASE \
+  GIT_NAMESPACE GIT_CONFIG GIT_CONFIG_PARAMETERS GIT_PREFIX
+# And git takes no folder that holds HEAD, objects/ and refs/ for the project's repository
+# unless it is named: safe.bareRepository=explicit, last, as wiki.sh's own first step adds it.
+hook_n="${GIT_CONFIG_COUNT:-0}"
+case "$hook_n" in '' | *[!0-9]*) hook_n=0 ;; esac
+hook_n=$((10#$hook_n))
+hook_k="GIT_CONFIG_KEY_$((hook_n - 1))"; hook_v="GIT_CONFIG_VALUE_$((hook_n - 1))"
+if [ "$hook_n" -eq 0 ] || [ "$(printf '%s' "${!hook_k:-}" | LC_ALL=C tr 'A-Z' 'a-z')" != safe.barerepository ] || [ "${!hook_v:-}" != explicit ]; then
+  export "GIT_CONFIG_KEY_$hook_n=safe.bareRepository" "GIT_CONFIG_VALUE_$hook_n=explicit" GIT_CONFIG_COUNT=$((hook_n + 1))
+fi
+unset hook_n hook_k hook_v
 
 ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 WIKI_SH="$ROOT/wiki.sh"

@@ -54,6 +54,32 @@ import tempfile
 import time
 from urllib.parse import unquote
 
+# Git takes the repository from these before it looks at a folder: a dotfiles setup exports
+# GIT_DIR and GIT_WORK_TREE. None reaches the git here, which names the session's project from
+# its folder. The same list is in wiki.sh: change them together.
+GIT_REPO_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+                 "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_QUARANTINE_PATH", "GIT_GRAFT_FILE", "GIT_SHALLOW_FILE", "GIT_REPLACE_REF_BASE",
+                 "GIT_NAMESPACE", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_PREFIX")
+for _k in GIT_REPO_VARS:
+    os.environ.pop(_k, None)
+
+
+def git_safe():
+    """safe.bareRepository=explicit for every git started here, after whatever the environment
+    carries and so the last word, as wiki.sh adds it: a folder that holds HEAD, objects/ and
+    refs/ is then no repository unless it is named."""
+    n = os.environ.get("GIT_CONFIG_COUNT", "")
+    n = int(n, 10) if re.fullmatch(r"[0-9]+", n) else 0
+    if n and os.environ.get("GIT_CONFIG_KEY_%d" % (n - 1), "").lower() == "safe.barerepository" \
+            and os.environ.get("GIT_CONFIG_VALUE_%d" % (n - 1)) == "explicit":
+        return
+    os.environ["GIT_CONFIG_KEY_%d" % n] = "safe.bareRepository"
+    os.environ["GIT_CONFIG_VALUE_%d" % n] = "explicit"
+    os.environ["GIT_CONFIG_COUNT"] = str(n + 1)
+
+
+git_safe()
+
 EDIT_TOOLS = ("Edit", "Write", "NotebookEdit", "MultiEdit")
 AGY_TOOLS = {"run_command": "Bash", "write_to_file": "Edit", "replace_file_content": "Edit",
              "multi_replace_file_content": "Edit", "invoke_subagent": "Agent",
