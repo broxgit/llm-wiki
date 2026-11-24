@@ -6,12 +6,14 @@ and the paths that differ from one extension to the next (its settings file, its
 
 What is here: cleaning text that came from outside, cutting a long log down to an excerpt and finding the line that
 names the error, keeping excerpts in a private folder, the settings file, the notice and desktop notification a new
-failure leaves, the note in a wiki when a failure is fixed, the state file and the list of watched folders.
+failure leaves, the note in a wiki when a failure is fixed, which collection that wiki is in, the state file and the
+list of watched folders.
 
 Nothing here talks to GitHub, GitLab or Jenkins, and nothing here writes to them.
 """
 import contextlib
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -34,6 +36,7 @@ KEEP_BYTES = 8000
 KEEP_DAYS = 7
 SIGNATURE_CHARS = 160
 NOTICE_DAYS = 3
+SYNC_SECONDS = 300
 SEPARATORS = "\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"
 
 
@@ -174,14 +177,22 @@ def folder_arg(args, what, ext):
 
 
 # What redirects git to another repository, another configuration or other objects: not passed to it.
-GIT_STRIP = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_PREFIX", "GIT_OBJECT_DIRECTORY",
-             "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG",
-             "GIT_CONFIG_SYSTEM", "GIT_REPLACE_REF_BASE", "GIT_GRAFT_FILE", "GIT_SHALLOW_FILE", "GIT_EXEC_PATH", "GIT_TEMPLATE_DIR")
+# wiki.sh strips the same, and wiki-github keeps a copy: change them together.
+GIT_STRIP = ("GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_PREFIX",
+             "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_QUARANTINE_PATH", "GIT_NAMESPACE",
+             "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG", "GIT_CONFIG_SYSTEM", "GIT_REPLACE_REF_BASE",
+             "GIT_GRAFT_FILE", "GIT_SHALLOW_FILE", "GIT_EXEC_PATH", "GIT_TEMPLATE_DIR")
+# What every git these extensions run is given, in place of the configuration the environment held: a folder
+# that only looks like a bare repository (HEAD, objects/ and refs/) is never read as one unless it is named.
+# The environment's other entries are not kept: one such as core.fsmonitor or core.sshCommand makes git run a
+# command, and nothing these extensions ask of git needs one.
+GIT_SAFE = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "safe.bareRepository", "GIT_CONFIG_VALUE_0": "explicit"}
 
 
 def git_env():
     env = {k: v for k, v in os.environ.items()
            if k not in GIT_STRIP and not k.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))}
+    env.update(GIT_SAFE)
     env["GIT_TERMINAL_PROMPT"] = "0"
     return env
 
@@ -411,15 +422,131 @@ def save_excerpt(state_dir, log_dir, repo_key, filename, lines):
 
 # ---- llm-wiki's own commands ------------------------------------------------------------------------
 
-def llm_wiki(*args, **kw):
-    """Run llm-wiki's own command, as the contract says: through $LLM_WIKI."""
+def run_llm_wiki(*args, **kw):
+    """(what llm-wiki's own command did, why it couldn't be run): run as the contract says, through $LLM_WIKI. The
+    answer is read as UTF-8 with what isn't replaced, so a note that holds a stray byte can't end the run."""
     exe = os.environ.get("LLM_WIKI")
     if not exe:
-        return None
+        return None, "LLM_WIKI isn't set"
+    timeout = kw.pop("timeout", 120)
     try:
-        return subprocess.run([exe] + list(args), capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL, **kw)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
+        return subprocess.run([exe] + list(args), capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              timeout=timeout, stdin=subprocess.DEVNULL, **kw), ""
+    except subprocess.TimeoutExpired:
+        return None, f"it didn't answer within {timeout} seconds"
+    except OSError as e:
+        return None, f"it couldn't be run: {e.strerror or e}"
+
+
+def llm_wiki(*args, **kw):
+    """Run llm-wiki's own command, as the contract says: through $LLM_WIKI. None when it couldn't be run."""
+    return run_llm_wiki(*args, **kw)[0]
+
+
+# ---- which collection a wiki is in ------------------------------------------------------------------
+# A machine can have several collections, folders of wikis, and every one has a wiki called global. A tick
+# starts in whichever collection the session or the schedule was in, so the wiki that covers a repository
+# is asked of every collection, and a call about a wiki of another collection runs with WIKIS_DIR set to
+# that collection's folder. llm-wiki hands every call LLM_WIKI_COLLECTION and LLM_WIKI_COLLECTIONS, worked
+# out from the collections file each time. wiki-confluence keeps the same rules. A run in a folder that no
+# collection names (a sandbox, a test, a one-off WIKIS_DIR) asks that folder alone.
+
+COLLECTION_OK = re.compile(r"[A-Za-z0-9_-]+\Z")
+# What llm-wiki calls a folder that no collection is listed for, such as a test's WIKIS_DIR.
+UNNAMED = "(unnamed)"
+DEFAULT = "default"
+
+
+def here_collection():
+    """The name of the collection this run is in, as llm-wiki hands it over."""
+    return os.environ.get("LLM_WIKI_COLLECTION") or UNNAMED
+
+
+def collections():
+    """[(name, folder)]: the collections a question about the wikis can go to, the one this run is in first, at
+    the folder in WIKIS_DIR, then the others as LLM_WIKI_COLLECTIONS lists them. Run in a folder no collection
+    names, by an older llm-wiki or by hand, only that one. A line whose name no collection can have is left out."""
+    here, folder = here_collection(), os.environ.get("WIKIS_DIR", "")
+    out = [(here, folder)]
+    if not COLLECTION_OK.match(here):
+        return out
+    real = os.path.realpath(folder) if folder else ""
+    for line in os.environ.get("LLM_WIKI_COLLECTIONS", "").split("\n"):
+        name, tab, path = line.partition("\t")
+        if not tab or not path or not COLLECTION_OK.match(name) or any(n == name for n, _ in out):
+            continue
+        # One folder is one collection: this run's, under another name, is not asked twice.
+        if real and os.path.realpath(path) == real:
+            continue
+        out.append((name, path))
+    return out
+
+
+def in_collection(coll, folder):
+    """What a call into llm-wiki about a wiki of that collection runs with: (environment, folder to run in).
+    For the collection this run is in, both as they are, so a machine with one collection sees no change."""
+    if coll == here_collection():
+        return None, os.environ.get("WIKIS_DIR") or os.getcwd()
+    env = dict(os.environ)
+    env["WIKIS_DIR"] = folder
+    return env, folder
+
+
+def asked():
+    """The collections a question about the wikis goes to: this run's, and each other one whose folder is there."""
+    return [(c, f) for i, (c, f) in enumerate(collections()) if i == 0 or os.path.isdir(f)]
+
+
+def qualified(coll):
+    """Whether a command about a wiki of that collection needs --collection to work from any folder: for every
+    named collection but the default one, and for the default one too when another collection is there. Never
+    for a folder no collection names, which no --collection can pick."""
+    return bool(COLLECTION_OK.match(coll)) and (coll != DEFAULT or len(asked()) > 1)
+
+
+def label(coll, wiki):
+    """A wiki as a person reads it: collection/wiki where a command needs --collection for it, else its name.
+    As it is on a machine with one collection."""
+    return f"{coll}/{wiki}" if qualified(coll) else wiki
+
+
+def wiki_cmd(coll, *words):
+    """A wiki command to print, which does the same from any folder: with --collection where it needs one."""
+    return " ".join([CMD] + (["--collection", coll] if qualified(coll) else []) + list(words))
+
+
+def ask(coll, folder, *args):
+    """(what llm-wiki's own command did in that collection, why it couldn't be run)."""
+    env, _ = in_collection(coll, folder)
+    return run_llm_wiki(*args) if env is None else run_llm_wiki(*args, env=env)
+
+
+def which_in(coll, folder, cover):
+    """What that collection says covers the name: ("wiki", its name), ("none", "") when `wiki which` there says
+    no wiki covers it, or ("error", why) when the answer couldn't be had: no answer in time, or a failure, such as
+    a folder it can't read. `wiki which` exits 1 for both of the last two, so "none" is only its own words."""
+    r, why = ask(coll, folder, "which", cover)
+    if r is None:
+        return "error", why
+    out = r.stdout.strip()
+    if r.returncode == 0 and out:
+        return "wiki", os.path.basename(out.rstrip("/"))
+    if r.returncode == 1 and f"no wiki covers {cover}" in r.stderr.splitlines():
+        return "none", ""
+    return "error", first_line(r.stderr) or f"it ended with exit {r.returncode} and said nothing"
+
+
+def covering(cover):
+    """([(collection, folder, wiki)], [(collection, why)]): each collection's wiki that covers the name, as `wiki
+    which` there says, this run's collection first, and each collection that couldn't be asked."""
+    found, failed = [], []
+    for coll, folder in asked():
+        what, it = which_in(coll, folder, cover)
+        if what == "wiki":
+            found.append((coll, folder, it))
+        elif what == "error":
+            failed.append((coll, it))
+    return found, failed
 
 
 def parse_find(out, mark="no mentions"):
@@ -444,10 +571,19 @@ def known_in_wikis(signature):
     query = signature.lstrip("- ").strip()
     if not query:
         return None
-    r = llm_wiki("find", query)
-    if r is None or r.returncode != 0:
-        return None
-    return parse_find(r.stdout)
+    # Every collection, this run's first: a note saved in another collection's wiki is known too.
+    answered = False
+    for coll, folder in asked():
+        env, _ = in_collection(coll, folder)
+        r = llm_wiki("find", query) if env is None else llm_wiki("find", query, env=env)
+        if r is None or r.returncode != 0:
+            continue
+        answered = True
+        hit = parse_find(r.stdout)
+        if hit:
+            wiki, _, path = hit.partition(": ")
+            return f"{label(coll, wiki)}: {path}"
+    return "" if answered else None
 
 
 # ---- the state file --------------------------------------------------------------------------------
@@ -593,39 +729,174 @@ def stale(created):
     return (datetime.datetime.now(datetime.timezone.utc) - then).days >= NOTICE_DAYS
 
 
-def save_note(folder, repo, cover, ext, what, body, flaky):
-    """The note about a failure that ended: saved with capture, then synced. True when it is
-    saved or when there is nothing to save it in, False when a save failed and should be tried again.
+# A note that no single wiki could take yet, because wikis in more than one collection cover the repository, is
+# kept in the extension's own state folder, on this machine, and tried again at each tick until one wiki covers it.
+HELD_FILE = "notes-held.json"
+HELD_LOCK = "notes-held.lock"
+HELD_MAX = 20
+
+
+def unasked_words(repo, cover, failed):
+    """The line for collections that couldn't be asked which wiki covers the name."""
+    parts = []
+    for coll, why in failed:
+        where = f"the {coll} collection" if COLLECTION_OK.match(coll) else f"the wikis at {os.environ.get('WIKIS_DIR', '')}"
+        parts.append(f"couldn't ask {where} which wiki covers {cover}: {clean(why, 200).rstrip('.')}")
+    return (f"{repo}: " + "; ".join(parts) + ". No note was saved, and the next tick tries again. "
+            f"Run: {wiki_cmd(failed[0][0], 'which', cover)} to see why")
+
+
+def several_words(repo, cover, found):
+    """The line for a name that wikis in more than one collection cover."""
+    named = ", ".join(f"{c}/{w}" for c, _, w in found)
+    listed = [f"{c}/{w}" for c, _, w in found if w != cover]
+    fix = (f"{CMD} --collection <collection> uncover {cover} takes it out of one that lists it ({', '.join(listed)})" if listed
+           else f"rename or move all but one of the wikis called {cover}")
+    return (f"{repo}: wikis in {len(found)} collections cover {cover}: {named}, so no note was saved rather than guess which. "
+            f"It is kept, and saved at a tick once one wiki covers it. Do: leave one of them covering it: {fix}")
+
+
+def write_note(repo, coll, folder, wiki, what, lines, flaky):
+    """Capture the note in that collection's wiki, then sync it there. True once the capture worked, whatever the
+    sync did: a sync that fails is said, with the command that does it, and never makes the note be taken again."""
+    exe = os.environ.get("LLM_WIKI")
+    env, wikis_dir = in_collection(coll, folder)
+    name = label(coll, wiki)
+    slug = "ci-flaky" if flaky else "ci-fixed"
+    try:
+        # From the wikis' folder, so a note taken in a ticket's folder gets no Ticket: line of that ticket.
+        c = subprocess.run([exe, "capture", wiki, slug], input="\n".join(lines) + "\n", text=True, encoding="utf-8",
+                           errors="replace", capture_output=True, cwd=wikis_dir, env=env, timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print(f"{repo}: couldn't save the note in {name}: {e}")
+        return False
+    if c.returncode != 0:
+        print(f"{repo}: couldn't save the note in {name}: {first_line(c.stderr)}")
+        return False
+    try:
+        s = subprocess.run([exe, "sync", wiki, "-m", f"{wiki}: CI failure {'was flaky' if flaky else 'fixed'}"],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+                           timeout=SYNC_SECONDS, stdin=subprocess.DEVNULL)
+        synced = s.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        synced = False
+    if not synced:
+        print(f"{repo}: saved the note in {name}, but the sync failed. Run: {wiki_cmd(coll, 'sync', wiki)}")
+    else:
+        print(f"{repo}: noted in {name} that {what} " + ("was flaky." if flaky else "is fixed."))
+    return True
+
+
+def held_notes(path):
+    book = load_state(path)
+    notes = book.get("notes")
+    return notes if isinstance(notes, dict) else {}
+
+
+def hold_note(state_dir, entry):
+    """Keep a note for a later tick. False, with a line, when it couldn't be kept."""
+    path = os.path.join(state_dir, HELD_FILE)
+    with state_lock(state_dir, os.path.join(state_dir, HELD_LOCK)) as held:
+        if not held:
+            print(f"{entry['repo']}: couldn't lock {path}, so the note wasn't kept for a later tick.")
+            return False
+        notes = held_notes(path)
+        nid = hashlib.sha256("\n".join(entry["lines"]).encode("utf-8", "replace")).hexdigest()[:16]
+        notes[nid] = entry
+        while len(notes) > HELD_MAX:
+            old = min(notes, key=lambda k: str((notes[k] or {}).get("since", "")) if isinstance(notes[k], dict) else "")
+            gone = notes[old] if isinstance(notes[old], dict) else {}
+            print(f"{clean(gone.get('repo', '?'), 100)}: more than {HELD_MAX} notes were waiting for one wiki to cover "
+                  f"their repository, so the oldest, kept since {clean(gone.get('since', '?'), 30)}, was let go.")
+            del notes[old]
+        write_state(state_dir, path, {"notes": notes})
+    return True
+
+
+def good_entry(e):
+    return (isinstance(e, dict) and all(isinstance(e.get(k), str) for k in ("repo", "cover", "what", "since"))
+            and isinstance(e.get("said", ""), str) and isinstance(e.get("lines"), list)
+            and all(isinstance(l, str) for l in e["lines"]) and not e["cover"].startswith("-"))
+
+
+def retry_held(state_dir):
+    """At a tick: each kept note is saved once one wiki covers its repository. What still stops one is said when
+    it first stops it and when that changes, not at every tick. True unless a save failed and should be tried again."""
+    path = os.path.join(state_dir, HELD_FILE)
+    if not os.path.exists(path) or not os.environ.get("LLM_WIKI"):
+        return True
+    ok = True
+    with state_lock(state_dir, os.path.join(state_dir, HELD_LOCK)) as held:
+        if not held:
+            print(f"couldn't lock {path}, so the notes kept there wait for the next tick.")
+            return False
+        notes = held_notes(path)
+        changed = False
+        for nid, e in list(notes.items()):
+            if not good_entry(e):
+                del notes[nid]
+                changed = True
+                continue
+            repo, cover = e["repo"], e["cover"]
+            found, failed = covering(cover)
+            if failed:
+                answer, words = "unasked:" + ",".join(c for c, _ in failed), unasked_words(repo, cover, failed)
+            elif len(found) == 1:
+                coll, folder, wiki = found[0]
+                if write_note(repo, coll, folder, wiki, e["what"], e["lines"], bool(e.get("flaky"))):
+                    del notes[nid]
+                    changed = True
+                else:
+                    ok = False
+                continue
+            elif found:
+                answer, words = "several:" + ",".join(f"{c}/{w}" for c, _, w in found), several_words(repo, cover, found)
+            else:
+                answer = "none"
+                words = (f"{repo}: no wiki covers {cover} now, so the note kept since {e['since']} still waits. "
+                         f"Run: {CMD} --collection <collection> cover <wiki> {cover}")
+            if answer != e.get("said"):
+                print(words)
+                e["said"] = answer
+                changed = True
+        if changed:
+            write_state(state_dir, path, {"notes": notes})
+    return ok
+
+
+def save_note(folder, repo, cover, ext, what, body, flaky, state_dir=None):
+    """The note about a failure that ended: saved with capture, then synced. True when it is saved, kept for a
+    later tick, or when there is nothing to save it in; False when a save failed, or a collection couldn't be
+    asked, and the failure should be tried again.
     repo is how the system names the project, cover what a wiki is asked to cover (the project's last name),
-    ext the extension's name, what the failure's own words ("CI on main"), and body the lines between the
-    heading and the Ticket line."""
-    r = None if cover.startswith("-") else llm_wiki("which", cover)
-    wiki = os.path.basename(r.stdout.strip().rstrip("/")) if r and r.returncode == 0 and r.stdout.strip() else ""
-    if not wiki:
-        print(f"{repo}: no wiki covers {cover}, so no note was saved. Run: {CMD} cover <wiki> {cover}")
+    ext the extension's name, what the failure's own words ("CI on main"), body the lines between the
+    heading and the Ticket line, and state_dir the extension's own state folder, where a note is kept.
+    The wiki is the one that covers cover in whichever collection it is in, and the capture and the sync run
+    in that collection. Every collection has to answer: one that couldn't be asked could hold a second wiki
+    that covers it. When wikis in two collections cover it, no note is saved in either: which one is meant is
+    the user's to say, and a note in the other could reach a remote it was never meant for. The note is kept,
+    and saved at a tick once one wiki covers it."""
+    if not os.environ.get("LLM_WIKI"):
+        print(f"{repo}: LLM_WIKI isn't set, so no note was saved. Run this as: {CMD} {ext}")
         return True
     word = "flaky" if flaky else "fixed"
     lines = [f"# CI {word}: {what} ({repo})", ""] + list(body) + ["", "Ticket: none"]
-    wikis_dir = os.environ.get("WIKIS_DIR") or os.getcwd()
-    slug = "ci-flaky" if flaky else "ci-fixed"
-    exe = os.environ.get("LLM_WIKI")
-    if not exe:
-        print(f"{repo}: LLM_WIKI isn't set, so no note was saved. Run this as: {CMD} {ext}")
+    found, failed = ([], []) if cover.startswith("-") else covering(cover)
+    if failed:
+        print(unasked_words(repo, cover, failed))
+        return False
+    if not found:
+        colls = asked()
+        where = "" if len(colls) < 2 else f" in any of the {len(colls)} collections ({', '.join(c for c, _ in colls)})"
+        how = f"{CMD} cover <wiki> {cover}" if len(colls) < 2 else f"{CMD} --collection <collection> cover <wiki> {cover}"
+        print(f"{repo}: no wiki covers {cover}{where}, so no note was saved. Run: {how}")
         return True
-    try:
-        # From the wikis' folder, so a note taken in a ticket's folder gets no Ticket: line of that ticket.
-        c = subprocess.run([exe, "capture", wiki, slug], input="\n".join(lines) + "\n", text=True, capture_output=True,
-                           cwd=wikis_dir, timeout=120)
-        s = subprocess.run([exe, "sync", wiki, "-m", f"{wiki}: CI failure {'was flaky' if flaky else 'fixed'}"],
-                           capture_output=True, text=True, timeout=300) if c.returncode == 0 else None
-    except (OSError, subprocess.TimeoutExpired) as e:
-        print(f"{repo}: couldn't save the note in {wiki}: {e}")
-        return False
-    if c.returncode != 0 or s is None:
-        print(f"{repo}: couldn't save the note in {wiki}: {first_line(c.stderr)}")
-        return False
-    if s.returncode != 0:
-        print(f"{repo}: saved the note in {wiki}, but the sync failed. Run: {CMD} sync {wiki}")
-    else:
-        print(f"{repo}: noted in {wiki} that {what} " + ("was flaky." if flaky else "is fixed."))
-    return True
+    if len(found) > 1:
+        print(several_words(repo, cover, found))
+        if state_dir:
+            since = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+            hold_note(state_dir, {"repo": repo, "cover": cover, "what": what, "flaky": bool(flaky), "lines": lines,
+                                  "since": since, "said": "several:" + ",".join(f"{c}/{w}" for c, _, w in found)})
+        return True
+    coll, folder, wiki = found[0]
+    return write_note(repo, coll, folder, wiki, what, lines, flaky)

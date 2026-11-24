@@ -1020,7 +1020,8 @@ def save_note(folder, o, prev, flaky):
              f"Passing build: #{o['id']} {o['url']}".rstrip()]
     if o["sha"]:
         body.append(f"Commit of the passing build: {sha} {commit_subject(folder, o['sha'])}".rstrip())
-    return cc.save_note(folder, job, os.path.basename(folder.rstrip("/")) or "jenkins", "jenkins", f"{job} on {prev['branch']}" if prev.get("branch") else job, body, flaky)
+    return cc.save_note(folder, job, os.path.basename(folder.rstrip("/")) or "jenkins", "jenkins", f"{job} on {prev['branch']}" if prev.get("branch") else job, body, flaky,
+                        state_dir=STATE_DIR)
 
 
 def tick_folder(jk, folder, job, conf):
@@ -1087,12 +1088,14 @@ def on_event(args):
     if args[:1] != ["tick"]:
         return 0
     conf = settings()
+    # A note kept at an earlier tick, because wikis in two collections cover its repository, is tried first.
+    held_ok = cc.retry_held(STATE_DIR) if conf["remember"] else True
     if not conf["watch"]:
         print(f"No folder is watched, so nothing was checked. Run: {CMD} jenkins watch <folder> <job>")
         return 0
     jk = Jenkins(conf)
     begun = time.time()
-    all_ok = True
+    all_ok = held_ok
     read = out_of_reach = 0
     for folder, job in conf["watch"]:
         if not os.path.isdir(folder):

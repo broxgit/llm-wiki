@@ -249,8 +249,10 @@ class NotGitHub(Exception):
 
 
 def run_gh(args, timeout=30, cwd=None):
-    """(exit code, stdout, stderr) of one gh call. Never asks a question, and never waits for ever."""
-    env = dict(os.environ)
+    """(exit code, stdout, stderr) of one gh call. Never asks a question, and never waits for ever. gh runs git on
+    the folder it is in, so it gets what every git here gets: no variable that points git at another repository.
+    Its own (GH_*, its config folder, PATH, HOME) are kept."""
+    env = git_env()
     env["GH_PROMPT_DISABLED"] = "1"
     env["GH_NO_UPDATE_NOTIFIER"] = "1"
     env["NO_COLOR"] = "1"
@@ -1027,7 +1029,8 @@ def save_note(folder, info, o, prev, flaky, fixes=()):
     for f in fixes:
         body.append(f"Fixed unattended: llm-wiki (wiki github fix) made commit {clean(f.get('commit', ''), 40)[:7]} on {clean(f.get('branch', ''), 100)}"
                     f" after run {int_or_none(f.get('run_id')) or 0} failed, with nobody watching. Read that commit before relying on it.")
-    return cc.save_note(folder, repo, repo.split("/")[1], "github", f"{prev['workflow']} on {prev['branch']}", body, flaky)
+    return cc.save_note(folder, repo, repo.split("/")[1], "github", f"{prev['workflow']} on {prev['branch']}", body, flaky,
+                        state_dir=STATE_DIR)
 
 
 
@@ -1051,9 +1054,9 @@ CLAUDE_SIGNIN_PREFIXES = ("ANTHROPIC_", "CLAUDE_")
 STRIP_WORDS = ("TOKEN", "SECRET", "PASSWORD", "PASSWD", "KEY", "CREDENTIAL", "AUTH", "COOKIE", "SESSION", "DSN")
 STRIP_PREFIXES = ("GH_", "GITHUB_", "LLM_WIKI", "GIT_CONFIG_", "GIT_SSH", "SSH_", "DOCKER_")
 STRIP_EXACT = ("GIT_ASKPASS", "SUDO_ASKPASS", "GPG_AGENT_INFO", "DATABASE_URL")
-GIT_STRIP = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_PREFIX", "GIT_OBJECT_DIRECTORY",
-             "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG",
-             "GIT_CONFIG_SYSTEM", "GIT_REPLACE_REF_BASE", "GIT_GRAFT_FILE", "GIT_SHALLOW_FILE", "GIT_EXEC_PATH", "GIT_TEMPLATE_DIR")
+# What redirects git, and the one setting every git is given instead of the environment's: as ci_common has them.
+GIT_STRIP = cc.GIT_STRIP
+GIT_SAFE = cc.GIT_SAFE
 AGENT_FILE_BYTES = 50 * 1024 * 1024     # the most one file the agent writes may hold
 AGENT_OUTPUT_BYTES = 1024 * 1024        # the most of its output that is read and kept (the end of it)
 MAX_CHANGED_PATHS = 2000                # more than this many changed paths isn't listed, only refused
@@ -1330,6 +1333,7 @@ def start_fix(folder, info, o, d, key, route, state):
 def git_env():
     env = {k: v for k, v in os.environ.items()
            if k not in GIT_STRIP and not k.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))}
+    env.update(GIT_SAFE)
     env["GIT_TERMINAL_PROMPT"] = "0"
     env["GH_PROMPT_DISABLED"] = "1"
     env["GIT_NO_REPLACE_OBJECTS"] = "1"
@@ -2259,12 +2263,14 @@ def on_event(args):
     if args[:1] != ["tick"]:
         return 0
     conf = settings()
+    # A note kept at an earlier tick, because wikis in two collections cover its repository, is tried first.
+    held_ok = cc.retry_held(STATE_DIR) if conf["remember"] else True
     if not conf["watch"]:
         print(f"No folder is watched, so nothing was checked. Run: {CMD} github watch <folder>")
         return 0
     state = load_state()
     begun = time.time()
-    all_ok = True
+    all_ok = held_ok
     for folder in conf["watch"]:
         if not os.path.isdir(folder):
             print(f"{folder} is gone, so it was skipped.")

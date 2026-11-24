@@ -4,6 +4,13 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. The date is the day the entry is written, in UTC, and several entries can share a day. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-11-23: CI notes go to the right collection
+
+- With several collections, a GitHub, GitLab or Jenkins note on a fixed failure goes to the wiki that covers the repository, whichever collection it is in.
+- When wikis in two collections cover it, the note waits until one does, and the extension's log names both and what to do, once.
+- A note whose sync fails is saved once, not again at the next tick, and the log gives the sync command for its collection.
+- `check` finds an error a note in any collection holds, and names the collection when it isn't this one.
+
 ## 2026-11-23: Jira keeps an item open while a ticket can't be read
 
 - An item no longer closes while Jira won't show a ticket it names. With `projects` set it stays open; without, you're asked once.
