@@ -900,7 +900,8 @@ def save_note(folder, info, o, prev, flaky):
              f"Commit of the passing pipeline: {sha} {commit_subject(folder, o['sha'], '')}".rstrip()]
     if pr:
         body.append(f"Merge request: !{pr}")
-    return cc.save_note(folder, repo, repo.split("/")[-1], "gitlab", f"{prev['workflow']} on {prev['branch']}", body, flaky)
+    return cc.save_note(folder, repo, repo.split("/")[-1], "gitlab", f"{prev['workflow']} on {prev['branch']}", body, flaky,
+                        state_dir=STATE_DIR)
 
 
 def tick_folder(folder, conf):
@@ -972,11 +973,13 @@ def on_event(args):
     if args[:1] != ["tick"]:
         return 0
     conf = settings()
+    # A note kept at an earlier tick, because wikis in two collections cover its repository, is tried first.
+    held_ok = cc.retry_held(STATE_DIR) if conf["remember"] else True
     if not conf["watch"]:
         print(f"No folder is watched, so nothing was checked. Run: {CMD} gitlab watch <folder>")
         return 0
     begun = time.time()
-    all_ok = True
+    all_ok = held_ok
     read = out_of_reach = 0
     for folder in conf["watch"]:
         if not os.path.isdir(folder):

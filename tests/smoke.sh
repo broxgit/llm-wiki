@@ -6989,6 +6989,7 @@ cat > "$GX/gh" <<'GHFAKE'
 D="$(dirname "$0")/fx"
 printf '%s\n' "$(printf '%s' "$*" | tr '\n' ' ')" >> "$D/calls"
 printf '%s\n' "${GH_PROMPT_DISABLED:-unset}" >> "$D/prompt"
+printf '%s\n' "${GIT_DIR:-unset}" >> "$D/gitdir"
 [ ! -f "$D/down" ] || { echo "error connecting to api.github.com" >&2; exit 1; }
 if [ "$1 $2" = "auth status" ]; then
   [ ! -f "$D/signedout" ] || { echo "You are not logged into any GitHub hosts. To log in, run: gh auth login" >&2; exit 1; }
@@ -7179,6 +7180,10 @@ mkdir -p "$GW/ghdemo/wiki/howto"
 printf -- '---\ntitle: CI\nsummary: Known CI failures.\n---\n\nThe tests fail with "%s" when the fixture is stale.\n' "$SIG" > "$GW/ghdemo/wiki/howto/ci.md"
 out="$(ghw check "$GX/clone" 2>&1)"
 case "$out" in *"  known:   yes, in ghdemo: wiki/howto/ci.md"*) ok "a signature a wiki already holds is named, with the page" ;; *) bad "a signature a wiki already holds is named, with the page" "$out" ;; esac
+# A page that holds a byte that isn't UTF-8 is read, and named, without ending check.
+printf -- '---\ntitle: CI\nsummary: Known CI failures.\n---\n\nThe tests fail with "%s" \377 here.\n' "$SIG" > "$GW/ghdemo/wiki/howto/ci.md"
+out="$(ghw check "$GX/clone" 2>&1)"
+case "$out" in *Traceback*) bad "a page with a byte that isn't UTF-8 is named, and check goes on" "$out" ;; *"  known:   yes, in ghdemo: wiki/howto/ci.md"*) ok "a page with a byte that isn't UTF-8 is named, and check goes on" ;; *) bad "a page with a byte that isn't UTF-8 is named, and check goes on" "$out" ;; esac
 rm -rf "$GW/ghdemo/wiki/howto"
 # A step with no log, and a run that never started a job.
 rm -f "$GX/fx/log-1002.txt"
@@ -7384,6 +7389,175 @@ before="$(ls "$GW"/*/raw | wc -l | tr -d ' ')"
 gtick >/dev/null
 check "a repository no wiki covers gets no note" test "$(ls "$GW"/*/raw | wc -l | tr -d ' ')" = "$before"
 check "and the log says why" grep -q "no wiki covers nowiki, so no note was saved" "$GST/extensions/github/tick.log"
+# Two named collections: home, where the tick starts, and work, whose wiki covers the repository. The note
+# goes to work's wiki, its capture and its sync run there, and the log says so.
+GWK="$GX/work"
+GWSIG='Error: only the work wiki knows this'
+GHELD="$GST/extensions/github/notes-held.json"
+# gh_wfail <id>: a failing run whose error is GWSIG.
+gh_wfail() { fail_run "$1"; printf 'build\tRun tests\t2026-11-15T10:00:03.1234567Z %s\n' "$GWSIG" > "$GX/fx/log-$1.txt"; }
+mkdir -p "$XDG_CONFIG_HOME/llm-wiki"
+printf 'home %s\nwork %s\n' "$GW" "$GWK" > "$XDG_CONFIG_HOME/llm-wiki/collections"
+WIKIS_DIR="$GWK" "$W" init --git >/dev/null 2>&1
+WIKIS_DIR="$GWK" "$W" new ghwork >/dev/null 2>&1
+printf '{"nameWithOwner":"acme/ghwork","defaultBranchRef":{"name":"main"},"url":"https://github.com/acme/ghwork"}\n' > "$GX/fx/repo.json"
+runs feat-x "$(run_row 1040 CI 11 completed failure abc1234def00)"
+gh_wfail 1040
+gtick >/dev/null
+runs feat-x "$(run_row 1041 CI 11 completed success "$SHA")" "$(run_row 1040 CI 11 completed failure abc1234def00)"
+before="$(ls "$GW"/*/raw | wc -l | tr -d ' ')"
+gtick >/dev/null
+check "with two collections, a fixed failure is noted in the other collection's wiki that covers the repository" test "$(find "$GWK"/ghwork/raw -name '*-ci-fixed*.md' | wc -l | tr -d ' ')" = 1
+check "and in no wiki of the collection the tick started in" test "$(ls "$GW"/*/raw | wc -l | tr -d ' ')" = "$before"
+check "the log names the wiki with its collection" grep -qF "acme/ghwork: noted in work/ghwork that CI on feat-x is fixed." "$GST/extensions/github/tick.log"
+check "and the note was synced in that collection" bash -c "git -C '$GWK' log --format=%s | grep -qx 'ghwork: CI failure fixed' && test -z \"\$(git -C '$GWK' status --short)\""
+# The state is the machine's: a tick that starts in work afterwards saves no second note for the same failure.
+env WIKIS_DIR="$GWK" LLM_WIKI_EVENTS=wait "$W" extensions tick >/dev/null
+check "one failure is one note, whichever collection the next tick starts in" test "$(find "$GWK"/ghwork/raw -name '*-ci-fixed*.md' | wc -l | tr -d ' ')" = 1
+# check knows an error that only another collection's wiki holds, and names that collection.
+runs feat-x "$(run_row 1042 CI 11 completed failure abc1234def00)"
+gh_wfail 1042
+out="$(ghw check "$GX/clone" 2>&1)"
+case "$out" in *"  known:   yes, in work/ghwork: raw/"*"-ci-fixed.md"*) ok "check finds an error a note in another collection's wiki holds, and names its collection" ;; *) bad "check finds an error a note in another collection's wiki holds, and names its collection" "$out" ;; esac
+# gh runs git in the folder it is in, so it gets no GIT_DIR that points at another repository.
+rm -f "$GX/fx/gitdir"
+env GIT_DIR="$GX/elsewhere" LLM_WIKI="$W" WIKIS_DIR="$GW" "$GEXT" check "$GX/clone" >/dev/null 2>&1
+check "gh is started without the GIT_DIR of the environment it was run in" bash -c "test -s '$GX/fx/gitdir' && ! grep -qv '^unset\$' '$GX/fx/gitdir'"
+# A tick that starts in the collection whose wiki covers it names that collection too, as it isn't the default one,
+# so the line and any command in it mean the same from any folder.
+gtick >/dev/null
+runs feat-x "$(run_row 1043 CI 11 completed success "$SHA")" "$(run_row 1042 CI 11 completed failure abc1234def00)"
+env WIKIS_DIR="$GWK" LLM_WIKI_EVENTS=wait "$W" extensions tick >/dev/null
+check "a tick started in the covering wiki's own collection names that collection, as it isn't the default" grep -qF "acme/ghwork: noted in work/ghwork that CI on feat-x is fixed." "$GST/extensions/github/tick.log"
+# A collection that can't be asked could hold a second wiki that covers it: nothing is saved, the log says which
+# collection couldn't be read, and the failure is tried again at the next tick.
+"$W" new ghwork >/dev/null 2>&1
+runs feat-x "$(run_row 1044 CI 11 completed failure abc1234def00)"
+gh_wfail 1044
+gtick >/dev/null
+runs feat-x "$(run_row 1045 CI 11 completed success "$SHA")" "$(run_row 1044 CI 11 completed failure abc1234def00)"
+before="$(ls "$GW"/*/raw "$GWK"/*/raw | wc -l | tr -d ' ')"
+if [ "$(id -u)" != 0 ]; then
+  chmod 000 "$GWK/ghwork"
+  expect "a collection that can't be asked fails the tick, so it is tried again" "github: failed" gtick
+  chmod 755 "$GWK/ghwork"
+  check "and nothing is saved in the collection that did answer" test "$(ls "$GW"/*/raw "$GWK"/*/raw | wc -l | tr -d ' ')" = "$before"
+  check "the log says which collection couldn't be read, and why" grep -qF "acme/ghwork: couldn't ask the work collection which wiki covers ghwork: error: can't read" "$GST/extensions/github/tick.log"
+else
+  skipped "a collection that can't be asked fails the tick (running as root, which reads every folder)"
+fi
+# Wikis in both collections cover it: no note in either, a line that names both and what to do, and the note is kept.
+gtick >/dev/null
+check "a repository wikis in two collections cover gets no note in either" test "$(ls "$GW"/*/raw "$GWK"/*/raw | wc -l | tr -d ' ')" = "$before"
+check "and the log names both and what to do" grep -qF "acme/ghwork: wikis in 2 collections cover ghwork: home/ghwork, work/ghwork, so no note was saved rather than guess which. It is kept, and saved at a tick once one wiki covers it. Do: leave one of them covering it: rename or move all but one of the wikis called ghwork" "$GST/extensions/github/tick.log"
+check "the note is kept in the extension's own state, on this machine" grep -q '"cover": "ghwork"' "$GHELD"
+gtick >/dev/null
+check "a later tick doesn't say the same again" bash -c "! grep -q 'collections cover ghwork' '$GST/extensions/github/tick.log'"
+# Once one wiki covers it, the kept note is saved there.
+rm -rf "$GW/ghwork"
+gtick >/dev/null
+check "once one wiki covers it, the kept note is saved there" test "$(find "$GWK"/ghwork/raw -name '*-ci-fixed*.md' | wc -l | tr -d ' ')" = 3
+check "and the log says so" grep -qF "acme/ghwork: noted in work/ghwork that CI on feat-x is fixed." "$GST/extensions/github/tick.log"
+check "and it is kept no longer" bash -c "! grep -q '\"cover\": \"ghwork\"' '$GHELD'"
+# No collection's wiki covers it: one line, which says so.
+printf '{"nameWithOwner":"acme/nowiki","defaultBranchRef":{"name":"main"},"url":"https://github.com/acme/nowiki"}\n' > "$GX/fx/repo.json"
+runs feat-x "$(run_row 1046 CI 11 completed failure abc1234def00)"
+fail_run 1046
+gtick >/dev/null
+runs feat-x "$(run_row 1047 CI 11 completed success abc9999abc99)"
+gtick >/dev/null
+check "with two collections, a repository none covers is said once, with the command" test "$(grep -c "no wiki covers nowiki in any of the 2 collections (home, work), so no note was saved. Run: .* --collection <collection> cover <wiki> nowiki$" "$GST/extensions/github/tick.log")" = 1
+# A tick in a folder no collection names asks that folder alone: work's wiki covers it, and no note goes there.
+printf 'work %s\n' "$GWK" > "$XDG_CONFIG_HOME/llm-wiki/collections"
+printf '{"nameWithOwner":"acme/ghwork","defaultBranchRef":{"name":"main"},"url":"https://github.com/acme/ghwork"}\n' > "$GX/fx/repo.json"
+runs feat-x "$(run_row 1048 CI 11 completed failure abc1234def00)"
+gh_wfail 1048
+gtick >/dev/null
+runs feat-x "$(run_row 1049 CI 11 completed success "$SHA")" "$(run_row 1048 CI 11 completed failure abc1234def00)"
+gtick >/dev/null
+check "a tick in a folder no collection names saves no note in a collection" test "$(find "$GWK"/ghwork/raw -name '*-ci-fixed*.md' | wc -l | tr -d ' ')" = 3
+check "and says what it says with one collection, naming no (unnamed) collection" bash -c "grep -q 'acme/ghwork: no wiki covers ghwork, so no note was saved. Run: .* cover <wiki> ghwork\$' '$GST/extensions/github/tick.log' && ! grep -q 'unnamed' '$GST/extensions/github/tick.log'"
+# What ci_common.py does with what it is handed: a sync that times out after the note is saved, a collection that
+# doesn't answer in time, a command printed for another collection, odd bytes in an answer, and git's settings.
+cat > "$GX/cc.py" <<'PYCC'
+import contextlib, io, os, subprocess, sys, tempfile
+sys.dont_write_bytecode = True
+ext, what = sys.argv[1], sys.argv[2]
+d1, d2 = tempfile.mkdtemp(), tempfile.mkdtemp()
+os.environ.update({"LLM_WIKI_CMD": "wiki", "LLM_WIKI": sys.executable, "WIKIS_DIR": d2, "LLM_WIKI_COLLECTION": "work",
+                   "LLM_WIKI_COLLECTIONS": "default\t%s\nwork\t%s" % (d1, d2)})
+if what == "alone":
+    os.environ.update({"WIKIS_DIR": d1, "LLM_WIKI_COLLECTION": "default", "LLM_WIKI_COLLECTIONS": "default\t%s" % d1})
+sys.path.insert(0, ext)
+import ci_common as cc
+calls = []
+def fake(cmd, **kw):
+    where = (kw.get("env") or os.environ)["WIKIS_DIR"]
+    calls.append(cmd[1])
+    if cmd[1] == "which":
+        if what == "timeout" and where == d1:
+            raise subprocess.TimeoutExpired(cmd, 120)
+        if where == d2 or what in ("alone", "timeout"):
+            return subprocess.CompletedProcess(cmd, 0, "%s/payments\n" % where, "")
+        return subprocess.CompletedProcess(cmd, 1, "", "no wiki covers payments\n")
+    if cmd[1] == "capture":
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+    if cmd[1] == "sync":
+        if what in ("sync", "alone"):
+            raise subprocess.TimeoutExpired(cmd, 300)
+        return subprocess.CompletedProcess(cmd, 1, "", "the push was refused\n")
+    raise AssertionError(cmd)
+real = subprocess.run
+if what in ("sync", "alone", "timeout", "command"):
+    subprocess.run = fake
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        r = cc.save_note("/x", "acme/payments", "payments", "github", "CI on main", ["Job: build"], False)
+    said = out.getvalue()
+    if what == "sync":
+        ok = r is True and calls.count("capture") == 1 and "acme/payments: saved the note in work/payments, but the sync failed. Run: wiki --collection work sync payments" in said
+    elif what == "alone":
+        ok = r is True and "acme/payments: saved the note in payments, but the sync failed. Run: wiki sync payments" in said
+    elif what == "timeout":
+        ok = r is False and "capture" not in calls and "couldn't ask the default collection which wiki covers payments: it didn't answer within 120 seconds" in said
+    else:
+        ok = r is True and "Run: wiki --collection work sync payments" in said
+    sys.exit(0 if ok else 1)
+if what == "bytes":
+    odd = os.path.join(d1, "odd")
+    with open(odd, "w") as f:
+        f.write("#!/bin/sh\nprintf 'demo:\\n  waiting to be compiled:\\n    raw/n.md: seen \\377 here\\n'\n")
+    os.chmod(odd, 0o755)
+    os.environ.update({"LLM_WIKI": odd, "LLM_WIKI_COLLECTION": "", "LLM_WIKI_COLLECTIONS": ""})
+    sys.exit(0 if cc.known_in_wikis("seen") == "demo: raw/n.md" else 1)
+if what == "git":
+    bare = tempfile.mkdtemp()
+    for p in ("objects", "refs"):
+        os.mkdir(os.path.join(bare, p))
+    open(os.path.join(bare, "HEAD"), "w").write("ref: refs/heads/main\n")
+    os.environ.update({"GIT_CONFIG_COUNT": "2", "GIT_CONFIG_KEY_0": "core.sshCommand", "GIT_CONFIG_VALUE_0": "false",
+                       "GIT_CONFIG_KEY_1": "safe.bareRepository", "GIT_CONFIG_VALUE_1": "explicit",
+                       "GIT_QUARANTINE_PATH": "/nowhere", "GIT_IMPLICIT_WORK_TREE": "0"})
+    import importlib.machinery, importlib.util
+    ld = importlib.machinery.SourceFileLoader("wg", os.path.join(ext, "wiki-github"))
+    m = importlib.util.module_from_spec(importlib.util.spec_from_loader("wg", ld)); ld.exec_module(m)
+    ok = True
+    for env in (cc.git_env(), m.git_env()):
+        ok = ok and all(k not in env for k in ("GIT_QUARANTINE_PATH", "GIT_IMPLICIT_WORK_TREE")) \
+            and env.get("GIT_CONFIG_COUNT") == "1" and env.get("GIT_CONFIG_KEY_0") == "safe.bareRepository" \
+            and env.get("GIT_CONFIG_VALUE_0") == "explicit" and "GIT_CONFIG_KEY_1" not in env
+    ok = ok and cc.git(bare, "rev-parse", "--git-dir") == "" and m.git(bare, "rev-parse", "--git-dir") == "" \
+        and m.run_git(bare, "rev-parse", "--git-dir")[0] != 0
+    sys.exit(0 if ok else 1)
+sys.exit(2)
+PYCC
+check "a sync that times out after the note is saved is said, with the command, and the note isn't taken again" python3 -B "$GX/cc.py" "$REPO/extensions" sync
+check "with one collection, the sync's command is as it was" python3 -B "$GX/cc.py" "$REPO/extensions" alone
+check "a collection that doesn't answer in time saves nothing, says which, and asks for another try" python3 -B "$GX/cc.py" "$REPO/extensions" timeout
+check "a failed sync's command names a collection that isn't the default" python3 -B "$GX/cc.py" "$REPO/extensions" command
+check "an answer with a byte that isn't UTF-8 is read, not a failure" python3 -B "$GX/cc.py" "$REPO/extensions" bytes
+check "git is given safe.bareRepository=explicit alone, without the environment's other settings, GIT_QUARANTINE_PATH or GIT_IMPLICIT_WORK_TREE" python3 -B "$GX/cc.py" "$REPO/extensions" git
+rm -f "$XDG_CONFIG_HOME/llm-wiki/collections" "$GHELD"
 printf '{"nameWithOwner":"acme/ghdemo","defaultBranchRef":{"name":"main"},"url":"https://github.com/acme/ghdemo"}\n' > "$GX/fx/repo.json"
 runs feat-x "$(run_row 1001 CI 11 completed success abc1234def00)"
 rm -f "$GST/notices"/*
@@ -9019,6 +9193,10 @@ mkdir -p "$GLW/gldemo/wiki/howto"
 printf -- '---\ntitle: CI\nsummary: Known CI failures.\n---\n\nThe tests fail with "%s" when the fixture is stale.\n' "$GSIG" > "$GLW/gldemo/wiki/howto/ci.md"
 out="$(glw check "$GL/clone" 2>&1)"
 case "$out" in *"  known:    yes, in gldemo: wiki/howto/ci.md"*) ok "a signature a wiki already holds is named, with the page" ;; *) bad "a signature a wiki already holds is named, with the page" "$out" ;; esac
+# A page that holds a byte that isn't UTF-8 is read, and named, without ending check.
+printf -- '---\ntitle: CI\nsummary: Known CI failures.\n---\n\nThe tests fail with "%s" \377 here.\n' "$GSIG" > "$GLW/gldemo/wiki/howto/ci.md"
+out="$(glw check "$GL/clone" 2>&1)"
+case "$out" in *Traceback*) bad "a page with a byte that isn't UTF-8 is named, and check goes on" "$out" ;; *"  known:    yes, in gldemo: wiki/howto/ci.md"*) ok "a page with a byte that isn't UTF-8 is named, and check goes on" ;; *) bad "a page with a byte that isn't UTF-8 is named, and check goes on" "$out" ;; esac
 rm -rf "$GLW/gldemo/wiki/howto"
 # A job with no log, and a pipeline whose only failing job is allowed to fail.
 rm -f "$GL/fx/trace-7001.txt"
@@ -9244,6 +9422,65 @@ before="$(ls "$GLW"/*/raw | wc -l | tr -d ' ')"
 gltick >/dev/null
 check "a project no wiki covers gets no note" test "$(ls "$GLW"/*/raw | wc -l | tr -d ' ')" = "$before"
 check "and the log says why" grep -q "no wiki covers nowiki, so no note was saved" "$GLST/extensions/gitlab/tick.log"
+# Two named collections: home, where the tick starts, and work, whose wiki covers the project. The note goes to
+# work's wiki and is synced there, the log says so, and a later tick in work adds none.
+GLWK="$GL/work"
+GLHELD="$GLST/extensions/gitlab/notes-held.json"
+mkdir -p "$XDG_CONFIG_HOME/llm-wiki"
+printf 'home %s\nwork %s\n' "$GLW" "$GLWK" > "$XDG_CONFIG_HOME/llm-wiki/collections"
+WIKIS_DIR="$GLWK" "$W" init --git >/dev/null 2>&1
+WIKIS_DIR="$GLWK" "$W" new glwork >/dev/null 2>&1
+printf '{"id":44,"path_with_namespace":"acme/glwork","default_branch":"main","web_url":"https://gitlab.com/acme/glwork"}\n' > "$GL/fx/repo.json"
+git -C "$GL/clone" remote set-url origin https://gitlab.com/acme/glwork.git
+plruns feat-x "$(plrow 1040 failed push abc1234def00)"
+glfail 1040
+gltick >/dev/null
+plruns feat-x "$(plrow 1041 success push "$GLSHA")"
+before="$(ls "$GLW"/*/raw | wc -l | tr -d ' ')"
+gltick >/dev/null
+check "with two collections, a fixed failure is noted in the other collection's wiki that covers the project" test "$(find "$GLWK"/glwork/raw -name '*-ci-fixed*.md' | wc -l | tr -d ' ')" = 1
+check "and in no wiki of the collection the tick started in" test "$(ls "$GLW"/*/raw | wc -l | tr -d ' ')" = "$before"
+check "the log names the wiki with its collection" grep -qF "acme/glwork: noted in work/glwork that pipeline (push) on feat-x is fixed." "$GLST/extensions/gitlab/tick.log"
+check "and the note was synced in that collection" bash -c "git -C '$GLWK' log --format=%s | grep -qx 'glwork: CI failure fixed' && test -z \"\$(git -C '$GLWK' status --short)\""
+env WIKIS_DIR="$GLWK" LLM_WIKI_EVENTS=wait "$W" extensions tick >/dev/null
+check "one failure is one note, whichever collection the next tick starts in" test "$(find "$GLWK"/glwork/raw -name '*-ci-fixed*.md' | wc -l | tr -d ' ')" = 1
+# A collection that can't be asked saves nothing, says which, and the failure is tried again.
+"$W" new tools >/dev/null 2>&1
+"$W" cover tools glwork >/dev/null 2>&1
+plruns feat-x "$(plrow 1042 failed push abc1234def00)"
+glfail 1042
+gltick >/dev/null
+plruns feat-x "$(plrow 1043 success push "$GLSHA")"
+before="$(ls "$GLW"/*/raw "$GLWK"/*/raw | wc -l | tr -d ' ')"
+if [ "$(id -u)" != 0 ]; then
+  chmod 000 "$GLWK/glwork"
+  expect "a collection that can't be asked fails the tick, so it is tried again" "gitlab: failed" gltick
+  chmod 755 "$GLWK/glwork"
+  check "and nothing is saved in the collection that did answer" test "$(ls "$GLW"/*/raw "$GLWK"/*/raw | wc -l | tr -d ' ')" = "$before"
+  check "the log says which collection couldn't be read, and why" grep -qF "acme/glwork: couldn't ask the work collection which wiki covers glwork: error: can't read" "$GLST/extensions/gitlab/tick.log"
+else
+  skipped "a collection that can't be asked fails the tick (running as root, which reads every folder)"
+fi
+# Wikis in both collections cover it: no note in either, a line that names both and what to do, and the note is kept.
+gltick >/dev/null
+check "a project wikis in two collections cover gets no note in either" test "$(ls "$GLW"/*/raw "$GLWK"/*/raw | wc -l | tr -d ' ')" = "$before"
+check "and the log names both, and the command for the one that lists it" grep -qF "acme/glwork: wikis in 2 collections cover glwork: home/tools, work/glwork, so no note was saved rather than guess which. It is kept, and saved at a tick once one wiki covers it. Do: leave one of them covering it: wiki --collection <collection> uncover glwork takes it out of one that lists it (home/tools)" "$GLST/extensions/gitlab/tick.log"
+gltick >/dev/null
+check "a later tick doesn't say the same again" bash -c "! grep -q 'collections cover glwork' '$GLST/extensions/gitlab/tick.log'"
+"$W" uncover glwork >/dev/null 2>&1
+gltick >/dev/null
+check "once one wiki covers it, the kept note is saved there" test "$(find "$GLWK"/glwork/raw -name '*-ci-fixed*.md' | wc -l | tr -d ' ')" = 2
+check "and it is kept no longer" bash -c "! grep -q '\"cover\": \"glwork\"' '$GLHELD'"
+# A tick in a folder no collection names asks that folder alone.
+printf 'work %s\n' "$GLWK" > "$XDG_CONFIG_HOME/llm-wiki/collections"
+plruns feat-x "$(plrow 1044 failed push abc1234def00)"
+glfail 1044
+gltick >/dev/null
+plruns feat-x "$(plrow 1045 success push "$GLSHA")"
+gltick >/dev/null
+check "a tick in a folder no collection names saves no note in a collection" test "$(find "$GLWK"/glwork/raw -name '*-ci-fixed*.md' | wc -l | tr -d ' ')" = 2
+check "and says what it says with one collection, naming no (unnamed) collection" bash -c "grep -q 'acme/glwork: no wiki covers glwork, so no note was saved. Run: wiki cover <wiki> glwork\$' '$GLST/extensions/gitlab/tick.log' && ! grep -q 'unnamed' '$GLST/extensions/gitlab/tick.log'"
+rm -rf "$GLW/tools" "$XDG_CONFIG_HOME/llm-wiki/collections" "$GLHELD"
 printf '{"id":42,"path_with_namespace":"acme/gldemo","default_branch":"main","web_url":"https://gitlab.com/acme/gldemo"}\n' > "$GL/fx/repo.json"
 git -C "$GL/clone" remote set-url origin https://gitlab.com/acme/gldemo.git
 plruns feat-x "$(plrow 1001 success push abc1234def00)"
@@ -10017,6 +10254,10 @@ mkdir -p "$JKW/jkdemo/wiki/howto"
 printf -- '---\ntitle: CI\nsummary: Known CI failures.\n---\n\nThe tests fail with "%s" when the fixture is stale.\n' "$JSIG" > "$JKW/jkdemo/wiki/howto/ci.md"
 out="$(jkw check "$JK/jkdemo" team/app 2>&1)"
 case "$out" in *"  known:   yes, in jkdemo: wiki/howto/ci.md"*) ok "a signature a wiki already holds is named, with the page" ;; *) bad "a signature a wiki already holds is named, with the page" "$out" ;; esac
+# A page that holds a byte that isn't UTF-8 is read, and named, without ending check.
+printf -- '---\ntitle: CI\nsummary: Known CI failures.\n---\n\nThe tests fail with "%s" \377 here.\n' "$JSIG" > "$JKW/jkdemo/wiki/howto/ci.md"
+out="$(jkw check "$JK/jkdemo" team/app 2>&1)"
+case "$out" in *Traceback*) bad "a page with a byte that isn't UTF-8 is named, and check goes on" "$out" ;; *"  known:   yes, in jkdemo: wiki/howto/ci.md"*) ok "a page with a byte that isn't UTF-8 is named, and check goes on" ;; *) bad "a page with a byte that isn't UTF-8 is named, and check goes on" "$out" ;; esac
 rm -rf "$JKW/jkdemo/wiki/howto"
 # A build with no log.
 rm -f "$JK/fx/job__team__job__app__12__consoleText.txt"
@@ -10436,6 +10677,66 @@ check "a failure that passes on a re-run of the same commit is noted as flaky" t
 check "saying so, and not that it was fixed" bash -c "grep -qx '# CI flaky: team/app (team/app)' '$JNOTE' && ! grep -q 'fixed' '$JNOTE'"
 check "and still ends with the ticket line" test "$(tail -n 1 "$JNOTE")" = "Ticket: none"
 check "and its sync says flaky" bash -c "git -C '$JKW' log --format=%s | grep -qx 'jkdemo: CI failure was flaky'"
+# Two named collections: home, where the tick starts, and work, whose wiki covers the clone. The note goes to
+# work's wiki and is synced there, the log says so, and a later tick in work adds none.
+JKWK="$JK/work"
+JKHELD="$JKST/extensions/jenkins/notes-held.json"
+printf 'home %s\nwork %s\n' "$JKW" "$JKWK" > "$XDG_CONFIG_HOME/llm-wiki/collections"
+WIKIS_DIR="$JKWK" "$W" init --git >/dev/null 2>&1
+WIKIS_DIR="$JKWK" "$W" new jkdemo >/dev/null 2>&1
+mv "$JKW/jkdemo" "$JK/jkdemo.away"
+rm -f "$JKST/notices"/*
+jkplain 50 FAILURE abc1234def00
+jkfail 50
+jktick >/dev/null
+jkplain 51 SUCCESS "$JKSHA"
+before="$(ls "$JKW"/*/raw | wc -l | tr -d ' ')"
+jktick >/dev/null
+check "with two collections, a fixed failure is noted in the other collection's wiki that covers the clone" test "$(find "$JKWK"/jkdemo/raw -name '*-ci-fixed*.md' | wc -l | tr -d ' ')" = 1
+check "and in no wiki of the collection the tick started in" test "$(ls "$JKW"/*/raw | wc -l | tr -d ' ')" = "$before"
+check "the log names the wiki with its collection" grep -qF "team/app: noted in work/jkdemo that team/app is fixed." "$JKST/extensions/jenkins/tick.log"
+check "and the note was synced in that collection" bash -c "git -C '$JKWK' log --format=%s | grep -qx 'jkdemo: CI failure fixed' && test -z \"\$(git -C '$JKWK' status --short)\""
+env WIKIS_DIR="$JKWK" LLM_WIKI_EVENTS=wait "$W" extensions tick >/dev/null
+check "one failure is one note, whichever collection the next tick starts in" test "$(find "$JKWK"/jkdemo/raw -name '*-ci-fixed*.md' | wc -l | tr -d ' ')" = 1
+# A collection that can't be asked saves nothing, says which, and the failure is tried again.
+mv "$JK/jkdemo.away" "$JKW/jkdemo"
+jkplain 52 FAILURE abc1234def00
+jkfail 52
+jktick >/dev/null
+jkplain 53 SUCCESS "$JKSHA"
+before="$(ls "$JKW"/*/raw "$JKWK"/*/raw | wc -l | tr -d ' ')"
+if [ "$(id -u)" != 0 ]; then
+  chmod 000 "$JKWK/jkdemo"
+  expect "a collection that can't be asked fails the tick, so it is tried again" "jenkins: failed" jktick
+  chmod 755 "$JKWK/jkdemo"
+  check "and nothing is saved in the collection that did answer" test "$(ls "$JKW"/*/raw "$JKWK"/*/raw | wc -l | tr -d ' ')" = "$before"
+  check "the log says which collection couldn't be read, and why" grep -qF "team/app: couldn't ask the work collection which wiki covers jkdemo: error: can't read" "$JKST/extensions/jenkins/tick.log"
+else
+  skipped "a collection that can't be asked fails the tick (running as root, which reads every folder)"
+fi
+# Wikis called jkdemo in both collections cover it: no note in either, a line that names both and what to do, and
+# the note is kept until one of them is the only one.
+jktick >/dev/null
+check "a clone wikis in two collections cover gets no note in either" test "$(ls "$JKW"/*/raw "$JKWK"/*/raw | wc -l | tr -d ' ')" = "$before"
+check "and the log names both and what to do" grep -qF "team/app: wikis in 2 collections cover jkdemo: home/jkdemo, work/jkdemo, so no note was saved rather than guess which. It is kept, and saved at a tick once one wiki covers it. Do: leave one of them covering it: rename or move all but one of the wikis called jkdemo" "$JKST/extensions/jenkins/tick.log"
+jktick >/dev/null
+check "a later tick doesn't say the same again" bash -c "! grep -q 'collections cover jkdemo' '$JKST/extensions/jenkins/tick.log'"
+mv "$JKWK/jkdemo" "$JK/jkdemo.work"
+homebefore="$(find "$JKW"/jkdemo/raw -name '*-ci-fixed*.md' | wc -l | tr -d ' ')"
+jktick >/dev/null
+check "once one wiki covers it, the kept note is saved there" test "$(find "$JKW"/jkdemo/raw -name '*-ci-fixed*.md' | wc -l | tr -d ' ')" = "$((homebefore + 1))"
+check "and the log names it with its collection" grep -qF "team/app: noted in home/jkdemo that team/app is fixed." "$JKST/extensions/jenkins/tick.log"
+check "and it is kept no longer" bash -c "! grep -q '\"cover\": \"jkdemo\"' '$JKHELD'"
+# A tick in a folder no collection names asks that folder alone, and names its wiki as with one collection.
+mv "$JK/jkdemo.work" "$JKWK/jkdemo"
+printf 'work %s\n' "$JKWK" > "$XDG_CONFIG_HOME/llm-wiki/collections"
+jkplain 54 FAILURE abc1234def00
+jkfail 54
+jktick >/dev/null
+jkplain 55 SUCCESS "$JKSHA"
+jktick >/dev/null
+check "a tick in a folder no collection names asks only that folder, though another collection's wiki covers it too" bash -c "grep -qF 'team/app: noted in jkdemo that team/app is fixed.' '$JKST/extensions/jenkins/tick.log' && test \"\$(find '$JKWK'/jkdemo/raw -name '*-ci-fixed*.md' | wc -l | tr -d ' ')\" = 1"
+rm -f "$XDG_CONFIG_HOME/llm-wiki/collections" "$JKST/notices"/* "$JKHELD"
 # With remember off, a fixed failure saves nothing, and says it passes again.
 "$W" extensions set jenkins remember no >/dev/null 2>&1
 before="$(ls "$JKW"/jkdemo/raw | wc -l | tr -d ' ')"
