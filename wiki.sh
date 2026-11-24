@@ -35,6 +35,29 @@ if [ "$git_safe_have" = 0 ]; then
   export GIT_CONFIG_COUNT=$((git_safe_n + 1))
 fi
 unset git_safe_n git_safe_have git_safe_k git_safe_v
+# Git takes the repository from the environment before it looks at the folder it is asked
+# about. A dotfiles setup exports GIT_DIR and GIT_WORK_TREE for the home folder, and git
+# exports GIT_DIR, GIT_INDEX_FILE and more to every hook and alias it runs, so a wiki command
+# started from one would commit, pull, set an option or install a hook in that repository.
+# So none of these reaches anything this script starts: each git here finds its repository
+# from its folder. The tool's own uses (history_git, links_take_out) set what they need on
+# the one command. Kept: GIT_CONFIG_COUNT and its keys (ours is among them; git reads
+# core.worktree and core.bare only from a repository's own config, never from these),
+# GIT_CEILING_DIRECTORIES (it only stops a search sooner), and those that name no repository.
+# What is promised: nothing in the environment makes this script act on a repository or work
+# tree other than the one a folder belongs to. Not promised: safety from a caller who sets
+# what runs a program, such as GIT_SSH_COMMAND, GIT_EXEC_PATH or core.hooksPath, since such a
+# caller can run programs anyway. The same list is in cmd/llm-wiki/main.go, mcp/server.py,
+# hooks/session-start.sh, hooks/reminders.py and scripts/migrate-to-plugin.sh: change them
+# together. Kept from them, for env_repo_here's one line and nothing else: whether GIT_DIR was
+# set, and the folder GIT_WORK_TREE named.
+ENV_GIT_DIR_SET=0
+[ -z "${GIT_DIR+set}" ] || ENV_GIT_DIR_SET=1
+ENV_GIT_WORK_TREE=""
+[ -z "${GIT_WORK_TREE:-}" ] || ENV_GIT_WORK_TREE="$(CDPATH='' cd -P "$GIT_WORK_TREE" 2>/dev/null && pwd -P || true)"
+unset GIT_DIR GIT_WORK_TREE GIT_IMPLICIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_QUARANTINE_PATH GIT_GRAFT_FILE GIT_SHALLOW_FILE GIT_REPLACE_REF_BASE \
+  GIT_NAMESPACE GIT_CONFIG GIT_CONFIG_PARAMETERS GIT_PREFIX
 
 # A git older than 2.38 doesn't know that setting, and something this script starts may drop
 # the environment. So this script also looks for itself before it asks git about a folder:
@@ -2395,12 +2418,12 @@ capture_ticketed() {
 # capture_only_from, and internal/capture, take their real paths and pass over the root
 # folder, the home folder and any folder that holds it, so a session started at home, or in
 # a repository whose top is the home folder, has no project to copy from. GIT_DIR and
-# GIT_WORK_TREE would name another work tree, so git is asked without them. A collections
-# file that can't be read leaves the repository and $WIKIS_DIR. A folder whose name has a
-# line break is left out: it would be two folders here.
+# GIT_WORK_TREE would name another work tree: they are cleared at the top of this script.
+# A collections file that can't be read leaves the repository and $WIKIS_DIR. A folder whose
+# name has a line break is left out: it would be two folders here.
 capture_from() {
   local top d nl=$'\n'
-  if top="$(unset GIT_DIR GIT_WORK_TREE; git rev-parse --show-toplevel 2>/dev/null)" && [ -n "$top" ]; then
+  if top="$(git rev-parse --show-toplevel 2>/dev/null)" && [ -n "$top" ]; then
     case "$top" in *"$nl"*) ;; *) printf '%s\n' "$top" ;; esac
   fi
   { collections 2>/dev/null || true; } | cut -f 2
@@ -4568,7 +4591,7 @@ sync_do() {
           case "$cname" in '' | default) ;; *) how="$how --collection $cname" ;; esac
           ;;
       esac
-      echo "$(tilde "$root") has no backup and isn't shared: it is kept on this machine only.$how"
+      if env_repo_here; then env_repo_text; echo; else echo "$(tilde "$root") has no backup and isn't shared: it is kept on this machine only.$how"; fi
     else
       echo "$(tilde "$root") is in a repository the wikis don't manage, so nothing is synced from here. Commits are up to you there."
     fi
@@ -5648,6 +5671,20 @@ collection_repo() {
   [ -n "$top" ] && [ "$top" = "$here" ]
 }
 
+# env_repo_here: GIT_DIR was set when this script started, with GIT_WORK_TREE naming the
+# collection's folder: a repository kept for it somewhere else, such as a bare one, which git
+# found only through the two. They were cleared at the top, so the folder has no git here.
+# Said where the fix would otherwise be to make a second repository: sync and init --git.
+env_repo_here() {
+  local here
+  [ "$ENV_GIT_DIR_SET" = 1 ] && [ -n "$ENV_GIT_WORK_TREE" ] || return 1
+  here="$(CDPATH='' cd -P "$WIKIS_DIR" 2>/dev/null && pwd -P)" || return 1
+  [ "$ENV_GIT_WORK_TREE" = "$here" ]
+}
+env_repo_text() {
+  printf '%s is the work tree of the repository GIT_DIR names, and llm-wiki takes no repository from the environment, so here it has no git. Do: keep that repository in the folder, with a file %s/.git that reads "gitdir: <the repository>", then run: git --git-dir=<the repository> config core.bare false' "$(tilde "$WIKIS_DIR")" "$(tilde "$WIKIS_DIR")"
+}
+
 # gitignore_ok: whether the collection's .gitignore can be written: missing, or a plain file.
 # One that is a link would have the lines written wherever it points, and one that is a
 # folder can't take them. Says so, with what to do, when it can't.
@@ -5721,6 +5758,8 @@ git_init_collection() {
     if git -C "$WIKIS_DIR" rev-parse -q --verify HEAD >/dev/null 2>&1; then collection_ignores; else git_first_commit; fi
     return 0
   fi
+  # A second repository here would split that one's history from the folder's.
+  if env_repo_here; then die "git isn't set up: $(env_repo_text). Or, for a new repository here, run $WIKI_CMD init --git again without GIT_DIR and GIT_WORK_TREE"; fi
   git -C "$WIKIS_DIR" init -q
   links_off "$WIKIS_DIR"
   install_hook "$WIKIS_DIR"

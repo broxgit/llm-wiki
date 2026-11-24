@@ -84,6 +84,7 @@ read -r -d '' PARTS <<'TABLE' || true
 3 | Uninstall | Collection
 3 | What CI skips |
 2 | A wiki that passes for a repository |
+2 | Git variables that name another repository |
 2 | A folder that only looks like a wiki |
 2 | Links in a wiki |
 2 | Two clones change one page |
@@ -12972,6 +12973,276 @@ out="$(h4w f init --git 2>&1)"; code=$?
 out="$(h4w f sync demo 2>&1)"; code=$?
 [ "$code" = 1 ] && ok "nor is a wiki there synced" || bad "nor is a wiki there synced" "exit $code: $out"
 check "and nothing ran" test ! -e "$H4/PROOF3"
+fi
+
+if section "Git variables that name another repository"; then
+# Git takes the repository from GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE and the rest before it
+# looks at the folder it is asked about. A dotfiles setup exports the first two for the home
+# folder, and git exports GIT_DIR and GIT_INDEX_FILE to the hooks it runs. wiki.sh, the helper,
+# both MCP servers and the session hook clear them at their start and act on the collection;
+# the tool's own uses (the history store, the commit that takes links out) set them per command.
+[ -x "$T/bin/llm-wiki" ] || ! command -v go >/dev/null 2>&1 || build_helper >/dev/null 2>&1
+GEV="$T/genv"
+mkdir -p "$GEV/home" "$GEV/bin" "$GEV/data" "$GEV/hist"
+GEVC="$GEV/home/wikis"
+# A stand-in for gitleaks that reads what git is about to commit, as the hook has gitleaks do,
+# and notes which repository and which changes it read.
+cat > "$GEV/bin/gitleaks" <<EOF
+#!/bin/sh
+case "\$*" in *--help*) exit 0 ;; *--staged*) ;; *) exit 0 ;; esac
+{ printf 'scan %s\n' "\$(git rev-parse --absolute-git-dir)"; git diff --cached --name-status; } >> "$GEV/scans"
+if git diff --cached | grep -q GENV-SECRET; then echo "leak: GENV-SECRET" >&2; exit 1; fi
+exit 0
+EOF
+chmod +x "$GEV/bin/gitleaks"
+# gev_in <collection> <command>...: run in this section's home, with that collection; gev with the first.
+gev_in() { local d="$1"; shift; env HOME="$GEV/home" WIKIS_DIR="$d" PATH="$GEV/bin:$PATH" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com "$@"; }
+gev() { gev_in "$GEVC" "$@"; }
+# The other repository, kept in git the way a dotfiles setup keeps a home folder.
+GEVX="$GEV/other"
+git init -q "$GEVX"
+printf 'dot\n' > "$GEVX/dotfile"
+git -C "$GEVX" add dotfile && git -C "$GEVX" commit -q -m dot
+git -C "$GEVX" remote add origin https://example.invalid/me/dotfiles.git
+gev_xsnap() { { cat "$GEVX/.git/config"; git -C "$GEVX" for-each-ref; git -C "$GEVX" ls-files -s; git -C "$GEVX" status --porcelain --untracked-files=all; ls -a "$GEVX" "$GEVX/.git" "$GEVX/.git/hooks"; find "$GEVX/.git/objects" -type f | LC_ALL=C sort; } 2>&1 | cksum; }
+gev_xsnap >/dev/null
+GEV_XBEFORE="$(gev_xsnap)"
+GEV_DOT=(GIT_DIR="$GEVX/.git" GIT_WORK_TREE="$GEVX")
+GEV_DIR=(GIT_DIR="$GEVX/.git")
+GEV_ALL=(GIT_DIR="$GEVX/.git" GIT_WORK_TREE="$GEVX" GIT_IMPLICIT_WORK_TREE=0 GIT_COMMON_DIR="$GEVX/.git" GIT_INDEX_FILE="$GEVX/.git/index"
+  GIT_OBJECT_DIRECTORY="$GEVX/.git/objects" GIT_ALTERNATE_OBJECT_DIRECTORIES="$GEVX/.git/objects" GIT_QUARANTINE_PATH="$GEVX/.git/objects"
+  GIT_GRAFT_FILE="$GEVX/.git/info/grafts" GIT_SHALLOW_FILE="$GEVX/.git/shallow" GIT_REPLACE_REF_BASE=refs/dot/ GIT_NAMESPACE=dot
+  GIT_CONFIG="$GEVX/.git/config" GIT_CONFIG_PARAMETERS="'core.bare'='true'" GIT_PREFIX=sub/)
+# gev_pick <dot|dir|all>: one of the three sets in gev_set, and what it is in gev_what.
+gev_pick() {
+  case "$1" in
+    dot) gev_set=("${GEV_DOT[@]}"); gev_what="GIT_DIR and GIT_WORK_TREE" ;;
+    dir) gev_set=("${GEV_DIR[@]}"); gev_what="GIT_DIR alone" ;;
+    *) gev_set=("${GEV_ALL[@]}"); gev_what="all of them" ;;
+  esac
+}
+# init --git, with the variables a dotfiles setup exports.
+gev "${GEV_DOT[@]}" "$W" init --git >/dev/null 2>&1
+check "with GIT_DIR and GIT_WORK_TREE naming another repository, init --git gives the collection its own" test -d "$GEVC/.git"
+check "with the secret scan's hook in it" test -x "$GEVC/.git/hooks/pre-commit"
+check "and puts no hook in the other one" test ! -e "$GEVX/.git/hooks/pre-commit"
+[ -d "$GEVC/.git" ] || gev "$W" init --git >/dev/null 2>&1
+gev "$W" new demo >/dev/null 2>&1
+# links_off runs at the start of nearly every command, and sets core.symlinks where git says.
+git config --file "$GEVC/.git/config" --unset core.symlinks
+gev "${GEV_DIR[@]}" LLM_WIKI_NO_GO=1 "$W" status >/dev/null 2>&1
+check "with GIT_DIR alone naming it, core.symlinks is set in the collection" test "$(git config --file "$GEVC/.git/config" --get core.symlinks)" = false
+check "and not in the other repository" test -z "$(git config --file "$GEVX/.git/config" --get core.symlinks)"
+GEVP="$GEV/proj"
+git init -q "$GEVP"
+gev "$W" status >/dev/null 2>&1
+for who in helper Bash; do
+  if [ "$who" = helper ]; then
+    [ -x "$T/bin/llm-wiki" ] || { skipped "status and which with the helper ignore git's variables (no Go here)"; continue; }
+    gev_go=(LLM_WIKI_NO_GO="" LLM_WIKI_GO="$T/bin/llm-wiki")
+  else
+    gev_go=(LLM_WIKI_NO_GO=1)
+  fi
+  want="$(gev "${gev_go[@]}" "$W" status 2>&1)"
+  for v in dot dir all; do
+    gev_pick "$v"
+    got="$(gev "${gev_set[@]}" "${gev_go[@]}" "$W" status 2>&1)"
+    [ "$got" = "$want" ] && ok "with the $who and $gev_what set, status says what it says with none" || bad "with the $who and $gev_what set, status says what it says with none" "$(diff <(printf '%s\n' "$want") <(printf '%s\n' "$got"))"
+  done
+  out="$(cd "$GEVP" && gev "${GEV_DOT[@]}" "${gev_go[@]}" "$W" which 2>&1)"
+  case "$out" in *dotfiles*) bad "with the $who, which names the repository it runs in, not the one GIT_WORK_TREE names" "$out" ;; *"no wiki covers proj"*) ok "with the $who, which names the repository it runs in, not the one GIT_WORK_TREE names" ;; *) bad "with the $who, which names the repository it runs in, not the one GIT_WORK_TREE names" "$out" ;; esac
+done
+if [ -x "$T/bin/llm-wiki" ]; then
+  out="$(cd "$GEVP" && env "${GEV_DOT[@]}" "$T/bin/llm-wiki" which --wikis "$GEVC" --home "$GEV/home" --wiki-cmd wiki 2>&1)"
+  case "$out" in *dotfiles*) bad "the helper started on its own ignores them too" "$out" ;; *"no wiki covers proj"*) ok "the helper started on its own ignores them too" ;; *) bad "the helper started on its own ignores them too" "$out" ;; esac
+else
+  skipped "the helper started on its own ignores them too (no Go here)"
+fi
+# sync commits in the collection, whichever of them are set.
+n=0
+for v in dot dir all; do
+  n=$((n + 1))
+  gev_pick "$v"
+  printf 'A note.\n' > "$GEVC/demo/raw/2026-11-01-00000$n-note.md"
+  out="$(gev "${gev_set[@]}" "$W" sync demo -m "demo: note $n" 2>&1)"
+  case "$out" in *"committed: demo: note $n"*) ok "with $gev_what set, sync commits in the collection" ;; *) bad "with $gev_what set, sync commits in the collection" "$out" ;; esac
+done
+check "each of the three is a commit of the collection's" test "$(git -C "$GEVC" log -3 --format=%s | tr '\n' '|')" = "demo: note 3|demo: note 2|demo: note 1|"
+check "and none is in the other repository" test "$(git -C "$GEVX" log --format=%s | tr '\n' '|')" = "dot|"
+# A wiki command run from a git hook of an unrelated project: git exports GIT_INDEX_FILE there,
+# and GIT_DIR in a linked worktree. Once from the project's own folder, once from a worktree.
+printf 'p\n' > "$GEVP/f"
+git -C "$GEVP" add f && git -C "$GEVP" commit -q -m p0
+git -C "$GEVP" worktree add -q "$GEV/proj-wt" 2>/dev/null
+cat > "$GEVP/.git/hooks/pre-commit" <<EOF
+#!/bin/sh
+printf 'From a hook.\n' > "$GEVC/demo/raw/2026-11-01-000010-\$(basename "\$PWD").md"
+env HOME="$GEV/home" WIKIS_DIR="$GEVC" PATH="$GEV/bin:\$PATH" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com "$W" sync demo -m "demo: from \$(basename "\$PWD")" >> "$GEV/hook-out" 2>&1
+exit 0
+EOF
+chmod +x "$GEVP/.git/hooks/pre-commit"
+gev_pcfg="$(cksum < "$GEVP/.git/config")"
+for d in "$GEVP" "$GEV/proj-wt"; do
+  b="${d##*/}"
+  printf '%s\n' "$b" > "$d/f"
+  (cd "$d" && git commit -q -a -m "$b: commit -a") >/dev/null 2>&1
+  check "a wiki sync from a project's hook ($b, commit -a) commits in the collection" test "$(git -C "$GEVC" log -1 --format=%s)" = "demo: from $b"
+  check "and the project's commit goes through with its own file alone ($b)" test "$(git -C "$d" log -1 --format=%s)|$(git -C "$d" ls-tree -r --name-only HEAD | tr '\n' ' ')" = "$b: commit -a|f "
+done
+check "and the project's config is as it was" test "$(cksum < "$GEVP/.git/config")" = "$gev_pcfg"
+check "nor does the collection's commit hold the project's file" bash -c "! git -C '$GEVC' ls-tree -r --name-only HEAD | grep -qx f"
+# The session hook names the session's project, not the repository GIT_WORK_TREE names.
+out="$(printf '{}' | env "${GEV_DOT[@]}" HOME="$GEV/home" WIKIS_DIR="$GEVC" CLAUDE_PLUGIN_ROOT="$REPO" CLAUDE_PLUGIN_DATA="$GEV/data" CLAUDE_PROJECT_DIR="$GEVP" bash "$REPO/hooks/session-start.sh" 2>&1)"
+case "$out" in *dotfiles*) bad "the session hook names the project it starts in" "$out" ;; *"No wiki covers proj"*) ok "the session hook names the project it starts in" ;; *) bad "the session hook names the project it starts in" "$out" ;; esac
+# Both MCP servers, started on their own as a client may start them: a capture is synced to the collection.
+gev_mcp() { # gev_mcp <slug> <server command>...
+  local slug="$1"
+  shift
+  printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"wiki_capture","arguments":{"wiki":"demo","slug":"%s","note":"From a chat."}}}\n' "$slug" \
+    | gev "${GEV_DIR[@]}" LLM_WIKI_NO_GO=1 LLM_WIKI_SH="$W" LLM_WIKI_COLLECTIONS="$(printf 'main\t%s' "$GEVC")" "$@" 2>&1 \
+    | python3 -c 'import json,sys; r=json.loads(sys.stdin.readline())["result"]; print(("ERROR: " if r.get("isError") else "")+r["content"][0]["text"])' 2>&1
+}
+out="$(gev_mcp from-python python3 "$REPO/mcp/server.py")"
+check "the Python MCP server, with GIT_DIR naming another repository, commits a capture in the collection" test "$(git -C "$GEVC" log -1 --format=%s)" = "demo: capture from-python"
+if [ -x "$T/bin/llm-wiki" ]; then
+  out="$(gev_mcp from-go "$T/bin/llm-wiki" mcp)"
+  check "and so does the helper's" test "$(git -C "$GEVC" log -1 --format=%s)" = "demo: capture from-go"
+else
+  skipped "and so does the helper's (no Go here)"
+fi
+# The commit that takes a recorded link out is made with a temporary index of its own: the scan
+# reads that index, so what it scans is the link going and nothing else.
+GEV_LINK="demo/raw/2026-11-01-000020-link.md"
+h="$(printf 'elsewhere' | git -C "$GEVC" hash-object -w --stdin)"
+git -C "$GEVC" update-index --add --cacheinfo "120000,$h,$GEV_LINK"
+printf 'elsewhere' > "$GEVC/$GEV_LINK"
+gev git -C "$GEVC" commit -q -m "a link" >/dev/null 2>&1
+: > "$GEV/scans"
+printf 'Another note.\n' > "$GEVC/demo/raw/2026-11-01-000021-after.md"
+out="$(gev "${GEV_ALL[@]}" "$W" sync demo -m "demo: after" 2>&1)"
+case "$out" in *"committed: demo: take out 1 link(s)"*"committed: demo: after"*) ok "with all of them set, sync takes a recorded link out, then commits" ;; *) bad "with all of them set, sync takes a recorded link out, then commits" "$out" ;; esac
+check "git records it as a plain file now" test -z "$(git -C "$GEVC" ls-files -s -- "$GEV_LINK" | grep '^120000' || true)"
+out="$(awk '/^scan /{n++; if (n == 1) print; next} n == 1' "$GEV/scans")"
+[ "$out" = "scan $GEVC/.git"$'\n'"D"$'\t'"$GEV_LINK" ] && ok "the scan of that commit read its temporary index, in the collection" || bad "the scan of that commit read its temporary index, in the collection" "$(cat "$GEV/scans")"
+# The scan still refuses a commit that holds a secret.
+printf 'Deploy key: GENV-SECRET\n' > "$GEVC/demo/raw/2026-11-01-000022-leak.md"
+out="$(gev "${GEV_ALL[@]}" "$W" sync demo -m "demo: leak" 2>&1)"; code=$?
+[ "$code" != 0 ] && case "$out" in *"commit refused"*) true ;; *) false ;; esac && ok "with all of them set, the secret scan refuses a commit that holds a secret" || bad "with all of them set, the secret scan refuses a commit that holds a secret" "exit $code: $out"
+check "and that commit didn't land" test "$(git -C "$GEVC" log -1 --format=%s)" = "demo: after"
+unlink "$GEVC/demo/raw/2026-11-01-000022-leak.md"
+git -C "$GEVC" reset -q
+# And in a linked worktree of the collection, where git names the worktree's GIT_DIR to the hook.
+git -C "$GEVC" worktree add -q -b side "$GEV/wt" 2>/dev/null
+: > "$GEV/scans"
+printf 'Deploy key: GENV-SECRET\n' > "$GEV/wt/demo/raw/2026-11-01-000023-leak.md"
+out="$(gev_in "$GEV/wt" "${GEV_ALL[@]}" "$W" sync demo -m "demo: leak in a worktree" 2>&1)"; code=$?
+[ "$code" != 0 ] && case "$out" in *"commit refused"*) true ;; *) false ;; esac && ok "in a linked worktree too, the scan refuses it" || bad "in a linked worktree too, the scan refuses it" "exit $code: $out"
+case "$(head -n 1 "$GEV/scans")" in "scan $GEVC/.git/worktrees/wt") ok "having read the worktree's own index" ;; *) bad "having read the worktree's own index" "$(cat "$GEV/scans")" ;; esac
+unlink "$GEV/wt/demo/raw/2026-11-01-000023-leak.md"
+printf 'A clean note.\n' > "$GEV/wt/demo/raw/2026-11-01-000024-clean.md"
+out="$(gev_in "$GEV/wt" "${GEV_ALL[@]}" "$W" sync demo -m "demo: clean in a worktree" 2>&1)"
+check "and lets a clean one through, on the worktree's branch" test "$(git -C "$GEV/wt" log -1 --format=%s):$(git -C "$GEVC" log -1 --format=%s)" = "demo: clean in a worktree:demo: after"
+# The history store names its own GIT_DIR and GIT_WORK_TREE, on its own commands.
+gev_hw() { env HOME="$GEV/hist" WIKIS_DIR="$GEV/hist/wikis" "$@"; }
+gev_hw "$W" init >/dev/null 2>&1
+gev_hw "$W" new demo >/dev/null 2>&1
+printf '# Page\n\nfirst\n' > "$GEV/hist/wikis/demo/wiki/p.md"
+gev_hw "${GEV_ALL[@]}" "$W" history on >/dev/null 2>&1
+gev_hid="$(sed -n 's/^id=//p' "$GEV/hist/wikis/.llm-wiki-history" 2>/dev/null)"
+gev_hg() { env GIT_DIR="$GEV/hist/.local/state/llm-wiki/history/$gev_hid.git" GIT_CONFIG_GLOBAL=/dev/null git "$@"; }
+check "with all of them set, history on starts the store and saves the collection" test "$(gev_hg rev-list --count HEAD 2>/dev/null)" = 1
+printf '# Page\n\nsecond\n' > "$GEV/hist/wikis/demo/wiki/p.md"
+expect "and sync saves a snapshot" "saved: a snapshot of your wikis" gev_hw "${GEV_ALL[@]}" "$W" sync demo -m "demo: second"
+check "of the collection's page" test "$(gev_hg show HEAD:demo/wiki/p.md 2>/dev/null | tail -n 1)" = second
+# What doesn't name a repository still reaches what the tool starts.
+mkdir -p "$GEV/home/.local/share/llm-wiki/extensions"
+cat > "$GEV/home/.local/share/llm-wiki/extensions/wiki-genv" <<'EXT'
+#!/bin/sh
+# wiki-extension: Names the git variables it was given, for the smoke test.
+env | grep '^GIT_' | cut -d= -f1 | LC_ALL=C sort | tr '\n' ' '
+EXT
+chmod +x "$GEV/home/.local/share/llm-wiki/extensions/wiki-genv"
+out=" $(gev "${GEV_ALL[@]}" GIT_CEILING_DIRECTORIES="$GEV/nowhere" GIT_SSH_COMMAND=ssh GIT_ASKPASS=/bin/false "$W" genv 2>&1)"
+gev_left=""
+for k in GIT_DIR GIT_WORK_TREE GIT_IMPLICIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_QUARANTINE_PATH GIT_GRAFT_FILE GIT_SHALLOW_FILE GIT_REPLACE_REF_BASE GIT_NAMESPACE GIT_CONFIG GIT_CONFIG_PARAMETERS GIT_PREFIX; do
+  case "$out" in *" $k "*) gev_left="$gev_left $k" ;; esac
+done
+[ -z "$gev_left" ] && ok "an extension gets none of them" || bad "an extension gets none of them" "still set:$gev_left"
+gev_gone=""
+for k in GIT_ASKPASS GIT_AUTHOR_NAME GIT_CEILING_DIRECTORIES GIT_CONFIG_COUNT GIT_SSH_COMMAND; do
+  case "$out" in *" $k "*) ;; *) gev_gone="$gev_gone $k" ;; esac
+done
+[ -z "$gev_gone" ] && ok "and keeps the ones that name no repository" || bad "and keeps the ones that name no repository" "missing:$gev_gone"
+# A caller's GIT_CONFIG_COUNT entries are kept. Git reads core.worktree and core.bare only from
+# a repository's own config, so neither, in any case, points it at another work tree.
+for e in "core.worktree=$GEVX" "Core.WorkTree=$GEVX" core.bare=true; do
+  n=$((n + 1))
+  gev_cfg=(GIT_CONFIG_COUNT=1 "GIT_CONFIG_KEY_0=${e%%=*}" "GIT_CONFIG_VALUE_0=${e#*=}")
+  printf 'A note.\n' > "$GEVC/demo/raw/2026-11-01-00000$n-cfg.md"
+  out="$(gev "${gev_cfg[@]}" "$W" sync demo -m "demo: cfg $n" 2>&1)"
+  [ "$(git -C "$GEVC" log -1 --format=%s)" = "demo: cfg $n" ] && ok "with ${e%%=*} from GIT_CONFIG_COUNT, sync commits in the collection" || bad "with ${e%%=*} from GIT_CONFIG_COUNT, sync commits in the collection" "$out"
+  out="$(cd "$GEVP" && gev "${gev_cfg[@]}" LLM_WIKI_NO_GO=1 "$W" which 2>&1)"
+  case "$out" in *"no wiki covers proj"*) ok "and which names the project (${e%%=*})" ;; *) bad "and which names the project (${e%%=*})" "$out" ;; esac
+done
+check "and still nothing is in the other repository" test "$(git -C "$GEVX" log --format=%s | tr '\n' '|')" = "dot|"
+# A wikis folder kept in a bare repository that only GIT_DIR and GIT_WORK_TREE name: here it has
+# no git. sync and init --git say why and what to do, not to make a second repository.
+GEVB="$GEV/bare"
+mkdir -p "$GEVB/home"
+gev_bw() { env HOME="$GEVB/home" WIKIS_DIR="$GEVB/home/wikis" PATH="$GEV/bin:$PATH" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com "$@"; }
+gev_bw "$W" init >/dev/null 2>&1
+gev_bw "$W" new demo >/dev/null 2>&1
+git init -q --bare "$GEVB/wikis.git"
+GEV_BARE=(GIT_DIR="$GEVB/wikis.git" GIT_WORK_TREE="$GEVB/home/wikis")
+gev_bw "${GEV_BARE[@]}" git add -A && gev_bw "${GEV_BARE[@]}" git commit -q -m start
+printf 'A note.\n' > "$GEVB/home/wikis/demo/raw/2026-11-01-000000-bare.md"
+out="$(gev_bw "${GEV_BARE[@]}" "$W" sync demo -m "demo: bare" 2>&1)"
+case "$out" in *"~/wikis is the work tree of the repository GIT_DIR names, and llm-wiki takes no repository from the environment"*"Do: keep that repository in the folder, with a file ~/wikis/.git that reads \"gitdir: <the repository>\""*) ok "sync of a folder whose repository only the environment names says so, and what to do" ;; *) bad "sync of a folder whose repository only the environment names says so, and what to do" "$out" ;; esac
+lacks "and doesn't send the person to set up git there" "setup git" printf '%s\n' "$out"
+out="$(gev_bw "${GEV_BARE[@]}" "$W" init --git 2>&1)"; code=$?
+[ "$code" = 1 ] && case "$out" in *"git isn't set up: ~/wikis is the work tree of the repository GIT_DIR names"*"without GIT_DIR and GIT_WORK_TREE"*) true ;; *) false ;; esac && ok "init --git there makes no second repository, and says why" || bad "init --git there makes no second repository, and says why" "exit $code: $out"
+check "so the folder has no .git" test ! -e "$GEVB/home/wikis/.git"
+check "and the repository has its one commit" test "$(git --git-dir="$GEVB/wikis.git" log --format=%s | tr '\n' '|')" = "start|"
+out="$(gev_bw "${GEV_DOT[@]}" "$W" sync demo -m "demo: bare" 2>&1)"
+case "$out" in *"has no backup and isn't shared"*) ok "with GIT_WORK_TREE naming another folder, sync says what it always said" ;; *) bad "with GIT_WORK_TREE naming another folder, sync says what it always said" "$out" ;; esac
+# What the line says to do works, with the variables still set or not.
+printf 'gitdir: %s\n' "$GEVB/wikis.git" > "$GEVB/home/wikis/.git"
+git --git-dir="$GEVB/wikis.git" config core.bare false
+out="$(gev_bw "${GEV_BARE[@]}" "$W" sync demo -m "demo: bare" 2>&1)"
+check "with a .git file that names it, sync commits to that repository" test "$(git --git-dir="$GEVB/wikis.git" log --format=%s | tr '\n' '|')" = "demo: bare|start|"
+# The session hook and reminders.py ask git about the project themselves, and so add
+# safe.bareRepository=explicit as wiki.sh does: a folder that only holds a repository's files is
+# none, even with a caller's setting that would let it pass.
+GEVQ="$GEV/planted"
+mkdir -p "$GEVQ/objects" "$GEVQ/refs"
+printf 'ref: refs/heads/main\n' > "$GEVQ/HEAD"
+printf '[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tworktree = .\n[remote "origin"]\n\turl = https://example.invalid/x/planted-elsewhere.git\n' > "$GEVQ/config"
+gev_all_pass=(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all)
+out="$(printf '{}' | env "${gev_all_pass[@]}" HOME="$GEV/home" WIKIS_DIR="$GEVC" CLAUDE_PLUGIN_ROOT="$REPO" CLAUDE_PLUGIN_DATA="$GEV/data" CLAUDE_PROJECT_DIR="$GEVQ" bash "$REPO/hooks/session-start.sh" 2>&1)"
+lacks "the session hook takes no planted repository for the project" "planted-elsewhere" printf '%s\n' "$out"
+out="$(env "${gev_all_pass[@]}" python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import reminders; print(reminders.project_of(sys.argv[2]))' "$REPO/hooks" "$GEVQ" </dev/null 2>&1)"
+[ "$out" = planted ] && ok "nor does reminders.py: the project is the folder's name" || bad "nor does reminders.py: the project is the folder's name" "$out"
+out="$(cd "$GEVP" && env "${GEV_DOT[@]}" "${gev_all_pass[@]}" python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import reminders; print(reminders.project_of(sys.argv[2]))' "$REPO/hooks" "$GEVP" </dev/null 2>&1)"
+[ "$out" = proj ] && ok "and reminders.py names the project, not the repository GIT_WORK_TREE names" || bad "and reminders.py names the project, not the repository GIT_WORK_TREE names" "$out"
+# scripts/migrate-to-plugin.sh pulls and commits in the wikis folder: one that only holds a
+# repository's files, with a config that runs a command, is no repository to it.
+mkdir -p "$GEV/mig/bin" "$GEV/mig/home/wikis/objects" "$GEV/mig/home/wikis/refs"
+printf '#!/bin/sh\nexit 0\n' > "$GEV/mig/bin/claude"
+printf '#!/bin/sh\nexit 0\n' > "$GEV/mig/bin/gitleaks"
+chmod +x "$GEV/mig/bin/claude" "$GEV/mig/bin/gitleaks"
+printf 'ref: refs/heads/main\n' > "$GEV/mig/home/wikis/HEAD"
+printf '[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tworktree = .\n\tfsmonitor = "touch %s; false"\n[remote "origin"]\n\turl = %s\n' "$GEV/mig/PROOF" "$GEV/mig/nowhere.git" > "$GEV/mig/home/wikis/config"
+env "${gev_all_pass[@]}" HOME="$GEV/mig/home" WIKIS_DIR="$GEV/mig/home/wikis" PATH="$GEV/mig/bin:$PATH" "$TTYRUN" bash "$REPO/scripts/migrate-to-plugin.sh" </dev/null >/dev/null 2>&1
+check "the migration runs no command that a planted config in the wikis folder names" test ! -e "$GEV/mig/PROOF"
+# One list, in every program of the tool that runs git.
+gev_list() { awk '/^unset GIT_DIR GIT_WORK_TREE|^GIT_REPO_VARS = \(|gitRepoVars = \[\]string/ { on = 1 } on { print } on && /GIT_PREFIX/ { exit }' "$REPO/$1" | grep -o 'GIT_[A-Z_]*' | grep -vx GIT_REPO_VARS | LC_ALL=C sort -u | tr '\n' ' '; }
+want="$(gev_list wiki.sh)"
+check "wiki.sh clears fifteen" test "$(printf '%s' "$want" | wc -w | tr -d ' ')" = 15
+for f in cmd/llm-wiki/main.go mcp/server.py hooks/session-start.sh hooks/reminders.py scripts/migrate-to-plugin.sh; do
+  got="$(gev_list "$f")"
+  [ "$got" = "$want" ] && ok "$f clears the same list" || bad "$f clears the same list" "wiki.sh: $want"$'\n'"$f: $got"
+done
+check "the other repository's config, index, refs, objects and files are as they were" test "$(gev_xsnap)" = "$GEV_XBEFORE"
 fi
 
 if section "A folder that only looks like a wiki"; then

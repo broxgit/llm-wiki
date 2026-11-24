@@ -7,6 +7,21 @@
 #
 # Commands that don't need answers get </dev/null, so they can't swallow typed input.
 set -euo pipefail
+# Each git here acts on the wikis folder, never on a repository the environment names, as a
+# dotfiles setup's GIT_DIR and GIT_WORK_TREE do. The same list is in wiki.sh: change them together.
+unset GIT_DIR GIT_WORK_TREE GIT_IMPLICIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_QUARANTINE_PATH GIT_GRAFT_FILE GIT_SHALLOW_FILE GIT_REPLACE_REF_BASE \
+  GIT_NAMESPACE GIT_CONFIG GIT_CONFIG_PARAMETERS GIT_PREFIX
+# And git takes no folder that holds HEAD, objects/ and refs/ for a repository unless it is
+# named: safe.bareRepository=explicit, last, as wiki.sh's own first step adds it.
+mig_n="${GIT_CONFIG_COUNT:-0}"
+case "$mig_n" in '' | *[!0-9]*) mig_n=0 ;; esac
+mig_n=$((10#$mig_n))
+mig_k="GIT_CONFIG_KEY_$((mig_n - 1))"; mig_v="GIT_CONFIG_VALUE_$((mig_n - 1))"
+if [ "$mig_n" -eq 0 ] || [ "$(printf '%s' "${!mig_k:-}" | LC_ALL=C tr 'A-Z' 'a-z')" != safe.barerepository ] || [ "${!mig_v:-}" != explicit ]; then
+  export "GIT_CONFIG_KEY_$mig_n=safe.bareRepository" "GIT_CONFIG_VALUE_$mig_n=explicit" GIT_CONFIG_COUNT=$((mig_n + 1))
+fi
+unset mig_n mig_k mig_v
 
 WIKIS_DIR="${WIKIS_DIR:-$HOME/wikis}"
 SETTINGS="$HOME/.claude/settings.json"
@@ -14,6 +29,16 @@ CLAUDE_MD="$HOME/.claude/CLAUDE.md"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 
 step() { printf '\n== %s\n' "$1"; }
+# wikis_repo: the wikis folder is the top of a git repository of its own, as wiki.sh's
+# collection_repo has it. Its .git is looked for first, so a folder with none starts no git:
+# a git older than 2.38 doesn't know safe.bareRepository.
+wikis_repo() {
+  local top here
+  [ -e "$WIKIS_DIR/.git" ] || [ -L "$WIKIS_DIR/.git" ] || return 1
+  top="$(git -C "$WIKIS_DIR" rev-parse --show-toplevel 2>/dev/null)" || return 1
+  here="$(cd "$WIKIS_DIR" 2>/dev/null && pwd -P)" || return 1
+  [ -n "$top" ] && [ "$top" = "$here" ]
+}
 die() { echo "error: $*" >&2; exit 1; }
 ask_yn() {
   local r
@@ -36,8 +61,7 @@ if [ -f "$WIKIS_DIR/delegation.md" ]; then
   cp "$WIKIS_DIR/delegation.md" "$deleg_backup"
   echo "saved delegation.md to $deleg_backup"
 fi
-if git -C "$WIKIS_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
-  && [ -n "$(git -C "$WIKIS_DIR" remote 2>/dev/null)" ]; then
+if wikis_repo && [ -n "$(git -C "$WIKIS_DIR" remote 2>/dev/null)" ]; then
   if [ -n "$(git -C "$WIKIS_DIR" status --porcelain)" ]; then
     # Likely an earlier run of this script, stopped before its commit step.
     echo "$WIKIS_DIR has uncommitted changes, so it isn't pulled now. The commit step below offers to commit them."
@@ -45,7 +69,7 @@ if git -C "$WIKIS_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
     git -C "$WIKIS_DIR" pull --no-rebase --no-edit </dev/null
   fi
 elif [ -d "$WIKIS_DIR" ]; then
-  echo "$WIKIS_DIR has no git remote, nothing to pull."
+  echo "$WIKIS_DIR isn't a git repository of its own with a remote, nothing to pull."
 else
   echo "no collection at $WIKIS_DIR yet. wiki setup creates one at the end."
 fi
@@ -138,14 +162,13 @@ if [ -n "$deleg_backup" ]; then
   cp "$deleg_backup" "$WIKIS_DIR/delegation.md"
   echo "restored delegation.md"
 fi
-if git -C "$WIKIS_DIR" ls-files --error-unmatch delegation.md >/dev/null 2>&1; then
+if wikis_repo && git -C "$WIKIS_DIR" ls-files --error-unmatch delegation.md >/dev/null 2>&1; then
   git -C "$WIKIS_DIR" rm -q --cached delegation.md
   echo "delegation.md is no longer tracked. Each machine keeps its own."
 fi
 
 step "Commit"
-if git -C "$WIKIS_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
-  && [ -n "$(git -C "$WIKIS_DIR" status --porcelain)" ]; then
+if wikis_repo && [ -n "$(git -C "$WIKIS_DIR" status --porcelain)" ]; then
   git -C "$WIKIS_DIR" status --short
   if ask_yn "Commit these as \"wikis: handbook upgrade\"?"; then
     git -C "$WIKIS_DIR" add -A
