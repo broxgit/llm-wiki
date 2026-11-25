@@ -3254,6 +3254,66 @@ note_age_hours() {
   [ -z "$t" ] || printf '%s' $(( ($(date -u +%s) - t) / 3600 ))
 }
 
+# runs.csv: one row per run. A file begun before a row named its collection and its log has
+# the first eight columns only, and those rows count for every collection.
+COMPILE_RUNS_HEAD="date,wiki,notes,left,seconds,oldest_hours,result,agent,collection,lint_left,log"
+# csv_value <text>: the text as one value of runs.csv: no control character, which takes a
+# line end with it, and no comma.
+csv_value() { printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C tr ',' '_'; }
+# compile_coll <collection folder>: the collection as runs.csv names it: its name in the
+# collections file, or its folder when the file doesn't know it, as a test's isn't. Folders
+# are compared as the real folders they are, so a collection reached through a link, or named
+# by a relative path, is the same collection whichever way a run or a status came to it.
+compile_coll() {
+  local d n f r p
+  d="$(ext_real "$1")"
+  while [ "$d" != / ] && [ "${d%/}" != "$d" ]; do d="${d%/}"; done
+  while IFS="$TAB" read -r n f r; do
+    [ -n "$f" ] || continue
+    p="$(ext_real "$f")"
+    while [ "$p" != / ] && [ "${p%/}" != "$p" ]; do p="${p%/}"; done
+    [ "$p" != "$d" ] || { csv_value "$n"; return 0; }
+  done <<EOF2
+$(collections)
+EOF2
+  csv_value "$d"
+}
+# compile_runs_here: the rows of runs.csv for this collection, and the rows of eight columns
+# written before a row named its collection. By byte, and without control characters. The
+# collection goes to awk through the environment: -v reads a backslash in a folder as an escape.
+compile_runs_here() {
+  [ -f "$COMPILE_DIR/runs.csv" ] && [ ! -L "$COMPILE_DIR/runs.csv" ] || return 0
+  tail -n +2 "$COMPILE_DIR/runs.csv" 2>/dev/null | LC_ALL=C tr -d '\000-\011\013-\037\177' \
+    | RUNS_COLL="$(compile_coll "$WIKIS_DIR")" LC_ALL=C awk -F , 'NF <= 8 || $9 == ENVIRON["RUNS_COLL"]' || true
+}
+# COMPILE_SEP divides the fields compile_failed prints. Not a tab: read takes two tabs in a row
+# as one, so an empty field moved the next into its place. Nothing read from runs.csv holds it.
+COMPILE_SEP=$'\037'
+# compile_failed: "<wiki> <result> <day> <log>", divided by COMPILE_SEP, for each wiki of this
+# collection whose last run here, of any width, has 11 columns, ended failed or timeout, and is
+# from the last 7 days. A run that failed and was then compiled by hand leaves no row to say so,
+# so a week is as long as it is shown. What runs.csv holds is read as data: the wiki must be a
+# name a wiki can have and one here, the day a date, and the log a plain file in the logs
+# folder, or it is left empty.
+compile_failed() {
+  local w r d l cut
+  cut="$(days_ago 7)"
+  while IFS="$COMPILE_SEP" read -r w r d l; do
+    valid_name "$w" && is_wiki "$WIKIS_DIR/$w" || continue
+    case "$r" in failed | timeout) ;; *) continue ;; esac
+    case "$d" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;; *) continue ;; esac
+    [ ! "$d" \< "$cut" ] || continue
+    case "$l" in
+      '' | .* | *..* | *[!A-Za-z0-9._-]*) l="" ;;
+      *) [ -f "$COMPILE_DIR/$l" ] && [ ! -L "$COMPILE_DIR/$l" ] || l="" ;;
+    esac
+    printf '%s%s%s%s%s%s%s\n' "$w" "$COMPILE_SEP" "$r" "$COMPILE_SEP" "$d" "$COMPILE_SEP" "$l"
+  done <<EOF2
+$(compile_runs_here | LC_ALL=C awk -F , '{ if (!($2 in r)) o[++n] = $2; c[$2] = NF; r[$2] = $7; d[$2] = substr($1, 1, 10); l[$2] = substr($11, 1, 200) }
+  END { for (i = 1; i <= n; i++) if (c[o[i]] >= 11) printf "%s\037%s\037%s\037%s\n", substr(o[i], 1, 200), r[o[i]], d[o[i]], l[o[i]] }' || true)
+EOF2
+}
+
 # compile_run <wiki root>: with the lock already held, run the agent under a time
 # limit, free the lock, sync, and record the run. The lock is stale after 30 minutes,
 # so the limit stays under that.
@@ -3303,7 +3363,21 @@ compile_run() {
   n="$(printf '%s' "$before" | grep -c . || true)"
   oldest="$(note_age_hours "$(printf '%s\n' "$before" | head -n 1)")"
   mkdir -p "$COMPILE_DIR" || die "can't create $(tilde "$COMPILE_DIR")"
-  out="$COMPILE_DIR/$name-$(date -u +%Y%m%d-%H%M%S).log"
+  # With the process number: two wikis of one name, such as two collections' global, started
+  # in the same second wrote one log and shared one timeout marker (code review M7).
+  # The name can be guessed, so the log is made here, new: a file or a link already at the name,
+  # or at its timeout marker's, would be written through. Another name is taken instead.
+  f="$COMPILE_DIR/$name-$(date -u +%Y%m%d-%H%M%S)-$$"
+  out="$f.log"
+  rc=1
+  while :; do
+    if [ ! -e "$out" ] && [ ! -L "$out" ] && [ ! -e "$out.timeout" ] && [ ! -L "$out.timeout" ] \
+      && ( set -C; : > "$out" ) 2>/dev/null && [ -f "$out" ] && [ ! -L "$out" ]; then break; fi
+    rc=$((rc + 1))
+    [ "$rc" -le 20 ] || die "can't make a log for the run in $(tilde "$COMPILE_DIR"): every name is taken. Do: remove the old logs there"
+    out="$f-$rc.log"
+  done
+  rc=0
   limit="${LLM_WIKI_COMPILE_TIMEOUT:-1200}"
   start="$(date -u +%s)"
   compile_agent_run "$root" "$name" > "$out" 2>&1 &
@@ -3349,8 +3423,16 @@ EOF
   # another session's sync swept it in, with nothing to say where it came from.
   synced=1
   WIKIS_DIR="$WIKIS_DIR" "$REPO/wiki.sh" sync "$root" -m "$name: background compile, $((n - left)) of $n note(s), $result" >> "$out" 2>&1 || synced=0
-  [ -f "$COMPILE_DIR/runs.csv" ] || echo "date,wiki,notes,left,seconds,oldest_hours,result,agent" > "$COMPILE_DIR/runs.csv"
-  printf '%s,%s,%s,%s,%s,%s,%s,%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$name" "$n" "$left" "$secs" "$oldest" "$result" "$(compile_agent | awk '{ sub(/.*\//, "", $1); print $1 }')" >> "$COMPILE_DIR/runs.csv"
+  # The collection and the log go last, so a reader of the first eight columns is unaffected.
+  # The tenth is kept for lint_left, which nothing writes yet.
+  # The header is made once, with noclobber: two runs ending together on a new state folder
+  # each found no file, and the second's header wrote over the first's row. A runs.csv that is
+  # a link or not a file gets no row, and the run goes on.
+  f="$COMPILE_DIR/runs.csv"
+  [ -e "$f" ] || [ -L "$f" ] || ( set -C; echo "$COMPILE_RUNS_HEAD" > "$f" ) 2>/dev/null || true
+  if [ -f "$f" ] && [ ! -L "$f" ]; then
+    printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,,%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$name" "$n" "$left" "$secs" "$oldest" "$result" "$(compile_agent | awk '{ sub(/.*\//, "", $1); print $1 }')" "$(compile_coll "${root%/*}")" "$(csv_value "${out##*/}")" >> "$f" 2>/dev/null || true
+  fi
   echo "compiled: $name, $((n - left)) of $n note(s) in ${secs}s, $result. Output: $(tilde "$out")"
   [ -z "$last" ] || echo "Its last line: $last"
   # What was compiled is committed here either way. That it didn't leave this machine was
@@ -3431,8 +3513,13 @@ cmd_compile() {
       if [ -f "$COMPILE_DIR/runs.csv" ]; then
         echo
         if can_read "$COMPILE_DIR/runs.csv"; then
-          echo "Last runs (date, wiki, notes, left waiting, seconds, oldest note's age in hours, result, agent):"
-          tail -n +2 "$COMPILE_DIR/runs.csv" | tail -n 10
+          # This collection's, in the first eight columns: another collection's global is
+          # another wiki.
+          echo "Last runs in this collection (date, wiki, notes, left waiting, seconds, oldest note's age in hours, result, agent):"
+          # Read as data, as hooks_failed reads its log: a byte past ASCII is a ?, so no row
+          # carries a C1 control or a change of direction, and no row reads as a fix to follow.
+          compile_runs_here | tail -n 10 | LC_ALL=C cut -d , -f 1-8 | LC_ALL=C cut -c 1-400 \
+            | LC_ALL=C tr '\200-\377' '?' | LC_ALL=C sed -e 's/Run: /Run /g' -e 's/gent: /gent /g' -e 's/Do: /Do /g'
         else
           echo "Last runs: can't read $(tilde "$COMPILE_DIR/runs.csv") from this shell. If this is an agent's sandbox, run it outside the sandbox."
         fi
@@ -6664,6 +6751,20 @@ EOF2
   done <<EOF2
 $(ext_unready)
 EOF2
+  # A wiki whose last background compile here failed or ran out of time in the last 7 days,
+  # until a later run of it ends otherwise. Nobody watched that run, so this is the only place
+  # it shows. In the Bash for both tables: the helper doesn't read runs.csv.
+  if [ -f "$COMPILE_DIR/runs.csv" ] && can_read "$COMPILE_DIR/runs.csv"; then
+    while IFS="$COMPILE_SEP" read -r k d w f; do
+      [ -n "$k" ] || continue
+      case "$d" in timeout) d="ran out of time" ;; *) d="failed" ;; esac
+      d="$d on $w"
+      if [ -n "$f" ]; then todo_add "compile: the last background compile of $k $d. Run: tail -n 20 $(qpath "$COMPILE_DIR/$f")"
+      else todo_add "compile: the last background compile of $k $d. Run: $WIKI_CMD compile"; fi
+    done <<EOF2
+$(compile_failed)
+EOF2
+  fi
   # A hook that failed this week. The session went on, so this is the only place it shows.
   IFS="$TAB" read -r n k d <<EOF2 || true
 $(hooks_failed)
