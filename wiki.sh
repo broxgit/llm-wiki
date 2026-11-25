@@ -492,6 +492,43 @@ EOF
 }
 # shellcheck source=ui.sh
 . "$REPO/ui.sh"
+# A failure a hook swallows leaves a line in hooks.log: hook_note, from the file the hooks
+# source too. HOOKS_LOG is where it writes, and wiki status counts what is there.
+HOOKS_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/llm-wiki/hooks.log"
+# Where what fails inside a hook's command goes, for hook_errs: a file, or /dev/stderr where
+# the command reads its own standard error. Empty means nowhere. Only a hook's own command
+# sets it, never the environment.
+HOOK_ERRF=""
+hook_note() { return 0; }
+# shellcheck source=hooks/hook-note.sh
+[ ! -r "$REPO/hooks/hook-note.sh" ] || . "$REPO/hooks/hook-note.sh" || true
+# hook_errs <hook> <call> <exit code> [<file>]: notes a failure of the call: what it wrote to the
+# file, which is then emptied for the next call, or an exit code that isn't 0. An empty file
+# is not opened. It never fails.
+hook_errs() {
+  local e=""
+  if [ -n "${4:-}" ] && [ -s "$4" ]; then
+    e="$(cat "$4" 2>/dev/null || true)"
+    : > "$4" 2>/dev/null || true
+  fi
+  [ -n "$e" ] || [ "${3:-0}" != 0 ] || return 0
+  hook_note "$1" "${3:-0}" "$2" "$e"
+  return 0
+}
+
+# The LC_ALL wiki.sh was started with. Some functions set LC_ALL=C and export it, for the
+# commands they run. An extension or an agent that one of them starts gets the caller's locale
+# back: user_locale, first thing in the subshell that starts it.
+if [ "${LC_ALL+set}" = set ]; then USER_LC_ALL="set:$LC_ALL"; else USER_LC_ALL="unset"; fi
+# Unset, it is unset as often as it takes: in bash 3.2 an unset uncovers the local of the
+# function that called the one that set it, prompt_recall's under atlassian_notice's.
+user_locale() {
+  local i=0
+  case "$USER_LC_ALL" in
+    set:*) LC_ALL="${USER_LC_ALL#set:}"; export LC_ALL ;;
+    *) while [ "${LC_ALL+set}" = set ] && [ "$i" -lt 20 ]; do unset LC_ALL; i=$((i + 1)); done ;;
+  esac
+}
 # need_value "$@", in a flag's arm: without it, shift fails and set -e ends the script with no message.
 need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 
@@ -737,6 +774,9 @@ resolve() {
 
 # A wiki is named after a repository, so its name must be one a repository can have.
 valid_name() {
+  # By byte, as name_hint and the compiled helper go: in a UTF-8 locale bash's ranges
+  # took café, and the C locale refused it (code review L2).
+  local LC_ALL=C  # no command runs here, so the local is enough
   case "$1" in
     '' | .* | -* | *[!A-Za-z0-9._-]*) return 1 ;;
   esac
@@ -758,7 +798,7 @@ name_hint() {
 handbook_version() {
   # By byte: in a UTF-8 locale a byte that is no character stops the shell from cutting the
   # line down to its number, and [0-9] can take in other digits than these ten.
-  local l LC_ALL=C
+  local l LC_ALL=C  # no command runs here, so the local is enough
   HB="" HB_READ=no
   [ -f "$1" ] || return 0
   {
@@ -1517,14 +1557,31 @@ recall_home() {
 # enough, in an index line, a page's text or a note waiting to be compiled. Weak words need two,
 # on one line, of the index or of a waiting note, and aren't searched for in page text, which is
 # noisy and slow. With home, the session's own wikis as recall_home gives them, weak words
-# count in those wikis only. Never fails: any error means nothing.
+# count in those wikis only. Never fails: any error means nothing. A hook that runs it names
+# a file in HOOK_ERRF, where the errors go, for hook_errs.
 recall_text() {
   local words strong weak
-  words="$(recall_words "$1" 2>/dev/null || true)"
+  words="$(recall_words "$1" 2>>"${HOOK_ERRF:-/dev/null}" || true)"
   [ -n "$words" ] || return 0
   strong="$(printf '%s\n' "$words" | LC_ALL=C awk -F'\t' '$1 == "S" { printf "%s ", $2 }')"
   weak="$(printf '%s\n' "$words" | LC_ALL=C awk -F'\t' '$1 == "W" { printf "%s ", $2 }')"
-  recall_core "${strong% }" "${weak% }" 1 "${2:-4}" "${3:-}" 2>/dev/null || true
+  recall_core "${strong% }" "${weak% }" 1 "${2:-4}" "${3:-}" 2>>"${HOOK_ERRF:-/dev/null}" || true
+}
+
+# recall_ticket <folder>: what __recall prints for a folder: the ticket's key and where it was
+# read, a line that begins "note: " when the Jira extension is set up (a sentence for the
+# session, the ticket and how to see where it stands), then the pages. Nothing when none.
+recall_ticket() {
+  local tkey thits tline
+  tkey="$(ticket_find "$1")"
+  thits="$(recall_key "${tkey% *}")"
+  tline="$(ticket_stand_line "${tkey% *}" "${tkey#* }")"
+  if [ -n "$thits" ] || [ -n "$tline" ]; then
+    printf '%s\n' "$tkey"
+    [ -z "$tline" ] || printf 'note: %s\n' "$tline"
+    [ -z "$thits" ] || printf '%s\n' "$thits"
+  fi
+  return 0
 }
 
 # recall_core <strong words> <weak words> <notes 0|1> <max> [home]: the search itself, over every
@@ -1545,7 +1602,11 @@ recall_core() {
   local strong="$1" weak="$2" notes="$3" max="$4" home_wikis="${5:-}" d f w n tmp nwords=0
   local kind a b c e line pend
   local tab="$TAB"
+  # By byte, in the commands this runs too: a local reaches them only exported. Under
+  # LANG=en_US.UTF-8, macOS's sed stopped at a byte that isn't UTF-8, and a waiting note
+  # was handed over with nothing after its path (code review M2).
   local LC_ALL=C
+  export LC_ALL
   local wdirs=()
   [ -d "$WIKIS_DIR" ] || return 0
   for w in $weak; do nwords=$((nwords + 1)); done
@@ -2103,7 +2164,7 @@ inbox_minutes() {
 # collection's own, which is the shared wiki's. Neither a wiki nor an inbox that is a link
 # counts, nor a wiki whose name holds a control character.
 inbox_dirs() {
-  local d LC_ALL=C
+  local d LC_ALL=C  # no command runs here, so the local is enough
   for d in "$WIKIS_DIR"/*/; do
     d="${d%/}"
     [ ! -L "$d" ] || continue
@@ -2132,6 +2193,7 @@ inbox_plain() {
 # back as it can the time the note was written.
 inbox_ready() {
   local f="$1" m LC_ALL=C
+  export LC_ALL
   INBOX_WHY=""
   case "${f##*/}" in
     .*) INBOX_WHY="hidden"; return 1 ;;
@@ -3069,7 +3131,7 @@ compile_background() {
   compile_agent_ready || return 1
   compile_agent_runs || return 1
   ( LLM_WIKI_LOCK_KIND=background cmd_lock "$root" ) >/dev/null 2>&1 || return 1
-  LLM_WIKI_BACKGROUND=1 WIKIS_DIR="$WIKIS_DIR" nohup "$REPO/wiki.sh" compile "$root" --locked </dev/null >/dev/null 2>&1 &
+  ( user_locale; LLM_WIKI_BACKGROUND=1 WIKIS_DIR="$WIKIS_DIR" nohup "$REPO/wiki.sh" compile "$root" --locked </dev/null >/dev/null 2>&1 & )
 }
 
 # compile [<wiki>] [--background] | on | off
@@ -4805,17 +4867,33 @@ cmd_index() {
 import os, re, sys
 root, check = sys.argv[1], sys.argv[2] == "1"
 CATS = {"concepts": "Concepts", "howto": "How-to", "decisions": "Decisions", "entities": "Entities"}
+# Every file is read as UTF-8, whatever the locale. index.md is read and written back byte for
+# byte, a byte that isn't UTF-8 included, and what is printed goes out as UTF-8, with such a
+# byte as ?, the same in every locale (code review L11).
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+# A value in double quotes, as YAML writes one: \\" and \\\\ inside, and no other quote.
+QUOTED = re.compile(r'"((?:[^"\\]|\\.)*)"')
+
+def value(v):
+    """A frontmatter value. One written in double quotes loses them, and its \\" and \\\\ are a
+    quote and a backslash, in one pass. Any other value keeps its backslashes and loses the
+    quotes at its ends, as it always did. cmd_lint holds the same function: change them together."""
+    v = v.strip()
+    m = QUOTED.fullmatch(v)
+    if m:
+        return re.sub(r'\\(["\\])', r"\1", m.group(1))
+    return v.strip('"').strip("'")
 
 def front(path):
     fm = {}
-    with open(path, errors="replace") as f:
+    with open(path, encoding="utf-8", errors="replace") as f:
         text = f.read()
     m = re.match(r"---\n(.*?)\n---\n", text, re.S)
     if m:
         for line in m.group(1).splitlines():
             k, sep, v = line.partition(":")
             if sep and not line.startswith((" ", "\t")):
-                fm[k.strip()] = v.strip().strip('"').strip("'")
+                fm[k.strip()] = value(v)
     return fm
 
 pages = {}   # index path -> (title, summary, category)
@@ -4848,7 +4926,7 @@ if os.path.isdir(sroot) and not os.path.islink(sroot):
             pages[f"skills/{name}/SKILL.md"] = (fm.get("name", name), fm.get("description", ""), "Skills")
 
 ipath = os.path.join(root, "index.md")
-lines = open(ipath).read().splitlines() if os.path.exists(ipath) else ["# Index"]
+lines = open(ipath, encoding="utf-8", errors="surrogateescape").read().splitlines() if os.path.exists(ipath) else ["# Index"]
 entry = re.compile(r"^- \[(.*?)\]\((.*?)\)(?::\s*(.*))?$")
 out, seen = [], set()
 updated = removed = dups = 0
@@ -4909,7 +4987,7 @@ n = sum(1 for l in out if entry.match(l))
 if n > 300:
     print(f"  {n} lines: past 300, split the index by category, as rules/compile.md says")
 if changed and not check:
-    with open(ipath, "w") as f:
+    with open(ipath, "w", encoding="utf-8", errors="surrogateescape") as f:
         f.write("\n".join(out) + "\n")
 elif changed and check:
     sys.exit(1)
@@ -4950,16 +5028,28 @@ cmd_lint() {
 import os, re, sys
 wikis, shared, stale_cut, lagfile, badfile, openfile = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6]
 roots = sys.argv[7:]
+# Every file is read as UTF-8, whatever the locale, and what is printed goes out as UTF-8, a
+# byte that isn't UTF-8 as ?, the same in every locale (code review L11).
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+# cmd_index's reader of a value, so the two measure a summary the same: change them together.
+QUOTED = re.compile(r'"((?:[^"\\]|\\.)*)"')
+
+def value(v):
+    v = v.strip()
+    m = QUOTED.fullmatch(v)
+    if m:
+        return re.sub(r'\\(["\\])', r"\1", m.group(1))
+    return v.strip('"').strip("'")
 bad_open = {}
-for line in open(openfile, errors="replace").read().splitlines():
+for line in open(openfile, encoding="utf-8", errors="replace").read().splitlines():
     root, _, text = line.partition("\t")
     bad_open.setdefault(root, []).append(text)
 bad_reminders = {}
-for line in open(badfile, errors="replace").read().splitlines():
+for line in open(badfile, encoding="utf-8", errors="replace").read().splitlines():
     root, _, text = line.partition("\t")
     bad_reminders.setdefault(root, []).append(text)
 lag = {}
-for line in open(lagfile).read().splitlines():
+for line in open(lagfile, encoding="utf-8", errors="replace").read().splitlines():
     root, page, what = line.split("\t", 2)
     lag.setdefault(root, []).append((page, what.split()))
 link = re.compile(r"\]\(([^)\s#]+\.md)(?:#[^)]*)?\)")
@@ -4985,7 +5075,7 @@ def body_and_front(text):
         key = None
         k, sep, v = line.partition(":")
         if sep and not line.startswith((" ", "\t")):
-            fm[k.strip()] = v.strip().strip('"').strip("'")
+            fm[k.strip()] = value(v)
             if not v.strip():
                 key = k.strip()
     return text[m.end():], fm
@@ -5003,7 +5093,7 @@ for root in roots:
     for p in pages:
         rel = os.path.relpath(p, root)
         source = rel.startswith("wiki/sources/")
-        text = open(p, errors="replace").read()
+        text = open(p, encoding="utf-8", errors="replace").read()
         body, fm = body_and_front(text)
         if fm is None:
             add("no frontmatter", rel)
@@ -5054,7 +5144,12 @@ for root in roots:
     ipath = os.path.join(root, "index.md")
     listed = {}
     if os.path.exists(ipath):
-        for line in open(ipath).read().splitlines():
+        itext = open(ipath, encoding="utf-8", errors="surrogateescape").read()
+        # wiki index keeps such a byte as it is, so a person retypes the line.
+        for n, line in enumerate(itext.split("\n"), 1):
+            if re.search("[\udc80-\udcff]", line):
+                add("index.md line with a byte that isn't UTF-8 (retype it)", f"index.md line {n}")
+        for line in itext.splitlines():
             m = entry.match(line)
             if m:
                 listed[m.group(2)] = listed.get(m.group(2), 0) + 1
@@ -5092,9 +5187,9 @@ for root in roots:
     done = set()
     lp = os.path.join(root, "log.md")
     if os.path.exists(lp):
-        done |= {m for m in re.findall(r"^- source: raw/(\S+)", open(lp, errors="replace").read(), re.M)}
+        done |= {m for m in re.findall(r"^- source: raw/(\S+)", open(lp, encoding="utf-8", errors="replace").read(), re.M)}
     for p in pages:
-        done |= set(re.findall(r"raw/([^\],\"\s]+)", (body_and_front(open(p, errors="replace").read())[1] or {}).get("sources", "")))
+        done |= set(re.findall(r"raw/([^\],\"\s]+)", (body_and_front(open(p, encoding="utf-8", errors="replace").read())[1] or {}).get("sources", "")))
     done = {os.path.splitext(d)[0] for d in done}
     sdir = os.path.join(root, "wiki", "sources")
     # Links are passed over, as pending_files and compiled_stems pass them (code review M24).
@@ -5983,6 +6078,25 @@ EOF
 todo_add() { STATUS_TODO="$STATUS_TODO- $1
 "; }
 
+# hooks_failed: "<count><TAB><hook><TAB><message>" for the lines of hooks.log from the last 7
+# days, with the hook and message of the latest, or nothing when there are none. The message
+# came from an error, which can quote anything: it is read as data, by byte, and loses
+# control characters, quotes and any "Run: " that would read as the line's own fix.
+hooks_failed() {
+  local n h m
+  [ -f "$HOOKS_LOG" ] && [ ! -L "$HOOKS_LOG" ] || return 0
+  IFS="$TAB" read -r n h m <<EOF2 || true
+$(LC_ALL=C awk -F '\t' -v cut="$(days_ago 7)" 'NF >= 4 && substr($1, 1, 10) >= cut { n++; h = $2; m = $4 } END { if (n) printf "%d\t%s\t%s\n", n, h, m }' "$HOOKS_LOG" 2>/dev/null || true)
+EOF2
+  [ -n "$n" ] || return 0
+  case "$h" in '' | *[!a-z0-9-]*) h="a hook" ;; esac
+  m="$(printf '%s' "$m" | LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C tr '"`' "''" | LC_ALL=C tr '\200-\377' '?' | LC_ALL=C cut -c 1-200)"
+  m="${m//Run: /Run }"
+  m="${m//gent: /gent }"
+  m="${m//Do: /Do }"
+  printf '%s\t%s\t%s\n' "$n" "$h" "${m%.}"
+}
+
 # status_todo_text <line>: one line of the to-do list, with what the reader can type in typed's
 # colour: what follows "Run: ", or the quoted request after "Ask an agent: ". Not a word changes.
 status_todo_text() {
@@ -6282,6 +6396,13 @@ EOF2
   done <<EOF2
 $(ext_unready)
 EOF2
+  # A hook that failed this week. The session went on, so this is the only place it shows.
+  IFS="$TAB" read -r n k d <<EOF2 || true
+$(hooks_failed)
+EOF2
+  if [ -n "$n" ]; then
+    todo_add "hooks: $n failure(s) in the last 7 days, the last in $k: $d. Run: tail -n 5 $(tilde "$HOOKS_LOG")"
+  fi
   n="$(news_unseen)"
   [ "$n" -eq 0 ] || todo_add "llm-wiki: $n new thing(s) to read about. Run: $WIKI_CMD news"
   n="$(TIP_REPO="$PWD" tips_due | wc -l | tr -d ' ')"
@@ -6336,6 +6457,7 @@ cmd_find() {
 find_search() {
   local word="$1" d hits pages f line n notes cands nl=$'\n'
   local LC_ALL=C
+  export LC_ALL
   for d in "$WIKIS_DIR"/*/; do
     d="${d%/}"
     # Only a wiki is searched, by the test every other command uses.
@@ -6868,7 +6990,7 @@ EOF2
 # a Claude Code plugin update moves $REPO, and Antigravity must not be left pointing at
 # a folder that is gone. They bypass wiki.sh, which takes 40 ms to start.
 # The matcher "*" is the docs' own spelling for every tool.
-agy_hook_files() { printf '%s\n' agy-hook.sh reminders.py; }
+agy_hook_files() { printf '%s\n' agy-hook.sh reminders.py hook-note.sh; }
 agy_hooks() {
   local h
   h="sh $(tilde "$AGY_DIR")/hooks/agy-hook.sh"
@@ -7006,7 +7128,7 @@ print(p[7:] if p.startswith("file://") else p)' 2>/dev/null || true)"
   out="$( (cmd_start "$dir") 2>&1 || true)"
   agy_reminders_write "$input" "$out"
   printf 'llm-wiki: this plugin ran `%s start` for this conversation. Its output follows. Read the AGENTS.md of the wiki it names and follow it. Do not run start again.\n\n%s\n' "$(agy_cmd)" "$out" \
-    | python3 -c 'import json, sys; print(json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": sys.stdin.read()}}]}))'
+    | python3 -c 'import json, sys; print(json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": sys.stdin.buffer.read().decode("utf-8", "replace")}}]}))'
 }
 
 # ---- What a message finds --------------------------------------------------------
@@ -7192,6 +7314,7 @@ atl_evidence() {
 atlassian_notice() {
   local tf="$1" state="$2" dir="$3" cfg jsites csites scan keys="" cands="" fresh="" pages="" link=0 line st c out="" k u n jkeys
   local LC_ALL=C
+  export LC_ALL
   command -v python3 >/dev/null 2>&1 || return 0
   cfg="${XDG_CONFIG_HOME:-$HOME/.config}/llm-wiki"
   jsites="${JIRA_URL:-} ${ATLASSIAN_SITE:-} $(atl_conf_get "$cfg/jira" url) $(atl_conf_get "$cfg/atlassian" site)"
@@ -7298,6 +7421,7 @@ EOF2
 prompt_recall() {
   local sid="$1" dir="$2" tf="$3" sdir state last sum hits fresh line out given n=0 wiki word atl
   local LC_ALL=C
+  export LC_ALL
   local intro="A search of your wikis for the words in this message found these. They were written by earlier sessions and can be out of date: check a figure against the code before you quote it."
   [ -z "${LLM_WIKI_BACKGROUND:-}" ] || return 0
   [ -f "$tf" ] || return 0
@@ -7317,10 +7441,13 @@ prompt_recall() {
     # Sessions end without telling anyone, so old files are swept as a new one starts.
     find "$sdir" -type f -mtime +7 -exec rm -f {} + 2>/dev/null || true
   fi
-  printf '%s\n' "$sum" > "$last" 2>/dev/null || true
+  # In braces: the shell's own message for a file it can't open goes to the stderr in force
+  # before the command's 2>, and the hook would note one for every message in a folder it
+  # can't write.
+  { printf '%s\n' "$sum" > "$last"; } 2>/dev/null || true
   # A ticket or a page of Atlassian's in the message comes first, and may be all there is.
   atl="$(atlassian_notice "$tf" "$state" "$dir" 2>/dev/null || true)"
-  hits="$(recall_text "$tf" 12 "$(recall_home "$dir" 2>/dev/null || true)" 2>/dev/null || true)"
+  hits="$(recall_text "$tf" 12 "$(recall_home "$dir" 2>/dev/null || true)" 2>>"${HOOK_ERRF:-/dev/null}" || true)"
   [ -n "$hits" ] || { printf '%s' "$atl"; return 0; }
   fresh="$hits"
   if [ -s "$state" ]; then fresh="$(printf '%s\n' "$hits" | grep -vxFf "$state" || true)"; fi
@@ -7338,7 +7465,7 @@ prompt_recall() {
 $fresh
 EOF2
   [ "$n" -gt 0 ] || { printf '%s' "$atl"; return 0; }
-  printf '%s' "$given" >> "$state" 2>/dev/null || true
+  { printf '%s' "$given" >> "$state"; } 2>/dev/null || true
   # Logged as a search that found something is, so that use of the wiki stays measurable.
   wiki="$(printf '%s\n' "$given" | sed -n '1s/^- \([^ ]*\) wiki.*/\1/p')"
   word="$(recall_words "$tf" 2>/dev/null | sed -n "1s/^[SW]$TAB//p")"
@@ -7351,26 +7478,39 @@ EOF2
 # wants context: additionalContext for Claude Code and Codex, a system message step for
 # Antigravity, which always gets a reply since its exit codes aren't documented. Claude
 # Code and Codex get nothing at all when there is nothing to hand over. With no python3
-# it does nothing. It never fails.
+# it does nothing. It never fails. What fails inside it, which it goes on past, leaves a
+# line in hooks.log: the first line it wrote to standard error, and its exit code.
 cmd_prompt_hook() {
-  local style="$1" tf fields sid dir="" ctx notices
+  local style="$1" td="" tf="" fields sid dir="" ctx notices hook code=0
   if ! command -v python3 >/dev/null 2>&1; then
     [ "$style" != agy ] || echo '{}'
     return 0
   fi
   ctx=""
+  case "$style" in codex | agy) hook="$style-prompt" ;; *) hook=user-prompt ;; esac
   # The command a session is told to run, as each agent's own session start names it.
   case "$style" in
     codex) WIKI_CMD="$(tilde "$(codex_cmd)")" ;;
     agy) WIKI_CMD="$(agy_cmd)" ;;
     *) if from_plugin; then WIKI_CMD="$(tilde "$(plugin_cmd)")"; fi ;;
   esac
-  tf="$(mktemp 2>/dev/null)" || tf=""
+  # One folder for the message and for what fails, removed however this ends, a hook stopped
+  # at its time limit included: one mktemp and one rm, as when it held the message alone.
+  td="$(mktemp -d 2>/dev/null)" || td=""
+  if [ -n "$td" ]; then
+    PROMPT_TD="$td"
+    trap '[ -z "${PROMPT_TD:-}" ] || rm -rf -- "${PROMPT_TD:?}"' EXIT
+    tf="$td/message"
+    HOOK_ERRF="$td/errors"
+  fi
   if [ -n "$tf" ]; then
     fields="$(PROMPT_FILE="$tf" STYLE="$style" python3 -c '
 import json, os, sys
+# As bytes, which JSON reads as UTF-8, and the folder printed as UTF-8: the locale may be one
+# that is not.
+sys.stdout.reconfigure(encoding="utf-8")
 try:
-    d = json.load(sys.stdin)
+    d = json.load(sys.stdin.buffer)
 except Exception:
     d = {}
 if not isinstance(d, dict):
@@ -7403,33 +7543,43 @@ if not head or head.startswith(UNTYPED):
     sys.exit(0)
 with open(os.environ["PROMPT_FILE"], "wb") as f:
     f.write(text[:4000].encode("utf-8", "replace"))
-print(sid + "\t" + (cwd if isinstance(cwd, str) else ""))' 2>/dev/null || true)"
+print(sid + "\t" + (cwd if isinstance(cwd, str) else ""))' 2>>"${HOOK_ERRF:-/dev/null}")" || code=$?
+    hook_errs "$hook" "the message's JSON" "$code" "$HOOK_ERRF"
     if [ -n "$fields" ]; then
       IFS="$TAB" read -r sid dir <<EOF2
 $fields
 EOF2
-      ctx="$( (prompt_recall "$sid" "$dir" "$tf") 2>/dev/null || true)"
+      code=0
+      ctx="$( (prompt_recall "$sid" "$dir" "$tf") 2>>"${HOOK_ERRF:-/dev/null}")" || code=$?
+      hook_errs "$hook" "the search for the message's words" "$code" "$HOOK_ERRF"
     fi
-    rm -f "$tf"
   fi
   # Lines extensions left for this repository. Looked for only when the folder has any
   # notices at all, so a message costs nothing more when there are none.
   if [ -n "$dir" ] && [ -d "$NOTICE_DIR" ]; then
-    notices="$( (notice_take "$dir") 2>/dev/null || true)"
+    code=0
+    notices="$( (notice_take "$dir") 2>>"${HOOK_ERRF:-/dev/null}")" || code=$?
+    hook_errs "$hook" "the notices" "$code" "$HOOK_ERRF"
     if [ -n "$notices" ]; then ctx="$NOTICE_LEAD"$'\n'"$notices${ctx:+$'\n\n'$ctx}"; fi
   fi
   if [ -z "$ctx" ]; then
     [ "$style" != agy ] || echo '{}'
-    return 0
-  fi
-  printf '%s' "$ctx" | STYLE="$style" python3 -c '
+  else
+    # Read as bytes: a byte in a page that isn't UTF-8 becomes U+FFFD, in any locale.
+    code=0
+    printf '%s' "$ctx" | STYLE="$style" python3 -c '
 import json, os, sys
-t = sys.stdin.read()
+t = sys.stdin.buffer.read().decode("utf-8", "replace")
 if os.environ["STYLE"] == "agy":
     r = {"injectSteps": [{"systemMessage": {"systemMessage": t}}]}
 else:
     r = {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": t}}
-print(json.dumps(r))' 2>/dev/null || { [ "$style" != agy ] || echo '{}'; }
+print(json.dumps(r))' 2>>"${HOOK_ERRF:-/dev/null}" || { code=$?; [ "$style" != agy ] || echo '{}'; }
+    hook_errs "$hook" "the reply's JSON" "$code" "$HOOK_ERRF"
+  fi
+  [ -z "$td" ] || rm -rf -- "${td:?}"
+  PROMPT_TD=""
+  return 0
 }
 
 # ---- Codex -------------------------------------------------------------------
@@ -7621,7 +7771,7 @@ $out"
 
 $capture"
   fi
-  printf '%s' "$msg" | EVENT="$event" python3 -c 'import json, os, sys; print(json.dumps({"hookSpecificOutput": {"hookEventName": os.environ["EVENT"], "additionalContext": sys.stdin.read()}}))'
+  printf '%s' "$msg" | EVENT="$event" python3 -c 'import json, os, sys; print(json.dumps({"hookSpecificOutput": {"hookEventName": os.environ["EVENT"], "additionalContext": sys.stdin.buffer.read().decode("utf-8", "replace")}}))'
 }
 
 # ---- Cursor ------------------------------------------------------------------
@@ -7751,7 +7901,7 @@ print(p[0] if p else "")' 2>/dev/null || true)"
   { ! global_files_ok || [ "$(cursor_state)" = none ] || cursor_links; } >/dev/null 2>&1 || true
   out="$( (cmd_start "$dir") 2>&1 || true)"
   printf 'llm-wiki: this hook ran `%s start` for this session. Its output follows. Read the AGENTS.md of the wiki it names and follow it. Do not run start again.\n\n%s\n' "$WIKI_CMD" "$out" \
-    | python3 -c 'import json, sys; print(json.dumps({"additional_context": sys.stdin.read()}))'
+    | python3 -c 'import json, sys; print(json.dumps({"additional_context": sys.stdin.buffer.read().decode("utf-8", "replace")}))'
 }
 
 cmd_claude() {
@@ -8322,7 +8472,7 @@ obsidian_state() {
 
 # obsidian_url <folder>: the link that opens a vault Obsidian already knows.
 obsidian_url() {
-  local LC_ALL=C s="$1" i c out=""
+  local LC_ALL=C s="$1" i c out=""  # no command runs here, so the local is enough
   for ((i = 0; i < ${#s}; i++)); do
     c="${s:i:1}"
     case "$c" in
@@ -9795,6 +9945,7 @@ cmd_standup() {
   # Byte order and byte matching, so glob order and --only and --exclude don't change
   # with the locale, and the compiled helper can do the same.
   local LC_ALL=C
+  export LC_ALL
   local today ds start_date end_date start_local end_local s_utc e_utc end_label
   today="$(journal_today)"
   ds="$(journal_get day_starts)"
@@ -10444,6 +10595,7 @@ open_add() {
   # Every check below goes by byte: in a UTF-8 locale, bash 3.2's patterns don't match a
   # string that holds a byte that isn't UTF-8, so a | or a space next to one got through.
   local LC_ALL=C
+  export LC_ALL
   local wiki="" heading="" who="" due="" from="" date="" root f note m n line last has name detail kept=""
   local LEDGER_STATUS="" LEDGER_KIND="" LEDGER_ADD="" LEDGER_ENTRY=""
   while [ $# -gt 0 ]; do
@@ -10514,6 +10666,7 @@ OPENEOF
 # open done <wiki> <text> --from raw/NOTE [--date DATE]
 open_done() {
   local LC_ALL=C
+  export LC_ALL
   local wiki="" text="" from="" date="" root f note m n line last has name done_m exact
   local LEDGER_STATUS="" LEDGER_KIND="" LEDGER_ADD="" LEDGER_ENTRY=""
   while [ $# -gt 0 ]; do
@@ -10568,6 +10721,7 @@ OPENEOF
 # patterns seen <wiki> <heading> --kind KIND --from raw/NOTE [--rule TEXT] [--repo REPO] [--times N] [--date DATE]
 patterns_seen() {
   local LC_ALL=C
+  export LC_ALL
   local wiki="" heading="" kind="" rule="" repo="-" from="" date="" times="" root f note m n line last has ekind name x="" tally out
   local LEDGER_STATUS="" LEDGER_KIND="" LEDGER_ADD="" LEDGER_ENTRY=""
   while [ $# -gt 0 ]; do
@@ -11245,6 +11399,7 @@ ext_run() {
       rm -f "${dir:?}/${key:?}.taken"
     fi
     (
+      user_locale
       LLM_WIKI="$REPO/wiki.sh" LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" LLM_WIKI_EXTENSION="$EXT_API" \
         LLM_WIKI_COLLECTION="$EXT_COLL" LLM_WIKI_COLLECTIONS="$EXT_COLLS" \
         LLM_WIKI_IN_EVENT=1 LLM_WIKI_CHANGED="$dir/$key.changed" exec "$f" --wiki-event "$ev" ${wiki:+"$wiki"}
@@ -11290,9 +11445,9 @@ ext_launch() {
     # folder the collections file lists under more than one: the file then says which folder it is.
     ext_collections
     if coll_name_ok "$EXT_COLL"; then
-      LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" nohup "$REPO/wiki.sh" --collection "$EXT_COLL" __ext-run "$@" </dev/null >/dev/null 2>&1 &
+      ( user_locale; LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" nohup "$REPO/wiki.sh" --collection "$EXT_COLL" __ext-run "$@" </dev/null >/dev/null 2>&1 & )
     else
-      LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" nohup "$REPO/wiki.sh" __ext-run "$@" </dev/null >/dev/null 2>&1 &
+      ( user_locale; LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" nohup "$REPO/wiki.sh" __ext-run "$@" </dev/null >/dev/null 2>&1 & )
     fi
   fi
 }
@@ -11402,6 +11557,7 @@ ext_ready() {
     out="$dir/ready.out"
     ext_collections
     (
+      user_locale
       LLM_WIKI="$REPO/wiki.sh" LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" LLM_WIKI_EXTENSION="$EXT_API" \
         LLM_WIKI_COLLECTION="$EXT_COLL" LLM_WIKI_COLLECTIONS="$EXT_COLLS" exec "$f" --wiki-ready
     ) </dev/null > "$out" 2>/dev/null &
@@ -11459,8 +11615,9 @@ ext_setup() {
   fi
   ui_detail "These are questions for a terminal. Or ask your agent to walk you through it: it runs $(typed "$WIKI_CMD setup --guide $n")."
   ext_collections
-  LLM_WIKI="$REPO/wiki.sh" LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" LLM_WIKI_EXTENSION="$EXT_API" \
-    LLM_WIKI_COLLECTION="$EXT_COLL" LLM_WIKI_COLLECTIONS="$EXT_COLLS" "$f" --wiki-setup || true
+  ( user_locale
+    LLM_WIKI="$REPO/wiki.sh" LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" LLM_WIKI_EXTENSION="$EXT_API" \
+      LLM_WIKI_COLLECTION="$EXT_COLL" LLM_WIKI_COLLECTIONS="$EXT_COLLS" "$f" --wiki-setup ) || true
   if msg="$(ext_ready "$n")"; then
     ui_item ok "$n is set up."
   else
@@ -11474,8 +11631,9 @@ ext_call() {
   shift
   f="$(ext_file "$n")"
   ext_collections
-  LLM_WIKI="$REPO/wiki.sh" LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" LLM_WIKI_EXTENSION="$EXT_API" \
-    LLM_WIKI_COLLECTION="$EXT_COLL" LLM_WIKI_COLLECTIONS="$EXT_COLLS" "$f" "$@" </dev/null
+  ( user_locale
+    LLM_WIKI="$REPO/wiki.sh" LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" LLM_WIKI_EXTENSION="$EXT_API" \
+      LLM_WIKI_COLLECTION="$EXT_COLL" LLM_WIKI_COLLECTIONS="$EXT_COLLS" "$f" "$@" </dev/null )
 }
 
 # ext_can_settings <name>: succeed when the extension is on, can run, and answers --wiki-settings.
@@ -11526,6 +11684,7 @@ run_extension() {
   need="$(ext_needs "$f")"
   [ -z "$need" ] || die "$WIKI_CMD ${f##*/wiki-} needs $need, which isn't on this machine. Do: install $need"
   ext_collections
+  user_locale
   LLM_WIKI="$REPO/wiki.sh" LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" LLM_WIKI_EXTENSION="$EXT_API" \
     LLM_WIKI_COLLECTION="$EXT_COLL" LLM_WIKI_COLLECTIONS="$EXT_COLLS" exec "$f" "$@"
 }
@@ -11583,7 +11742,7 @@ notice_top() {
 # notice_ok <what> <text> <max bytes>: succeeds when the text is one line of at most that many
 # bytes with no control character. Counted in bytes, whatever the locale.
 notice_ok() {
-  local LC_ALL=C
+  local LC_ALL=C  # no command runs here, so the local is enough
   [ -n "$2" ] || return 1
   [ "${#2}" -le "$3" ] || return 1
   case "$2" in *[[:cntrl:]]*) return 1 ;; esac
@@ -11687,6 +11846,7 @@ offer_watches() {
   local pid t=0 code=0
   ext_collections
   (
+    user_locale
     LLM_WIKI="$REPO/wiki.sh" LLM_WIKI_CMD="$WIKI_CMD" WIKIS_DIR="$WIKIS_DIR" LLM_WIKI_EXTENSION="$EXT_API" \
       LLM_WIKI_COLLECTION="$EXT_COLL" LLM_WIKI_COLLECTIONS="$EXT_COLLS" exec "$1" --wiki-watches "$2"
   ) </dev/null >/dev/null 2>&1 &
@@ -11861,7 +12021,7 @@ sched_cmd() {
   if from_plugin; then plugin_cmd; else printf '%s/wiki.sh' "$REPO"; fi
 }
 # sched_plain <text>: succeeds when the text has no control character, a newline included.
-sched_plain() { local LC_ALL=C; case "$1" in *[[:cntrl:]]*) return 1 ;; esac; return 0; }
+sched_plain() { local LC_ALL=C; case "$1" in *[[:cntrl:]]*) return 1 ;; esac; return 0; } # no command runs here, so the local is enough
 # sched_env: what the job takes from the shell that installs it, as NAME=value lines.
 sched_env() {
   printf 'PATH=%s\n' "$PATH"
@@ -15289,7 +15449,7 @@ UNEOF
 # un_plain_name <name>: a file's name with no control character in it, so that a list of
 # paths, one a line, is one path a line.
 un_plain_name() {
-  local LC_ALL=C
+  local LC_ALL=C  # no command runs here, so the local is enough
   case "$1" in *[[:cntrl:]]*) return 1 ;; esac
   return 0
 }
@@ -15979,8 +16139,13 @@ case "$cmd" in
   # With --text <file> it searches for the words of a message instead, for the hooks that
   # run when the user sends one: at most --max lines (4), best first, and nothing at all
   # when nothing fits. With --in <folder> after them it searches as a session in that
-  # folder would: ordinary words count in its own wikis only. It never fails.
+  # folder would: ordinary words count in its own wikis only. It never fails. What fails
+  # inside it, which it goes on past, leaves a line in hooks.log: the session hook runs the
+  # search for a folder, and nothing reads what this writes to standard error.
   __recall)
+    # What fails inside it goes to its own standard error, which is read here, around the
+    # search: no file to make and remove. The output goes out on fd 3, as it comes.
+    HOOK_ERRF=/dev/stderr
     if [ "${1:-}" = --text ]; then
       rfile="${2:-}" rmax=4 rhome=""
       [ $# -lt 2 ] || shift 2
@@ -15992,19 +16157,13 @@ case "$cmd" in
         shift 2
       done
       case "$rmax" in '' | *[!0-9]*) rmax=4 ;; esac
-      recall_text "$rfile" "$rmax" "$rhome" 2>/dev/null || true
+      { rerr="$(recall_text "$rfile" "$rmax" "$rhome" 2>&1 >&3 3>&-)" || true; } 3>&1
+      [ -z "$rerr" ] || hook_note recall 0 "__recall --text" "$rerr"
       exit 0
     fi
-    tkey="$(ticket_find "${1:-$PWD}")"
-    thits="$(recall_key "${tkey% *}")"
-    # A line that begins "note: " is a sentence for the session, the ticket and how to see
-    # where it stands, and comes when the Jira extension is set up. The pages follow.
-    tline="$(ticket_stand_line "${tkey% *}" "${tkey#* }")"
-    if [ -n "$thits" ] || [ -n "$tline" ]; then
-      printf '%s\n' "$tkey"
-      [ -z "$tline" ] || printf 'note: %s\n' "$tline"
-      [ -z "$thits" ] || printf '%s\n' "$thits"
-    fi
+    rcode=0
+    { rerr="$(recall_ticket "${1:-$PWD}" 2>&1 >&3 3>&-)" || rcode=$?; } 3>&1
+    [ -z "$rerr" ] && [ "$rcode" = 0 ] || hook_note session-start "$rcode" "__recall" "$rerr"
     exit 0
     ;;
   __place)

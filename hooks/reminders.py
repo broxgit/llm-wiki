@@ -16,7 +16,8 @@ so they come back when the session no longer remembers them.
   tool    the pattern is a tool's name
 In every pattern, * matches anything.
 
-A hook must never break a session, so anything unexpected ends quietly with no reply.
+A hook must never break a session, so anything unexpected ends quietly with no reply, and
+with a line in hooks.log, which wiki status counts.
 
 With --antigravity <tool|invoke> it is the adapter for Google's Antigravity, which has
 no context reply on a tool call. The conversation's rows are in agy-<conversation id>.tsv,
@@ -43,12 +44,13 @@ doing them from memory mostly doesn't:
   a handoff (Claude Code)  the Agent or Task tool, or a start_session tool: one row in
                            delegation-log.csv with the result "started". The outcome is
                            added by hand, once the work is checked.
-Neither can break the session: every failure is ignored.
+Neither can break the session: a failure is noted in hooks.log, and the call goes on.
 """
 
 import json
 import os
 import re
+import stat
 import sys
 import tempfile
 import time
@@ -79,6 +81,54 @@ def git_safe():
 
 
 git_safe()
+
+HOOK_LOG_KEEP = 200
+
+
+def hook_note(hook, error):
+    """A failure this hook caught, as one line in hooks.log in llm-wiki's state folder, the
+    line hooks/hook-note.sh writes: UTC time, the hook, an exit code (always 0 here, since
+    the hook goes on), and "reminders.py line N: <the exception's name>". Only the name: what
+    follows it can quote the input. Written only when hooks.log is a plain file or isn't
+    there, never through a link, never into a pipe. Keeps the last 200 lines, trimmed through
+    a file made beside it, which goes whatever happens. It never fails."""
+    tmp = None
+    try:
+        # The last line of this file the error passed through.
+        tb, line = error.__traceback__, 0
+        while tb is not None:
+            if tb.tb_frame.f_code.co_filename == __file__:
+                line = tb.tb_lineno
+            tb = tb.tb_next
+        msg = "reminders.py line %d: %s" % (line, type(error).__name__)
+        msg = "".join(c if " " <= c <= "~" else "?" for c in msg)[:200]
+        # Where the rest of llm-wiki keeps its state: XDG_STATE_HOME as given, else the home's.
+        state = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+        folder = os.path.join(state, "llm-wiki")
+        path = os.path.join(folder, "hooks.log")
+        os.makedirs(folder, exist_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | os.O_NONBLOCK, 0o644)
+        with os.fdopen(fd, "a", encoding="ascii") as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                return
+            f.write("%s\t%s\t0\t%s\n" % (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), hook, msg))
+        with open(path, encoding="ascii", errors="replace") as f:
+            kept = f.read().splitlines(True)
+        if len(kept) > HOOK_LOG_KEEP:
+            fd, tmp = tempfile.mkstemp(prefix="hooks.log.", dir=folder)
+            with os.fdopen(fd, "w", encoding="ascii", errors="replace") as f:
+                f.write("".join(kept[-HOOK_LOG_KEEP:]))
+            os.replace(tmp, path)
+            tmp = None
+    except Exception:
+        pass
+    finally:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
 
 EDIT_TOOLS = ("Edit", "Write", "NotebookEdit", "MultiEdit")
 AGY_TOOLS = {"run_command": "Bash", "write_to_file": "Edit", "replace_file_content": "Edit",
@@ -456,8 +506,8 @@ def main():
     if is_handoff(tool) and not stopped:
         try:
             log_handoff(call)
-        except Exception:
-            pass
+        except Exception as e:
+            hook_note("pre-tool-use", e)
     if not hits:
         return
     if stopped:
@@ -544,6 +594,7 @@ def run_antigravity(event):
         reply, conv, tool, outcome = antigravity(event, rdir)
     except Exception as e:
         reply, conv, tool, outcome = allow, "", "", "error: %s" % type(e).__name__
+        hook_note("agy-" + event, e)
     print(json.dumps(reply))
     log(os.path.dirname(rdir.rstrip("/")), event, conv, tool, outcome)
 
@@ -553,5 +604,7 @@ try:
         run_antigravity("invoke" if sys.argv[3] == "invoke" else "tool")
     else:
         main()
-except Exception:
-    pass
+except Exception as e:
+    # Noted only when it runs as the hook: a test that imports it has no tool call on stdin.
+    if __name__ == "__main__":
+        hook_note("pre-tool-use", e)

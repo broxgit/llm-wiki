@@ -96,6 +96,8 @@ read -r -d '' PARTS <<'TABLE' || true
 2 | Trusted certificates |
 3 | Tour |
 4 | The released helper | Session hook
+4 | One locale for the work |
+4 | A hook that fails leaves a line |
 TABLE
 PART=""
 # The sections asked for by name, each ended by a |, which no name holds: it divides the table.
@@ -2181,6 +2183,10 @@ git -C "$T/clone2" add -A && git -C "$T/clone2" commit -qm "global: moved" && gi
 echo "after" > "$WIKIS_DIR/demo/raw/2026-01-05-000004-after.md"
 expect "sync pulls when the remote refuses the push, then pushes" "synced: pulled and pushed" "$W" sync demo -m "demo: after"
 check "and both sides' commits are on the remote" bash -c "git -C '$T/remote.git' log -5 --format=%s | grep -qx 'global: moved' && git -C '$T/remote.git' log -5 --format=%s | grep -qx 'demo: after'"
+# The tool calls above that it couldn't read each left a line in hooks.log. It goes here, so
+# that no later section's status has a hooks line.
+check "a tool call the hook can't read is noted in hooks.log, by its exception" grep -q "$(printf '\tpre-tool-use\t0\treminders.py line [0-9]*: JSONDecodeError$')" "$HOME/.local/state/llm-wiki/hooks.log"
+rm -f "$HOME/.local/state/llm-wiki/hooks.log"
 fi
 
 if section "Index and lint"; then
@@ -2955,6 +2961,7 @@ ALLOW='{"decision": "allow"}'
 is() { local name="$1" want="$2" got="$3"; if [ "$got" = "$want" ]; then ok "$name"; else bad "$name" "wanted: $want
 got: $got"; fi; }
 check "setup installs the tool-call hooks beside the plugin" test -x "$AP/hooks/agy-hook.sh" -a -f "$AP/hooks/reminders.py"
+check "with hook-note.sh, which writes hooks.log for them" cmp -s "$REPO/hooks/hook-note.sh" "$AP/hooks/hook-note.sh"
 check "hooks.json has PreToolUse for every tool (the docs' matcher *), and PreInvocation, which also runs the search for a message" python3 -c "
 import json, sys
 h = json.load(open(sys.argv[1]))['llm-wiki']
@@ -3048,6 +3055,10 @@ for want in deny queued delivered no-match no-conversation no-rows "error: "; do
   check "the log has a $want line" grep -q "	$want" "$LOG"
 done
 check "each line of it has a time, the event, the conversation, the tool and what came of it" awk -F'\t' 'NF != 5 { exit 1 }' "$LOG"
+# And each it couldn't read, in hooks.log too. That goes, so that no later section's status has
+# a hooks line.
+check "a call the Antigravity hooks can't read is noted in hooks.log, by its exception" grep -q "$(printf '\tagy-tool\t0\treminders.py line [0-9]*: JSONDecodeError$')" "$HOME/.local/state/llm-wiki/hooks.log"
+rm -f "$HOME/.local/state/llm-wiki/hooks.log"
 rm -rf "$HOME/.gemini"
 fi
 
@@ -16859,6 +16870,355 @@ if command -v go >/dev/null 2>&1 && [ -n "$HPLAT" ]; then
   check "and leaves a whole one alone" test ! -e "$HDIR/$HSRC/.tried"
 else
   skipped "fetching and verifying a release (go isn't installed)"
+fi
+fi
+
+if section "One locale for the work"; then
+# Code review M2, M10, L2 and L11. Each case runs in a home of its own, in a UTF-8 locale set as a
+# terminal sets it (LANG, with LC_ALL unset) and in the C locale. L8 is a UTF-8 locale this
+# machine has; without one, the UTF-8 halves are skipped.
+L8="$(locale -a 2>/dev/null | grep -i -m 1 -e '^en_US.utf-\?8$' -e '^C.utf-\?8$' || true)"
+LO="$T/locale"
+mkdir -p "$LO/home"
+cp "$HOME/.gitconfig" "$LO/home/.gitconfig"
+# lw <locale setting> <command...>: a command in that home, with no locale but the one given.
+lw() { local l="$1"; shift; env -u LC_ALL -u LC_CTYPE -u LANG -u WIKIS_DIR HOME="$LO/home" LLM_WIKI_NO_GO=1 ${l:+"$l"} "$@"; }
+# The locales each case runs in.
+LOCS="LC_ALL=C${L8:+ LANG=$L8}"
+[ -n "$L8" ] || skipped "the UTF-8 halves of this section (no UTF-8 locale here)"
+lw "" "$W" init >/dev/null 2>&1
+lw "" "$W" new lrepo >/dev/null 2>&1
+LWK="$LO/home/wikis/lrepo"
+mkdir -p "$LWK/wiki/concepts" "$LO/repo" "$LO/work/PAY-102"
+git init -q "$LO/repo"; git init -q "$LO/work/PAY-102"
+printf -- '---\ntitle: Retry policy\nsummary: how a failed charge is retried\n---\n\n# Retry policy\n\nRetried up to charge_retry_limit times.\n' > "$LWK/wiki/concepts/retry.md"
+for p in a b c; do printf -- '---\ntitle: %s\n---\n\nText.\n' "$p" > "$LWK/wiki/concepts/$p.md"; done
+{ printf -- '---\ntitle: Bank timeout\nsummary: PAY-102 raises the timeout '; printf '\377'; printf ' to 30 s\n---\n\nPAY-102 raises the bank timeout.\n'; } > "$LWK/wiki/concepts/bank-timeout.md"
+{ printf '# Index\n\n## Concepts\n- [Retry policy](wiki/concepts/retry.md): how a failed charge is retried\n'
+  printf -- '- [A](wiki/concepts/a.md): fee_schedule_v2 caf\351 one\n- [B](wiki/concepts/b.md): fee_schedule_v2 two\n- [C](wiki/concepts/c.md): fee_schedule_v2 three\n'
+  printf -- '- [Bank timeout](wiki/concepts/bank-timeout.md): PAY-102 raises the timeout \377 to 30 s\n'; } > "$LWK/index.md"
+printf 'Captured: 2026-01-02\n\n# Billing note\n\nThe charge_retry_limit setting moved to the billing service.\n' > "$LWK/raw/2026-01-02-090000-billing.md"
+printf 'What is charge_retry_limit set to?' > "$LO/msg-note"
+printf 'What does fee_schedule_v2 say?' > "$LO/msg-three"
+for l in $LOCS; do
+  # 1. The review's reproduction of M2: the waiting note is listed with its text.
+  out="$(lw "$l" "$W" __recall --text "$LO/msg-note" --in "$LO/repo" 2>&1)"
+  case "$out" in *"raw/2026-01-02-090000-billing.md: The charge_retry_limit setting moved to the billing service."*) ok "$l: the search at a message lists a waiting note with its text" ;; *) bad "$l: the search at a message lists a waiting note with its text" "$out" ;; esac
+  # And three index lines that match stay three, one of them holding a byte that isn't UTF-8.
+  out="$(lw "$l" "$W" __recall --text "$LO/msg-three" 2>&1)"
+  [ "$(printf '%s\n' "$out" | grep -c 'fee_schedule_v2')" = 3 ] && ok "$l: three index lines that match stay three, one with a byte that isn't UTF-8" || bad "$l: three index lines that match stay three, one with a byte that isn't UTF-8" "$out"
+done
+# 2. The same from Python with no locale set: Python hands what it starts LC_CTYPE=C.UTF-8 or the like.
+out="$(env -u LC_ALL -u LC_CTYPE -u LANG -u WIKIS_DIR HOME="$LO/home" LLM_WIKI_NO_GO=1 python3 -c '
+import subprocess, sys
+for m in sys.argv[2:]:
+    r = subprocess.run(["bash", sys.argv[1], "__recall", "--text", m], capture_output=True)
+    sys.stdout.write(r.stdout.decode("utf-8", "replace"))' "$W" "$LO/msg-note" "$LO/msg-three" 2>&1)"
+case "$out" in *"billing.md: The charge_retry_limit setting moved"*) ok "started from Python with no locale, the note has its text" ;; *) bad "started from Python with no locale, the note has its text" "$out" ;; esac
+[ "$(printf '%s\n' "$out" | grep -c 'fee_schedule_v2')" = 3 ] && ok "and the three lines stay three" || bad "and the three lines stay three" "$out"
+# 3. A local LC_ALL=C reaches the commands a function runs only when it is exported. Each one
+# in wiki.sh and the session hook is, or says on its line that no command runs there.
+out="$(awk '
+  held != "" { if ($0 !~ /^[[:space:]]*export LC_ALL[[:space:]]*$/) print held; held = "" }
+  /^[[:space:]]*#/ { next }
+  /(^|[^a-z_])local[[:space:]][^#]*LC_ALL=C/ { n++; if ($0 !~ /no command runs here/) held = FILENAME ":" FNR ": " $0 }
+  END { if (held != "") print held; if (n < 10) print "only " n " found: the scan is broken" }
+' "$W" "$REPO/hooks/session-start.sh")"
+[ -z "$out" ] && ok "every local LC_ALL=C is exported, or says no command runs there" || bad "every local LC_ALL=C is exported, or says no command runs there" "$out"
+# 4. CI runs the suite on macOS in the locale a terminal sets (T16).
+check "CI runs the suite on macOS under LANG=en_US.UTF-8, with LC_ALL unset" grep -qF 'if [ "$RUNNER_OS" = macOS ]; then unset LC_ALL LC_CTYPE; export LANG=en_US.UTF-8; fi' "$REPO/.github/workflows/ci.yml"
+# 5. A name is by byte in every locale, as name_hint is (L2).
+for l in $LOCS; do
+  out="$(lw "$l" "$W" new "$(printf 'caf\303\251')" 2>&1)"
+  case "$out" in "A wiki's name is letters, digits, dots, dashes and underscores, so this one is called caf, not \"$(printf 'caf\303\251')\"."*"created:"*) ok "$l: new café says the name was changed, and makes caf" ;; *) bad "$l: new café says the name was changed, and makes caf" "$out" ;; esac
+  check "$l: the folder is caf, and no other" bash -c "test -f '$LO/home/wikis/caf/AGENTS.md' && ! ls '$LO/home/wikis' | grep -q '^caf.'"
+  rm -rf "${LO:?}/home/wikis/caf"
+  out="$(lw "$l" "$W" start --name "$(printf 'caf\303\251')" 2>&1)"; code=$?
+  case "$code:$out" in "2:"*"takes a repository's name"*) ok "$l: start --name café is refused, as the MCP servers refuse it" ;; *) bad "$l: start --name café is refused, as the MCP servers refuse it" "exit $code: $out" ;; esac
+done
+# 6. The review's reproduction of M10: a byte that isn't UTF-8 in the index line of a ticket's page.
+# hjson <file> <word>: the file is UTF-8, its JSON parses to text that is UTF-8, and the word is in it.
+hjson() {
+  python3 -c '
+import json, sys
+b = open(sys.argv[1], "rb").read()
+b.decode("utf-8")
+d = json.loads(b)
+def texts(v):
+    if isinstance(v, str):
+        yield v
+    elif isinstance(v, dict):
+        for x in v.values(): yield from texts(x)
+    elif isinstance(v, list):
+        for x in v: yield from texts(x)
+t = "\n".join(texts(d))
+t.encode("utf-8")
+assert sys.argv[2] in t, t
+' "$1" "$2"
+}
+for l in $LOCS; do
+  printf '{"source":"startup"}' | lw "$l" CLAUDE_PLUGIN_ROOT="$REPO" CLAUDE_PLUGIN_DATA="$LO/data" CLAUDE_PROJECT_DIR="$LO/work/PAY-102" bash "$REPO/hooks/session-start.sh" > "$LO/m10.json" 2>/dev/null; code=$?
+  [ "$code" = 0 ] && hjson "$LO/m10.json" bank-timeout 2>/dev/null && ok "$l: the session hook's JSON is UTF-8, parses, and names the ticket's page" || bad "$l: the session hook's JSON is UTF-8, parses, and names the ticket's page" "exit $code: $(cat -v "$LO/m10.json" | head -c 600)"
+  # 9a. The same for the other agents' session start, and for the hooks at a message.
+  printf '{"cwd":"%s","hook_event_name":"SessionStart","source":"startup"}' "$LO/work/PAY-102" | lw "$l" bash "$W" __codex-start > "$LO/codex.json" 2>/dev/null
+  hjson "$LO/codex.json" bank-timeout 2>/dev/null && ok "$l: Codex's session start JSON parses and is UTF-8" || bad "$l: Codex's session start JSON parses and is UTF-8" "$(cat -v "$LO/codex.json" | head -c 600)"
+  printf '{"workspacePaths":["%s"]}' "$LO/work/PAY-102" | lw "$l" bash "$W" __agy-start > "$LO/agy.json" 2>/dev/null
+  hjson "$LO/agy.json" bank-timeout 2>/dev/null && ok "$l: Antigravity's session start JSON parses and is UTF-8" || bad "$l: Antigravity's session start JSON parses and is UTF-8" "$(cat -v "$LO/agy.json" | head -c 600)"
+  printf '{"workspace_roots":["%s"]}' "$LO/work/PAY-102" | lw "$l" bash "$W" __cursor-start > "$LO/cursor.json" 2>/dev/null
+  hjson "$LO/cursor.json" bank-timeout 2>/dev/null && ok "$l: Cursor's session start JSON parses and is UTF-8" || bad "$l: Cursor's session start JSON parses and is UTF-8" "$(cat -v "$LO/cursor.json" | head -c 600)"
+  for st in prompt-hook:claude codex-prompt:codex agy-prompt:agy; do
+    if [ "${st#*:}" = agy ]; then j='{"lastUserInput":"Where is PAY-102?","conversationId":"lc-%s-%s","cwd":"%s"}'; else j='{"prompt":"Where is PAY-102?","session_id":"lc-%s-%s","cwd":"%s"}'; fi
+    # shellcheck disable=SC2059
+    printf "$j" "${st#*:}" "${l%%=*}" "$LO/work/PAY-102" | lw "$l" bash "$W" "__${st%%:*}" > "$LO/prompt.json" 2>/dev/null
+    hjson "$LO/prompt.json" bank-timeout 2>/dev/null && ok "$l: the ${st#*:} hook at a message gives JSON that parses and is UTF-8" || bad "$l: the ${st#*:} hook at a message gives JSON that parses and is UTF-8" "$(cat -v "$LO/prompt.json" | head -c 600)"
+  done
+done
+# 7, 8, 9b, 9d. index and lint on an index.md with bytes that aren't UTF-8, and a summary's quotes.
+lw "" "$W" new lindex >/dev/null 2>&1
+LIX="$LO/home/wikis/lindex"
+mkdir -p "$LIX/wiki/concepts"
+printf -- '---\ntitle: Keep\n---\n\nText.\n' > "$LIX/wiki/concepts/keep.md"
+printf -- '---\ntitle: Bank\nsummary: the new summary\n---\n\nText.\n' > "$LIX/wiki/concepts/bank.md"
+printf -- '---\ntitle: Quote\nsummary: "He said \\"no\\""\n---\n\nText.\n' > "$LIX/wiki/concepts/quote.md"
+printf -- '---\ntitle: Path\nsummary: C:\\\\dir is the folder\n---\n\nText.\n' > "$LIX/wiki/concepts/path.md"
+printf -- '---\ntitle: Odd\nsummary: "C:\\\\dir" and "x"\n---\n\nText.\n' > "$LIX/wiki/concepts/odd.md"
+printf -- '---\ntitle: Caf\303\251 r\303\250gles\nsummary: "\303\211cole \\"normale\\" \342\200\224 na\303\257ve"\n---\n\nText.\n' > "$LIX/wiki/concepts/cafe.md"
+# A summary of 120 characters once its \" are quotes, and one of 121: lint and index measure the same.
+b120="$(printf 'A%.0s' $(seq 1 116))"
+printf -- '---\ntitle: B120\nsummary: "%s\\"no\\""\n---\n\nText.\n' "$b120" > "$LIX/wiki/concepts/b120.md"
+printf -- '---\ntitle: B121\nsummary: "%sA\\"no\\""\n---\n\nText.\n' "$b120" > "$LIX/wiki/concepts/b121.md"
+# A locale whose characters aren't UTF-8's, where Python would read a file as Latin-1.
+LL1="$(locale -a 2>/dev/null | grep -i -m 1 '^en_US\.iso8859-\?1$' || true)"
+[ -n "$LL1" ] || skipped "index and lint in a Latin-1 locale (none is installed)"
+{ printf '# Index\n\nNotes \377 here.\n\n## Concepts\n- [Keep](wiki/concepts/keep.md): kept \377 text\n'
+  printf -- '- [Bank](wiki/concepts/bank.md): old \377 summary\n'; } > "$LIX/index.md"
+cp "$LIX/index.md" "$LO/index.before"
+for l in $LOCS ${LL1:+LC_ALL=$LL1}; do
+  cp "$LO/index.before" "$LIX/index.md"
+  out="$(lw "$l" "$W" index lindex 2>&1)"; code=$?
+  [ "$code" = 0 ] && ok "$l: index finishes on an index.md with bytes that aren't UTF-8" || bad "$l: index finishes on an index.md with bytes that aren't UTF-8" "exit $code: $out"
+  [ "$(LC_ALL=C grep -c "$(printf '\377')" "$LIX/index.md")" = 2 ] && ok "$l: and the lines it keeps keep their bytes" || bad "$l: and the lines it keeps keep their bytes" "$(cat -v "$LIX/index.md")"
+  case "$out" in *"updated from the page's frontmatter: wiki/concepts/bank.md"*"    was: old "[?]" summary"*) ok "$l: a changed line's was: shows such a byte as ?" ;; *) bad "$l: a changed line's was: shows such a byte as ?" "$out" ;; esac
+  case "$out" in *"summary over 120 characters, at 121: wiki/concepts/b121.md"*) ok "$l: index says a summary of 121 characters is over 120" ;; *) bad "$l: index says a summary of 121 characters is over 120" "$out" ;; esac
+  case "$out" in *"characters, at "*": wiki/concepts/b120.md"*) bad "$l: and not one of 120, counted with its quotes read" "$out" ;; *) ok "$l: and not one of 120, counted with its quotes read" ;; esac
+  check "$l: a page's title and summary that aren't ASCII reach the index as they are" grep -qxF -- "$(printf -- '- [Caf\303\251 r\303\250gles](wiki/concepts/cafe.md): \303\211cole "normale" \342\200\224 na\303\257ve')" "$LIX/index.md"
+  check "$l: a value that only looks quoted keeps its backslashes, as before" grep -qxF -- '- [Odd](wiki/concepts/odd.md): C:\\dir" and "x' "$LIX/index.md"
+  check "$l: a summary in double quotes reaches the index unquoted" grep -qxF -- '- [Quote](wiki/concepts/quote.md): He said "no"' "$LIX/index.md"
+  check "$l: and one without quotes keeps its backslashes" grep -qxF -- '- [Path](wiki/concepts/path.md): C:\\dir is the folder' "$LIX/index.md"
+  out="$(lw "$l" "$W" lint lindex 2>&1)"; code=$?
+  case "$code:$out" in "0:"*"index.md line with a byte that isn't UTF-8 (retype it): 2"*"index.md line 3"*"index.md line 6"*) ok "$l: lint names each index.md line with such a byte, and exits as for any finding" ;; *) bad "$l: lint names each index.md line with such a byte, and exits as for any finding" "exit $code: $out" ;; esac
+  long="$(printf '%s\n' "$out" | awk '/^  summary over 120 characters/ { on = 1; next } /^  [^ ]/ { on = 0 } on')"
+  [ "$long" = "    wiki/concepts/b121.md" ] && ok "$l: lint measures a summary as index does: 121 is over, 120 isn't" || bad "$l: lint measures a summary as index does: 121 is over, 120 isn't" "$out"
+done
+# The search runs its sed under LC_ALL=C in any locale, by the export, which a stand-in sed on
+# PATH sees. Its bytes don't matter: this holds on Linux too, where GNU sed doesn't fail.
+mkdir -p "$LO/bin"
+printf '#!/bin/sh\ncase "$*" in *"$(printf "\\300")"*) echo "LC_ALL=${LC_ALL-unset}" >> "%s/sed-saw" ;; esac\nexec "%s" "$@"\n' "$LO" "$(command -v sed)" > "$LO/bin/sed"
+chmod +x "$LO/bin/sed"
+for l in $LOCS; do
+  rm -f "$LO/sed-saw"
+  lw "$l" PATH="$LO/bin:$PATH" "$W" __recall --text "$LO/msg-note" >/dev/null 2>&1
+  [ -s "$LO/sed-saw" ] && ! grep -qv '^LC_ALL=C$' "$LO/sed-saw" && ok "$l: the search's sed runs under LC_ALL=C" || bad "$l: the search's sed runs under LC_ALL=C" "$(cat "$LO/sed-saw" 2>/dev/null)"
+done
+rm -f "$LO/bin/sed"
+# What wiki.sh starts from inside a function that set LC_ALL=C, an extension or a background
+# compile's agent, gets the caller's locale back: a stand-in for each says what it was given.
+mkdir -p "$LO/home/.local/share/llm-wiki/extensions" "$LO/home/.config/llm-wiki" "$LO/clone/lrepo"
+git init -q "$LO/clone/lrepo"
+printf '#!/bin/sh\n# wiki-extension: a stand-in\n# wiki-setup: yes\necho "extension LC_ALL=${LC_ALL-unset} LANG=${LANG-unset}" >> "%s/saw"\nexit 0\n' "$LO" > "$LO/home/.local/share/llm-wiki/extensions/wiki-jira"
+chmod +x "$LO/home/.local/share/llm-wiki/extensions/wiki-jira"
+printf '#!/bin/sh\ncat >/dev/null\necho "agent LC_ALL=${LC_ALL-unset} LANG=${LANG-unset}" >> "%s/saw"\n' "$LO" > "$LO/bin/agent"
+chmod +x "$LO/bin/agent"
+printf 'auto=on\nagent=%s\n' "$LO/bin/agent" > "$LO/home/.config/llm-wiki/compile"
+printf 'Captured: 2026-01-02\n\n# For the agent\n\nA note.\n' > "$LWK/raw/2026-01-03-090000-agent.md"
+n=0
+for l in ${L8:+LANG=$L8 LC_ALL=$L8} LC_ALL=C; do
+  n=$((n + 1))
+  case "$l" in LANG=*) want="LC_ALL=unset LANG=$L8" ;; *) want="LC_ALL=${l#LC_ALL=} LANG=unset" ;; esac
+  rm -f "$LO/saw" "$LWK/.compile-lock"
+  printf '{"prompt":"see https://example.atlassian.net/browse/PAY-102 please","session_id":"lx-%s","cwd":"%s"}' "$n" "$LO/clone/lrepo" \
+    | lw "$l" JIRA_URL=https://example.atlassian.net bash "$W" __prompt-hook > "$LO/prompt.out" 2>&1
+  grep -qxF "extension $want" "$LO/saw" 2>/dev/null && ! grep -v -xF "extension $want" "$LO/saw" | grep -q . && ok "$l: an extension the search at a message asks is given the caller's locale" || bad "$l: an extension the search at a message asks is given the caller's locale" "$(cat "$LO/saw" "$LO/prompt.out" 2>/dev/null)"
+  rm -f "$LO/saw"
+  printf '{"source":"startup","session_id":"lx-%s"}' "$n" | lw "$l" CLAUDE_PLUGIN_ROOT="$REPO" CLAUDE_PLUGIN_DATA="$LO/data" CLAUDE_PROJECT_DIR="$LO/clone/lrepo" bash "$REPO/hooks/session-start.sh" >/dev/null 2>&1
+  i=0; while [ "$i" -lt 100 ] && ! grep -q '^agent ' "$LO/saw" 2>/dev/null; do sleep 0.1; i=$((i + 1)); done
+  grep -qxF "agent $want" "$LO/saw" 2>/dev/null && ok "$l: the agent a session start sets compiling is given the caller's locale" || bad "$l: the agent a session start sets compiling is given the caller's locale" "$(cat "$LO/saw" 2>/dev/null)"
+  # Its run ends with the lock let go; until then, the next session start would start none.
+  i=0; while [ "$i" -lt 100 ] && [ "$(cat "$LWK/.compile-lock" 2>/dev/null)" != free ] && [ -e "$LWK/.compile-lock" ]; do sleep 0.1; i=$((i + 1)); done
+done
+rm -f "$LO/home/.config/llm-wiki/compile" "$LO/home/.local/share/llm-wiki/extensions/wiki-jira" "$LWK/raw/2026-01-03-090000-agent.md"
+# 12. The compiled helper and the Bash agree, in a UTF-8 locale.
+[ -x "$T/bin/llm-wiki" ] || ! command -v go >/dev/null 2>&1 || build_helper >/dev/null 2>&1
+if [ -x "$T/bin/llm-wiki" ] && [ -n "$L8" ]; then
+  a="$(env -C "$LO/repo" -u LC_ALL -u LC_CTYPE -u WIKIS_DIR HOME="$LO/home" LANG="$L8" LLM_WIKI_NO_GO=1 "$W" find charge_retry_limit 2>&1)"
+  b="$(env -C "$LO/repo" -u LC_ALL -u LC_CTYPE -u WIKIS_DIR HOME="$LO/home" LANG="$L8" LLM_WIKI_GO="$T/bin/llm-wiki" "$W" find charge_retry_limit 2>&1)"
+  [ "$a" = "$b" ] && case "$a" in *"billing.md: The charge_retry_limit setting moved"*) true ;; *) false ;; esac && ok "find, helper and Bash: the waiting note, with its text, under LANG=$L8" || bad "find, helper and Bash: the waiting note, with its text, under LANG=$L8" "$(printf 'Bash: %s\nhelper: %s' "$a" "$b")"
+else
+  skipped "the helper beside the Bash in a UTF-8 locale (no go, or no such locale)"
+fi
+fi
+
+if section "A hook that fails leaves a line"; then
+# Code review D6 and T9. Each case runs in a home of its own, so no line reaches the suite's status.
+HK="$T/hooklog"
+mkdir -p "$HK/home" "$HK/bin" "$HK/repo" "$HK/root" "$HK/work/HOOK-7"
+cp "$HOME/.gitconfig" "$HK/home/.gitconfig"
+git init -q "$HK/repo"; git init -q "$HK/work/HOOK-7"
+hw() { env -u WIKIS_DIR HOME="$HK/home" LLM_WIKI_NO_GO=1 "$@"; }
+HLOG="$HK/home/.local/state/llm-wiki/hooks.log"
+hw "$W" init >/dev/null 2>&1
+hw "$W" new hrepo >/dev/null 2>&1
+printf 'Captured: 2026-01-02\n\n# Billing note\n\nThe charge_retry_limit setting moved, for HOOK-7.\n' > "$HK/home/wikis/hrepo/raw/2026-01-02-090000-billing.md"
+# A plugin root whose wiki.sh fails one command and runs the real one for the rest.
+cp -R "$REPO/hooks" "$REPO/template" "$HK/root/"
+printf '#!/bin/sh\ncase "$1" in "${HOOK_FAIL:-none}") printf "%%b" "${HOOK_SAY:-wiki.sh: made to fail}" >&2; exit "${HOOK_CODE:-3}" ;; esac\nexec bash "%s" "$@"\n' "$W" > "$HK/root/wiki.sh"
+chmod +x "$HK/root/wiki.sh"
+hstart() { printf '{"source":"startup","session_id":"hk1"}' | hw CLAUDE_PLUGIN_ROOT="$HK/root" CLAUDE_PLUGIN_DATA="$HK/data" CLAUDE_PROJECT_DIR="$1" bash "$REPO/hooks/session-start.sh"; }
+# hlines: how many lines hooks.log holds.
+hlines() { if [ -f "$HLOG" ]; then wc -l < "$HLOG" | tr -d ' '; else echo 0; fi; }
+# Hooks that work leave nothing.
+hstart "$HK/repo" > "$HK/out.json"; code=$?
+printf '{"prompt":"What is charge_retry_limit set to?","session_id":"hk1","cwd":"%s"}' "$HK/repo" | hw CLAUDE_PLUGIN_ROOT="$REPO" sh "$REPO/hooks/user-prompt.sh" >/dev/null
+printf '{"tool_name":"Agent","session_id":"hk1","tool_input":{"description":"a task"},"cwd":"%s"}' "$HK/repo" | hw sh "$REPO/hooks/pre-tool-use.sh" >/dev/null
+[ "$code" = 0 ] && [ "$(hlines)" = 0 ] && ok "hooks that work leave no hooks.log" || bad "hooks that work leave no hooks.log" "exit $code: $(cat "$HLOG" 2>/dev/null)"
+lacks "and status has no hooks line" "hooks:" hw "$W" status
+# 9. A call of the session hook's into wiki.sh that fails.
+out="$(HOOK_FAIL=__reminders hstart "$HK/repo")"; code=$?
+[ "$code" = 0 ] && printf '%s' "$out" | context >/dev/null 2>&1 && ok "a session hook whose call into wiki.sh fails still exits 0 with its JSON" || bad "a session hook whose call into wiki.sh fails still exits 0 with its JSON" "exit $code: $out"
+[ "$(hlines)" = 1 ] && grep -q "$(printf '^[0-9-]*T[0-9:]*Z\tsession-start\t3\twiki.sh __reminders: wiki.sh: made to fail$')" "$HLOG" && ok "and hooks.log has one line: when, the hook, the exit code and the error" || bad "and hooks.log has one line: when, the hook, the exit code and the error" "$(cat "$HLOG" 2>/dev/null)"
+# The hook at a message, whose wiki.sh fails.
+: > "$HLOG"
+out="$(printf '{"prompt":"hello there","session_id":"hk2","cwd":"%s"}' "$HK/repo" | hw HOOK_FAIL=__prompt-hook HOOK_CODE=4 CLAUDE_PLUGIN_ROOT="$HK/root" sh "$REPO/hooks/user-prompt.sh")"; code=$?
+[ "$code" = 0 ] && [ -z "$out" ] && grep -q "$(printf '\tuser-prompt\t4\twiki.sh __prompt-hook: wiki.sh: made to fail$')" "$HLOG" && [ "$(hlines)" = 1 ] && ok "the hook at a message notes its wiki.sh failing, and exits 0" || bad "the hook at a message notes its wiki.sh failing, and exits 0" "exit $code: $out $(cat "$HLOG" 2>/dev/null)"
+# The tool-call hook, whose Python fails before it can catch anything.
+: > "$HLOG"
+printf '#!/bin/sh\ncat >/dev/null\necho "python3: made to fail" >&2\nexit 5\n' > "$HK/bin/python3"; chmod +x "$HK/bin/python3"
+out="$(printf '{"tool_name":"Agent","session_id":"hk1"}' | hw PATH="$HK/bin:$PATH" sh "$REPO/hooks/pre-tool-use.sh")"; code=$?
+[ "$code" = 0 ] && grep -q "$(printf '\tpre-tool-use\t5\treminders.py: python3: made to fail$')" "$HLOG" && ok "the tool-call hook notes a Python that fails, and exits 0" || bad "the tool-call hook notes a Python that fails, and exits 0" "exit $code: $out $(cat "$HLOG" 2>/dev/null)"
+# A failure inside __recall, which it goes on past: a sed that fails on the search's cut.
+: > "$HLOG"
+printf '#!/bin/sh\ncase "$*" in *"$(printf "\\300")"*) echo "sed: made to fail" >&2; exit 1 ;; esac\nexec "%s" "$@"\n' "$(command -v sed)" > "$HK/bin/sed"; chmod +x "$HK/bin/sed"
+rm -f "$HK/bin/python3"
+out="$(hw PATH="$HK/bin:$PATH" "$W" __recall "$HK/work/HOOK-7" 2>&1)"; code=$?
+case "$code:$out" in "0:HOOK-7 folder"*"billing.md: "*) ok "a failure inside __recall: it goes on, and exits 0" ;; *) bad "a failure inside __recall: it goes on, and exits 0" "exit $code: $out" ;; esac
+grep -q "$(printf '\tsession-start\t0\t__recall: sed: made to fail$')" "$HLOG" && ok "and hooks.log has its error" || bad "and hooks.log has its error" "$(cat "$HLOG" 2>/dev/null)"
+: > "$HLOG"
+printf '{"prompt":"What is charge_retry_limit set to?","session_id":"hk3","cwd":"%s"}' "$HK/repo" | hw PATH="$HK/bin:$PATH" CLAUDE_PLUGIN_ROOT="$REPO" sh "$REPO/hooks/user-prompt.sh" > "$HK/out.json"; code=$?
+[ "$code" = 0 ] && grep -q "$(printf '\tuser-prompt\t0\tthe search for the message.s words: sed: made to fail$')" "$HLOG" && ok "and so does the search at a message" || bad "and so does the search at a message" "exit $code: $(cat "$HLOG" 2>/dev/null)"
+rm -f "$HK/bin/sed"
+# A failure inside reminders.py, which it catches.
+: > "$HLOG"
+out="$(printf '{"tool_name":"Agent", "session_id": "hk1", ' | hw sh "$REPO/hooks/pre-tool-use.sh")"; code=$?
+[ "$code" = 0 ] && [ -z "$out" ] && grep -q "$(printf '\tpre-tool-use\t0\treminders.py line [0-9]*: JSONDecodeError$')" "$HLOG" && ok "a failure inside reminders.py: no reply, exit 0, and a line naming the exception" || bad "a failure inside reminders.py: no reply, exit 0, and a line naming the exception" "exit $code: $out $(cat "$HLOG" 2>/dev/null)"
+# wiki status counts them.
+out="$(hw "$W" status 2>&1)"
+case "$out" in *"- hooks: 1 failure(s) in the last 7 days, the last in pre-tool-use: reminders.py line "*": JSONDecodeError. Run: tail -n 5 ~/.local/state/llm-wiki/hooks.log"*) ok "status counts the week's failures, names the last, and ends with its fix" ;; *) bad "status counts the week's failures, names the last, and ends with its fix" "$out" ;; esac
+printf '2026-01-01T00:00:00Z\tsession-start\t3\tlong ago\n' > "$HLOG"
+lacks "a failure older than a week isn't counted" "hooks:" hw "$W" status
+# What an error says can't make a second line, or a line of status, or carry much.
+: > "$HLOG"
+HOOK_FAIL=__reminders HOOK_SAY='first\tpart\0033[31m red\r\n- hooks: 99 failure(s) Run: rm -rf ~\nthird' hstart "$HK/repo" >/dev/null
+[ "$(hlines)" = 1 ] && [ "$(awk -F '\t' '{ print NF }' "$HLOG")" = 4 ] && ! LC_ALL=C grep -q "$(printf '\033')" "$HLOG" && ok "an error with tabs, line ends and escapes is one line of four fields, with no escape" || bad "an error with tabs, line ends and escapes is one line of four fields, with no escape" "$(cat -v "$HLOG")"
+out="$(hw "$W" status 2>&1)"
+case "$out" in *"the last in session-start: wiki.sh __reminders: first part[31m red. Run: tail -n 5 "*) ok "and status shows its first line, with no second" ;; *) bad "and status shows its first line, with no second" "$out" ;; esac
+case "$out" in *"99 failure"* | *"rm -rf"*) bad "and nothing after its first line reaches status" "$out" ;; *) ok "and nothing after its first line reaches status" ;; esac
+: > "$HLOG"
+HOOK_FAIL=__reminders HOOK_SAY="Traceback (most recent call last):\n  File \"x.py\", line 3\n    token = 'secret-value-123'\nValueError: bad value secret-value-123\n" hstart "$HK/repo" >/dev/null
+grep -q "$(printf '\twiki.sh __reminders: Traceback: ValueError$')" "$HLOG" && ! grep -q secret-value "$HLOG" && ok "of a traceback, only the exception's name" || bad "of a traceback, only the exception's name" "$(cat "$HLOG")"
+: > "$HLOG"
+HOOK_FAIL=__reminders HOOK_SAY="$(printf 'x%.0s' $(seq 1 500))" hstart "$HK/repo" >/dev/null
+[ "$(awk -F '\t' '{ print length($4) }' "$HLOG")" = 200 ] && ok "and a long error is cut at 200 bytes" || bad "and a long error is cut at 200 bytes" "$(cat "$HLOG")"
+# 10. Two hundred and one failures leave two hundred lines, the newest last.
+: > "$HLOG"
+hw bash -c '. "$1/hooks/hook-note.sh"; i=1; while [ "$i" -le 201 ]; do hook_note session-start 1 "call $i" ""; i=$((i + 1)); done' _ "$REPO"
+[ "$(hlines)" = 200 ] && tail -n 1 "$HLOG" | grep -q 'call 201$' && head -n 1 "$HLOG" | grep -q 'call 2$' && ok "201 failures leave the last 200 lines" || bad "201 failures leave the last 200 lines" "$(hlines) lines, the last: $(tail -n 1 "$HLOG")"
+printf '{"tool_name":"Agent", ' | hw sh "$REPO/hooks/pre-tool-use.sh"
+[ "$(hlines)" = 200 ] && tail -n 1 "$HLOG" | grep -q 'JSONDecodeError$' && head -n 1 "$HLOG" | grep -q 'call 3$' && ok "and reminders.py keeps 200 too" || bad "and reminders.py keeps 200 too" "$(hlines) lines, the last: $(tail -n 1 "$HLOG")"
+# A state folder that can't be written: nothing breaks.
+: > "$HLOG"
+chmod 500 "$HK/home/.local/state/llm-wiki"
+out="$(HOOK_FAIL=__reminders hstart "$HK/repo")"; code=$?
+[ "$code" = 0 ] && printf '%s' "$out" | context >/dev/null 2>&1 && ok "with a state folder it can't write, the session hook still exits 0 with its JSON" || bad "with a state folder it can't write, the session hook still exits 0 with its JSON" "exit $code: $out"
+printf '{"prompt":"x","session_id":"hk4","cwd":"%s"}' "$HK/repo" | hw HOOK_FAIL=__prompt-hook CLAUDE_PLUGIN_ROOT="$HK/root" sh "$REPO/hooks/user-prompt.sh"; c1=$?
+printf '{"tool_name":"Agent", ' | hw sh "$REPO/hooks/pre-tool-use.sh"; c2=$?
+out="$(hw PATH="$HK/bin:$PATH" "$W" __recall "$HK/work/HOOK-7" 2>&1)"; c3=$?
+[ "$c1:$c2:$c3" = 0:0:0 ] && ok "and so do the hooks at a message and a tool call, and __recall" || bad "and so do the hooks at a message and a tool call, and __recall" "$c1:$c2:$c3 $out"
+chmod 700 "$HK/home/.local/state/llm-wiki"
+# A traceback after a warning, a syntax error, and an exception whose message has more lines:
+# each gives the exception's name and nothing of its text.
+: > "$HLOG"
+hw bash -c '. "$1/hooks/hook-note.sh"
+hook_note session-start 1 warned "$(printf "warning: something\nTraceback (most recent call last):\n  File \"x.py\", line 3, in <module>\n    f()\nKeyError: '"'"'secret-1'"'"'\n")"
+hook_note session-start 1 syntax "$(printf "  File \"x.py\", line 3\n    token = (secret-2\n            ^\nSyntaxError: never closed\n")"
+hook_note session-start 1 lines "$(printf "Traceback (most recent call last):\n  File \"x.py\", line 3, in <module>\nValueError: bad value\nsecret: secret-3\n")"
+hook_note session-start 1 nameless "$(printf "Traceback (most recent call last):\n  File \"x.py\", line 3, in <module>\n!! secret-4\n")"' _ "$REPO"
+[ "$(awk -F '\t' '{ print $4 }' "$HLOG" | paste -sd '|' -)" = "warned: Traceback: KeyError|syntax: Traceback: SyntaxError|lines: Traceback: ValueError|nameless: Traceback: an exception" ] && ! grep -q secret "$HLOG" && ok "a traceback anywhere in the error, or a syntax error, gives the exception's name alone" || bad "a traceback anywhere in the error, or a syntax error, gives the exception's name alone" "$(cat "$HLOG")"
+# hooks.log is written only as a plain file: never through a link, never into a pipe.
+: > "$HLOG"
+printf 'kept\n' > "$HK/elsewhere"
+unlink "$HLOG"; ln -s "$HK/elsewhere" "$HLOG"
+HOOK_FAIL=__reminders hstart "$HK/repo" >/dev/null
+printf '{"tool_name":"Agent", ' | hw sh "$REPO/hooks/pre-tool-use.sh"
+[ "$(cat "$HK/elsewhere")" = kept ] && [ -L "$HLOG" ] && ok "a hooks.log that is a link is not written through, by either writer" || bad "a hooks.log that is a link is not written through, by either writer" "$(cat "$HK/elsewhere")"
+unlink "$HLOG"
+mkfifo "$HLOG"
+( HOOK_FAIL=__reminders hstart "$HK/repo" >/dev/null; printf '{"tool_name":"Agent", ' | hw sh "$REPO/hooks/pre-tool-use.sh"; echo finished > "$HK/fifo-done" ) &
+fp=$!
+i=0; while [ "$i" -lt 100 ] && [ ! -f "$HK/fifo-done" ]; do sleep 0.1; i=$((i + 1)); done
+if [ -f "$HK/fifo-done" ]; then ok "nor one that is a pipe, and neither hook waits on it"; else bad "nor one that is a pipe, and neither hook waits on it"; kill "$fp" 2>/dev/null; fi
+wait "$fp" 2>/dev/null
+unlink "$HLOG"
+# The trim leaves no file of its own behind, from either writer.
+hw bash -c '. "$1/hooks/hook-note.sh"; i=1; while [ "$i" -le 201 ]; do hook_note session-start 1 "call $i" ""; i=$((i + 1)); done' _ "$REPO"
+printf '{"tool_name":"Agent", ' | hw sh "$REPO/hooks/pre-tool-use.sh"
+[ "$(hlines)" = 200 ] && [ -z "$(find "${HLOG%/*}" -maxdepth 1 -name 'hooks.log.*' 2>/dev/null)" ] && ok "trimming leaves no file beside hooks.log" || bad "trimming leaves no file beside hooks.log" "$(ls "${HLOG%/*}")"
+: > "$HLOG"
+# With no home and no XDG_STATE_HOME, a note is no failure: nothing is written, and the caller goes on.
+out="$(env -u HOME -u XDG_STATE_HOME sh -c 'set -u; . "$1/hooks/hook-note.sh"; hook_note user-prompt 1 call error; echo went on' _ "$REPO" 2>&1)"
+[ "$out" = "went on" ] && ok "with no home, hook_note writes nothing and its caller goes on" || bad "with no home, hook_note writes nothing and its caller goes on" "$out"
+printf '{"tool_name":"Agent", ' | env -u HOME -u XDG_STATE_HOME sh "$REPO/hooks/pre-tool-use.sh"; c1=$?
+printf '{"prompt":"x","session_id":"hk5","cwd":"/"}' | env -u HOME -u XDG_STATE_HOME HOOK_FAIL=__prompt-hook CLAUDE_PLUGIN_ROOT="$HK/root" sh "$REPO/hooks/user-prompt.sh"; c2=$?
+[ "$c1:$c2" = 0:0 ] && ok "and the hooks at a tool call and a message still exit 0" || bad "and the hooks at a tool call and a message still exit 0" "$c1:$c2"
+# A recall folder it can't write is no failure to note at every message.
+: > "$HLOG"
+mkdir -p "$HK/home/.local/state/llm-wiki/recall"
+chmod 500 "$HK/home/.local/state/llm-wiki/recall"
+for i in 1 2; do
+  printf '{"prompt":"What is charge_retry_limit set to, %s?","session_id":"hk6","cwd":"%s"}' "$i" "$HK/repo" | hw CLAUDE_PLUGIN_ROOT="$REPO" sh "$REPO/hooks/user-prompt.sh" >/dev/null
+done
+chmod 700 "$HK/home/.local/state/llm-wiki/recall"
+[ "$(hlines)" = 0 ] && ok "a recall folder that can't be written leaves no line" || bad "a recall folder that can't be written leaves no line" "$(cat "$HLOG")"
+# A hook stopped while it runs leaves no folder of its own in the temp folder. A stand-in
+# mktemp makes it here: macOS's makes one in its own folder, whatever TMPDIR says.
+mkdir -p "$HK/tmp"
+printf '#!/bin/sh\ncat >/dev/null\nsleep 2\n' > "$HK/bin/python3"; chmod +x "$HK/bin/python3"
+printf '#!/bin/sh\nn="%s/tmp/t.$$"\nif [ "${1:-}" = -d ]; then mkdir "$n"; else : > "$n"; fi\necho "$n"\n' "$HK" > "$HK/bin/mktemp"; chmod +x "$HK/bin/mktemp"
+# Not through hw: a function in a pipeline is a subshell of its own, and $! would be that.
+printf '{"prompt":"x","session_id":"hk7","cwd":"%s"}' "$HK/repo" | env -u WIKIS_DIR HOME="$HK/home" LLM_WIKI_NO_GO=1 PATH="$HK/bin:$PATH" bash "$W" __prompt-hook >/dev/null 2>&1 &
+kp=$!
+sleep 1
+made="$(ls -A "$HK/tmp")"
+kill -TERM "$kp" 2>/dev/null
+wait "$kp" 2>/dev/null
+rm -f "$HK/bin/python3" "$HK/bin/mktemp"
+[ -n "$made" ] && [ -z "$(ls -A "$HK/tmp")" ] && ok "a hook at a message stopped partway leaves nothing in the temp folder" || bad "a hook at a message stopped partway leaves nothing in the temp folder" "made: $made; left: $(ls -A "$HK/tmp")"
+# Antigravity's tool-call hook notes a Python that fails before it can catch anything.
+: > "$HLOG"
+mkdir -p "$HK/home/.local/state/llm-wiki/reminders"
+printf '#!/bin/sh\ncat >/dev/null\nexit 6\n' > "$HK/bin/python3"; chmod +x "$HK/bin/python3"
+out="$(printf '{}' | hw PATH="$HK/bin:$PATH" sh "$REPO/hooks/agy-hook.sh" tool)"; code=$?
+rm -f "$HK/bin/python3"
+[ "$code:$out" = '0:{"decision": "allow"}' ] && grep -q "$(printf '\tagy-tool\t6\treminders.py$')" "$HLOG" && ok "Antigravity's tool-call hook still allows the call, and notes its Python failing" || bad "Antigravity's tool-call hook still allows the call, and notes its Python failing" "exit $code: $out $(cat "$HLOG")"
+# 12. The compiled helper and the Bash print the same status, the hooks line included.
+date -u +%Y-%m-%dT%H:%M:%SZ | sed 's/$/	session-start	3	wiki.sh __reminders: made to fail/' > "$HLOG"
+date -u +%Y-%m-%dT%H:%M:%SZ | sed 's/$/	user-prompt	4	wiki.sh __prompt-hook: made to fail/' >> "$HLOG"
+[ -x "$T/bin/llm-wiki" ] || ! command -v go >/dev/null 2>&1 || build_helper >/dev/null 2>&1
+if [ -x "$T/bin/llm-wiki" ]; then
+  a="$(hw "$W" status 2>&1)"
+  b="$(env -u WIKIS_DIR HOME="$HK/home" LLM_WIKI_GO="$T/bin/llm-wiki" "$W" status 2>&1)"
+  [ "$a" = "$b" ] && case "$a" in *"- hooks: "*" the last in user-prompt: wiki.sh __prompt-hook: made to fail. Run: "*) true ;; *) false ;; esac && ok "status, helper and Bash: the same, with the hooks line" || bad "status, helper and Bash: the same, with the hooks line" "$(printf 'Bash: %s\nhelper: %s' "$a" "$b")"
+else
+  skipped "status from the helper beside the Bash (go isn't installed)"
 fi
 fi
 

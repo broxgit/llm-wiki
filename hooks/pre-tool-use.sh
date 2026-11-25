@@ -26,5 +26,13 @@ case "$input" in
   *'"tool_name":"Agent"'* | *'"tool_name": "Agent"'* | *'"tool_name":"Task"'* | *'"tool_name": "Task"'* | *'start_session"'*) ;;
   *) [ -d "$dir" ] || exit 0 ;;
 esac
-printf '%s' "$input" | python3 -S "$(dirname "$0")/reminders.py" "$dir" 2>/dev/null
+# reminders.py notes the errors it catches in hooks.log. One it can't catch, such as a
+# file it can't even be read from, ends it with an exit code, noted here.
+{ hook_e="$(printf '%s' "$input" | python3 -S "$(dirname "$0")/reminders.py" "$dir" 2>&1 >&3 3>&-)"; hook_c=$?; } 3>&1
+if [ "$hook_c" != 0 ]; then
+  hook_note() { return 0; }
+  # shellcheck source=hooks/hook-note.sh
+  [ ! -r "$(dirname "$0")/hook-note.sh" ] || . "$(dirname "$0")/hook-note.sh" 2>/dev/null || true
+  hook_note pre-tool-use "$hook_c" "reminders.py" "$hook_e"
+fi
 exit 0
