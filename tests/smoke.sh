@@ -1734,7 +1734,7 @@ check "and that the lock is already its own" grep -q "lock is already held for y
 check "and never to resolve a contradiction" grep -q "Never resolve a contradiction" "$T/fake-prompt"
 expect "the lock is free afterwards" "free" cat "$BG/.compile-lock"
 expect "nothing is left waiting" "nothing waiting" "$W" pending bg
-check "the run is recorded" grep -q ',bg,2,0,[0-9]*,[0-9]*,ok,fake-agent$' "$BGR"
+check "the run is recorded" grep -q ',bg,2,0,[0-9]*,[0-9]*,ok,fake-agent,' "$BGR"
 check "and committed" bash -c "git -C '$WIKIS_DIR' log --format=%s -5 | grep -q 'bg: background compile, 2 of 2 note(s), ok'"
 expect "compile alone shows the last runs" ",bg,2,0," "$W" compile
 expect "with nothing waiting, it says so" "nothing waiting" "$W" compile bg
@@ -1809,7 +1809,7 @@ out="$("$W" compile bg 2>&1)"
 case "$out" in *"1 of 1 note(s)"*", ok."*) ok "claude named by its full path runs" ;; *) bad "claude named by its full path runs" "$out" ;; esac
 check "as Claude Code: headless, on sonnet, with a tool list" bash -c "grep -qx -- '-p' '$T/claude-args' && grep -qx 'sonnet' '$T/claude-args' && grep -qx -- '--allowedTools' '$T/claude-args'"
 check "allowed the wiki commands a compile needs" grep -q '^Bash(.* pending \*)$' "$T/claude-args"
-check "and recorded by its name" grep -q ',ok,claude$' "$BGR"
+check "and recorded by its name" grep -q ',ok,claude,' "$BGR"
 rm -f "$BGC" "$T/claude-args"
 bg_note 7
 out="$(PATH="$T/claude-bin:$PATH" "$W" compile bg 2>&1)"
@@ -1822,10 +1822,10 @@ bg_note 8
 # A run that ends well and compiled none of its notes isn't "partial": nothing was done.
 out="$(FAKE_NOTHING=1 "$W" compile bg 2>&1)" && bad "a run that compiles nothing is recorded as none" "$out" || case "$out" in *"0 of 1 note(s)"*", none."*) ok "a run that compiles nothing is recorded as none" ;; *) bad "a run that compiles nothing is recorded as none" "$out" ;; esac
 case "$out" in *"Its last line: fake-agent: left them all"*) ok "and says the agent's last line, which is where it says why" ;; *) bad "and says the agent's last line, which is where it says why" "$out" ;; esac
-check "and so in the runs" bash -c "tail -n 1 '$BGR' | grep -q ',bg,1,1,[0-9]*,[0-9]*,none,fake-agent$'"
+check "and so in the runs" bash -c "tail -n 1 '$BGR' | grep -q ',bg,1,1,[0-9]*,[0-9]*,none,fake-agent,'"
 out="$(FAKE_LATE=1 "$W" compile bg 2>&1)"
 case "$out" in *"1 of 1 note(s)"*", ok."*) ok "a note captured during a run doesn't count against it" ;; *) bad "a note captured during a run doesn't count against it" "$out" ;; esac
-check "the run is recorded with nothing left" bash -c "tail -n 1 '$BGR' | grep -q ',bg,1,0,[0-9]*,[0-9]*,ok,fake-agent$'"
+check "the run is recorded with nothing left" bash -c "tail -n 1 '$BGR' | grep -q ',bg,1,0,[0-9]*,[0-9]*,ok,fake-agent,'"
 expect "and the late note waits for the next run" "000009-late" "$W" pending bg
 # Claude Code that is installed and can't be executed, as in an agent's sandbox. The
 # run used to start and fail at once, after start had told the session to leave the notes.
@@ -1850,6 +1850,220 @@ if [ "$(id -u)" != 0 ]; then
 else
   skipped "a runs file that can't be read (root can read anything)"
 fi
+# Two collections that each have a global, compiled in the background in the same second
+# (code review M7). They shared one log, which held one run's start and the other's end,
+# and their rows in runs.csv couldn't be told apart. A clock that stops at one second for
+# the log's name makes "the same second" certain. The stand-in says which folder it ran in.
+cat > "$T/bin/m7-agent" <<FAKE
+#!/bin/sh
+cat > /dev/null
+echo "m7 run in \$(pwd -P)"
+# FAKE_DEAF: one that the time limit can't stop, so its run ends late and still timed out.
+[ -z "\${FAKE_DEAF:-}" ] || trap '' TERM
+[ -z "\${FAKE_SLEEP:-}" ] || sleep "\$FAKE_SLEEP"
+[ -z "\${FAKE_FAIL:-}" ] || { echo "m7-agent: refused" >&2; exit 3; }
+for f in \$("$W" pending "\$LLM_WIKI_COMPILE_WIKI" | sed -n 's/^\(raw\/[^ ]*\).*/\1/p'); do
+  "$W" log "\$LLM_WIKI_COMPILE_WIKI" ingest "Fake" --source "\$f" >/dev/null
+done
+echo "m7 done in \$(pwd -P)"
+FAKE
+mkdir -p "$T/m7clock"
+# The clock. With M7_PLANT set it also puts a link at the name the run's log will have: the
+# run's command substitution is this script's parent, and its number is in the log's name.
+cat > "$T/m7clock/date" <<FAKE
+#!/bin/sh
+case "\$*" in
+  *%Y%m%d-%H%M%S*)
+    [ -z "\${M7_PLANT:-}" ] || ln -s "\$M7_PLANT" "\$M7_PLANT_DIR/global-20260101-000000-\$PPID.log"
+    echo 20260101-000000; exit 0 ;;
+esac
+exec $(command -v date) "\$@"
+FAKE
+chmod +x "$T/bin/m7-agent" "$T/m7clock/date"
+printf 'agent=%s\n' "$T/bin/m7-agent" > "$BGC"
+M7A="$T/m7a" M7B="$T/m7b"
+M7L="${BGR%/*}"
+WIKIS_DIR="$M7A" "$W" new global >/dev/null 2>&1
+WIKIS_DIR="$M7B" "$W" new global >/dev/null 2>&1
+printf 'Captured: 2026-01-01\n\nA.\n' > "$M7A/global/raw/2026-01-01-000001-a.md"
+printf 'Captured: 2026-01-01\n\nB.\n' > "$M7B/global/raw/2026-01-01-000001-b.md"
+printf 'Captured: 2026-01-01\n\nB.\n' > "$M7B/global/raw/2026-01-01-000002-b.md"
+# m7_runs <n>: wait for n rows of a global, which is the last thing a run writes.
+m7_runs() {
+  local i=0
+  while [ "$i" -lt 150 ]; do
+    [ "$(grep -c ',global,' "$BGR" 2>/dev/null || true)" -lt "$1" ] || return 0
+    sleep 0.2
+    i=$((i + 1))
+  done
+  return 1
+}
+# m7_logs: the logs' names, one a line, in order.
+m7_logs() { for f in "$M7L"/*.log; do [ ! -f "$f" ] || printf '%s\n' "${f##*/}"; done | LC_ALL=C sort; }
+n="$(grep -c ',global,' "$BGR" || true)"
+m7_logs > "$T/m7-before"
+PATH="$T/m7clock:$PATH" WIKIS_DIR="$M7A" FAKE_SLEEP=1 "$W" compile global --background >/dev/null 2>&1
+PATH="$T/m7clock:$PATH" WIKIS_DIR="$M7B" FAKE_SLEEP=1 "$W" compile global --background >/dev/null 2>&1
+check "two collections' globals compiled in the background both finish" m7_runs $((n + 2))
+m7logs="$(m7_logs | LC_ALL=C comm -13 "$T/m7-before" - | tr '\n' ' ')"
+[ "$(printf '%s' "$m7logs" | wc -w | tr -d ' ')" = 2 ] && ok "started in the same second, they write two logs" || bad "started in the same second, they write two logs" "$m7logs"
+m7own=""
+for f in $m7logs; do
+  if grep -q "in $M7A/global" "$M7L/$f"; then c="$M7A" o="$M7B"; else c="$M7B" o="$M7A"; fi
+  grep -q "m7 run in $c/global" "$M7L/$f" && grep -q "m7 done in $c/global" "$M7L/$f" && ! grep -q "in $o/global" "$M7L/$f" && m7own="$m7own${c##*/} "
+done
+[ "$m7own" = "m7a m7b " ] || [ "$m7own" = "m7b m7a " ] && ok "each holding its own run's output, and only that" || bad "each holding its own run's output, and only that" "$(for f in $m7logs; do echo "== $f"; cat "$M7L/$f"; done)"
+check "each log has the wiki's name, the second and the run's process" bash -c "for f in $m7logs; do case \"\$f\" in global-20260101-000000-[0-9]*.log) ;; *) exit 1 ;; esac; done"
+check "a new runs file names the collection and the log in its header" grep -qx 'date,wiki,notes,left,seconds,oldest_hours,result,agent,collection,lint_left,log' "$BGR"
+check "each run's row names its collection, and its log" bash -c "awk -F , -v a='$M7A' -v b='$M7B' '\$2 == \"global\" && NF == 11 && \$10 == \"\" && ((\$9 == a && \$3 == 1) || (\$9 == b && \$3 == 2)) { print \$11 }' '$BGR' | LC_ALL=C sort | tr '\n' ' ' | grep -qxF '$m7logs'"
+# A row from before the change, with eight columns, counts for every collection.
+echo "2026-01-01T00:00:00Z,global,7,0,5,1,ok,old-agent" >> "$BGR"
+out="$(WIKIS_DIR="$M7A" "$W" compile 2>&1)"
+case "$out" in *",global,1,0,"*",ok,m7-agent"*",global,7,0,5,1,ok,old-agent"*) ok "compile alone shows this collection's runs, and an old row of eight columns" ;; *) bad "compile alone shows this collection's runs, and an old row of eight columns" "$out" ;; esac
+case "$out" in *",global,2,"*) bad "and not the other collection's" "$out" ;; *) ok "and not the other collection's" ;; esac
+case "$out" in *"$M7A"* | *".log"*) bad "in the eight columns it always showed" "$out" ;; *) ok "in the eight columns it always showed" ;; esac
+expect "the other collection sees its own" ",global,2,0," env WIKIS_DIR="$M7B" "$W" compile
+# wiki status names a wiki whose last run in this collection failed or ran out of time, with
+# its log, until a run of it ends otherwise. From the Bash and from the helper alike.
+[ -x "$T/bin/llm-wiki" ] || ! command -v go >/dev/null 2>&1 || build_helper >/dev/null 2>&1
+m7_status() {
+  local c="$1" g="$2"
+  shift 2
+  if [ "$g" = go ]; then env WIKIS_DIR="$c" LLM_WIKI_GO="$T/bin/llm-wiki" "$W" status "$@"
+  else env WIKIS_DIR="$c" LLM_WIKI_NO_GO=1 "$W" status "$@"; fi
+}
+m7_forms="bash"
+[ -x "$T/bin/llm-wiki" ] && m7_forms="bash go" || skipped "status from the helper after a failed run (no Go here)"
+lacks "status says nothing of a run that went well" "last background compile" m7_status "$M7B" bash
+# m7_compile <collection> [<variable>=<value>...]: compile its global with a note waiting, keeping
+# the output in out, the log's name in m7log, and the day before and after in m7d0 and m7d1.
+m7n=10
+m7_compile() {
+  local c="$1"
+  shift
+  m7n=$((m7n + 1))
+  printf 'Captured: 2026-01-01\n\nN.\n' > "$c/global/raw/2026-01-01-0000$m7n-n.md"
+  m7d0="$(date -u +%Y-%m-%d)"
+  out="$(env WIKIS_DIR="$c" "$@" "$W" compile global 2>&1)"
+  m7d1="$(date -u +%Y-%m-%d)"
+  m7log="$(printf '%s' "$out" | sed -n 's/.*Output: .*\/\([^/ ]*\.log\)$/\1/p' | head -n 1)"
+}
+# m7_day <name> <text before the day> <text after it> <command...>: the output has the text,
+# with the day the run started or the day it ended, so a run across midnight UTC still passes.
+m7_day() {
+  local name="$1" pre="$2" post="$3" o
+  shift 3
+  o="$("$@" 2>&1)"
+  case "$o" in *"$pre$m7d0$post"* | *"$pre$m7d1$post"*) ok "$name" ;; *) bad "$name (no \"$pre$m7d1$post\")" "$o" ;; esac
+}
+m7_compile "$M7B" FAKE_FAIL=1
+for g in $m7_forms; do
+  m7_day "after a failed run, status says so, with the log ($g)" "compile: the last background compile of global failed on " ". Run: tail -n 20 ~/.local/state/llm-wiki/compile/$m7log" m7_status "$M7B" "$g"
+  lacks "and not in the other collection ($g)" "last background compile" m7_status "$M7A" "$g"
+done
+m7_compile "$M7B" FAKE_SLEEP=30 LLM_WIKI_COMPILE_TIMEOUT=1
+for g in $m7_forms; do
+  m7_day "after a run that timed out, status says so, with its log ($g)" "compile: the last background compile of global ran out of time on " ". Run: tail -n 20 ~/.local/state/llm-wiki/compile/$m7log" m7_status "$M7B" "$g"
+done
+m7_compile "$M7B"
+m7good="$m7log"
+for g in $m7_forms; do
+  lacks "after a run that went well, the line is gone ($g)" "last background compile" m7_status "$M7B" "$g"
+done
+m7today="$(date -u +%Y-%m-%d)"
+# A row with no day, which read once took the log's name for: it is from no known week, so no line.
+printf ',global,1,1,0,0,failed,x,%s,,%s\n' "$M7B" "$m7good" >> "$BGR"
+lacks "a failed row with no day makes no line" "last background compile" m7_status "$M7B" bash
+# A failure more than 7 days old is not shown: the notes may have been compiled by hand since,
+# which writes no row.
+printf '%s,global,1,1,0,0,failed,x,%s,,%s\n' "$(env TZ=UTC date -u -d '8 days ago' +%Y-%m-%dT00:00:00Z 2>/dev/null || date -u -v-8d +%Y-%m-%dT00:00:00Z)" "$M7B" "$m7good" >> "$BGR"
+lacks "a failure more than 7 days old makes no line" "last background compile" m7_status "$M7B" bash
+# The last row of a wiki counts whatever its width: an old row of eight columns after a failed
+# one has no log to name, so no line.
+printf '%sT00:00:00Z,global,1,1,0,0,failed,x,%s,,%s\n' "$m7today" "$M7B" "$m7good" >> "$BGR"
+expect "a failure today shows" "compile: the last background compile of global failed on $m7today. Run: tail -n 20 " m7_status "$M7B" bash
+echo "${m7today}T00:00:01Z,global,1,0,5,1,ok,old-agent" >> "$BGR"
+lacks "and a later row of eight columns takes it away" "last background compile" m7_status "$M7B" bash
+# What runs.csv holds is data. A row of this collection's that names a log outside the logs
+# folder, with control characters and a very long field, prints none of them.
+m7long="$(printf '%05000d' 0)"
+printf '%s\033]0;owned\007T00:00:00Z,global,1,1,0,0,failed,x\033[31m,%s,,../../../../etc/passwd\n' "$m7today" "$M7B" >> "$BGR"
+out="$(m7_status "$M7B" bash 2>&1)"
+case "$out" in *"compile: the last background compile of global failed on $m7today. Run: "*" compile"*) ok "a row naming a log outside the logs folder still says the run failed" ;; *) bad "a row naming a log outside the logs folder still says the run failed" "$out" ;; esac
+case "$out" in *passwd* | *"../"*) bad "and shows no path from it" "$out" ;; *) ok "and shows no path from it" ;; esac
+case "$out" in *$'\033'* | *$'\007'* | *owned*) bad "and no control character from it" "$(printf '%s' "$out" | cat -v)" ;; *) ok "and no control character from it" ;; esac
+printf '%sT00:00:00Z,global,1,1,0,0,timeout,x,%s,,%s.log\n' "$m7today" "$M7B" "$m7long" >> "$BGR"
+printf '%sT00:00:00Z,../global,1,1,0,0,failed,x,%s,,global.log\n' "$m7today" "$M7B" >> "$BGR"
+printf '%sT00:00:00Z,%s,1,1,0,0,failed,x,%s,,global.log\n' "$m7today" "$m7long" "$M7B" >> "$BGR"
+out="$(m7_status "$M7B" bash 2>&1)"
+[ "$(printf '%s\n' "$out" | awk 'length($0) > 600' | wc -l | tr -d ' ')" = 0 ] && ok "a very long field makes no long line" || bad "a very long field makes no long line" "$(printf '%s' "$out" | cut -c 1-300)"
+case "$out" in *"of ../global"* | *"of 00000"*) bad "and a wiki that isn't a name here is passed over" "$out" ;; *) ok "and a wiki that isn't a name here is passed over" ;; esac
+expect "while the last row of a real wiki still counts" "compile: the last background compile of global ran out of time on $m7today. Run: " m7_status "$M7B" bash
+# The summary reads its rows as data too: a byte past ASCII is a ?, and no row reads as a fix.
+printf '%sT00:00:02Z,global,1,0,5,1,ok,Run: rm -rf ~ \302\233x\342\200\256\n' "$m7today" >> "$BGR"
+out="$(WIKIS_DIR="$M7B" "$W" compile 2>&1)"
+case "$out" in *"Run: rm"* | *$'\302'* | *$'\342'*) bad "the summary shows no row as a fix, and no byte past ASCII" "$(printf '%s' "$out" | cat -v)" ;; *) ok "the summary shows no row as a fix, and no byte past ASCII" ;; esac
+case "$out" in *",global,"*",ok,m7-agent"*",ok,Run rm -rf ~ ??x???"*) ok "while the wiki and agent of a real row are as they were" ;; *) bad "while the wiki and agent of a real row are as they were" "$(printf '%s' "$out" | cat -v)" ;; esac
+# A collection the collections file names is recorded by its name, and status and the summary
+# find its rows by it.
+M7N="$T/m7n"
+WIKIS_DIR="$M7N" "$W" new global >/dev/null 2>&1
+mkdir -p "$HOME/.config/llm-wiki"
+printf 'm7named %s\n' "$M7N" > "$HOME/.config/llm-wiki/collections"
+m7_compile "$M7N" FAKE_FAIL=1
+check "a named collection's row has its name" bash -c "tail -n 1 '$BGR' | awk -F , '\$9 == \"m7named\" { f = 1 } END { exit !f }'"
+m7_day "and status in it finds the run by that name" "compile: the last background compile of global failed on " ". Run: tail -n 20 ~/.local/state/llm-wiki/compile/$m7log" m7_status "$M7N" bash
+expect "and so does the summary" ",global,1,1," env WIKIS_DIR="$M7N" "$W" compile
+rm -f "$HOME/.config/llm-wiki/collections"
+# A collection reached through a link is the folder it links to.
+ln -s "$M7A" "$T/m7link"
+m7_compile "$T/m7link" FAKE_FAIL=1
+check "a run through a link records the real folder" bash -c "tail -n 1 '$BGR' | awk -F , -v a='$M7A' '\$9 == a { f = 1 } END { exit !f }'"
+m7_day "and status in the real folder finds it" "compile: the last background compile of global failed on " ". Run: tail -n 20 " m7_status "$M7A" bash
+m7_day "and so does status through the link" "compile: the last background compile of global failed on " ". Run: tail -n 20 " m7_status "$T/m7link" bash
+m7_compile "$M7A"
+# A folder with a backslash in its name, which awk -v read as an escape.
+M7S="$T/m7\\back"
+WIKIS_DIR="$M7S" "$W" new global >/dev/null 2>&1
+m7_compile "$M7S" FAKE_FAIL=1
+m7_day "a collection whose folder has a backslash finds its run" "compile: the last background compile of global failed on " ". Run: tail -n 20 " m7_status "$M7S" bash
+expect "and so does the summary" ",global,1,1," env WIKIS_DIR="$M7S" "$W" compile
+# A logs folder with a space in its path: the command is quoted, so it pastes as it is.
+M7Q="$T/m7 state"
+m7_compile "$M7B" FAKE_FAIL=1 XDG_STATE_HOME="$M7Q"
+expect "a log path with a space is quoted in the line" "Run: tail -n 20 '$M7Q/llm-wiki/compile/$m7log'" env XDG_STATE_HOME="$M7Q" WIKIS_DIR="$M7B" LLM_WIKI_NO_GO=1 "$W" status
+# The timeout marker is the run's own: of two runs in one second, one that runs out of time
+# doesn't make the other's ok run a timeout. The first can't be stopped, so its run ends after
+# the second's, and its marker is there when the second's ends.
+m7_compile "$M7A"
+m7_compile "$M7B"
+printf 'Captured: 2026-01-01\n\nA.\n' > "$M7A/global/raw/2026-01-01-000031-a.md"
+printf 'Captured: 2026-01-01\n\nB.\n' > "$M7B/global/raw/2026-01-01-000031-b.md"
+n="$(grep -c ',global,' "$BGR" || true)"
+PATH="$T/m7clock:$PATH" WIKIS_DIR="$M7A" FAKE_DEAF=1 FAKE_SLEEP=4 LLM_WIKI_COMPILE_TIMEOUT=1 "$W" compile global --background >/dev/null 2>&1
+PATH="$T/m7clock:$PATH" WIKIS_DIR="$M7B" FAKE_SLEEP=2 "$W" compile global --background >/dev/null 2>&1
+check "a pair in one second, one of them past its time, both finish" m7_runs $((n + 2))
+m7r="$(tail -n 2 "$BGR" | awk -F , -v a="$M7A" -v b="$M7B" '$9 == a { x = $7 } $9 == b { y = $7 } END { print x " " y }')"
+[ "$m7r" = "timeout ok" ] && ok "the one past its time is a timeout, and the other is ok" || bad "the one past its time is a timeout, and the other is ok" "$(tail -n 2 "$BGR")"
+# The log is made new: a link already at its name is not written through, and another name is taken.
+m7_compile "$M7A" PATH="$T/m7clock:$PATH" M7_PLANT="$T/m7victim" M7_PLANT_DIR="$M7L"
+check "a link planted at the log's name is not written through" test ! -e "$T/m7victim"
+case "$m7log" in global-20260101-000000-[0-9]*-2.log) ok "and the run takes another name" ;; *) bad "and the run takes another name" "$out" ;; esac
+find "$M7L" -name 'global-20260101-000000-*.log' -type l -exec rm -f {} + 2>/dev/null || true
+# runs.csv is written only as a plain file: through no link, with its header made once.
+M7R="$T/m7r/llm-wiki/compile"
+mkdir -p "$M7R"
+ln -s "$T/m7victim.csv" "$M7R/runs.csv"
+m7_compile "$M7A" XDG_STATE_HOME="$T/m7r"
+check "a runs.csv that is a link to nothing is not made through it" test ! -e "$T/m7victim.csv"
+case "$out" in *"compiled: global, 1 of 1 note(s)"*", ok."*) ok "and the run still ends well" ;; *) bad "and the run still ends well" "$out" ;; esac
+printf 'x\n' > "$T/m7victim.csv"
+m7_compile "$M7A" XDG_STATE_HOME="$T/m7r"
+check "a runs.csv that is a link to a file gets no row through it" test "$(cat "$T/m7victim.csv")" = x
+rm -f "$M7R/runs.csv" && mkdir "$M7R/runs.csv"
+m7_compile "$M7A" XDG_STATE_HOME="$T/m7r"
+case "$out" in *"Is a directory"*) bad "a runs.csv that is a folder gets no row, and no error" "$out" ;; *"compiled: global, 1 of 1 note(s)"*", ok."*) ok "a runs.csv that is a folder gets no row, and no error" ;; *) bad "a runs.csv that is a folder gets no row, and no error" "$out" ;; esac
+rm -rf "$M7A" "$M7B" "$M7N" "$M7S" "$T/m7link" "$T/m7r" "$M7Q" "$T/m7victim" "$T/m7victim.csv" "$T/m7clock" "$T/m7-before"
 rm -f "$BGC"
 fi
 
