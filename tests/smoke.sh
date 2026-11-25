@@ -38,6 +38,7 @@ read -r -d '' PARTS <<'TABLE' || true
 1 | Weekly report | Seed, Session hook
 3 | Bookkeeping commands | Collection
 3 | Background compile | Session hook
+2 | The compile lock holds | Collection
 3 | Reminders | Two clones merge index.md and log.md, Session hook
 3 | Index and lint | Collection
 3 | Setup fit | Session hook
@@ -299,6 +300,8 @@ lacks() {
   out="$("$@" 2>&1)"
   case "$out" in *"$unwanted"*) bad "$name (has \"$unwanted\")" "$out" ;; *) ok "$name" ;; esac
 }
+# mins_ago <n>: the UTC time n minutes ago, as a lock's line has it.
+mins_ago() { date -u -d "$1 minutes ago" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-"$1"M +%Y-%m-%dT%H:%M:%SZ; }
 set_version() { sed "s/^Handbook version [0-9]*\./Handbook version $2./" "$1" > "$1.tmp" && mv "$1.tmp" "$1"; }
 # hook <project dir> [stdin json]
 hook() { printf '%s' "${2:-}" | CLAUDE_PLUGIN_ROOT="$REPO" CLAUDE_PLUGIN_DATA="$T/data" CLAUDE_PROJECT_DIR="$1" bash "$REPO/hooks/session-start.sh"; }
@@ -1647,7 +1650,7 @@ expect "and so does --who" 'held: the session "cloud-dvr  feature work", in ~/wo
 check "--who changes nothing and succeeds" "$W" lock demo --who
 "$W" lock demo --renew >/dev/null
 check "a plain renew keeps the name" grep -q "|cloud-dvr  feature work$" "$LK"
-"$W" lock demo --release >/dev/null
+CLAUDE_PROJECT_DIR="$HOME/work/feature" "$W" lock demo --release >/dev/null
 out="$("$W" lock demo --as 'tidying up' 2>&1)"
 case "$out" in *"--renew --as"*) bad "a session that named itself isn't told how to" "$out" ;; *) ok "a session that named itself isn't told how to" ;; esac
 "$W" lock demo --release >/dev/null
@@ -1848,6 +1851,333 @@ else
   skipped "a runs file that can't be read (root can read anything)"
 fi
 rm -f "$BGC"
+fi
+
+if section "The compile lock holds"; then
+# Code review M12, L18 and T7: one taker at a time, a release only by the session that holds
+# the lock, a stale lock shown as stale, and a killed background run that leaves nothing going.
+"$W" new lk >/dev/null
+LKW="$WIKIS_DIR/lk"
+LKF="$LKW/.compile-lock"
+LKT="$T/lk"
+mkdir -p "$LKT/a" "$LKT/b"
+# lka and lkb: wiki.sh from a session in folder a, or in folder b.
+lka() { CLAUDE_PROJECT_DIR="$LKT/a" "$W" "$@"; }
+lkb() { CLAUDE_PROJECT_DIR="$LKT/b" "$W" "$@"; }
+# lk_at_once <n> [<command>...]: each command given, then n takes from folder b, all started
+# together. Each one's output is in $LKT/out.<i>.
+lk_at_once() {
+  local n="$1" i=0 pids="" p
+  shift
+  rm -f "$LKT"/out.*
+  for p in "$@"; do i=$((i + 1)); eval "$p" > "$LKT/out.c$i" 2>&1 & pids="$pids $!"; done
+  i=0
+  while [ "$i" -lt "$n" ]; do i=$((i + 1)); lkb lock lk > "$LKT/out.$i" 2>&1 & pids="$pids $!"; done
+  for p in $pids; do wait "$p"; done
+}
+lk_locked() { cat "$LKT"/out.* 2>/dev/null | grep -c '^locked:' || true; }
+lk_tok() { head -n 1 "$LKF" | awk '{ print $2 }'; }
+check "a new wiki's .gitignore leaves the lock's folders out" bash -c "grep -qxF .compile-lock.d '$LKW/.gitignore' && grep -qxF .compile-lock.take '$LKW/.gitignore'"
+
+# 1. Twenty takes at once: exactly one is told locked:, and the lock is that one's.
+r=0; why=""
+while [ "$r" -lt 3 ]; do
+  r=$((r + 1))
+  "$W" unlock lk >/dev/null
+  lk_at_once 20
+  got="$(lk_locked)"
+  printed="$(cat "$LKT"/out.* | sed -n 's/^locked: .*, token \([0-9a-f]*\)\..*/\1/p')"
+  [ "$got" = 1 ] && [ "$printed" = "$(lk_tok)" ] || why="$why round $r: $got told locked:, lock $(head -n 1 "$LKF");"
+done
+[ -z "$why" ] && ok "twenty takes at once: exactly one is told locked:, and the lock is its, in each of three rounds" || bad "twenty takes at once: exactly one is told locked:, and the lock is its, in each of three rounds" "$why"
+check "every other take is told the lock is held" test "$(cat "$LKT"/out.* | grep -c '^held: ')" = 19
+check "and no take leaves the lock's folder behind" test ! -e "$LKW/.compile-lock.d"
+
+# 2 to 4. A release asks whose lock it is.
+"$W" unlock lk >/dev/null
+out="$(lka lock lk 2>&1)"
+tok="$(lk_tok)"
+case "$out" in *"When compiling ends, even if it failed: "*" lock lk --release $tok"*) ok "the take prints the whole command that frees it, with its token" ;; *) bad "the take prints the whole command that frees it, with its token" "$out" ;; esac
+line="$(head -n 1 "$LKF")"
+out="$(lkb lock lk --release 2>&1)" && rc=0 || rc=$?
+case "$rc:$out" in "1:error: a session in $LKT/a holds the lock on $LKW, not this session. It frees itself 30 minutes after its last renewal. The user can free it now: "*" unlock lk") ok "a release from another session's folder is refused, and says who holds it and how the user frees it" ;; *) bad "a release from another session's folder is refused, and says who holds it and how the user frees it" "exit $rc: $out" ;; esac
+check "and the lock's first line is as it was" test "$(head -n 1 "$LKF")" = "$line"
+out="$(lkb lock lk --release 000000 2>&1)" && rc=0 || rc=$?
+case "$rc:$out" in *"not this session: token 000000 isn't its."*) ok "a release with a wrong token is refused" ;; *) bad "a release with a wrong token is refused" "exit $rc: $out" ;; esac
+check "and the lock is as it was" test "$(head -n 1 "$LKF")" = "$line"
+expect "a release with the holder's token frees it, from any folder" "released: " lkb lock lk --release "$tok"
+check "and the lock is free" test "$(head -n 1 "$LKF")" = free
+lka lock lk >/dev/null
+expect "a release with no token frees it from the folder that took it, as handbook v45 has it" "released: " lka lock lk --release
+check "and the lock is free" test "$(head -n 1 "$LKF")" = free
+lka lock lk >/dev/null
+expect "the token may come before the wiki" "released: " lkb lock --release lk "$(lk_tok)"
+printf 'held abc123 %s\nby: background|%s|%s|%s|1|\n' "$(mins_ago 0)" "$LKT/a" "$(mins_ago 0)" "$$" > "$LKF"
+refuse "a background run's lock isn't freed by a release from the folder it was started from" lka lock lk --release
+printf 'held abc123 %s\nby: session|%s|x|-|0|\n' "$(mins_ago 31)" "$LKT/a" > "$LKF"
+expect "a lock nobody has renewed for 30 minutes anyone may free, as anyone may take it" "released: " lkb lock lk --release
+lka lock lk >/dev/null
+expect "the user frees any lock with unlock" "unlocked: " lkb unlock lk
+check "and it is free" test "$(head -n 1 "$LKF")" = free
+
+# 5. status says stale where lock would take the lock, from the Bash and from the helper.
+lk_row() { printf '%s\n' "$1" | grep -E "^${2:-lk} +v[0-9?]+ +[0-9?]+ +" | head -n 1 | sed -E 's/^[^ ]+ +[^ ]+ +[^ ]+ +//'; }
+printf 'held abc123 %s\nby: session|%s|x|-|0|\n' "$(mins_ago 31)" "$LKT/a" > "$LKF"
+out="$(LLM_WIKI_NO_GO=1 "$W" status 2>&1)"
+check "a lock last renewed 31 minutes ago shows as stale in status, from the Bash" test "$(lk_row "$out")" = stale
+[ -x "$T/bin/llm-wiki" ] || ! command -v go >/dev/null 2>&1 || build_helper >/dev/null 2>&1
+if [ -x "$T/bin/llm-wiki" ]; then
+  out="$("$T/bin/llm-wiki" status --wikis "$WIKIS_DIR" --template-version "$TV" --wiki-cmd wiki 2>&1)"
+  check "and from the helper" test "$(printf '%s\n' "$out" | sed -n 's/^row //p' | grep -E '^lk +' | sed -E 's/^[^ ]+ +[^ ]+ +[^ ]+ +//')" = stale
+  line="held abc123 $(mins_ago 29)"
+  printf '%s\nby: session|%s|x|-|0|\n' "$line" "$LKT/a" > "$LKF"
+  out="$("$T/bin/llm-wiki" status --wikis "$WIKIS_DIR" --template-version "$TV" --wiki-cmd wiki 2>&1)"
+  check "one renewed 29 minutes ago is held, from the helper" test "$(printf '%s\n' "$out" | sed -n 's/^row //p' | grep -E '^lk +' | sed -E 's/^[^ ]+ +[^ ]+ +[^ ]+ +//')" = "$line"
+else
+  skipped "the helper's status of a stale lock (go isn't installed)"
+fi
+line="held abc123 $(mins_ago 29)"
+printf '%s\nby: session|%s|x|-|0|\n' "$line" "$LKT/a" > "$LKF"
+check "and from the Bash" test "$(lk_row "$(LLM_WIKI_NO_GO=1 "$W" status 2>&1)")" = "$line"
+printf 'held abc123 %s\nby: session|%s|x|-|0|\n' "$(mins_ago 31)" "$LKT/a" > "$LKF"
+expect "and the lock status calls stale is one lock takes" "locked: " lkb lock lk
+"$W" unlock lk >/dev/null
+
+# 10a. A renew and a release started at the same moment as twenty takes: the lock ends held by
+# one taker, or as it was, or free, and never two told they hold it.
+r=0; why=""
+while [ "$r" -lt 3 ]; do
+  r=$((r + 1))
+  "$W" unlock lk >/dev/null
+  lka lock lk >/dev/null
+  tok="$(lk_tok)"
+  lk_at_once 20 "lka lock lk --renew" "lka lock lk --release"
+  got="$(lk_locked)"
+  printed="$(cat "$LKT"/out.* | sed -n 's/^locked: .*, token \([0-9a-f]*\)\..*/\1/p')"
+  line="$(head -n 1 "$LKF")"
+  case "$got:$line" in
+    "1:held $printed "*) ;;
+    "0:free" | "0:held $tok "*) ;;
+    *) why="$why round $r: $got told locked: ($printed), lock $line;" ;;
+  esac
+done
+[ -z "$why" ] && ok "a renew and a release at the same moment as twenty takes: never two holders, in each of three rounds" || bad "a renew and a release at the same moment as twenty takes: never two holders, in each of three rounds" "$why"
+check "and no lock folder is left" test ! -e "$LKW/.compile-lock.d"
+
+# 11. The lock's folder: one left by a killed process is taken over after a minute, by one
+# taker however many find it, and one held now makes a take give up, saying why.
+# touch_ago <path> <seconds>: set its time that long ago. The suite's TZ is UTC, as touch -t reads it.
+touch_ago() { touch -t "$(date -u -d "@$(( $(date -u +%s) - $2 ))" +%Y%m%d%H%M.%S 2>/dev/null || date -u -r "$(( $(date -u +%s) - $2 ))" +%Y%m%d%H%M.%S)" "$1"; }
+"$W" unlock lk >/dev/null
+mkdir "$LKW/.compile-lock.d" && touch -t 202001010000 "$LKW/.compile-lock.d"
+expect "a lock folder left for over a minute doesn't stop a take" "locked: " lka lock lk
+check "and is gone" test ! -e "$LKW/.compile-lock.d"
+# Twenty takers that all find it stale: one removes it and the rest find the fresh one.
+r=0; why=""
+while [ "$r" -lt 3 ]; do
+  r=$((r + 1))
+  "$W" unlock lk >/dev/null
+  mkdir "$LKW/.compile-lock.d" && touch -t 202001010000 "$LKW/.compile-lock.d"
+  lk_at_once 20
+  got="$(lk_locked)"
+  printed="$(cat "$LKT"/out.* | sed -n 's/^locked: .*, token \([0-9a-f]*\)\..*/\1/p')"
+  [ "$got" = 1 ] && [ "$printed" = "$(lk_tok)" ] || why="$why round $r: $got told locked:, lock $(head -n 1 "$LKF");"
+done
+[ -z "$why" ] && ok "twenty takes that all find a stale lock folder: exactly one is told locked:, in each of three rounds" || bad "twenty takes that all find a stale lock folder: exactly one is told locked:, in each of three rounds" "$why"
+check "and neither folder is left" bash -c "[ ! -e '$LKW/.compile-lock.d' ] && [ ! -e '$LKW/.compile-lock.take' ]"
+# A minute on both systems: GNU find's -mmin +1 waited for two.
+"$W" unlock lk >/dev/null
+mkdir "$LKW/.compile-lock.d" && touch_ago "$LKW/.compile-lock.d" 90
+expect "a lock folder left for 90 seconds is taken over" "locked: " lka lock lk
+"$W" unlock lk >/dev/null
+mkdir "$LKW/.compile-lock.d" && touch_ago "$LKW/.compile-lock.d" 20
+out="$(lka lock lk 2>&1)" && rc=0 || rc=$?
+case "$rc:$out" in "1:held: another session is taking the lock on $LKW right now, so don't compile it now"*) ok "one held for 20 seconds makes a take give up, and say another session is taking the lock" ;; *) bad "one held for 20 seconds makes a take give up, and say another session is taking the lock" "exit $rc: $out" ;; esac
+check "and leaves the lock free" test "$(head -n 1 "$LKF")" = free
+out="$("$W" unlock lk 2>&1)" && rc=0 || rc=$?
+case "$rc:$out" in *"another session is writing the lock on $LKW right now. Try again in a moment."*) ok "unlock waits for it too, and says so" ;; *) bad "unlock waits for it too, and says so" "exit $rc: $out" ;; esac
+rmdir "$LKW/.compile-lock.d"
+# Something else in the folder's place is never a write without it, and is named.
+printf 'x\n' > "$LKW/.compile-lock.d"
+out="$(lka lock lk 2>&1)" && rc=0 || rc=$?
+case "$rc:$out" in "1:error: $LKW/.compile-lock.d is in the way of the compile lock: it is a file, not a folder,"*"Do: remove it, then try again") ok "a file where the lock's folder goes stops the take, and is named" ;; *) bad "a file where the lock's folder goes stops the take, and is named" "exit $rc: $out" ;; esac
+check "and the lock is as it was" test "$(head -n 1 "$LKF")" = free
+rm -f "$LKW/.compile-lock.d"
+for tgt in "$LKT/no-such" "$LKT"; do
+  ln -s "$tgt" "$LKW/.compile-lock.d"
+  out="$(lka lock lk 2>&1)" && rc=0 || rc=$?
+  case "$rc:$out" in "1:error: $LKW/.compile-lock.d is in the way of the compile lock: it is a link,"*) ok "so does a link there, to ${tgt##*/}" ;; *) bad "so does a link there, to ${tgt##*/}" "exit $rc: $out" ;; esac
+  rm -f "$LKW/.compile-lock.d"
+done
+mkdir -p "$LKW/.compile-lock.d/x" && touch -t 202001010000 "$LKW/.compile-lock.d"
+# Given 20 seconds: it used to go round removing it for ever.
+lka lock lk > "$LKT/bounded.out" 2>&1 &
+lkp=$!
+i=0; while [ "$i" -lt 200 ] && kill -0 "$lkp" 2>/dev/null; do sleep 0.1; i=$((i + 1)); done
+if kill -0 "$lkp" 2>/dev/null; then pkill -P "$lkp" 2>/dev/null; kill "$lkp" 2>/dev/null; fi
+wait "$lkp" && rc=0 || rc=$?
+out="$(cat "$LKT/bounded.out")"
+case "$rc:$out" in "1:error: $LKW/.compile-lock.d is in the way of the compile lock: it is a folder with something in it,"*) ok "a stale lock folder with something in it is named, not waited on for ever" ;; *) bad "a stale lock folder with something in it is named, not waited on for ever" "exit $rc: $out" ;; esac
+check "and the takeover's own folder is given back" test ! -e "$LKW/.compile-lock.take"
+rm -rf "$LKW/.compile-lock.d"
+# A wiki that can't be written at all: the write says so itself.
+if [ "$(id -u)" != 0 ]; then
+  rm -f "$LKF" && chmod 555 "$LKW"
+  out="$(lka lock lk 2>&1)" && rc=0 || rc=$?
+  chmod 755 "$LKW"
+  printf 'free\n' > "$LKF"
+  case "$rc:$out" in "1:"*"can't write "*) ok "a wiki that can't be written says the lock couldn't be written" ;; *) bad "a wiki that can't be written says the lock couldn't be written" "exit $rc: $out" ;; esac
+else
+  skipped "a wiki that can't be written (root can write anything)"
+fi
+# The lock file itself a link: nothing is written through it.
+printf 'keep\n' > "$LKT/target"
+mv "$LKF" "$LKT/lock.saved" && ln -s "$LKT/target" "$LKF"
+out="$(lka lock lk 2>&1)" && rc=0 || rc=$?
+case "$rc:$out" in "1:error: $LKF is a link"*) ok "a lock file that is a link is refused" ;; *) bad "a lock file that is a link is refused" "exit $rc: $out" ;; esac
+refuse "and so is unlock through it" "$W" unlock lk
+check "and what it points to is as it was" test "$(cat "$LKT/target")" = keep
+rm -f "$LKF" && mv "$LKT/lock.saved" "$LKF"
+
+# The values a take writes are checked: with set -e off inside the guard, a failed od wrote an
+# empty token, and a failed date a line with no time, which is held for ever.
+mkdir -p "$LKT/bad-od" "$LKT/bad-date"
+printf '#!/bin/sh\nexit 1\n' > "$LKT/bad-od/od"
+printf '#!/bin/sh\ncase "$*" in *%%Y-%%m-%%dT%%H:%%M:%%SZ*) exit 1 ;; esac\nexec %s "$@"\n' "$(command -v date)" > "$LKT/bad-date/date"
+chmod +x "$LKT/bad-od/od" "$LKT/bad-date/date"
+"$W" unlock lk >/dev/null
+out="$(PATH="$LKT/bad-od:$PATH" lka lock lk 2>&1)" && rc=0 || rc=$?
+case "$rc:$out" in "1:error: no token could be read from /dev/urandom"*) ok "a take with no token to be had writes nothing, and says why" ;; *) bad "a take with no token to be had writes nothing, and says why" "exit $rc: $out" ;; esac
+check "and the lock is free" test "$(head -n 1 "$LKF")" = free
+out="$(PATH="$LKT/bad-date:$PATH" lka lock lk 2>&1)" && rc=0 || rc=$?
+case "$rc:$out" in "1:error: date gave no time"*) ok "nor does one with no time to be had" ;; *) bad "nor does one with no time to be had" "exit $rc: $out" ;; esac
+check "and the lock is free" test "$(head -n 1 "$LKF")" = free
+lka lock lk >/dev/null
+line="$(head -n 1 "$LKF")"
+refuse "a renew with no time to be had fails" env PATH="$LKT/bad-date:$PATH" CLAUDE_PROJECT_DIR="$LKT/a" "$W" lock lk --renew
+check "and leaves the lock as it was" test "$(head -n 1 "$LKF")" = "$line"
+"$W" unlock lk >/dev/null
+
+# A release names a token or none, never an empty one.
+lka lock lk >/dev/null
+out="$(lka lock lk --release "" 2>&1)" && rc=0 || rc=$?
+case "$rc:$out" in "2:error: lock --release takes the token its take printed"*) ok "--release with an empty token is a usage error" ;; *) bad "--release with an empty token is a usage error" "exit $rc: $out" ;; esac
+check "and the lock is still held" bash -c "head -n 1 '$LKF' | grep -q '^held '"
+"$W" unlock lk >/dev/null
+
+# A renew that names a hand-written lock's session doesn't make the renewer its holder.
+printf 'held abc123 %s\n' "$(mins_ago 0)" > "$LKF"
+lkb lock lk --renew --as 'not mine' >/dev/null
+check "a renew --as on a lock written by hand keeps the name and claims no folder" grep -qx 'by: session|||-|-|not mine' "$LKF"
+refuse "so the renewer's release with no token doesn't free it" lkb lock lk --release
+check "and the lock is as it was" grep -q '^held abc123 ' "$LKF"
+"$W" unlock lk >/dev/null
+
+# A project folder with a bar in its name: its fields stay where they are.
+LKP="$LKT/p|q"
+mkdir -p "$LKP"
+CLAUDE_PROJECT_DIR="$LKP" "$W" lock lk >/dev/null
+check "a folder with a bar in its name is written with a ? for it" grep -q "^by: session|$LKT/p?q|" "$LKF"
+expect "and a release with no token from it frees the lock" "released: " env CLAUDE_PROJECT_DIR="$LKP" "$W" lock lk --release
+
+# What the lock file says is shown without its control characters.
+lkn="$(mins_ago 0)"; printf 'held abc123 %s \033[31mred\007\nby: session|%s\033]0;t\007|x|-|0|\n' "$lkn" "$LKT/a" > "$LKF"
+out="$(LLM_WIKI_NO_GO=1 "$W" status 2>&1)"
+case "$out" in *"$(printf '\033')"* | *"$(printf '\007')"*) bad "status shows the lock without its control characters, from the Bash" "$out" ;; *) ok "status shows the lock without its control characters, from the Bash" ;; esac
+[ "$(lk_row "$out")" = "held abc123 $lkn [31mred" ] && ok "and the rest of the line is as it was" || bad "and the rest of the line is as it was" "$(lk_row "$out" | od -c | head -n 5)"
+if [ -x "$T/bin/llm-wiki" ]; then
+  check "and the helper shows the same" test "$(LLM_WIKI_GO="$T/bin/llm-wiki" "$W" status 2>&1)" = "$out"
+else
+  skipped "the helper's status of a lock with control characters (go isn't installed)"
+fi
+out="$(lkb lock lk 2>&1)"
+case "$out" in *"$(printf '\033')"* | *"$(printf '\007')"*) bad "a take that finds it held names its holder without them" "$out" ;; *) ok "a take that finds it held names its holder without them" ;; esac
+"$W" unlock lk >/dev/null
+# A lock file that can't be read is a ? in status, which goes on to its end.
+if [ "$(id -u)" != 0 ]; then
+  printf 'held abc123 %s\n' "$(mins_ago 0)" > "$LKF" && chmod 000 "$LKF"
+  for go in 1 ""; do
+    out="$(env LLM_WIKI_NO_GO="$go" LLM_WIKI_GO="$T/bin/llm-wiki" "$W" status 2>&1)" && rc=0 || rc=$?
+    [ "$rc" = 0 ] && [ "$(lk_row "$out")" = "?" ] && ok "a lock file that can't be read is a ? in status$([ -n "$go" ] && echo ', from the Bash' || echo ', with the helper asked first'), and status ends well" || bad "a lock file that can't be read is a ? in status$([ -n "$go" ] && echo ', from the Bash' || echo ', with the helper asked first'), and status ends well" "exit $rc: $out"
+  done
+  chmod 644 "$LKF"
+else
+  skipped "a lock file that can't be read (root can read anything)"
+fi
+"$W" unlock lk >/dev/null
+
+# A background run does nothing until the lock is its own: a note typed into the inbox stays
+# there while it waits. It used to be taken into raw/ before the lock was taken.
+mkdir -p "$LKW/inbox"
+printf '# Typed\n\nA typed note.\n' > "$LKW/inbox/typed.md" && touch -t 202001010000 "$LKW/inbox/typed.md"
+"$W" unlock lk >/dev/null
+LLM_WIKI_INBOX_MINUTES=0 LLM_WIKI_BACKGROUND=1 "$W" compile lk --locked >/dev/null 2>&1 &
+lkr=$!
+i=0; while [ "$i" -lt 30 ] && [ -e "$LKW/inbox/typed.md" ]; do sleep 0.1; i=$((i + 1)); done
+check "a background run waiting for its lock leaves the inbox alone" test -e "$LKW/inbox/typed.md"
+kill "$lkr" 2>/dev/null; wait "$lkr" 2>/dev/null
+check "and the lock alone" test "$(head -n 1 "$LKF")" = free
+expect "which wiki inbox then takes in, as before" "taken: " env LLM_WIKI_INBOX_MINUTES=0 "$W" inbox
+rm -rf "$LKW/inbox"; rm -f "$LKW"/raw/*typed*
+
+# 10b and 11. A background run killed while its agent works: the agent and the time limit's
+# watchdog go with it, the lock is free, and the next take has it at once.
+LKC="$HOME/.config/llm-wiki/compile"
+mkdir -p "${LKC%/*}"
+[ ! -f "$LKC" ] || mv "$LKC" "$LKT/compile.saved"
+printf '#!/bin/sh\ncat >/dev/null\necho $$ > "%s/agent.pid"\nexec sleep 60\n' "$LKT" > "$LKT/agent"
+chmod +x "$LKT/agent"
+printf 'agent=%s\n' "$LKT/agent" > "$LKC"
+printf 'Captured: 2026-01-01\n\nA note.\n' > "$LKW/raw/2026-01-01-000001-lk.md"
+"$W" unlock lk >/dev/null
+rm -f "$LKT/agent.pid"
+out="$(LLM_WIKI_COMPILE_TIMEOUT=977 lka compile lk --background 2>&1)"
+case "$out" in *"in the background"*) ok "a background run starts" ;; *) bad "a background run starts" "$out" ;; esac
+# Read at once: the take wrote the run's process, where the run used to add it a moment later.
+lk_run() { local r; r="$(sed -n '2p' "$LKF" | awk -F'|' '{ print $4 }')"; case "$r" in '' | *[!0-9]* | 0 | 1) ;; *) printf '%s' "$r" ;; esac; }
+run="$(lk_run)"
+check "the lock names the run's process from the moment it is taken" bash -c "[ -n '$run' ] && kill -0 '$run'"
+# Everything the run started: the agent, and the watchdog with its sleep.
+lk_tree() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do echo "$c"; lk_tree "$c"; done; }
+lk_watch() { local p; for p in $(lk_tree "$run"); do ps -o command= -p "$p" 2>/dev/null; done | grep -q 'sleep 977'; }
+i=0
+while [ "$i" -lt 150 ] && { [ -z "$run" ] || [ ! -s "$LKT/agent.pid" ] || ! lk_watch; }; do
+  sleep 0.1; i=$((i + 1)); [ -n "$run" ] || run="$(lk_run)"
+done
+if [ -n "$run" ]; then
+  agent="$(cat "$LKT/agent.pid" 2>/dev/null)"
+  kids="$(lk_tree "$run" | tr '\n' ' ')"
+  check "it has an agent and a watchdog going" bash -c "case ' $kids' in *' $agent '*) ;; *) exit 1 ;; esac; for p in $kids; do ps -o command= -p \"\$p\"; done | grep -q 'sleep 977'"
+  kill "$run" 2>/dev/null
+  # Gone within a second, given five under load.
+  lk_gone() { local p; for p in $run $kids; do kill -0 "$p" 2>/dev/null && return 1; done; return 0; }
+  i=0; while [ "$i" -lt 50 ] && ! lk_gone; do sleep 0.1; i=$((i + 1)); done
+  left=""; for p in $run $kids; do ! kill -0 "$p" 2>/dev/null || left="$left $(ps -o pid=,command= -p "$p" 2>/dev/null)"; done
+  [ -z "$left" ] && ok "killed, the run stops its agent and its watchdog" || bad "killed, the run stops its agent and its watchdog" "$left"
+  for p in $kids; do kill "$p" 2>/dev/null || true; done
+else
+  bad "killed, the run stops its agent and its watchdog" "the lock never named the run's process: $(cat "$LKF")"
+fi
+check "and frees the lock" test "$(head -n 1 "$LKF")" = free
+check "and leaves no lock folder" test ! -e "$LKW/.compile-lock.d"
+out="$(lka lock lk 2>&1)"
+case "$out" in "locked: "*) ok "so the next take has the lock at once" ;; *) bad "so the next take has the lock at once" "$out" ;; esac
+"$W" unlock lk >/dev/null
+# Started from a folder with a bar in its name, a background run still finds its process in
+# the lock, and runs: the bar used to push the process number out of its field, and the run
+# waited for a lock it never saw while the lock stayed held.
+printf '#!/bin/sh\ncat >/dev/null\necho "quick agent"\n' > "$LKT/agent-quick"
+chmod +x "$LKT/agent-quick"
+printf 'agent=%s\n' "$LKT/agent-quick" > "$LKC"
+out="$(CLAUDE_PROJECT_DIR="$LKP" "$W" compile lk --background 2>&1)"
+case "$out" in *"in the background"*) ok "a background run starts from a folder with a bar in its name" ;; *) bad "a background run starts from a folder with a bar in its name" "$out" ;; esac
+run="$(lk_run)"
+check "and the lock names its process" test -n "$run"
+i=0; while [ "$i" -lt 150 ] && [ "$(head -n 1 "$LKF")" != free ]; do sleep 0.1; i=$((i + 1)); done
+check "and it runs, and frees the lock" test "$(head -n 1 "$LKF")" = free
+"$W" unlock lk >/dev/null
+rm -f "$LKC" "$LKW/raw/2026-01-01-000001-lk.md"
+[ ! -f "$LKT/compile.saved" ] || mv "$LKT/compile.saved" "$LKC"
 fi
 
 if section "Reminders"; then
@@ -4417,7 +4747,12 @@ goes"
   sw st-pat "$TV"
   printf '# Patterns\n\n## Ready\n- kind: correction\n- status: watching\n- seen: 2026-01-01 a raw/a.md x3\n## Again\n- kind: correction\n- status: accepted 2026-01-05: a convention\n- seen: 2026-01-06 b raw/b.md\n' > "$FD/st-pat/patterns.md"
   sw st-old 1; sw st-new 999; sw st-nover none
-  sw st-lock "$TV"; printf 'held by s-1 since 2026-01-01\nmore\n' > "$FD/st-lock/.compile-lock"
+  # Held, stale after 30 minutes with no renewal, and stale once a background run has stopped.
+  STLOCK="held s-1 $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  sw st-lock "$TV"; printf '%s\nmore\n' "$STLOCK" > "$FD/st-lock/.compile-lock"
+  sw st-lock-old "$TV"; printf 'held s-2 %s\nby: session|/p|x|-|0|\n' "$(mins_ago 31)" > "$FD/st-lock-old/.compile-lock"
+  sleep 0 & stgone=$!; wait "$stgone"
+  sw st-lock-run "$TV"; printf 'held s-3 %s\nby: background|/p|x|%s|0|\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$stgone" > "$FD/st-lock-run/.compile-lock"
   # covers-nl/ comes before covers/ in the shell's glob, which sorts with the slash.
   sw st-cov "$TV"; printf -- '- web\n- api\r\nnot a line\n- last' > "$FD/st-cov/repos.md"
   sw st-cov-nl "$TV"; printf -- '- one\n- two\n' > "$FD/st-cov-nl/repos.md"
@@ -4431,7 +4766,9 @@ goes"
   out="$(srun "$T/bin/llm-wiki")"
   expect "and the helper counts the notes waiting, less those compiled" "st-due                     v$TV       7        free  <- compile due" printf '%s' "$out"
   expect "and the patterns ready and not working, and the ingests since a lint" "st-pat                     v$TV       0        free  <- 1 pattern(s) ready  <- 1 accepted fix(es) not working" printf '%s' "$out"
-  expect "and the lock" "st-lock                    v$TV       0        held by s-1 since 2026-01-01" printf '%s' "$out"
+  expect "and the lock" "st-lock                    v$TV       0        $STLOCK" printf '%s' "$out"
+  expect "and a lock not renewed for 30 minutes as stale" "st-lock-old                v$TV       0        stale" printf '%s' "$out"
+  expect "and a stopped background run's lock as stale" "st-lock-run                v$TV       0        stale" printf '%s' "$out"
   expect "and what a wiki covers, a last line with no line feed and all" "free  covers: web api$(printf '\r') last" printf '%s' "$out"
   expect "and the other collection's notes" "also:    collection work at $(printf '%s' "$CW" | sed "s#^$HOME#~#"), 2 note(s) waiting." printf '%s' "$out"
   [ "$(printf '%s\n' "$out" | awk '$1 ~ /^(Beta|alpha|st-cov-nl|st-cov)$/ { printf "%s ", $1 }')" = "Beta alpha st-cov-nl st-cov " ] && ok "and orders the wikis by byte, as the shell's glob of */ does" || bad "and orders the wikis by byte, as the shell's glob of */ does" "$out"
@@ -14659,8 +14996,8 @@ printf '\n\n\n\n\n\n' | fcwt "$FA" setup git >/dev/null 2>&1
 out="$(fcg "$FA" -C "$FA/wikis" ls-files)"
 check "the clone's commits hold no journal, delegation or stats file" test -z "$(printf '%s\n' "$out" | fcmine)"
 check "and they hold WIKIS.md" bash -c "printf '%s\n' '$out' | grep -qx WIKIS.md"
-f=1; for l in .DS_Store .compile-lock .obsidian/ .trash/ /journal/ /delegation.md /delegation-log.csv /stats.csv; do grep -qxF -- "$l" "$FA/wikis/.gitignore" 2>/dev/null || f=0; done
-[ "$f" = 1 ] && ok "the clone's .gitignore has the four base lines and the ones for the journal and delegation files" || bad "the clone's .gitignore has the four base lines and the ones for the journal and delegation files" "$(cat "$FA/wikis/.gitignore" 2>&1)"
+f=1; for l in .DS_Store .compile-lock .compile-lock.d .compile-lock.take .obsidian/ .trash/ /journal/ /delegation.md /delegation-log.csv /stats.csv; do grep -qxF -- "$l" "$FA/wikis/.gitignore" 2>/dev/null || f=0; done
+[ "$f" = 1 ] && ok "the clone's .gitignore has the six base lines and the ones for the journal and delegation files" || bad "the clone's .gitignore has the six base lines and the ones for the journal and delegation files" "$(cat "$FA/wikis/.gitignore" 2>&1)"
 
 # No name until setup asks for one: the first commit is setup's, and it takes llm-wiki's own files by name.
 FB="$FC/b"; fcclone "$FB"

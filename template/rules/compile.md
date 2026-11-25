@@ -11,9 +11,9 @@ Check for pending files first. Take the lock only when there is something to com
 1. Read `.compile-lock`. The lock is free if the file is missing, says `free`, or carries a time more than 30 minutes old.
 2. If it is free, write one line: `held <token> <UTC time>`. Make up a 6-character token. Write the time as `YYYY-MM-DDTHH:MM:SSZ`.
 3. Read the file back. If the token is yours, you hold the lock. If not, another session got there first. Don't compile.
-4. When the compile work ends, write `free`. Do this even if the work failed.
+4. When the compile work ends, write `free` if your token is still there. Do this even if the work failed.
 
-`wiki.sh lock <wiki>` does steps 1 to 3, and exits with an error if another session holds the lock. `wiki.sh lock <wiki> --release` does step 4, and `--renew` rewrites the time. Use them when you have the script.
+`wiki.sh lock <wiki>` does steps 1 to 3, and exits with an error if another session holds the lock. It prints the command for step 4, with your token: free the lock with that command. `--renew` rewrites the time. Use them when you have the script.
 
 If you can't get the current time, treat any `held` line as held. If compile work runs past 20 minutes, rewrite the line with a fresh time.
 

@@ -28,7 +28,7 @@ start: a ticket folder with pages that mention it	1342
 start: a ticket folder, the Jira extension set up	1441
 start: a ticket folder, two wikis, no pattern	1466
 template/AGENTS.md	16129
-template/rules/compile.md	11888
+template/rules/compile.md	11952
 template/rules/conflicts.md	1581
 template/rules/delegation.md	4985
 template/rules/dependencies.md	3612

@@ -1,4 +1,6 @@
 .DS_Store
 .compile-lock
+.compile-lock.d
+.compile-lock.take
 .obsidian/
 .trash/

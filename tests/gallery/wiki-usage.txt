@@ -15,9 +15,10 @@
   capture <wiki> <slug>  Save a note piped on stdin in raw/, named from the clock.
                        --file NOTE reads it from a file. --copy FILE stores a
                        document unchanged instead.
-  lock <wiki> [--release|--renew|--who] [--as <name>]
-                       Take, release or renew the compile lock. --who says who holds
-                       it. --as names the session that takes or renews it.
+  lock <wiki> [--release [<token>]|--renew|--who] [--as <name>]
+                       Take, release or renew the compile lock. A release names the
+                       token the take printed. --who says who holds it. --as names
+                       the session that takes or renews it.
   compile [<wiki>] [--background] | on | off
                        Compile a wiki's waiting notes with a headless agent. on makes
                        session start do it in the background. compile --help has more.

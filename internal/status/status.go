@@ -21,6 +21,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/broxgit/llm-wiki/internal/routing"
 )
@@ -237,8 +239,9 @@ func version(path string) (string, error) {
 	return "", nil
 }
 
-// lockLine is the LOCK column: the lock file's first line when it says the lock is
-// held, and "free" otherwise.
+// lockLine is the LOCK column: the lock file's first line while someone holds the lock,
+// "stale" when it says held and lock_holder in wiki.sh would take it as free, and "free"
+// otherwise.
 func lockLine(path string) (string, error) {
 	ok, err := routing.IsFile(path)
 	if err != nil || !ok {
@@ -248,11 +251,76 @@ func lockLine(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	line, _, _ := bytes.Cut(data, []byte("\n"))
-	if bytes.HasPrefix(line, []byte("held")) {
-		return string(line), nil
+	line, rest, _ := bytes.Cut(data, []byte("\n"))
+	if !bytes.HasPrefix(line, []byte("held ")) {
+		return "free", nil
 	}
-	return "free", nil
+	by, _, _ := bytes.Cut(rest, []byte("\n"))
+	held, err := lockHeld(line, by)
+	if err != nil {
+		return "", err
+	}
+	if held {
+		return string(clean(line)), nil
+	}
+	return "stale", nil
+}
+
+// clean is lock_clean, and the tr in lock_by: the lock's text without its control
+// characters, bytes 0 to 31 and 127. The file can come from elsewhere, through a sync.
+func clean(b []byte) []byte {
+	out := make([]byte, 0, len(b))
+	for _, c := range b {
+		if c >= 32 && c != 127 {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// Seams for the tests: the clock, and whether a process is running.
+var (
+	now   = time.Now
+	alive = func(pid int) bool { return syscall.Kill(pid, 0) == nil }
+)
+
+var lockTime = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$`)
+
+// lockHeld is lock_holder's test, for a first line that starts "held ", with the lock's
+// second line: a background run whose process is gone holds nothing, and otherwise the
+// lock is held for 30 minutes after the time on its first line. A time it can't read
+// counts as held there, but which times the shell's date reads differs between GNU and
+// BSD, so a time not in the handbook's form is an error, and the Bash answers: so are a
+// day that doesn't exist, which BSD date moves into the next month, and a year before
+// 1970 (BSD date reads none before 1900). So is a process number kill might read its own
+// way.
+func lockHeld(line, second []byte) (bool, error) {
+	if by, ok := bytes.CutPrefix(second, []byte("by: ")); ok {
+		// lock_field: awk -F'|', so fields split at each bar, of the line lock_by cleaned.
+		f := strings.Split(string(clean(by)), "|")
+		if f[0] == "background" && len(f) >= 4 && f[3] != "" && strings.Trim(f[3], "0123456789") == "" {
+			if len(f[3]) > 9 {
+				return false, errors.New("a process number for the Bash: " + f[3])
+			}
+			pid, err := strconv.Atoi(f[3])
+			if err != nil || pid == 0 {
+				return false, errors.New("a process number for the Bash: " + f[3])
+			}
+			if !alive(pid) {
+				return false, nil
+			}
+		}
+	}
+	// awk's $3, under LC_ALL=C: fields split at runs of spaces and tabs.
+	fields := bytes.FieldsFunc(line, func(r rune) bool { return r == ' ' || r == '\t' })
+	if len(fields) < 3 || !lockTime.Match(fields[2]) {
+		return false, errors.New("a lock time for the Bash: " + string(line))
+	}
+	then, err := time.Parse("2006-01-02T15:04:05Z", string(fields[2]))
+	if err != nil || then.Year() < 1970 {
+		return false, errors.New("a lock time for the Bash: " + string(line))
+	}
+	return now().Unix()-then.Unix() < 1800, nil
 }
 
 var (
