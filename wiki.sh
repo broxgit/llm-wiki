@@ -348,9 +348,10 @@ Usage: $WIKI_CMD <command> [options]
   capture <wiki> <slug>  Save a note piped on stdin in raw/, named from the clock.
                        --file NOTE reads it from a file. --copy FILE stores a
                        document unchanged instead.
-  lock <wiki> [--release|--renew|--who] [--as <name>]
-                       Take, release or renew the compile lock. --who says who holds
-                       it. --as names the session that takes or renews it.
+  lock <wiki> [--release [<token>]|--renew|--who] [--as <name>]
+                       Take, release or renew the compile lock. A release names the
+                       token the take printed. --who says who holds it. --as names
+                       the session that takes or renews it.
   compile [<wiki>] [--background] | on | off
                        Compile a wiki's waiting notes with a headless agent. on makes
                        session start do it in the background. compile --help has more.
@@ -543,7 +544,7 @@ need_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 # Raise GO_PROTOCOL, with the constant in cmd/llm-wiki/main.go, whenever a ported
 # command's arguments or output change. scripts/helper.sh builds releases and writes
 # helper.lock.
-GO_PROTOCOL=26
+GO_PROTOCOL=27
 HELPER_LOCK="$REPO/helper.lock"
 HELPER_DIR="${LLM_WIKI_HELPER_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/llm-wiki/helper}"
 
@@ -2808,10 +2809,19 @@ capture_lint() {
 #   by: <kind>|<folder>|<since>|<pid>|<notes>|<name>
 # kind is session or background. pid is a background run's own, and notes how many
 # waited when the lock was taken. name is what a session called itself with --as.
-lock_by() { sed -n '2s/^by: //p' "$1/.compile-lock" 2>/dev/null || true; }
+# The file can come from elsewhere, through a sync service, so what is read from it loses
+# its control characters before it is shown.
+lock_by() { LC_ALL=C sed -n '2s/^by: //p' "$1/.compile-lock" 2>/dev/null | LC_ALL=C tr -d '\000-\037\177' || true; }
 lock_field() { printf '%s' "$1" | awk -F'|' -v n="$2" '{ print $n }'; }
 # lock_name <text>: a session's name for itself, made safe for one field of that line.
 lock_name() { printf '%s' "$1" | tr -d '\n\r|' | cut -c 1-80; }
+# lock_folder <path>: a folder as the by: line holds it. A bar or a line break in a project's
+# path shifted the fields after it, so a background run never found its process and a
+# release never found its folder. Each such character becomes a ?, and a release compares
+# its own folder the same way.
+lock_folder() { printf '%s' "$1" | LC_ALL=C tr '|\000-\037\177' '?'; }
+# lock_clean <text>: text from the lock file, without its control characters, to print.
+lock_clean() { printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177'; }
 
 # lock_who <wiki root>: who holds the lock, as words that can start a sentence's subject.
 lock_who() {
@@ -2860,11 +2870,215 @@ lock_holder() {
   if [ -z "$then_" ] || [ $(( $(date -u +%s) - then_ )) -lt 1800 ]; then printf '%s' "$line"; fi
 }
 
-# lock <wiki> [--release | --renew | --who] [--as <name>]: the compile lock, as
+# path_age <path>: seconds since it last changed, or nothing. GNU stat takes -c, BSD stat -f.
+# find -mmin +1 matched from 61 seconds with BSD find and from 120 with GNU find.
+path_age() {
+  local m
+  m="$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || true)"
+  case "$m" in '' | *[!0-9]*) return 0 ;; esac
+  printf '%s' $(( $(date -u +%s) - m ))
+}
+# lock_stale <folder>: a guard folder held for a minute, which no write takes: its holder was killed.
+lock_stale() {
+  local a
+  a="$(path_age "$1")"
+  [ -n "$a" ] && [ "$a" -ge 60 ]
+}
+# lock_odd <path>: what is at a guard folder's path when it isn't a folder of its own, or failure.
+lock_odd() {
+  if [ -L "$1" ]; then printf 'a link'
+  elif [ -e "$1" ] && [ ! -d "$1" ]; then printf 'a file, not a folder'
+  else return 1
+  fi
+}
+# lock_in_way <path> <what it is>: the error for something in a guard folder's place.
+lock_in_way() {
+  printf '%s is in the way of the compile lock: it is %s, where a session makes an empty folder for a moment. Nothing was written. Do: remove it, then try again' "$(tilde "$1")" "$2"
+}
+
+# lock_write <wiki root> <function> [<arg>...]: run the function, which reads the compile
+# lock and writes it, while this process holds the folder <wiki root>/.compile-lock.d. Every
+# write to the lock goes through here: a take, a renew, a release, unlock, and a background
+# run freeing its own. Taking the lock was a read, a write and a read back, and two sessions
+# that both read "free" each read their own line back: of 30 takes started at once, 2 to 4
+# were told "locked:" (code review M12). mkdir is one step, so only one process holds the
+# folder. The function runs in a subshell, so an exit or a die in it ends only that, and the
+# folder is given back either way. A folder held for a minute is a killed process's, and
+# lock_takeover removes it. Fails with LOCK_BUSY when another process held the folder for two
+# seconds, and otherwise with the function's own exit code.
+#
+# Only a wiki folder that can't be written at all, as in an agent's sandbox, runs the function
+# without the folder, so that the write says so itself. A folder that is only gone again by
+# the time it is looked at was given back by its holder: that is a round more, never a write
+# without it. Something else in its place, a file or a link, is an error that names it.
+LOCK_BUSY=75
+lock_write() {
+  local root="$1" g="$1/.compile-lock.d" n=0 gone=0 rc=0 odd
+  shift
+  if [ -L "$root/.compile-lock" ]; then
+    ( die "$(tilde "$root/.compile-lock") is a link, and the compile lock is a plain file of the wiki's own. Nothing was written through it. Do: remove the link, then try again" ) || return 1
+  fi
+  while ! mkdir "$g" 2>/dev/null; do
+    if [ ! -w "$root" ]; then ( "$@" ) || rc=$?; return "$rc"; fi
+    if odd="$(lock_odd "$g")"; then ( die "$(lock_in_way "$g" "$odd")" ) || return 1; fi
+    if [ ! -d "$g" ]; then
+      # Given back between the two looks, or can't be made though the folder says it can be
+      # written, as some sandboxes answer. Five times running is no holder's timing.
+      gone=$((gone + 1))
+      [ "$gone" -lt 5 ] || { ( "$@" ) || rc=$?; return "$rc"; }
+      continue
+    fi
+    gone=0
+    n=$((n + 1))
+    [ "$n" -le 20 ] || return "$LOCK_BUSY"
+    if lock_stale "$g"; then lock_takeover "$root" || return 1; fi
+    sleep 0.1
+  done
+  ( "$@" ) || rc=$?
+  rmdir "$g" 2>/dev/null || true
+  return "$rc"
+}
+
+# lock_takeover <wiki root>: remove a guard folder that a killed process left, under a second
+# folder, .compile-lock.take, which only one process holds at a time, and only after looking
+# at the guard's age again there. Two that both found it stale removed it in turn, the second
+# removing the fresh one the first had just made, and both went on to write. One left by a
+# process killed in the moment it held .compile-lock.take is removed after a minute too.
+lock_takeover() {
+  local root="$1" g="$1/.compile-lock.d" t="$1/.compile-lock.take" odd
+  if ! mkdir "$t" 2>/dev/null; then
+    if odd="$(lock_odd "$t")"; then ( die "$(lock_in_way "$t" "$odd")" ) || return 1; fi
+    if [ -d "$t" ] && lock_stale "$t"; then rmdir "$t" 2>/dev/null || true; fi
+    return 0
+  fi
+  if [ -d "$g" ] && [ ! -L "$g" ] && lock_stale "$g" && ! rmdir "$g" 2>/dev/null; then
+    rmdir "$t" 2>/dev/null || true
+    ( die "$(lock_in_way "$g" "a folder with something in it")" ) || return 1
+  fi
+  rmdir "$t" 2>/dev/null || true
+}
+
+# lock_now: the time for a lock's line, or a die. With set -e off inside lock_write's
+# subshell, a date that failed wrote a line with no time, which counts as held for ever.
+lock_now() {
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
+  case "$now" in
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z) printf '%s' "$now" ;;
+    *) die "date gave no time in the form YYYY-MM-DDTHH:MM:SSZ, so the lock wasn't written. Do: check that date -u runs in this shell" ;;
+  esac
+}
+
+# lock_take <wiki root> <wiki as named> <name> <notes waiting>: the take, inside lock_write.
+lock_take() {
+  local root="$1" wiki="$2" name="$3" notes="$4" f="$1/.compile-lock" line when by since tok now kind pid="-" hint=""
+  now="$(lock_now)" || exit 1
+  line="$(lock_holder "$root")"
+  if [ -n "$line" ]; then
+    when="$(lock_clean "$(printf '%s' "$line" | awk '{ print $3 }')")"
+    by="$(lock_by "$root")"
+    since="$(lock_field "$by" 3)"
+    if [ -z "$by" ]; then
+      echo "held: another session has held the lock on $(tilde "$root") since $when. Don't compile it now; carry on, and the notes wait for a later pause."
+    elif [ "$(lock_field "$by" 1)" = background ]; then
+      echo "held: $(lock_who "$root") has held the lock on $(tilde "$root") since ${since:-$when}. It is compiling the waiting notes, so don't compile them and nothing needs doing."
+    else
+      echo "held: $(lock_who "$root") has held the lock on $(tilde "$root") since ${since:-$when}, last renewed $when. Don't compile it now; carry on, and the notes wait for a later pause. If the user needs them compiled sooner, tell them which session holds the lock: that session can compile them, or free it with $WIKI_CMD lock ${wiki} --release. It frees itself 30 minutes after its last renewal."
+    fi
+    exit 1
+  fi
+  # Six hex digits, or no lock: a failed od gave an empty token, which the read back
+  # below took for a match.
+  tok="$(od -An -N3 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' || true)"
+  case "$tok" in
+    [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+    *) die "no token could be read from /dev/urandom, so the lock wasn't taken. Do: run this where od can read /dev/urandom" ;;
+  esac
+  kind="${LLM_WIKI_LOCK_KIND:-session}"
+  # A background run's own process, named in the same write that takes the lock: a run
+  # killed at any point after it then holds nothing, where one killed before it wrote the
+  # number held the lock for 30 minutes.
+  if [ "$kind" = background ]; then
+    case "${LLM_WIKI_LOCK_PID:-}" in '' | *[!0-9]*) ;; *) pid="$LLM_WIKI_LOCK_PID" ;; esac
+  fi
+  { printf 'held %s %s\n' "$tok" "$now"; printf 'by: %s|%s|%s|%s|%s|%s\n' "$kind" "$(lock_folder "${CLAUDE_PROJECT_DIR:-$PWD}")" "$now" "$pid" "$notes" "$name"; } 2>/dev/null > "$f" || die "$(cant_write "$f")"
+  [ "$kind" != session ] || [ -n "$name" ] || hint=". To let a session that finds it locked say who holds it: $WIKI_CMD lock ${wiki} --renew --as '<a few words on this session>'"
+  # Read it back. A session that writes the lock by hand, as the handbook allows, doesn't
+  # wait for the folder, and if it wrote in between, the lock is its.
+  if [ "$(head -n 1 "$f" 2>/dev/null || true)" != "held $tok $now" ]; then
+    echo "held: another session took the lock on $(tilde "$root") first. Don't compile it now."
+    exit 1
+  fi
+  echo "locked: $(tilde "$root"), token $tok. When compiling ends, even if it failed: $WIKI_CMD lock ${wiki} --release $tok$hint"
+}
+
+# lock_release <wiki root> <wiki as named> <token or nothing>: the release, inside
+# lock_write. It frees the lock for the session that holds it, and for no other: one that
+# was refused the lock and then followed "release it even if compiling failed" freed
+# another session's (code review M12). The session is known by the token its take printed,
+# or, with no token, as handbook v45 and earlier have a session type it, by the folder its
+# take named. A lock nobody holds any more, stale or a stopped background run's, anyone may
+# take, so anyone may free it too.
+lock_release() {
+  local root="$1" wiki="$2" tok="$3" f="$1/.compile-lock" line by mine=0
+  line="$(head -n 1 "$f" 2>/dev/null || true)"
+  case "$line" in
+    held\ *)
+      by="$(lock_by "$root")"
+      if [ -n "$tok" ]; then
+        [ "$tok" != "$(printf '%s' "$line" | awk '{ print $2 }')" ] || mine=1
+      elif [ "$(lock_field "$by" 1)" = session ] && [ "$(lock_field "$by" 2)" = "$(lock_folder "${CLAUDE_PROJECT_DIR:-$PWD}")" ]; then
+        mine=1
+      fi
+      [ "$mine" = 1 ] || [ -n "$(lock_holder "$root")" ] || mine=1
+      [ "$mine" = 1 ] || die "$(lock_who "$root") holds the lock on $(tilde "$root"), not this session$([ -z "$tok" ] || echo ": token $tok isn't its"). It frees itself 30 minutes after its last renewal. The user can free it now: $WIKI_CMD unlock ${wiki}"
+      ;;
+  esac
+  printf 'free\n' 2>/dev/null > "$f" || die "$(cant_write "$f")"
+}
+
+# lock_renew <wiki root> <name> <named: 1 or 0>: the renew, inside lock_write.
+lock_renew() {
+  local root="$1" name="$2" named="$3" f="$1/.compile-lock" line tok by now
+  now="$(lock_now)" || exit 1
+  line="$(head -n 1 "$f" 2>/dev/null || true)"
+  case "$line" in held\ *) ;; *) die "the lock on $(tilde "$root") isn't held" ;; esac
+  tok="$(printf '%s' "$line" | awk '{ print $2 }')"
+  # Who holds it stays as it was. --as names a session that didn't say at the start. On a
+  # lock written by hand, with no by: line, it gives the name and no folder: the renewing
+  # session's folder would have let its own release with no token free a lock it never took.
+  by="$(lock_by "$root")"
+  if [ "$named" = 1 ]; then
+    if [ -n "$by" ]; then by="$(lock_field "$by" 1)|$(lock_field "$by" 2)|$(lock_field "$by" 3)|$(lock_field "$by" 4)|$(lock_field "$by" 5)|$name"
+    else by="session|||-|-|$name"; fi
+  fi
+  { printf 'held %s %s\n' "$tok" "$now"; [ -z "$by" ] || printf 'by: %s\n' "$by"; } 2>/dev/null > "$f" || die "$(cant_write "$f")"
+  echo "renewed: $(lock_clean "$tok"), $now"
+}
+
+# lock_free_mine <wiki root> <token>: free the lock if it still has this token, inside
+# lock_write. How a background run frees its own, and never a lock another took since.
+lock_free_mine() {
+  [ "$(head -n 1 "$1/.compile-lock" 2>/dev/null | awk '{ print $2 }')" = "$2" ] || return 0
+  printf 'free\n' 2>/dev/null > "$1/.compile-lock" || true
+}
+
+# lock_free_run <wiki root> <pid>: free the lock if it still names this background run,
+# inside lock_write. For a run that stopped before it could take up the lock taken for it.
+lock_free_run() {
+  case "$(head -n 1 "$1/.compile-lock" 2>/dev/null || true)" in held\ *) ;; *) return 0 ;; esac
+  [ "$(lock_field "$(lock_by "$1")" 4)" = "$2" ] || return 0
+  printf 'free\n' 2>/dev/null > "$1/.compile-lock" || true
+}
+
+# lock_busy <wiki root>: the error when another process kept the lock's folder.
+lock_busy() { printf 'another session is writing the lock on %s right now. Try again in a moment.' "$(tilde "$1")"; }
+
+# lock <wiki> [--release [<token>] | --renew | --who] [--as <name>]: the compile lock, as
 # rules/compile.md describes. --who says who holds it and changes nothing. --as names
 # the session taking or renewing it, for one that finds the wiki locked.
 cmd_lock() {
-  local wiki="" mode=take root f line tok when now by name="" named=0 kind since notes hint=""
+  local wiki="" mode=take root line when name="" named=0 since notes tok="" npos=0 rc=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --release) mode=release; shift ;;
@@ -2876,65 +3090,57 @@ cmd_lock() {
         named=1
         shift 2
         ;;
-      -*) die_usage "lock options: --release, --renew, --who, --as <name>" ;;
-      *) wiki="$1"; shift ;;
+      -*) die_usage "lock options: --release [<token>], --renew, --who, --as <name>" ;;
+      *)
+        # The first word is the wiki. A second is the token a release names, and an empty
+        # one is a mistake, not a release with no token.
+        npos=$((npos + 1))
+        case "$npos" in
+          1) wiki="$1" ;;
+          2) [ -n "$1" ] || die_usage "lock --release takes the token its take printed, and \"\" isn't one"; tok="$1" ;;
+          *) die_usage "lock takes a wiki, and a token after --release" ;;
+        esac
+        shift
+        ;;
     esac
   done
+  [ -z "$tok" ] || [ "$mode" = release ] || die_usage "lock takes a wiki, and a token after --release"
   root="$(wiki_root "$wiki")"
-  f="$root/.compile-lock"
-  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  line="$(head -n 1 "$f" 2>/dev/null || true)"
   case "$mode" in
     release)
-      printf 'free\n' 2>/dev/null > "$f" || die "$(cant_write "$f")"
+      lock_write "$root" lock_release "$root" "$wiki" "$tok" || rc=$?
+      [ "$rc" != "$LOCK_BUSY" ] || die "$(lock_busy "$root")"
+      [ "$rc" = 0 ] || exit "$rc"
       echo "released: $(tilde "$root")"
       history_snap "compiled: ${root##*/}"
       ;;
     renew)
-      case "$line" in held\ *) ;; *) die "the lock on $(tilde "$root") isn't held" ;; esac
-      tok="$(printf '%s' "$line" | awk '{ print $2 }')"
-      # Who holds it stays as it was. --as names a session that didn't say at the start.
-      by="$(lock_by "$root")"
-      if [ "$named" = 1 ]; then
-        if [ -n "$by" ]; then by="$(lock_field "$by" 1)|$(lock_field "$by" 2)|$(lock_field "$by" 3)|$(lock_field "$by" 4)|$(lock_field "$by" 5)|$name"
-        else by="session|${CLAUDE_PROJECT_DIR:-$PWD}|$now|-|-|$name"; fi
-      fi
-      { printf 'held %s %s\n' "$tok" "$now"; [ -z "$by" ] || printf 'by: %s\n' "$by"; } 2>/dev/null > "$f" || die "$(cant_write "$f")"
-      echo "renewed: $tok, $now"
+      lock_write "$root" lock_renew "$root" "$name" "$named" || rc=$?
+      [ "$rc" != "$LOCK_BUSY" ] || die "$(lock_busy "$root")"
+      [ "$rc" = 0 ] || exit "$rc"
       ;;
     who)
       line="$(lock_holder "$root")"
       if [ -z "$line" ]; then echo "free: $(tilde "$root")"; return 0; fi
-      when="$(printf '%s' "$line" | awk '{ print $3 }')"
+      when="$(lock_clean "$(printf '%s' "$line" | awk '{ print $3 }')")"
       since="$(lock_field "$(lock_by "$root")" 3)"
       echo "held: $(lock_who "$root") has held the lock on $(tilde "$root") since ${since:-$when}, last renewed $when. It frees itself 30 minutes after that if it isn't renewed."
       ;;
     take)
-      line="$(lock_holder "$root")"
-      if [ -n "$line" ]; then
-        when="$(printf '%s' "$line" | awk '{ print $3 }')"
-        by="$(lock_by "$root")"
-        since="$(lock_field "$by" 3)"
-        if [ -z "$by" ]; then
-          echo "held: another session has held the lock on $(tilde "$root") since $when. Don't compile it now; carry on, and the notes wait for a later pause."
-        elif [ "$(lock_field "$by" 1)" = background ]; then
-          echo "held: $(lock_who "$root") has held the lock on $(tilde "$root") since ${since:-$when}. It is compiling the waiting notes, so don't compile them and nothing needs doing."
-        else
-          echo "held: $(lock_who "$root") has held the lock on $(tilde "$root") since ${since:-$when}, last renewed $when. Don't compile it now; carry on, and the notes wait for a later pause. If the user needs them compiled sooner, tell them which session holds the lock: that session can compile them, or free it with $WIKI_CMD lock ${wiki} --release. It frees itself 30 minutes after its last renewal."
-        fi
+      # Counted before the folder is taken, and only when the lock looks free, so a take
+      # holds the folder for no longer than its read and write. A background start counted
+      # them before it started its run.
+      notes=0
+      case "${LLM_WIKI_LOCK_NOTES:-}" in
+        '' | *[!0-9]*) [ -n "$(lock_holder "$root")" ] || notes="$(pending_files "$root" | wc -l | tr -d ' ')" ;;
+        *) notes="$LLM_WIKI_LOCK_NOTES" ;;
+      esac
+      lock_write "$root" lock_take "$root" "$wiki" "$name" "$notes" || rc=$?
+      if [ "$rc" = "$LOCK_BUSY" ]; then
+        echo "held: another session is taking the lock on $(tilde "$root") right now, so don't compile it now; carry on, and the notes wait for a later pause."
         exit 1
       fi
-      tok="$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"
-      kind="${LLM_WIKI_LOCK_KIND:-session}"
-      notes="$(pending_files "$root" | wc -l | tr -d ' ')"
-      { printf 'held %s %s\n' "$tok" "$now"; printf 'by: %s|%s|%s|-|%s|%s\n' "$kind" "${CLAUDE_PROJECT_DIR:-$PWD}" "$now" "$notes" "$name"; } 2>/dev/null > "$f" || die "$(cant_write "$f")"
-      [ "$kind" != session ] || [ -n "$name" ] || hint=". To let a session that finds it locked say who holds it: $WIKI_CMD lock ${wiki} --renew --as '<a few words on this session>'"
-      # Read it back: if another session wrote in between, it's theirs.
-      if [ "$(head -n 1 "$f")" != "held $tok $now" ]; then
-        echo "held: another session took the lock on $(tilde "$root") first. Don't compile it now."
-        exit 1
-      fi
-      echo "locked: $(tilde "$root"), token $tok. When compiling ends, even if it failed: $WIKI_CMD lock ${wiki} --release$hint"
+      [ "$rc" = 0 ] || exit "$rc"
       ;;
   esac
 }
@@ -3051,18 +3257,48 @@ note_age_hours() {
 # compile_run <wiki root>: with the lock already held, run the agent under a time
 # limit, free the lock, sync, and record the run. The lock is stale after 30 minutes,
 # so the limit stays under that.
-COMPILE_LOCK=""
+COMPILE_ROOT=""
+COMPILE_TOKEN=""
+COMPILE_AGENT_PID=""
+COMPILE_WATCH_PID=""
+# compile_run_exit: how a run ends, killed or not. The agent it started and the time limit's
+# watchdog are stopped first: a run that was killed left both going, with the lock free, so
+# a session could compile beside an agent that was still writing. Then the lock is freed, if
+# it is still this run's.
+compile_run_exit() {
+  [ -z "$COMPILE_AGENT_PID" ] || kill_tree "$COMPILE_AGENT_PID"
+  [ -z "$COMPILE_WATCH_PID" ] || kill_tree "$COMPILE_WATCH_PID"
+  COMPILE_AGENT_PID=""
+  COMPILE_WATCH_PID=""
+  [ -z "$COMPILE_ROOT" ] || lock_write "$COMPILE_ROOT" lock_free_mine "$COMPILE_ROOT" "$COMPILE_TOKEN" || true
+  COMPILE_ROOT=""
+}
+# compile_wait_lock <wiki root>: wait until the lock names this process, and keep its token
+# in COMPILE_TOKEN. The lock names a run's process from the moment it is taken: a run started
+# in the background is started first, and the session that started it then takes the lock for
+# it, so the run waits here, before it does anything else. One whose lock never comes leaves
+# the lock alone. The file is read once a time round, so the token and the process number
+# are from the same write.
+compile_wait_lock() {
+  local root="$1" i=0 text line by
+  while :; do
+    text="$(cat "$root/.compile-lock" 2>/dev/null || true)"
+    line="${text%%$'\n'*}"
+    case "$text" in *$'\n'*) by="${text#*$'\n'}"; by="${by%%$'\n'*}" ;; *) by="" ;; esac
+    case "$by" in "by: "*) by="$(lock_clean "${by#by: }")" ;; *) by="" ;; esac
+    case "$line" in held\ *) [ "$(lock_field "$by" 4)" != "$$" ] || break ;; esac
+    i=$((i + 1))
+    [ "$i" -le 300 ] || die "the lock on $(tilde "$root") isn't this run's, so nothing was compiled"
+    sleep 0.1
+  done
+  COMPILE_TOKEN="$(printf '%s' "$line" | awk '{ print $2 }')"
+}
 compile_run() {
-  local root="$1" name n left start secs rc=0 result out oldest pid wd limit before after f last="" nl=$'\n' by synced
+  local root="$1" name n left start secs rc=0 result out oldest limit before after f last="" nl=$'\n' synced
   name="${root##*/}"
-  COMPILE_LOCK="$root/.compile-lock"
-  trap '[ -z "$COMPILE_LOCK" ] || printf "free\n" > "$COMPILE_LOCK" 2>/dev/null' EXIT
-  # Say whose lock this is, with this run's pid: a run that was killed then holds nothing.
-  by="$(lock_by "$root")"
-  if [ -n "$by" ]; then
-    { head -n 1 "$COMPILE_LOCK"; printf 'by: background|%s|%s|%s|%s|\n' "$(lock_field "$by" 2)" "$(lock_field "$by" 3)" "$$" "$(lock_field "$by" 5)"; } > "$COMPILE_LOCK.tmp" 2>/dev/null \
-      && mv "$COMPILE_LOCK.tmp" "$COMPILE_LOCK" 2>/dev/null || true
-  fi
+  compile_wait_lock "$root"
+  COMPILE_ROOT="$root"
+  trap compile_run_exit EXIT
   before="$(pending_files "$root")"
   n="$(printf '%s' "$before" | grep -c . || true)"
   oldest="$(note_age_hours "$(printf '%s\n' "$before" | head -n 1)")"
@@ -3071,15 +3307,17 @@ compile_run() {
   limit="${LLM_WIKI_COMPILE_TIMEOUT:-1200}"
   start="$(date -u +%s)"
   compile_agent_run "$root" "$name" > "$out" 2>&1 &
-  pid=$!
+  COMPILE_AGENT_PID=$!
   # Only a sleep that ran its full time is a timeout. Calling the limit off stops the
   # sleep first, and with ";" the lines after it could still run before they were stopped.
-  ( sleep "$limit" && : > "$out.timeout" && kill_tree "$pid" ) >/dev/null 2>&1 &
-  wd=$!
+  ( sleep "$limit" && : > "$out.timeout" && kill_tree "$COMPILE_AGENT_PID" ) >/dev/null 2>&1 &
+  COMPILE_WATCH_PID=$!
   # Disowned, so stopping it below doesn't print "Terminated".
-  disown "$wd" 2>/dev/null || true
-  wait "$pid" || rc=$?
-  kill_tree "$wd"
+  disown "$COMPILE_WATCH_PID" 2>/dev/null || true
+  wait "$COMPILE_AGENT_PID" || rc=$?
+  COMPILE_AGENT_PID=""
+  kill_tree "$COMPILE_WATCH_PID"
+  COMPILE_WATCH_PID=""
   secs=$(( $(date -u +%s) - start ))
   # Only the notes that were waiting at the start count as left. One captured while
   # the run was going is the next run's, and would make a whole run look partial.
@@ -3105,8 +3343,8 @@ EOF
     last="$(grep . "$out" 2>/dev/null | tail -n 1 | cut -c 1-200 || true)"
   else result=partial
   fi
-  printf 'free\n' > "$COMPILE_LOCK" 2>/dev/null || true
-  COMPILE_LOCK=""
+  lock_write "$root" lock_free_mine "$root" "$COMPILE_TOKEN" || true
+  COMPILE_ROOT=""
   # Sync even after a failure. What a run wrote would otherwise sit uncommitted until
   # another session's sync swept it in, with nothing to say where it came from.
   synced=1
@@ -3125,13 +3363,30 @@ EOF
 # process. Says nothing and fails when there's nothing to do or it can't start, because
 # session start calls it for every wiki with notes waiting.
 compile_background() {
-  local root="$1"
+  local root="$1" pid n
   [ -z "${LLM_WIKI_BACKGROUND:-}" ] || return 1
-  [ -n "$(pending_files "$root")" ] || return 1
+  # Counted here, before the run starts, and handed to the take: counting them between the
+  # start and the take kept the run waiting for its lock.
+  n="$(pending_files "$root" | wc -l | tr -d ' ')"
+  [ "${n:-0}" -gt 0 ] || return 1
   compile_agent_ready || return 1
   compile_agent_runs || return 1
-  ( LLM_WIKI_LOCK_KIND=background cmd_lock "$root" ) >/dev/null 2>&1 || return 1
-  ( user_locale; LLM_WIKI_BACKGROUND=1 WIKIS_DIR="$WIKIS_DIR" nohup "$REPO/wiki.sh" compile "$root" --locked </dev/null >/dev/null 2>&1 & )
+  [ -z "$(lock_holder "$root")" ] || return 1
+  # The run is started first, so the lock can name its process in the write that takes it.
+  # It waits until the lock is its own, and is stopped if the take fails. nohup runs the
+  # script in its own process, so $! is the run's $$.
+  pid="$( ( user_locale; LLM_WIKI_BACKGROUND=1 WIKIS_DIR="$WIKIS_DIR" nohup "$REPO/wiki.sh" compile "$root" --locked </dev/null >/dev/null 2>&1 & echo "$!" ) )"
+  case "$pid" in '' | *[!0-9]*) return 1 ;; esac
+  if ! ( LLM_WIKI_LOCK_KIND=background LLM_WIKI_LOCK_PID="$pid" LLM_WIKI_LOCK_NOTES="$n" cmd_lock "$root" ) >/dev/null 2>&1; then
+    kill "$pid" 2>/dev/null || true
+    return 1
+  fi
+  # A run that stopped before the take landed, having waited too long or failed to start,
+  # compiles nothing: the lock taken for it is freed again, and the session is told so.
+  if ! kill -0 "$pid" 2>/dev/null; then
+    lock_write "$root" lock_free_run "$root" "$pid" || true
+    return 1
+  fi
 }
 
 # compile [<wiki>] [--background] | on | off
@@ -3149,6 +3404,13 @@ cmd_compile() {
       *) [ -z "$wiki" ] || die_usage "compile takes one wiki"; wiki="$1"; shift ;;
     esac
   done
+  # A background run does nothing before the lock is its own: not the inbox, and not the
+  # links, which the dispatch leaves to it for this.
+  if [ "$locked" = 1 ]; then
+    root="$(wiki_root "$wiki")"
+    compile_wait_lock "$root"
+    links_off_all "$WIKIS_DIR"
+  fi
   inbox_take >/dev/null 2>&1 || true
   case "$wiki" in
     on | off)
@@ -3199,7 +3461,8 @@ cmd_compile() {
     echo "compiling: $n note(s) in $(tilde "$root"), in the background. See how it went with: $WIKI_CMD compile"
     return 0
   fi
-  out="$(LLM_WIKI_LOCK_KIND=background cmd_lock "$root" 2>&1)" || { echo "$out"; exit 1; }
+  # $$ is this process in the substitution too: the one that runs compile_run below.
+  out="$(LLM_WIKI_LOCK_KIND=background LLM_WIKI_LOCK_PID=$$ cmd_lock "$root" 2>&1)" || { echo "$out"; exit 1; }
   export LLM_WIKI_BACKGROUND=1
   compile_run "$root" || exit 1
 }
@@ -5830,7 +6093,7 @@ collection_ignores() {
   in_git_repo "$WIKIS_DIR" || return 0
   # A link or a folder: nothing is written, and the first commit, which goes by name, is still safe.
   gitignore_ok || return 0
-  for l in .DS_Store .compile-lock .obsidian/ .trash/; do ensure_line "$WIKIS_DIR/.gitignore" "$l"; done
+  for l in .DS_Store .compile-lock .compile-lock.d .compile-lock.take .obsidian/ .trash/; do ensure_line "$WIKIS_DIR/.gitignore" "$l"; done
   apply_journal_commit
   apply_delegation_ignore
   collection_unignored
@@ -6143,10 +6406,15 @@ status_table() {
     v="$(version_of "$d/AGENTS.md")"
     waiting="$(pending_files "$d" | wc -l | tr -d ' ')"
     [ -z "$(unlisted "$d")" ] || waiting="?"
+    # Held, stale or free, as `lock` would find it: one not renewed for 30 minutes, or a
+    # stopped background run's, anyone may take. It showed as held until it was freed.
+    # A lock file that can't be read is a ?, as raw/ is: its head ended status partway.
     lock="free"
     if [ -f "$d/.compile-lock" ]; then
-      line="$(head -n 1 "$d/.compile-lock")"
-      case "$line" in held*) lock="$line" ;; esac
+      if ! line="$(head -n 1 "$d/.compile-lock" 2>/dev/null)"; then lock="?"
+      else
+        case "$line" in held\ *) lock="$(lock_clean "$(lock_holder "$d")")"; [ -n "$lock" ] || lock=stale ;; esac
+      fi
     fi
     note=""
     w="${d##*/}"
@@ -6634,7 +6902,7 @@ EOF2
 }
 
 upgrade_one() {
-  local root="$1" tv wv f r had_links=1
+  local root="$1" tv wv f r l had_links=1
   is_wiki "$root" || die "$(not_wiki "$root")"
   # A handbook that can't be read counts as a wiki, and has no version to compare: replacing
   # it would write over a file nobody has looked at.
@@ -6669,10 +6937,12 @@ upgrade_one() {
   [ -f "$root/links.md" ] || had_links=0
   copy_missing "$root" report
   [ "$had_links" = 1 ] || link_shared "$root"
-  if [ -f "$root/.gitignore" ] && ! grep -qxF '.compile-lock' "$root/.gitignore"; then
-    printf '.compile-lock\n' >> "$root/.gitignore"
-    ui_detail ".gitignore: added .compile-lock"
-  fi
+  for l in .compile-lock .compile-lock.d .compile-lock.take; do
+    if [ -f "$root/.gitignore" ] && ! grep -qxF "$l" "$root/.gitignore"; then
+      ensure_line "$root/.gitignore" "$l"
+      ui_detail ".gitignore: added $l"
+    fi
+  done
   [ ! -f "$root/.gitignore" ] || ignore_obsidian "$root/.gitignore"
   r="$(wiki_repo "$root")"
   [ -z "$r" ] || install_hook "$r"
@@ -6865,10 +7135,15 @@ EOF2
   fi
 }
 
+lock_unlock() { printf 'free\n' > "$1/.compile-lock"; }
+
+# unlock <wiki>: the user's way to free any lock, whoever holds it.
 cmd_unlock() {
-  local root="$1"
+  local root="$1" rc=0
   is_wiki "$root" || die "$(not_wiki "$root")"
-  printf 'free\n' > "$root/.compile-lock"
+  lock_write "$root" lock_unlock "$root" || rc=$?
+  [ "$rc" != "$LOCK_BUSY" ] || die "$(lock_busy "$root")"
+  [ "$rc" = 0 ] || exit "$rc"
   ui_item ok "unlocked: $(tilde "$root")"
 }
 
@@ -16066,7 +16341,12 @@ case "$cmd" in
 esac
 # Before anything is read: git writes a link in the collection as a plain file (code review
 # M24). Not for tab completion, which runs at every key and reads only names.
-case "$cmd" in __complete | completion) ;; *) links_off_all "$WIKIS_DIR" ;; esac
+# A background run's own process does it once its lock is its own, in cmd_compile.
+case "$cmd" in
+  __complete | completion) ;;
+  compile) case " $* " in *" --locked "*) ;; *) links_off_all "$WIKIS_DIR" ;; esac ;;
+  *) links_off_all "$WIKIS_DIR" ;;
+esac
 if [ "$cmd" = journal ]; then
   cmd_journal "$@"
   exit 0

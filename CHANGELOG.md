@@ -4,6 +4,15 @@ What changed in each handbook version, written for the person upgrading. `./wiki
 
 Format: one `## vN (date)` section per version. Lines starting `- ` say what changed. Lines starting `- Do:` say what to do about it. Newest first. Bumping the handbook version means adding a section here.
 
+## v46 (2026-11-25)
+
+A session frees the compile lock with the command that took it printed.
+
+- `wiki lock <wiki>` prints the full command to free the lock, with its token: `wiki lock <wiki> --release <token>`. `rules/compile.md` says to free it with that command.
+- `--release` refuses a lock another session holds, and leaves it as it was. With no token it still frees a lock taken from the same folder, so a session following v45 keeps working. `wiki unlock` still frees any lock.
+- `rules/compile.md` says to free a lock by hand only while its first line still has your token.
+- Do: run `wiki upgrade --all`.
+
 ## v45 (2026-11-20)
 
 A session's `--file` and `--copy` take a file of the project or the wikis.

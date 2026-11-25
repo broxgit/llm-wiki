@@ -27,7 +27,7 @@ import (
 // protocol is what wiki.sh checks before it trusts this program: the commands, their
 // arguments and what they print. Raise it, and GO_PROTOCOL in wiki.sh with it, whenever
 // one of those changes, so a binary left over from an older checkout is passed over.
-const protocol = "26"
+const protocol = "27"
 
 // gitSafe is wiki.sh's own first step, for a helper started without it, as the MCP server
 // can be: every git this process starts gets safe.bareRepository=explicit, after whatever

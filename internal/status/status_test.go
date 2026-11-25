@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func write(t *testing.T, path, text string) {
@@ -43,7 +44,9 @@ func collection(t *testing.T) string {
 	wiki(t, root, "ahead", "29")
 	wiki(t, root, "nover", "")
 	d := wiki(t, root, "locked", "28")
-	write(t, d+"/.compile-lock", "held by s-1 since 2026-01-01\nmore\n")
+	write(t, d+"/.compile-lock", "held s-1 "+time.Now().UTC().Format("2006-01-02T15:04:05Z")+"\nmore\n")
+	d = wiki(t, root, "stale", "28")
+	write(t, d+"/.compile-lock", "held s-2 2020-01-01T00:00:00Z\nby: session|/p|2020-01-01T00:00:00Z|-|0|\n")
 	d = wiki(t, root, "freelock", "28")
 	write(t, d+"/.compile-lock", "released\n")
 	d = wiki(t, root, "due", "028")
@@ -98,7 +101,8 @@ func TestRun(t *testing.T) {
 		"ahead":  "ahead                      v29       0        free  <- ahead of your template v28",
 		// A handbook with no version line is not a wiki's: the folder is in no row.
 		"nover":     "",
-		"locked":    "locked                     v28       0        held by s-1 since 2026-01-01",
+		"locked":    "locked                     v28       0        held s-1 " + time.Now().UTC().Format("2006-01-02T15:04:05Z"),
+		"stale":     "stale                      v28       0        stale",
 		"freelock":  "freelock                   v28       0        free",
 		"due":       "due                        v028      5        free  <- compile due",
 		"lint":      "lint                       v28       0        free  <- lint due (11 ingests)",
@@ -119,7 +123,7 @@ func TestRun(t *testing.T) {
 	for _, line := range r.Rows[1:] {
 		order = append(order, strings.Fields(line)[0])
 	}
-	if want := "Beta a-wiki-with-a-name-longer-than-the-column ahead alpha behind caf\xc3\xa9-wiki covers-nl covers due freelock lint locked pat"; strings.Join(order, " ") != want {
+	if want := "Beta a-wiki-with-a-name-longer-than-the-column ahead alpha behind caf\xc3\xa9-wiki covers-nl covers due freelock lint locked pat stale"; strings.Join(order, " ") != want {
 		t.Errorf("order: %q", order)
 	}
 	if _, ok := rows["notawiki"]; ok {
@@ -264,6 +268,16 @@ func TestUnsure(t *testing.T) {
 		"NUL in patterns.md": func(root string) { write(t, root+"/w/patterns.md", "## X\x00\n") },
 		"NUL in a page":      func(root string) { write(t, root+"/w/wiki/a.md", "a\x00\n") },
 		"NUL in the lock":    func(root string) { write(t, root+"/w/.compile-lock", "held\x00\n") },
+		"a lock time not in the handbook's form": func(root string) {
+			write(t, root+"/w/.compile-lock", "held abc 2026-01-01\n")
+		},
+		"a lock with no time": func(root string) { write(t, root+"/w/.compile-lock", "held abc\n") },
+		"a lock time with no such day": func(root string) {
+			write(t, root+"/w/.compile-lock", "held abc 2026-02-30T00:00:00Z\n")
+		},
+		"a background run's process number too long": func(root string) {
+			write(t, root+"/w/.compile-lock", "held abc 2026-01-01T00:00:00Z\nby: background|/p|x|12345678901|0|\n")
+		},
 		"a link under wiki/": func(root string) { os.Symlink(root+"/w/index.md", root+"/w/wiki/l.md") },
 		"no log.md":          func(root string) { os.Remove(root + "/w/log.md") },
 		"a name with a line break": func(root string) {
@@ -359,6 +373,61 @@ func TestSameAsTheBash(t *testing.T) {
 		}
 		if !ok || !strings.HasPrefix(rest, todo) {
 			t.Errorf("the to-do lines:\n%s\nthe Bash's:\n%s", todo, rest)
+		}
+	}
+}
+
+// The LOCK column follows lock_holder: held for 30 minutes after the last renewal, and
+// not at all once a background run's process is gone.
+func TestLockHeld(t *testing.T) {
+	at := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	running := map[int]bool{41: true}
+	oldNow, oldAlive := now, alive
+	now, alive = func() time.Time { return at }, func(pid int) bool { return running[pid] }
+	defer func() { now, alive = oldNow, oldAlive }()
+	for text, want := range map[string]string{
+		"held a 2026-01-01T11:31:00Z\n":                                "held a 2026-01-01T11:31:00Z",
+		"held a 2026-01-01T11:30:00Z\n":                                "stale",
+		"held a 2026-01-01T12:10:00Z\n":                                "held a 2026-01-01T12:10:00Z",
+		"held\ta\t2026-01-01T11:59:00Z\n":                              "free",
+		"held  a   2026-01-01T11:59:00Z  x\n":                          "held  a   2026-01-01T11:59:00Z  x",
+		"held a 2026-01-01T11:59:00Z\nby: background|/p|t|41|3|\n":     "held a 2026-01-01T11:59:00Z",
+		"held a 2026-01-01T11:59:00Z\nby: background|/p|t|42|3|\n":     "stale",
+		"held a 2026-01-01T11:59:00Z\nby: background|/p|t|-|3|\n":      "held a 2026-01-01T11:59:00Z",
+		"held a 2026-01-01T11:59:00Z\nby: session|/p|t|42|3|\n":        "held a 2026-01-01T11:59:00Z",
+		"held a 2020-01-01T00:00:00Z\nby: background|/p|t|42|3|\n":     "stale",
+		"held a not-a-time\nby: background|/p|t|42|3|\n":               "stale",
+		"held a 2026-01-01T11:59:00Z\nmore\nby: background|/p|t|42|\n": "held a 2026-01-01T11:59:00Z",
+		"heldx\n": "free",
+		"free\n":  "free",
+		"":        "free",
+		// Control characters are dropped from what is shown, and from the by: line
+		// before its fields are read, as lock_clean and lock_by do.
+		"held a\x1b[31m 2026-01-01T11:59:00Z \x07x\n":                "held a[31m 2026-01-01T11:59:00Z x",
+		"held a 2026-01-01T11:59:00Z\nby: back\x01ground|/p|t|42|\n": "stale",
+	} {
+		dir := t.TempDir()
+		write(t, dir+"/.compile-lock", text)
+		got, err := lockLine(dir + "/.compile-lock")
+		if err != nil || got != want {
+			t.Errorf("lockLine(%q) = %q, %v, want %q", text, got, err, want)
+		}
+	}
+	// Each of these reaches the time, with a running process or none named, and the Bash
+	// may read that time its own way, so it answers.
+	for _, text := range []string{
+		"held a not-a-time\nby: background|/p|t|41|3|\n",
+		"held a not-a-time\n",
+		"held a 2026-02-30T00:00:00Z\n",
+		"held a 2026-01-01T23:59:60Z\n",
+		"held a 1899-12-31T00:00:00Z\nby: background|/p|t|41|3|\n",
+		"held a 1969-12-31T23:59:59Z\n",
+		"held a 2026-01-01T11:59:00Z\r\n",
+	} {
+		dir := t.TempDir()
+		write(t, dir+"/.compile-lock", text)
+		if got, err := lockLine(dir + "/.compile-lock"); err == nil {
+			t.Errorf("lockLine(%q) = %q, want an error, for the Bash to answer", text, got)
 		}
 	}
 }
