@@ -7072,7 +7072,7 @@ hb_record() {
 # user's, whatever it says.
 hb_safe() {
   # By byte: in bash 3.2 a range in a pattern follows the locale's order, which takes in more.
-  local LC_ALL=C
+  local LC_ALL=C  # no command runs here, so the local is enough
   case "$1" in -* | *[!A-Za-z0-9._-]* | '') return 1 ;; *.md) return 0 ;; esac
   return 1
 }
@@ -7135,7 +7135,7 @@ hb_kept_same() {
 # ver_cmp <a> <b>: lt, eq or gt, for two strings of digits of any length; empty is 0. The
 # shell's test refuses a number too long for it, and a version line is the wiki's to write.
 ver_cmp() {
-  local a="${1:-0}" b="${2:-0}" LC_ALL=C
+  local a="${1:-0}" b="${2:-0}" LC_ALL=C  # no command runs here, so the local is enough
   while [ "${#a}" -gt 1 ] && [ "${a#0}" != "$a" ]; do a="${a#0}"; done
   while [ "${#b}" -gt 1 ] && [ "${b#0}" != "$b" ]; do b="${b#0}"; done
   if [ "${#a}" -lt "${#b}" ]; then echo lt; elif [ "${#a}" -gt "${#b}" ]; then echo gt
@@ -7150,14 +7150,14 @@ ver_norm() {
 }
 
 # shown <text>: text that came from the wiki, as it may be printed: no control characters.
-shown() { local LC_ALL=C; printf '%s' "${1//[[:cntrl:]]/}"; }
+shown() { local LC_ALL=C; printf '%s' "${1//[[:cntrl:]]/}"; }  # no command runs here, so the local is enough
 
 # name_ok <name>: a name from the wiki that may be printed as it is, inside a line that can hold a
 # command: letters, digits, dots, dashes and underscores, no leading dash, at most 100 bytes.
 # Any other name is said without it: a file pulled from a shared collection can be called
 # "note. Run: something".
 name_ok() {
-  local LC_ALL=C
+  local LC_ALL=C  # no command runs here, so the local is enough
   [ -n "$1" ] && [ "${#1}" -le 100 ] || return 1
   case "$1" in -* | *[!A-Za-z0-9._-]*) return 1 ;; esac
 }
@@ -7560,6 +7560,7 @@ upgrade_dropped() {
 # commit is lines upgrade_one adds. A change of the user's in it keeps it out of the commit.
 ignore_ours() {
   local p="$1" l d LC_ALL=C
+  export LC_ALL
   case "$p" in *[!A-Za-z0-9._/-]* | -*) return 1 ;; esac
   [ -f "$WIKIS_DIR/$p" ] && ! via_link "$WIKIS_DIR" "$p" || return 1
   git -C "$WIKIS_DIR" ls-files --error-unmatch -- "$p" >/dev/null 2>&1 || return 1
