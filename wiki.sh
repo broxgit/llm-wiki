@@ -583,8 +583,13 @@ go_helper() {
   return 1
 }
 
+# sha256_of <file>: its SHA-256, by sha256sum, else shasum, else openssl, or nothing. hb_hashes
+# asks the same tools in the same order, for many files at once.
 sha256_of() {
-  if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d ' ' -f 1; else sha256sum "$1" | cut -d ' ' -f 1; fi
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum < "$1" | cut -d ' ' -f 1
+  elif command -v shasum >/dev/null 2>&1; then shasum -a 256 < "$1" | cut -d ' ' -f 1
+  elif command -v openssl >/dev/null 2>&1; then openssl dgst -sha256 < "$1" | sed 's/.* //'
+  fi
 }
 
 # helper_base: where releases are downloaded from: this copy's repository on GitHub.
@@ -857,11 +862,19 @@ not_wiki() {
 in_git_repo() { git -C "$1" rev-parse --is-inside-work-tree >/dev/null 2>&1; }
 
 # Copy template files into a wiki. Never overwrites a file that is already there.
+# Nothing is written through a link: not a file that is one, dangling or not, and not into a
+# folder that is one, such as a rules/ that points somewhere else.
 copy_missing() {
-  local root="$1" report="${2:-}" f
+  local root="$1" report="${2:-}" f d
   (cd "$TEMPLATE" && find . -type f -print) | while IFS= read -r f; do
     f="${f#./}"
-    if [ ! -e "$root/$f" ]; then
+    d="${f%/*}"
+    while [ "$d" != "$f" ] && [ -n "$d" ]; do
+      # A file where the folder should be, as links_off leaves a link git had, can't take one.
+      if [ -L "$root/$d" ] || { [ -e "$root/$d" ] && [ ! -d "$root/$d" ]; }; then continue 2; fi
+      case "$d" in */*) d="${d%/*}" ;; *) break ;; esac
+    done
+    if [ ! -e "$root/$f" ] && [ ! -L "$root/$f" ]; then
       mkdir -p "$root/$(dirname "$f")"
       cp "$TEMPLATE/$f" "$root/$f"
       case "$report:$f" in report:*.gitkeep | :*) ;; *) ui_detail "added:    $f" ;; esac
@@ -922,6 +935,12 @@ scaffold() {
   [ -f "$root/index.md" ] || printf '# Index\n' > "$root/index.md"
   [ -f "$root/log.md" ] || printf '# Log\n' > "$root/log.md"
   link_shared "$root"
+  # The text an upgrade keeps of an edited handbook is this machine's: upgrade_one adds the same
+  # rule to a wiki made before it. Not in the template, which would be a handbook change.
+  if [ -f "$root/.gitignore" ] && [ ! -L "$root/.gitignore" ]; then
+    ensure_line "$root/.gitignore" '/AGENTS.md.before-v*'
+    ensure_line "$root/.gitignore" '/rules/*.before-v*'
+  fi
   echo "created: $(tilde "$root")"
   if [ "$want_git" = 1 ]; then
     if in_git_repo "$root"; then
@@ -6180,7 +6199,7 @@ collection_ignores() {
   in_git_repo "$WIKIS_DIR" || return 0
   # A link or a folder: nothing is written, and the first commit, which goes by name, is still safe.
   gitignore_ok || return 0
-  for l in .DS_Store .compile-lock .compile-lock.d .compile-lock.take .obsidian/ .trash/; do ensure_line "$WIKIS_DIR/.gitignore" "$l"; done
+  for l in .DS_Store .compile-lock .compile-lock.d .compile-lock.take '/*/AGENTS.md.before-v*' '/*/rules/*.before-v*' .obsidian/ .trash/; do ensure_line "$WIKIS_DIR/.gitignore" "$l"; done
   apply_journal_commit
   apply_delegation_ignore
   collection_unignored
@@ -6724,6 +6743,28 @@ EOF2
     pw="$(wiki_planted "$pd")"
     [ -z "$pw" ] || todo_add "git files: $(wiki_planted_text "$pw")"
   done
+  # The text of a handbook file an upgrade replaced after someone changed it, until it is
+  # removed. A session saw the upgrade's line and may not have passed it on. In the Bash for
+  # both tables: the helper doesn't look for these files.
+  # Only what upgrade could have written is counted: plain files, named as it names them.
+  local kf kn kx
+  for pd in "$WIKIS_DIR"/*/; do
+    pd="${pd%/}"
+    is_wiki "$pd" || continue
+    kn=0 kx=""
+    for kf in "$pd"/AGENTS.md.before-v* "$pd"/rules/*.before-v*; do
+      [ -f "$kf" ] && [ ! -L "$kf" ] || continue
+      case "$kf" in "$pd"/rules/*) keep_shaped "${kf##*/}" rules || continue ;; *) keep_shaped "${kf##*/}" top || continue ;; esac
+      kn=$((kn + 1))
+      [ -n "$kx" ] || kx="${kf#"$pd"/}"
+    done
+    [ "$kn" = 0 ] && continue
+    if name_ok "${pd##*/}"; then
+      todo_add "handbook: ${pd##*/} keeps $kn file(s) of your own text that an upgrade replaced, such as $(tilde "$pd")/$kx. Do: move what you want to keep into wiki/conventions.md under \"For agents\", then delete the .before-v file(s)"
+    else
+      todo_add "handbook: a wiki with an unusual name keeps $kn file(s) of your own text that an upgrade replaced. Do: move what you want to keep into wiki/conventions.md under \"For agents\", then delete the .before-v file(s)"
+    fi
+  done
   if collection_repo && [ -f "$WIKIS_DIR/WIKIS.md" ]; then
     case "$(hook_state "$WIKIS_DIR")" in
       ours) command -v gitleaks >/dev/null 2>&1 || todo_add "secrets: commits aren't scanned, gitleaks isn't installed. Run: brew install gitleaks" ;;
@@ -7002,68 +7043,421 @@ EOF2
   [ "$found" = 1 ] || ui_item ok "nothing older than $days days (cutoff $cutoff) or $STALE_COMMITS commits"
 }
 
+# ---- what each handbook version shipped (code review M11) ---------------------------------
+# handbook-hashes.tsv, beside this script, has a line for each file of each handbook version:
+# version<TAB>path<TAB>sha256, written by scripts/handbook-hashes.sh. upgrade_one reads it to
+# tell a wiki's handbook as its version shipped it from one somebody edited, and keeps the text
+# of an edited one beside the new, as <file>.before-v<new version>. Every doubt means edited: a
+# wrong "edited" only keeps a file, and a wrong "as shipped" would lose someone's text.
+
+# hb_record: loads the record once a process, into HB_REC, each line between line ends, and sets
+# HB_REC_OK to yes when it can be used. It is read as data: a file that is missing, can't be
+# read, or has one line that isn't the form, is not used at all. A path in it is only compared.
+HB_REC="" HB_REC_OK="" HB_SUMS="" UPGRADE_LEFT=""
+hb_record() {
+  local t
+  [ -z "$HB_REC_OK" ] || return 0
+  HB_REC_OK=no
+  t="$(LC_ALL=C awk -F '\t' '
+    NF != 3 || $1 !~ /^[0-9]+$/ || $2 !~ /^(AGENTS\.md|rules\/[A-Za-z0-9._-]+\.md)$/ || length($3) != 64 || $3 ~ /[^0-9a-f]/ { bad = 1; exit }
+    { print }
+    END { exit bad }' "$REPO/handbook-hashes.tsv" 2>/dev/null)" || return 0
+  [ -n "$t" ] || return 0
+  HB_REC=$'\n'"$t"$'\n'
+  HB_REC_OK=yes
+}
+
+# hb_safe <name>: a rules file's name of the kind the record holds. No other name is looked up,
+# hashed or removed: a name with a space, a newline, a glob character or a leading dash is the
+# user's, whatever it says.
+hb_safe() {
+  # By byte: in bash 3.2 a range in a pattern follows the locale's order, which takes in more.
+  local LC_ALL=C
+  case "$1" in -* | *[!A-Za-z0-9._-]* | '') return 1 ;; *.md) return 0 ;; esac
+  return 1
+}
+
+# hb_hashes <root> <path>...: "path<TAB>sha256" for each file that could be read, one process for
+# all of them. sha256sum, else shasum, else openssl. Every path is AGENTS.md or rules/<safe name>,
+# and each has been checked to be a plain file. A file left out counts as edited.
+hb_hashes() {
+  local root="$1"
+  shift
+  [ $# -gt 0 ] || return 0
+  (
+    cd "$root" 2>/dev/null || exit 0
+    if command -v sha256sum >/dev/null 2>&1; then sha256sum -- "$@"
+    elif command -v shasum >/dev/null 2>&1; then shasum -a 256 -- "$@"
+    elif command -v openssl >/dev/null 2>&1; then
+      openssl dgst -sha256 "$@" | LC_ALL=C sed -n 's/^[A-Za-z0-9-]*(\(.*\))= \([0-9a-f]*\)$/\2  \1/p'
+    fi 2>/dev/null || true
+  ) | LC_ALL=C awk '
+    { h = substr($0, 1, 64); s = substr($0, 65, 2); p = substr($0, 67) }
+    length(h) == 64 && h !~ /[^0-9a-f]/ && (s == "  " || s == " *") && p != "" { print p "\t" h }'
+}
+
+# hb_hash_of <path>: the hash hb_hashes gave the path, from HB_SUMS, or nothing.
+hb_hash_of() {
+  local s
+  case "$HB_SUMS" in *$'\n'"$1$TAB"*) ;; *) return 0 ;; esac
+  s="${HB_SUMS#*$'\n'"$1$TAB"}"
+  printf '%s' "${s%%$'\n'*}"
+}
+
+# hb_shipped <version> <path> <sha256>: whether that version shipped the path with that hash.
+# hb_shipped_any <path> <sha256>: whether any version did. hb_known <version>: whether the
+# record has the version. hb_path_known <path>: whether any version shipped the path at all.
+hb_shipped() { [ "$HB_REC_OK" = yes ] && [ -n "$1" ] && [ -n "$3" ] && case "$HB_REC" in *$'\n'"$1$TAB$2$TAB$3"$'\n'*) true ;; *) false ;; esac; }
+hb_shipped_any() { [ "$HB_REC_OK" = yes ] && [ -n "$2" ] && case "$HB_REC" in *"$TAB$1$TAB$2"$'\n'*) true ;; *) false ;; esac; }
+hb_known() { [ "$HB_REC_OK" = yes ] && [ -n "$1" ] && case "$HB_REC" in *$'\n'"$1$TAB"*) true ;; *) false ;; esac; }
+hb_path_known() { [ "$HB_REC_OK" = yes ] && case "$HB_REC" in *"$TAB$1$TAB"*) true ;; *) false ;; esac; }
+
+# hb_keep_name <file> <version>: a name beside the file that nothing has, not even a link:
+# <file>.before-v<version>, then -2, -3 and on. An existing one is never written over.
+hb_keep_name() {
+  local b="$1.before-v$2" i=2
+  while [ -e "$b" ] || [ -L "$b" ]; do b="$1.before-v$2-$i"; i=$((i + 1)); done
+  printf '%s' "$b"
+}
+
+# hb_kept_same <file> <version>: an earlier copy of the file's text beside it, a plain file named
+# <file>.before-v<version>[-<n>] with the same bytes, or a failure.
+hb_kept_same() {
+  local k where=rules
+  [ "${1##*/}" != AGENTS.md ] || where=top
+  for k in "$1.before-v$2" "$1.before-v$2"-*; do
+    [ -f "$k" ] && [ ! -L "$k" ] && keep_shaped "${k##*/}" "$where" || continue
+    if cmp -s -- "$1" "$k" 2>/dev/null; then printf '%s' "$k"; return 0; fi
+  done
+  return 1
+}
+
+# ver_cmp <a> <b>: lt, eq or gt, for two strings of digits of any length; empty is 0. The
+# shell's test refuses a number too long for it, and a version line is the wiki's to write.
+ver_cmp() {
+  local a="${1:-0}" b="${2:-0}" LC_ALL=C
+  while [ "${#a}" -gt 1 ] && [ "${a#0}" != "$a" ]; do a="${a#0}"; done
+  while [ "${#b}" -gt 1 ] && [ "${b#0}" != "$b" ]; do b="${b#0}"; done
+  if [ "${#a}" -lt "${#b}" ]; then echo lt; elif [ "${#a}" -gt "${#b}" ]; then echo gt
+  elif [ "$a" = "$b" ]; then echo eq; elif [[ "$a" < "$b" ]]; then echo lt; else echo gt; fi
+}
+
+# ver_norm <digits>: the number without leading zeros, as the record writes it. Empty stays empty.
+ver_norm() {
+  local v="$1"
+  while [ "${#v}" -gt 1 ] && [ "${v#0}" != "$v" ]; do v="${v#0}"; done
+  printf '%s' "$v"
+}
+
+# shown <text>: text that came from the wiki, as it may be printed: no control characters.
+shown() { local LC_ALL=C; printf '%s' "${1//[[:cntrl:]]/}"; }
+
+# name_ok <name>: a name from the wiki that may be printed as it is, inside a line that can hold a
+# command: letters, digits, dots, dashes and underscores, no leading dash, at most 100 bytes.
+# Any other name is said without it: a file pulled from a shared collection can be called
+# "note. Run: something".
+name_ok() {
+  local LC_ALL=C
+  [ -n "$1" ] && [ "${#1}" -le 100 ] || return 1
+  case "$1" in -* | *[!A-Za-z0-9._-]*) return 1 ;; esac
+}
+
+# wiki_said <root>: the wiki's name, or "a wiki with an unusual name". upgrade_cmd <root>: the
+# command that upgrades it again, by name when the name can be printed.
+wiki_said() { if name_ok "${1##*/}"; then printf '%s' "${1##*/}"; else printf 'a wiki with an unusual name'; fi; }
+upgrade_cmd() { if name_ok "${1##*/}"; then printf '%s upgrade %s' "$WIKI_CMD" "${1##*/}"; else printf '%s upgrade --all' "$WIKI_CMD"; fi; }
+
+# keep_shaped <name> <rules|top>: whether a file name is one upgrade could have kept text in:
+# AGENTS.md.before-v<digits>[-<digits>] at the top, <safe name>.before-v<digits>[-<digits>] in rules/.
+keep_shaped() {
+  local base="${1%.before-v*}" r="${1##*.before-v}" a b LC_ALL=C
+  [ "$base" != "$1" ] || return 1
+  case "$2" in top) [ "$base" = AGENTS.md ] || return 1 ;; *) hb_safe "$base" || return 1 ;; esac
+  a="${r%%-*}" b=""
+  [ "$a" = "$r" ] || b="${r#*-}"
+  case "$a" in '' | *[!0-9]*) return 1 ;; esac
+  [ "$a" = "$r" ] || case "$b" in '' | *[!0-9]*) return 1 ;; esac
+}
+
+# The rules that keep the text an upgrade kept out of git are '/AGENTS.md.before-v*' and
+# '/rules/*.before-v*' in a wiki's own .gitignore, and the same under '/*/' at the top of a
+# collection. Anchored to where upgrade writes, so a page named like one is still synced. They are
+# written out, quoted, wherever they are used: unquoted, the shell would take them as globs.
+
+# upgrade_say <form> <text>: one line of what upgrade_one did, through the kit: item-ok,
+# item-warn, item-error or detail. With LLM_WIKI_UPGRADE_DATA set it also hands the line back
+# tagged, "note<TAB>form<TAB>wiki<TAB>text", for wiki update and setup to show in their own words.
+upgrade_say() {
+  case "$1" in
+    item-ok) ui_item ok "$2" ;;
+    item-warn) ui_item warn "$2" ;;
+    item-error) ui_item error "$2" ;;
+    *) ui_detail "$2" ;;
+  esac
+  [ -z "${LLM_WIKI_UPGRADE_DATA:-}" ] || printf 'note\t%s\t%s\t%s\n' "$1" "$(wiki_said "${UPGRADE_WIKI:-}")" "$2"
+}
+
+# upgrade_guarded <root>: upgrade_one in a process of its own, so that one wiki that stops it
+# (a handbook it can't read, a file it can't write) is named with why, and the others go on.
+# Its errors are said without style, and with control characters taken out.
+upgrade_guarded() {
+  local e rc=0 why
+  if ! e="$(mktemp 2>/dev/null)"; then
+    # Nowhere to keep its errors: still in a process of its own, with them on stderr as they come.
+    set +e
+    ( set -e; upgrade_one "$1" )
+    rc=$?
+    set -e
+    [ "$rc" = 0 ] || UPGRADE_WIKI="${1##*/}" upgrade_say item-error "failed:   the upgrade of this wiki stopped (exit $rc); its error is just above"
+    return 0
+  fi
+  # Not as "( ... ) || rc=$?": in a list, bash runs the whole subshell with set -e off, and a
+  # failed copy would no longer stop the upgrade. So -e is off here only, and on again inside.
+  set +e
+  # shellcheck disable=SC2034 # read by the kit's die
+  ( set -e; STYLE_ERR=no; upgrade_one "$1" ) 2>"$e"
+  rc=$?
+  set -e
+  if [ "$rc" = 0 ]; then
+    cat "$e" >&2
+  else
+    why="$(LC_ALL=C tr '\n\t' '  ' < "$e" | LC_ALL=C tr -d '\000-\037\177' | cut -c 1-400)"
+    why="${why#error: }"
+    UPGRADE_WIKI="${1##*/}" upgrade_say item-error "failed:   the upgrade of this wiki stopped: ${why:-exit $rc}"
+  fi
+  rm -f "$e"
+}
+
+# upgraded_only <name:version pairs>: those whose handbook is now the template's version: what
+# was upgraded, for the summary and the commit. One left as it was, or stopped, isn't.
+upgraded_only() {
+  local p tv v
+  tv="$(version_of "$TEMPLATE/AGENTS.md")"
+  for p in $1; do
+    v="$(version_of "$WIKIS_DIR/${p%:*}/AGENTS.md")"
+    [ "$(ver_cmp "$v" "$tv")" != eq ] || printf ' %s' "$p"
+  done
+}
+
+# upgrade_handbook <root> <from> <to>: replace the handbook's files with the template's. Each
+# one is compared first with what its version shipped. An edited one is replaced too, after
+# its text is kept beside it, and is named. A rules file the template no longer has is
+# removed only when a version shipped it as it is; one of the user's own is left alone.
+# Nothing is written or removed through a link: if any part of the handbook is one, or isn't
+# a plain file, the handbook stays as it is. Nothing is replaced unless every edited text was kept.
+upgrade_handbook() {
+  local root="$1" wv="$2" tv="$3" f n p h b why="" what="a plain file" edited="" kept_at="" sums_for="AGENTS.md" ne=0 mode
+  if [ -L "$root/rules" ] || { [ -e "$root/rules" ] && [ ! -d "$root/rules" ]; }; then why="rules" what="a folder"
+  else
+    for f in "$TEMPLATE"/rules/*.md; do
+      p="$root/rules/${f##*/}"
+      if [ -L "$p" ] || { [ -e "$p" ] && [ ! -f "$p" ]; }; then why="rules/${f##*/}"; break; fi
+    done
+  fi
+  if [ -n "$why" ]; then
+    upgrade_say item-warn "handbook: left at v${wv:-?}: its $why is a link or not $what, and nothing is written through one. Do: make $why $what (or remove it), then run $(typed "$(upgrade_cmd "$root")")"
+    UPGRADE_HB_LEFT=yes
+    return 0
+  fi
+  # Each file to be replaced, and the folders that take new files and kept text, must be
+  # writable before anything is written: a handbook half new would claim the new version.
+  why=""
+  for p in "" AGENTS.md rules; do
+    [ -e "$root/$p" ] || continue
+    # Not "${p:-...}" with an apostrophe in it: bash 3.2 reads that as a quote.
+    [ -w "$root/$p" ] || { why="$p"; [ -n "$why" ] || why="the folder of the wiki"; break; }
+  done
+  if [ -z "$why" ]; then
+    for f in "$TEMPLATE"/rules/*.md; do
+      p="$root/rules/${f##*/}"
+      if [ -e "$p" ] && [ ! -w "$p" ]; then why="rules/${f##*/}"; break; fi
+    done
+  fi
+  if [ -n "$why" ]; then
+    upgrade_say item-warn "handbook: left at v${wv:-?}: $why can't be written, so nothing was replaced. Do: make it writable, then run $(typed "$(upgrade_cmd "$root")")"
+    UPGRADE_HB_LEFT=yes
+    return 0
+  fi
+  hb_record
+  # The files to compare: the handbook's own, and each rules file a version shipped.
+  if [ -d "$root/rules" ]; then
+    for f in "$root"/rules/*.md; do
+      n="${f##*/}"
+      [ -f "$f" ] && [ ! -L "$f" ] && hb_safe "$n" || continue
+      if [ -f "$TEMPLATE/rules/$n" ] || hb_path_known "rules/$n"; then sums_for="$sums_for rules/$n"; fi
+    done
+  fi
+  # shellcheck disable=SC2086 # every name in it passed hb_safe
+  HB_SUMS=$'\n'"$(hb_hashes "$root" $sums_for)"$'\n'
+  # First keep every edited text. One that can't be kept stops the upgrade before any write.
+  local own="AGENTS.md"
+  for f in "$TEMPLATE"/rules/*.md; do [ ! -f "$f" ] || own="$own rules/${f##*/}"; done
+  for p in $own; do
+    [ -f "$root/$p" ] || continue
+    h="$(hb_hash_of "$p")"
+    ! hb_shipped "$wv" "$p" "$h" || continue
+    # Already the new template's text, as an upgrade that stopped partway leaves it: no edit.
+    ! cmp -s -- "$root/$p" "$TEMPLATE/$p" 2>/dev/null || continue
+    # Kept already, by an earlier run that stopped: that copy is named, and no other is made.
+    if ! b="$(hb_kept_same "$root/$p" "$tv")"; then
+      b="$(hb_keep_name "$root/$p" "$tv")"
+      if ! { cp -- "$root/$p" "$b" && cmp -s -- "$root/$p" "$b"; } 2>/dev/null; then
+        # The name was free a moment ago, so what is there now is this run's half copy.
+        rm -f -- "$b" 2>/dev/null || true
+        upgrade_say item-warn "handbook: left at v${wv:-?}: $p was changed in this wiki and its text couldn't be kept, so nothing was replaced. Do: make it readable, and the folder writable, then run $(typed "$(upgrade_cmd "$root")")"
+        [ -z "$kept_at" ] || upgrade_say detail "kept so far:$kept_at"
+        UPGRADE_HB_LEFT=yes
+        return 0
+      fi
+    fi
+    edited="$edited$p$TAB$b"$'\n'
+    kept_at="$kept_at $(tilde "$b")"
+    ne=$((ne + 1))
+  done
+  # The rules files are part of the handbook and move with its version. AGENTS.md, which holds
+  # the version, goes last: a copy that fails partway leaves the old number, and the next
+  # upgrade tries again.
+  if [ -d "$TEMPLATE/rules" ]; then
+    mkdir -p "$root/rules"
+    for f in "$TEMPLATE"/rules/*.md; do
+      [ -e "$root/rules/${f##*/}" ] || upgrade_say detail "added:    rules/${f##*/}"
+      if ! cp "$f" "$root/rules/${f##*/}" 2>/dev/null; then
+        upgrade_say item-warn "handbook: left at v${wv:-?}: rules/${f##*/} couldn't be written, so the upgrade stopped partway and AGENTS.md still says v${wv:-?}. Do: see that the disk has room and the file can be written, then run $(typed "$(upgrade_cmd "$root")")"
+        [ -z "$kept_at" ] || upgrade_say detail "your text, kept:$kept_at"
+        UPGRADE_HB_LEFT=yes
+        return 0
+      fi
+    done
+  fi
+  if ! cp "$TEMPLATE/AGENTS.md" "$root/AGENTS.md" 2>/dev/null; then
+    upgrade_say item-warn "handbook: left at v${wv:-?}: AGENTS.md couldn't be written, so it still says v${wv:-?}. Do: see that the disk has room and the file can be written, then run $(typed "$(upgrade_cmd "$root")")"
+    [ -z "$kept_at" ] || upgrade_say detail "your text, kept:$kept_at"
+    UPGRADE_HB_LEFT=yes
+    return 0
+  fi
+  mode="handbook: v${wv:-?} -> v$tv"
+  if [ "$ne" = 1 ]; then mode="$mode, 1 edited file replaced"; elif [ "$ne" -gt 1 ]; then mode="$mode, $ne edited files replaced"; fi
+  upgrade_say item-ok "$mode"
+  while IFS="$TAB" read -r p b; do
+    [ -n "$p" ] || continue
+    upgrade_say item-warn "edited:   $p was changed in this wiki, and the new handbook replaced it. Your text: $(tilde "$b"). Rules of your own go in wiki/conventions.md under \"For agents\", which an upgrade never touches."
+  done <<EOF2
+$edited
+EOF2
+  # Rules files the template no longer has.
+  if [ -d "$root/rules" ]; then
+    for f in "$root"/rules/*.md; do
+      n="${f##*/}"
+      [ -e "$f" ] || [ -L "$f" ] || continue
+      [ ! -f "$TEMPLATE/rules/$n" ] || continue
+      if [ -L "$f" ] || [ ! -f "$f" ] || ! hb_safe "$n" || ! hb_path_known "rules/$n"; then
+        if name_ok "$n"; then upgrade_say detail "yours:    rules/$n isn't the handbook's, left alone"
+        else upgrade_say detail "yours:    a rules file with an unusual name isn't the handbook's, left alone"; fi
+      elif hb_known "$wv" && hb_shipped_any "rules/$n" "$(hb_hash_of "rules/$n")"; then
+        rm -f -- "$f"
+        upgrade_say detail "removed:  rules/$n, which the handbook no longer has"
+      else
+        upgrade_say detail "kept:     rules/$n is no longer part of the handbook, and you changed it, so it stays"
+      fi
+    done
+  fi
+}
+
+# upgrade_notes <output> [summary]: from what an upgrade run with LLM_WIKI_UPGRADE_DATA handed
+# back, the lines a person has to see wherever the upgrade ran: an edited file replaced, one kept,
+# one of the user's own, and a handbook left as it was. With "summary", each wiki's
+# "handbook: vN -> vM" line too, as "<wiki>: vN -> vM".
+upgrade_notes() {
+  local form w text
+  while IFS="$TAB" read -r _ form w text; do
+    [ -n "$form" ] || continue
+    case "$text" in
+      "failed: "*) ui_item error "$w: $text" ;;
+      "handbook: left at "*) ui_item warn "$w: $text" ;;
+      "edited: "*) ui_item warn "$w: $text" ;;
+      "kept: "* | "yours: "*) ui_detail "$w: $text" ;;
+      "handbook: "*) [ "${2:-}" != summary ] || ui_detail "$w: ${text#handbook: }" ;;
+    esac
+  done <<EOF2
+$(printf '%s\n' "$1" | grep "^note$TAB" || true)
+EOF2
+}
+
 upgrade_one() {
-  local root="$1" tv wv f r l had_links=1
+  local root="$1" tv wv f r l had_links=1 UPGRADE_WIKI="${1##*/}" UPGRADE_HB_LEFT=""
   is_wiki "$root" || die "$(not_wiki "$root")"
   # A handbook that can't be read counts as a wiki, and has no version to compare: replacing
   # it would write over a file nobody has looked at.
   handbook_version "$root/AGENTS.md"
   [ "$HB_READ" = yes ] || die "$(tilde "$root/AGENTS.md") can't be read, so it is left as it is. If this runs inside an agent's sandbox, run the upgrade outside it"
   tv="$(version_of "$TEMPLATE/AGENTS.md")"
-  wv="$(version_of "$root/AGENTS.md")"
-  if [ "${wv:-0}" -gt "${tv:-0}" ]; then
-    ui_item warn "handbook: v$wv is newer than your template (v$tv), left alone. Update the template: $(typed "git -C $(tilde "$REPO") pull")"
-  elif [ "${wv:-0}" -eq "${tv:-0}" ]; then
-    ui_detail "handbook: already v${wv:-?}, nothing to replace"
-  else
-    # Outside git there is no history, so keep the old handbook beside the new one.
-    in_git_repo "$root" || cp "$root/AGENTS.md" "$root/AGENTS.md.bak"
-    cp "$TEMPLATE/AGENTS.md" "$root/AGENTS.md"
-    # The rules files are part of the handbook and move with its version.
-    if [ -d "$TEMPLATE/rules" ]; then
-      mkdir -p "$root/rules"
-      for f in "$TEMPLATE"/rules/*.md; do
-        [ -e "$root/rules/${f##*/}" ] || ui_detail "added:    rules/${f##*/}"
-        cp "$f" "$root/rules/"
-      done
+  # "045" is 45: the record and every line printed here write it so.
+  wv="$(ver_norm "$(version_of "$root/AGENTS.md")")"
+  case "$(ver_cmp "$wv" "$tv")" in
+    gt) ui_item warn "handbook: v$wv is newer than your template (v$tv), left alone. Update the template: $(typed "git -C $(tilde "$REPO") pull")" ;;
+    # At the template's version there is nothing to replace, so an edit there is the user's to keep.
+    eq) ui_detail "handbook: already v${wv:-?}, nothing to replace" ;;
+    *) upgrade_handbook "$root" "$wv" "$tv" ;;
+  esac
+  # A handbook left as it was gets nothing more of the template: no new rules file, no files
+  # copied in, no CLAUDE.md switch, so it stays the old version whole. What still runs keeps
+  # things safe: the ignore rules, which keep out of git any text a run that stopped had kept,
+  # and the secret-scan hook. Neither touches the handbook.
+  if [ "$UPGRADE_HB_LEFT" != yes ]; then
+    # Older scaffolds pointed CLAUDE.md at the handbook in words. An import is reliable.
+    if [ -f "$root/CLAUDE.md" ] && [ ! -L "$root/CLAUDE.md" ] && ! grep -q '^@AGENTS\.md' "$root/CLAUDE.md" \
+      && [ "$(wc -l < "$root/CLAUDE.md" | tr -d ' ')" -le 1 ]; then
+      cp "$TEMPLATE/CLAUDE.md" "$root/CLAUDE.md"
+      ui_detail "CLAUDE.md: switched to an import of AGENTS.md"
     fi
-    ui_item ok "handbook: v${wv:-?} -> v$tv"
+    [ -f "$root/links.md" ] || had_links=0
+    copy_missing "$root" report
+    [ "$had_links" = 1 ] || link_shared "$root"
   fi
-  # Older scaffolds pointed CLAUDE.md at the handbook in words. An import is reliable.
-  if [ -f "$root/CLAUDE.md" ] && ! grep -q '^@AGENTS\.md' "$root/CLAUDE.md" \
-    && [ "$(wc -l < "$root/CLAUDE.md" | tr -d ' ')" -le 1 ]; then
-    cp "$TEMPLATE/CLAUDE.md" "$root/CLAUDE.md"
-    ui_detail "CLAUDE.md: switched to an import of AGENTS.md"
-  fi
-  [ -f "$root/links.md" ] || had_links=0
-  copy_missing "$root" report
-  [ "$had_links" = 1 ] || link_shared "$root"
-  for l in .compile-lock .compile-lock.d .compile-lock.take; do
-    if [ -f "$root/.gitignore" ] && ! grep -qxF "$l" "$root/.gitignore"; then
+  # The old text of an edited handbook stays on this machine: it is the user's, not the wiki's.
+  if [ -f "$root/.gitignore" ] && [ ! -L "$root/.gitignore" ] && [ -w "$root/.gitignore" ]; then
+    for l in .compile-lock .compile-lock.d .compile-lock.take '/AGENTS.md.before-v*' '/rules/*.before-v*'; do
+      grep -qxF -- "$l" "$root/.gitignore" && continue
       ensure_line "$root/.gitignore" "$l"
       ui_detail ".gitignore: added $l"
-    fi
-  done
-  [ ! -f "$root/.gitignore" ] || ignore_obsidian "$root/.gitignore"
+    done
+    ignore_obsidian "$root/.gitignore"
+  fi
   r="$(wiki_repo "$root")"
   [ -z "$r" ] || install_hook "$r"
-  ui_item ok "done:     $(tilde "$root")"
+  if [ "$UPGRADE_HB_LEFT" = yes ]; then ui_item warn "not upgraded: $(tilde "$root")"; else ui_item ok "done:     $(tilde "$root")"; fi
 }
 
 cmd_upgrade_all() {
-  local d found=0 behind from
+  local d found=0 behind from l
   [ -d "$WIKIS_DIR" ] || die "no wikis at $(tilde "$WIKIS_DIR")"
   behind="$(behind_versions)"
-  from="$(oldest_version "$behind")"
+  # Read once here, so that each wiki's own process has it.
+  hb_record
   for d in "$WIKIS_DIR"/*/; do
     d="${d%/}"
     is_wiki "$d" || continue
     found=1
     ui_stage UPGRADE "${d##*/}"
-    upgrade_one "$d"
+    upgrade_guarded "$d"
   done
   [ "$found" = 1 ] || ui_detail "(no wikis to upgrade)"
-  [ ! -f "$WIKIS_DIR/.gitignore" ] || ignore_obsidian "$WIKIS_DIR/.gitignore"
+  # Upgraded is what is now at the template's version: a wiki left as it was, or stopped, isn't.
+  UPGRADE_LEFT="$(upgrade_left "$behind")"
+  behind="$(upgraded_only "$behind")"
+  from="$(oldest_version "$behind")"
+  if [ -f "$WIKIS_DIR/.gitignore" ] || [ -L "$WIKIS_DIR/.gitignore" ]; then
+    # A link or a folder: nothing is written through it. apply_journal_commit says so, below.
+    if gitignore_ok >/dev/null; then
+      ignore_obsidian "$WIKIS_DIR/.gitignore"
+      # The text an upgrade keeps stays on this machine, in a collection made before too.
+      for l in '/*/AGENTS.md.before-v*' '/*/rules/*.before-v*'; do
+        grep -qxF -- "$l" "$WIKIS_DIR/.gitignore" && continue
+        ensure_line "$WIKIS_DIR/.gitignore" "$l"
+        echo ".gitignore: added $l"
+      done
+    fi
+  fi
   ensure_shared_conventions
   ui_stage UPGRADE "journal"
   write_journal_config
@@ -7086,10 +7480,27 @@ cmd_upgrade_one() {
   local root="$1" behind="" from
   is_wiki "$root" || die "$(not_wiki "$root")"
   from="$(version_of "$root/AGENTS.md")"
-  if [ "${from:-0}" -lt "$(version_of "$TEMPLATE/AGENTS.md")" ]; then behind=" ${root##*/}:${from:-0}"; fi
+  if [ "$(ver_cmp "$from" "$(version_of "$TEMPLATE/AGENTS.md")")" = lt ]; then behind=" ${root##*/}:${from:-0}"; fi
   ui_stage UPGRADE "${root##*/}"
   upgrade_one "$root"
+  # Left as it was ("handbook: left at"): not counted or committed as upgraded.
+  UPGRADE_LEFT=""
+  if [ -n "$behind" ] && [ "$(ver_cmp "$(version_of "$root/AGENTS.md")" "$(version_of "$TEMPLATE/AGENTS.md")")" != eq ]; then
+    UPGRADE_LEFT=" ${root##*/}" behind=""
+  fi
   upgrade_summary "${from:-0}" "$behind" "$root"
+  # Asked to upgrade this one, and it is still behind: that is a failure, for a caller that checks.
+  # --all exits 0 when some are left: each is named, and the others were upgraded.
+  [ -z "$UPGRADE_LEFT" ] || exit 1
+}
+
+# upgrade_left <name:version pairs>: the names of those that are still behind the template.
+upgrade_left() {
+  local p tv
+  tv="$(version_of "$TEMPLATE/AGENTS.md")"
+  for p in $1; do
+    [ "$(ver_cmp "$(version_of "$WIKIS_DIR/${p%:*}/AGENTS.md")" "$tv")" = eq ] || printf ' %s' "${p%:*}"
+  done
 }
 
 # Wikis behind the template, as " name:version" pairs. 0 means no version line.
@@ -7123,6 +7534,48 @@ changelog_since() {
   ' "$REPO/CHANGELOG.md"
 }
 
+# via_link <base> <path>: whether the path, or a folder on the way to it from base, is a link.
+via_link() {
+  local p="$2"
+  while [ -n "$p" ]; do
+    [ ! -L "$1/$p" ] || return 0
+    case "$p" in */*) p="${p%/*}" ;; *) p="" ;; esac
+  done
+  return 1
+}
+
+# upgrade_dropped <wiki name>: the rules files of that wiki that git has and the folder no longer
+# does, of the names a handbook version shipped and the template no longer has: what
+# upgrade_handbook removed. Their removal is committed with the upgrade.
+upgrade_dropped() {
+  local d="$1" f n
+  git -C "$WIKIS_DIR" ls-files -d -- "$d/rules" 2>/dev/null | while IFS= read -r f; do
+    n="${f#"$d/rules/"}"
+    [ "$n" != "$f" ] && hb_safe "$n" && hb_path_known "rules/$n" && [ ! -f "$TEMPLATE/rules/$n" ] || continue
+    [ -e "$WIKIS_DIR/$f" ] || [ -L "$WIKIS_DIR/$f" ] || printf '%s\n' "$f"
+  done
+}
+
+# ignore_ours <wiki>/.gitignore: whether git has the file and the only change to it since the last
+# commit is lines upgrade_one adds. A change of the user's in it keeps it out of the commit.
+ignore_ours() {
+  local p="$1" l d LC_ALL=C
+  case "$p" in *[!A-Za-z0-9._/-]* | -*) return 1 ;; esac
+  [ -f "$WIKIS_DIR/$p" ] && ! via_link "$WIKIS_DIR" "$p" || return 1
+  git -C "$WIKIS_DIR" ls-files --error-unmatch -- "$p" >/dev/null 2>&1 || return 1
+  d="$(git -C "$WIKIS_DIR" diff --no-color --no-ext-diff -U0 HEAD -- "$p" 2>/dev/null)" || return 1
+  [ -n "$d" ] || return 1
+  while IFS= read -r l; do
+    case "$l" in
+      'diff '* | 'index '* | '--- '* | '+++ '* | '@@'*) ;;
+      '+.compile-lock' | '+.compile-lock.d' | '+.compile-lock.take' | '+/AGENTS.md.before-v*' | '+/rules/*.before-v*' | '+.obsidian/' | '+.trash/') ;;
+      *) return 1 ;;
+    esac
+  done <<EOF2
+$d
+EOF2
+}
+
 # upgrade_commit <names> <prefix>: commit what the upgrade changed in those wikis, so
 # it can't sit uncommitted. Sessions upgrade on their own and were leaving it to the
 # agent, which didn't always commit. Only files the handbook owns, and template files
@@ -7134,21 +7587,40 @@ upgrade_commit() {
   # ignore rules, so this runs every time.
   collection_repo || return 0
   tv="$(version_of "$TEMPLATE/AGENTS.md")"
+  local own="AGENTS.md CLAUDE.md .gitattributes .gitignore"
+  # The template's rules files one by one, never the folder: a file of the user's own there, or
+  # one this upgrade kept, stays out of the commit.
+  for f in "$TEMPLATE"/rules/*.md; do [ ! -f "$f" ] || own="$own rules/${f##*/}"; done
+  hb_record
   for d in $1; do
-    for f in AGENTS.md CLAUDE.md rules .gitattributes .gitignore; do
-      [ -e "$WIKIS_DIR/$d/$f" ] && paths="$paths $d/$f"
+    # A link, or a file in a folder that is one, is the user's: the upgrade wrote nothing there.
+    for f in $own; do
+      [ -e "$WIKIS_DIR/$d/$f" ] && ! via_link "$WIKIS_DIR/$d" "$f" && paths="$paths $d/$f"
     done
+    # A rules file the handbook dropped, which this upgrade removed: its removal goes in.
+    while IFS= read -r f; do
+      [ -n "$f" ] && paths="$paths $f"
+    done <<EOF2
+$(upgrade_dropped "$d")
+EOF2
     # Template files the upgrade created, such as patterns.md in an old wiki.
     while IFS= read -r f; do
       [ -n "$f" ] && paths="$paths $f"
     done <<EOF2
 $(cd "$WIKIS_DIR" && (cd "$TEMPLATE" && find . -type f | sed "s#^\./#$d/#") | while IFS= read -r f; do
-      [ -e "$f" ] && ! git ls-files --error-unmatch -- "$f" >/dev/null 2>&1 && printf '%s\n' "$f"
+      [ -e "$f" ] && ! via_link "$WIKIS_DIR/$d" "${f#"$d/"}" && ! git ls-files --error-unmatch -- "$f" >/dev/null 2>&1 && printf '%s\n' "$f"
     done)
 EOF2
   done
-  # Upgrades can add ignore rules for the journal, delegation and stats files.
-  [ -f "$WIKIS_DIR/.gitignore" ] && paths="$paths .gitignore"
+  # Every other wiki whose .gitignore upgrade_one changed and nobody else did, such as one already
+  # on the template's version given a new rule: committed with the rest, not left for a sync.
+  for d in "$WIKIS_DIR"/*/; do
+    d="${d%/}"; d="${d##*/}"
+    case " $1 " in *" $d "*) continue ;; esac
+    is_wiki "$WIKIS_DIR/$d" && ignore_ours "$d/.gitignore" && paths="$paths $d/.gitignore"
+  done
+  # Upgrades can add ignore rules for the journal, delegation and stats files. Not a link.
+  [ -f "$WIKIS_DIR/.gitignore" ] && [ ! -L "$WIKIS_DIR/.gitignore" ] && paths="$paths .gitignore"
   # And the shared wiki's conventions page, when the upgrade created it.
   if [ -f "$WIKIS_DIR/$SHARED/wiki/conventions.md" ] && ! git -C "$WIKIS_DIR" ls-files --error-unmatch -- "$SHARED/wiki/conventions.md" >/dev/null 2>&1; then
     paths="$paths $SHARED/wiki/conventions.md $SHARED/index.md"
@@ -7188,10 +7660,10 @@ upgrade_summary() {
   for d in $names; do plain="$plain ${d%:*}"; done
   if [ -n "${LLM_WIKI_UPGRADE_DATA:-}" ]; then
     upgrade_commit "$plain" >/dev/null
-    printf 'upgraded\t%s\t%s\t%s\n' "$from" "$names" "$one"
+    printf 'upgraded\t%s\t%s\t%s\t%s\n' "$from" "$names" "$one" "${UPGRADE_LEFT:-}"
     return 0
   fi
-  upgrade_changed "$from" "$names" "$one"
+  upgrade_changed "$from" "$names" "$one" "${UPGRADE_LEFT:-}"
   ui_stage NEXT "what to do now"
   if [ -n "$names" ]; then
     ui_detail "New sessions load the new handbook."
@@ -7210,8 +7682,17 @@ upgrade_summary() {
 # upgrade_changed <from> <upgraded names> [one wiki root]: the CHANGED stage, what the upgrade did,
 # with what's new in the handbook since the oldest version it came from.
 upgrade_changed() {
-  local from="$1" names="$2" one="${3:-}" tv n d l groups=""
+  local from="$1" names="$2" one="${3:-}" left="${4:-}" tv n d l groups="" said=""
   tv="$(version_of "$TEMPLATE/AGENTS.md")"
+  # Behind, and not upgraded: each one's line above says why. Not "already on" anything.
+  if [ -n "$left" ]; then
+    for d in $left; do said="$said, $(wiki_said "$d")"; done
+    said="${said#, }"
+    if [ -z "$names" ]; then
+      ui_stage --warn CHANGED "Nothing upgraded. Still behind handbook v$tv: $said. The lines above say why."
+      return 0
+    fi
+  fi
   # names arrives as name:version pairs. Group them by the version they came from.
   if [ -n "$names" ]; then
     groups="$(for d in $names; do echo "${d##*:} ${d%:*}"; done | sort -k1,1rn -k2,2 | awk '
@@ -7229,6 +7710,7 @@ upgrade_changed() {
     while IFS= read -r l; do [ -z "$l" ] || ui_detail "$l"; done <<EOF2
 $groups
 EOF2
+    [ -z "$said" ] || ui_item warn "Still behind handbook v$tv: $said. The lines above say why."
     if [ "$from" = 0 ]; then ui_detail "What's new (all versions on record):"; else ui_detail "What's new since v$from:"; fi
     while IFS= read -r l; do [ -z "$l" ] || ui_detail "$l"; done <<EOF2
 $(changelog_since "$from")
@@ -9502,7 +9984,7 @@ except Exception:
 
 # update_wikis: pull, upgrade and push each collection, then new settings and next steps.
 update_wikis() {
-  local n f r ahead track k ulock
+  local n f r ahead track k ulock up ue
   # The helper that goes with this version of the code. Skipped where one is built in
   # the checkout, which is newer than any release.
   if [ -z "${LLM_WIKI_NO_GO:-}" ] && [ -f "$HELPER_LOCK" ] && ! helper_ok "$REPO/bin/llm-wiki"; then
@@ -9539,8 +10021,17 @@ update_wikis() {
       fi
     fi
     # The upgrade hands back what it did, which this shows as its own CHANGED stage.
-    k="$(LLM_WIKI_UPGRADE_DATA=1 WIKIS_DIR="$f" "$REPO/wiki.sh" upgrade --all </dev/null 2>/dev/null | sed -n 's/^upgraded'"$TAB"'//p' | tail -n 1)"
-    [ -z "$k" ] || upgrade_changed "${k%%"$TAB"*}" "$(printf '%s' "$k" | cut -f 2)"
+    # A run that stops partway hands back no "upgraded" line: that is said, with its error.
+    ue="$(mktemp)"
+    up="$(LLM_WIKI_UPGRADE_DATA=1 WIKIS_DIR="$f" "$REPO/wiki.sh" upgrade --all </dev/null 2>"$ue" || true)"
+    k="$(printf '%s\n' "$up" | sed -n 's/^upgraded'"$TAB"'//p' | tail -n 1)"
+    [ -z "$k" ] || upgrade_changed "${k%%"$TAB"*}" "$(printf '%s' "$k" | cut -f 2)" "" "$(printf '%s' "$k" | cut -f 4)"
+    upgrade_notes "$up"
+    if [ -z "$k" ]; then
+      r="$(LC_ALL=C tr '\n\t' '  ' < "$ue" | LC_ALL=C tr -d '\000-\037\177' | cut -c 1-400)"
+      ui_item error "the upgrade stopped partway: ${r:-it said nothing}. Run: $(typed "$WIKI_CMD upgrade --all")$([ "$n" = here ] || printf ' --collection %s' "$n"), which says what it did"
+    fi
+    rm -f "$ue"
     if collection_repo "$f" && [ -n "$(git -C "$f" remote 2>/dev/null)" ]; then
       ahead="$(git -C "$f" rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)"
       if ! (sync_scan_gate "$f") >/dev/null 2>&1; then
@@ -14553,16 +15044,25 @@ setup_upgrade() {
     return 0
   fi
   ui_detail "Behind the template's v$tv:$behind"
-  from="$(oldest_version "$(behind_versions)")"
+  local pairs out up=""
+  pairs="$(behind_versions)"
   if ask_yn "Upgrade them now? Pages and notes are untouched." y; then
+    hb_record
     for d in $behind; do
-      printf '  %s: ' "$d"
-      upgrade_one "$WIKIS_DIR/$d" | sed -n 's/^handbook: //p'
+      # What it did comes back tagged, so the lines a person must see aren't lost in a filter. A
+      # wiki that stops the upgrade is named with why, and the others go on.
+      out="$(LLM_WIKI_UPGRADE_DATA=1 upgrade_guarded "$WIKIS_DIR/$d" 2>/dev/null)"
+      upgrade_notes "$out" summary
     done
+    # Only what is now at the template's version was upgraded, and only that is committed.
+    pairs="$(upgraded_only "$pairs")"
+    [ -n "$pairs" ] || { ui_item warn "Nothing was upgraded. The lines above say why."; return 0; }
+    from="$(oldest_version "$pairs")"
+    for d in $pairs; do up="$up ${d%:*}"; done
     ui_detail "What's new since v$from:"
     changelog_since "$from" | sed 's/^/  /'
     ui_detail "New sessions load the new handbook. Running sessions keep the old one until restarted."
-    upgrade_commit "$behind"
+    upgrade_commit "$up"
   fi
 }
 
