@@ -48,7 +48,7 @@ jobs:
         # Without its data-flow analysis: with it, shellcheck took about 14 GB of memory on
         # tests/smoke.sh, and the runner was shut down part way (2026-11-19). The checks that
         # analysis adds are few, and the file passes with them when run where there is room.
-        run: shellcheck --extended-analysis=false -S warning wiki.sh ui.sh tests/ui-lint.sh scripts/gallery.sh hooks/session-start.sh hooks/pre-tool-use.sh hooks/user-prompt.sh hooks/hook-note.sh hooks/pre-commit scripts/migrate-to-plugin.sh scripts/helper.sh scripts/ci-changes.sh tests/smoke.sh tests/smoke-parts.sh tests/budget.sh
+        run: shellcheck --extended-analysis=false -S warning wiki.sh ui.sh tests/ui-lint.sh scripts/gallery.sh hooks/session-start.sh hooks/pre-tool-use.sh hooks/user-prompt.sh hooks/hook-note.sh hooks/pre-commit scripts/migrate-to-plugin.sh scripts/helper.sh scripts/handbook-hashes.sh scripts/ci-changes.sh tests/smoke.sh tests/smoke-parts.sh tests/budget.sh
       - name: The smoke matrix runs every part of the suite
         run: test "$(tests/smoke.sh --list | cut -f 1 | sort -un | paste -sd ' ' -)" = "1 2 3 4"
       - uses: actions/setup-node@v4

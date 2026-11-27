@@ -26,6 +26,7 @@ read -r -d '' PARTS <<'TABLE' || true
 1 | Collection |
 1 | What a new wiki gets | Collection
 1 | Upgrade | Collection
+2 | An edited handbook survives an upgrade |
 1 | Two clones merge index.md and log.md | Collection
 1 | Secret scan | Collection
 1 | Session hook | Collection
@@ -425,6 +426,8 @@ done
 expect "index.md merges by union" "merge: union" git -C "$WIKIS_DIR" check-attr merge -- demo/index.md
 expect "log.md merges by union" "merge: union" git -C "$WIKIS_DIR" check-attr merge -- demo/log.md
 check "delegation.md is git-ignored" git -C "$WIKIS_DIR" check-ignore -q delegation.md
+check "a new wiki's .gitignore keeps an upgrade's .before-v files out of git" bash -c "grep -qxF '/AGENTS.md.before-v*' '$WIKIS_DIR/demo/.gitignore' && grep -qxF '/rules/*.before-v*' '$WIKIS_DIR/demo/.gitignore'"
+check "and so does the collection's" bash -c "grep -qxF '/*/AGENTS.md.before-v*' '$WIKIS_DIR/.gitignore' && grep -qxF '/*/rules/*.before-v*' '$WIKIS_DIR/.gitignore'"
 check "the secret-scan hook is installed" grep -q "llm-wiki secret scan" "$WIKIS_DIR/.git/hooks/pre-commit"
 fi
 
@@ -436,6 +439,9 @@ case "$out" in *"handbook: v12 -> v$TV"*) ok "upgrade moves the handbook to v$TV
 case "$out" in *"What's new since v12"*) ok "upgrade prints the changelog" ;; *) bad "upgrade prints the changelog" "$out" ;; esac
 check "upgrade restores patterns.md" test -f "$WIKIS_DIR/demo/patterns.md"
 check "upgrade gives an old wiki open.md and rules/open.md" test -f "$WIKIS_DIR/demo/open.md" -a -f "$WIKIS_DIR/demo/rules/open.md"
+# set_version made a handbook that is no version's, so the upgrade kept its text. The sections
+# after this one use demo, and its kept files would be a To do line in each status.
+rm -f "$WIKIS_DIR"/demo/AGENTS.md.before-v* "$WIKIS_DIR"/demo/rules/*.before-v*
 rm "$WIKIS_DIR/global/wiki/conventions.md"
 "$W" upgrade --all >/dev/null 2>&1
 check "upgrade recreates a missing conventions page" test -f "$WIKIS_DIR/global/wiki/conventions.md"
@@ -449,6 +455,411 @@ expect "upgrade leaves a newer wiki alone" "newer than your template" "$W" upgra
 check "the newer handbook is untouched" grep -q "Handbook version 999" "$WIKIS_DIR/demo/AGENTS.md"
 set_version "$WIKIS_DIR/demo/AGENTS.md" "$TV"
 lacks "status is quiet once current" "behind template" "$W" status
+fi
+
+if section "An edited handbook survives an upgrade"; then
+# The record of what each version shipped (code review M11, T12).
+check "handbook-hashes.tsv holds every file of handbook v$TV, each with its hash" "$REPO/scripts/handbook-hashes.sh" --check
+hb_n="$(awk -F '\t' -v v="$TV" '$1 == v' "$REPO/handbook-hashes.tsv" | wc -l | tr -d ' ')"
+hb_files="$(cd "$REPO/template" && ls AGENTS.md rules/*.md | wc -l | tr -d ' ')"
+check "with one line for each of them" test "$hb_n" = "$hb_files"
+UX="$T/hb-nobump"; copy_repo "$UX"
+perl -0pi -e 's/ the / a /' "$UX/template/rules/compile.md"
+out="$("$UX/scripts/handbook-hashes.sh" --check 2>&1)" && bad "a changed word in the template with the same version fails the check" "$out" || case "$out" in
+  *"Changed or new: rules/compile.md."*"raise the version in template/AGENTS.md"*"run scripts/handbook-hashes.sh"*) ok "a changed word in the template with the same version fails the check, and says what to run" ;;
+  *) bad "a changed word in the template with the same version fails the check, and says what to run" "$out" ;;
+esac
+refuse "and the script won't record it under a number already recorded" "$UX/scripts/handbook-hashes.sh"
+set_version "$UX/template/AGENTS.md" "$((TV + 1))"
+refuse "a new number with no lines for it fails the check too" "$UX/scripts/handbook-hashes.sh" --check
+check "the script records the new number" "$UX/scripts/handbook-hashes.sh"
+check "and then the check passes" "$UX/scripts/handbook-hashes.sh" --check
+check "with the lines for v$TV as they were" test "$(awk -F '\t' -v v="$TV" '$1 == v' "$UX/handbook-hashes.tsv")" = "$(awk -F '\t' -v v="$TV" '$1 == v' "$REPO/handbook-hashes.tsv")"
+rm -rf "$UX"
+
+# A copy of this checkout, whose record also has a version made up here, OV: the template as it
+# is, under that number, with a rules file the template no longer has. Old versions can't come
+# from history: CI checks out one commit. NV is a number below the template's that no version has.
+UR="$T/hb-repo"; copy_repo "$UR"
+UW="$UR/wiki.sh"
+hb_sha() { { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi; } < "$1" | cut -d ' ' -f 1; }
+OV="" NV="" XV=""
+for n in 1 2 3 4 5 6 7 8 9 10 11; do
+  grep -q "^$n"$'\t' "$REPO/handbook-hashes.tsv" && continue
+  if [ -z "$OV" ]; then OV="$n"; elif [ -z "$NV" ]; then NV="$n"; elif [ -z "$XV" ]; then XV="$n"; fi
+done
+cp "$REPO/template/AGENTS.md" "$T/hb-old-agents"; set_version "$T/hb-old-agents" "$OV"
+printf 'A rule the handbook has dropped.\n' > "$T/hb-retired"
+{
+  printf '%s\tAGENTS.md\t%s\n' "$OV" "$(hb_sha "$T/hb-old-agents")"
+  for f in "$REPO"/template/rules/*.md; do printf '%s\trules/%s\t%s\n' "$OV" "${f##*/}" "$(hb_sha "$f")"; done
+  printf '%s\trules/retired.md\t%s\n' "$OV" "$(hb_sha "$T/hb-retired")"
+} >> "$UR/handbook-hashes.tsv"
+# XV, a version whose rules/compile.md is not the template's: an upgrade from it replaces that file.
+cp "$REPO/template/AGENTS.md" "$T/hb-x-agents"; set_version "$T/hb-x-agents" "$XV"
+{ cat "$REPO/template/rules/compile.md"; printf 'A line v%s had.\n' "$XV"; } > "$T/hb-x-compile"
+{
+  printf '%s\tAGENTS.md\t%s\n' "$XV" "$(hb_sha "$T/hb-x-agents")"
+  for f in "$REPO"/template/rules/*.md; do
+    if [ "${f##*/}" = compile.md ]; then printf '%s\trules/compile.md\t%s\n' "$XV" "$(hb_sha "$T/hb-x-compile")"
+    else printf '%s\trules/%s\t%s\n' "$XV" "${f##*/}" "$(hb_sha "$f")"; fi
+  done
+} >> "$UR/handbook-hashes.tsv"
+HC="$T/hb-wikis"
+hbw() { env WIKIS_DIR="$HC" "$@"; }
+hbw "$UW" init --git >/dev/null 2>&1
+# hb_old <name> [version]: a wiki at an older handbook, every file as that version shipped it,
+# with the rules file it had and the template doesn't. Committed.
+hb_old() {
+  hbw "$UW" new "$1" >/dev/null 2>&1
+  set_version "$HC/$1/AGENTS.md" "${2:-$OV}"
+  cp "$T/hb-retired" "$HC/$1/rules/retired.md"
+  # Its own folder only: a link another test made must not be recorded, or links_off makes it a file.
+  git -C "$HC" add -A -- "$1" >/dev/null 2>&1; git -C "$HC" commit -qm "$1: an old handbook" -- "$1" >/dev/null 2>&1
+}
+hb_kept() { find "$HC/$1" -name '*.before-v*' | wc -l | tr -d ' '; }
+
+# As shipped: what upgrade printed before, and a file the handbook dropped goes.
+hb_old plain
+out="$(hbw "$UW" upgrade plain 2>&1)"
+if printf '%s\n' "$out" | grep -qx "    - handbook: v$OV -> v$TV"; then ok "an old handbook as its version shipped it is upgraded as before: handbook: v$OV -> v$TV"; else bad "an old handbook as its version shipped it is upgraded as before: handbook: v$OV -> v$TV" "$out"; fi
+case "$out" in *edited:*) bad "with no edited: line" "$out" ;; *) ok "with no edited: line" ;; esac
+check "and no old text kept" test "$(hb_kept plain)" = 0
+case "$out" in *"removed:  rules/retired.md, which the handbook no longer has"*) ok "a rules file an old version shipped, unedited, and the template dropped, is removed and named" ;; *) bad "a rules file an old version shipped, unedited, and the template dropped, is removed and named" "$out" ;; esac
+check "it is gone" test ! -e "$HC/plain/rules/retired.md"
+check "and its removal is in the upgrade's commit" bash -c "! git -C '$HC' ls-files --error-unmatch plain/rules/retired.md >/dev/null 2>&1 && test -z \"\$(git -C '$HC' status --porcelain -- plain)\""
+lacks "a second upgrade right after says nothing of edits" "edited:" hbw "$UW" upgrade plain
+
+# Edited, committed: the review's reproduction.
+hb_old edc
+printf 'MY OWN RULE.\n' >> "$HC/edc/AGENTS.md"; printf 'MY COMPILE NOTE.\n' >> "$HC/edc/rules/compile.md"
+cp "$HC/edc/AGENTS.md" "$T/hb-edc-a"; cp "$HC/edc/rules/compile.md" "$T/hb-edc-c"
+git -C "$HC" commit -qam "edc: my edits" >/dev/null 2>&1
+out="$(hbw "$UW" upgrade edc 2>&1)"
+check "one changed line in AGENTS.md and one in rules/compile.md: two edited: lines" test "$(printf '%s\n' "$out" | grep -c 'edited:   ')" = 2
+case "$out" in *"handbook: v$OV -> v$TV, 2 edited files replaced"*) ok "the summary counts 2" ;; *) bad "the summary counts 2" "$out" ;; esac
+case "$out" in *"edited:   AGENTS.md was changed in this wiki, and the new handbook replaced it. Your text: $HC/edc/AGENTS.md.before-v$TV. Rules of your own go in wiki/conventions.md under \"For agents\", which an upgrade never touches."*) ok "the line says where the text is, and where rules of your own go" ;; *) bad "the line says where the text is, and where rules of your own go" "$out" ;; esac
+case "$out" in *"edited:   rules/compile.md was changed in this wiki, and the new handbook replaced it. Your text: $HC/edc/rules/compile.md.before-v$TV."*) ok "and names the rules file" ;; *) bad "and names the rules file" "$out" ;; esac
+check "the old text is where the line says" cmp -s "$T/hb-edc-a" "$HC/edc/AGENTS.md.before-v$TV"
+check "both of them" cmp -s "$T/hb-edc-c" "$HC/edc/rules/compile.md.before-v$TV"
+check "and the new handbook is in place" bash -c "cmp -s '$REPO/template/AGENTS.md' '$HC/edc/AGENTS.md' && cmp -s '$REPO/template/rules/compile.md' '$HC/edc/rules/compile.md'"
+check "the upgrade's commit holds no kept text" test -z "$(git -C "$HC" ls-files -- edc | grep before-v)"
+check "and git ignores it" git -C "$HC" check-ignore -q "edc/rules/compile.md.before-v$TV"
+lacks "a second upgrade right after prints no edited: line" "edited:" hbw "$UW" upgrade edc
+
+# Edited and never committed.
+hb_old edu
+printf 'MY OWN RULE.\n' >> "$HC/edu/AGENTS.md"; printf 'MY COMPILE NOTE.\n' >> "$HC/edu/rules/compile.md"
+cp "$HC/edu/AGENTS.md" "$T/hb-edu-a"; cp "$HC/edu/rules/compile.md" "$T/hb-edu-c"
+out="$(hbw "$UW" upgrade edu 2>&1)"
+case "$out" in *"2 edited files replaced"*) ok "edits never committed are found the same way" ;; *) bad "edits never committed are found the same way" "$out" ;; esac
+check "and their text is kept" bash -c "cmp -s '$T/hb-edu-a' '$HC/edu/AGENTS.md.before-v$TV' && cmp -s '$T/hb-edu-c' '$HC/edu/rules/compile.md.before-v$TV'"
+check "the commit has the new handbook, and not the edits or their kept text" bash -c "git -C '$HC' show HEAD:edu/AGENTS.md | cmp -s - '$REPO/template/AGENTS.md' && ! git -C '$HC' log -p -- edu | grep -q 'MY OWN RULE' && test -z \"\$(git -C '$HC' ls-files -- edu | grep before-v)\""
+
+# A wiki in no repository.
+NG="$T/hb-nogit"; mkdir -p "$NG"
+WIKIS_DIR="$NG" "$UW" new ngw >/dev/null 2>&1
+set_version "$NG/ngw/AGENTS.md" "$OV"
+printf 'MY OWN RULE.\n' >> "$NG/ngw/AGENTS.md"; printf 'MY COMPILE NOTE.\n' >> "$NG/ngw/rules/compile.md"
+cp "$NG/ngw/AGENTS.md" "$T/hb-ng-a"
+out="$(WIKIS_DIR="$NG" "$UW" upgrade ngw 2>&1)"
+case "$out" in *"2 edited files replaced"*"Your text: $NG/ngw/AGENTS.md.before-v$TV."*) ok "a wiki in no repository keeps the text the same way" ;; *) bad "a wiki in no repository keeps the text the same way" "$out" ;; esac
+check "beside the file" cmp -s "$T/hb-ng-a" "$NG/ngw/AGENTS.md.before-v$TV"
+check "with no AGENTS.md.bak besides" test ! -e "$NG/ngw/AGENTS.md.bak"
+
+# A version the record doesn't have: every file counts as edited.
+# A file with the new template's bytes holds no text of anyone's, so it is never an edit: the wikis
+# below have two other files, AGENTS.md (its version line) and an old rules/compile.md.
+hb_old unk "$NV"; cp "$T/hb-x-compile" "$HC/unk/rules/compile.md"
+out="$(hbw "$UW" upgrade unk 2>&1)"
+check "a wiki whose version is not in the record: every file not the new template's counts as edited" test "$(printf '%s\n' "$out" | grep -c 'edited:   ')" = 2
+check "and each one's text is kept" test "$(hb_kept unk)" = 2
+case "$out" in *"kept:     rules/retired.md is no longer part of the handbook, and you changed it, so it stays"*) ok "and a file the template dropped stays" ;; *) bad "and a file the template dropped stays" "$out" ;; esac
+
+# A dropped file that was edited, and one of the user's own.
+hb_old own
+printf 'mine too\n' >> "$HC/own/rules/retired.md"
+printf '# Team rules\n' > "$HC/own/rules/team.md"
+out="$(hbw "$UW" upgrade own 2>&1)"
+case "$out" in *"kept:     rules/retired.md is no longer part of the handbook, and you changed it, so it stays"*) ok "a rules file the template dropped, edited, is kept and named" ;; *) bad "a rules file the template dropped, edited, is kept and named" "$out" ;; esac
+check "and is there as it was" grep -q 'mine too' "$HC/own/rules/retired.md"
+case "$out" in *"yours:    rules/team.md isn't the handbook's, left alone"*) ok "rules/team.md, which no version shipped, is left alone and named" ;; *) bad "rules/team.md, which no version shipped, is left alone and named" "$out" ;; esac
+check "it is as it was" test "$(cat "$HC/own/rules/team.md")" = "# Team rules"
+check "and the upgrade's commit does not hold it" bash -c "! git -C '$HC' ls-files --error-unmatch own/rules/team.md >/dev/null 2>&1 && git -C '$HC' log -1 --format=%s | grep -q 'handbook v'"
+case "$out" in *edited:*) bad "and nothing there counts as edited" "$out" ;; *) ok "and nothing there counts as edited" ;; esac
+
+# Names a wiki writes are data: spaces, a leading dash, glob characters, a line break, a link.
+hb_old odd
+for n in "my notes.md" "-x.md" "a*b.md" $'nl\nname.md' $'ctl\033[31m.md'; do printf 'own\n' > "$HC/odd/rules/$n"; done
+printf 'outside\n' > "$T/hb-outside"
+rm -f "$HC/odd/rules/retired.md"; ln -s "$T/hb-outside" "$HC/odd/rules/retired.md"
+out="$(hbw "$UW" upgrade odd 2>&1)"
+check "a name with a space, a leading dash, a glob character, a line break or an escape is said without it" test "$(printf '%s\n' "$out" | grep -c "yours:    a rules file with an unusual name isn't the handbook's, left alone")" = 5
+case "$out" in *"my notes"* | *"-x.md"* | *"a*b.md"* | *"nl"$'\n'"name"* | *"ctl["*) bad "and none of those names is printed" "$out" ;; *) ok "and none of those names is printed" ;; esac
+case "$out" in *"yours:    rules/retired.md isn't the handbook's, left alone"*) ok "a link with a handbook file's name is the user's, and named" ;; *) bad "a link with a handbook file's name is the user's, and named" "$out" ;; esac
+check "each is as it was" bash -c "for n in 'my notes.md' '-x.md' 'a*b.md' 'nl
+name.md'; do test \"\$(cat \"$HC/odd/rules/\$n\")\" = own || exit 1; done"
+check "and a link with a handbook file's name is neither followed nor removed" bash -c "test -L '$HC/odd/rules/retired.md' && test \"\$(cat '$T/hb-outside')\" = outside"
+case "$out" in *"$(printf '\033')"*) bad "no control character reaches the output" "$out" ;; *) ok "no control character reaches the output" ;; esac
+
+# Links in the handbook: nothing is written or removed through one.
+hb_old lna; cp "$HC/lna/AGENTS.md" "$T/hb-lna"; rm "$HC/lna/AGENTS.md"; ln -s "$T/hb-lna" "$HC/lna/AGENTS.md"
+expect "an AGENTS.md that is a link: upgrade refuses the wiki" "its AGENTS.md is a link" hbw "$UW" upgrade lna
+check "and the file it points to is untouched" cmp -s "$T/hb-lna" "$T/hb-old-agents"
+hb_old lnr; mv "$HC/lnr/rules" "$T/hb-lnr"; rm -f "$T/hb-lnr/open.md"; ln -s "$T/hb-lnr" "$HC/lnr/rules"; cp -R "$T/hb-lnr" "$T/hb-lnr-was"
+expect "a rules that is a link: the handbook is left as it is, and why" "handbook: left at v$OV: its rules is a link or not a folder" hbw "$UW" upgrade lnr
+check "nothing was written where it points" diff -r "$T/hb-lnr" "$T/hb-lnr-was"
+check "and AGENTS.md is still the old one" grep -q "^Handbook version $OV\." "$HC/lnr/AGENTS.md"
+hb_old lnf; printf 'theirs\n' > "$T/hb-lnf"; rm "$HC/lnf/rules/compile.md"; ln -s "$T/hb-lnf" "$HC/lnf/rules/compile.md"
+expect "a rules file that is a link to a file elsewhere: left as it is" "its rules/compile.md is a link or not a plain file" hbw "$UW" upgrade lnf
+check "and the file it points to is untouched" test "$(cat "$T/hb-lnf")" = theirs
+hb_old lnd; rm "$HC/lnd/rules/compile.md"; ln -s "$T/hb-nowhere/compile.md" "$HC/lnd/rules/compile.md"
+expect "a rules file that is a dangling link: left as it is" "its rules/compile.md is a link or not a plain file" hbw "$UW" upgrade lnd
+check "and nothing was made where it points" test ! -e "$T/hb-nowhere"
+hb_old lnk; rm "$HC/lnk/rules/compile.md"; mkdir "$HC/lnk/rules/compile.md"
+expect "a rules file that is a folder: left as it is" "its rules/compile.md is a link or not a plain file" hbw "$UW" upgrade lnk
+hb_old plant
+printf 'MY OWN RULE.\n' >> "$HC/plant/AGENTS.md"; printf 'MY COMPILE NOTE.\n' >> "$HC/plant/rules/compile.md"
+printf 'untouched\n' > "$T/hb-plant"; ln -s "$T/hb-plant" "$HC/plant/AGENTS.md.before-v$TV"
+printf 'an older keep\n' > "$HC/plant/rules/compile.md.before-v$TV"
+out="$(hbw "$UW" upgrade plant 2>&1)"
+case "$out" in *"Your text: $HC/plant/AGENTS.md.before-v$TV-2."*"Your text: $HC/plant/rules/compile.md.before-v$TV-2."*) ok "a .before-v name already taken, by a link or a file, gives the next one" ;; *) bad "a .before-v name already taken, by a link or a file, gives the next one" "$out" ;; esac
+check "nothing was written through the planted link" test "$(cat "$T/hb-plant")" = untouched
+check "and an existing .before-v file is not overwritten" test "$(cat "$HC/plant/rules/compile.md.before-v$TV")" = "an older keep"
+check "the text is in the new one" grep -q 'MY COMPILE NOTE' "$HC/plant/rules/compile.md.before-v$TV-2"
+
+# A record that can't be used, or no hash: every file counts as edited, and its text is kept.
+hb_old miss; cp "$T/hb-x-compile" "$HC/miss/rules/compile.md"
+mv "$UR/handbook-hashes.tsv" "$T/hb-record"
+out="$(hbw "$UW" upgrade miss 2>&1)"
+check "with the hashes file missing, every file not the new template's counts as edited" test "$(printf '%s\n' "$out" | grep -c 'edited:   ')" = 2
+check "and its text is kept" test "$(hb_kept miss)" = 2
+hb_old mal; cp "$T/hb-x-compile" "$HC/mal/rules/compile.md"
+{ cat "$T/hb-record"; printf '%s\tAGENTS.md\t$(touch %s)\n' "$OV" "$T/hb-pwned"; } > "$UR/handbook-hashes.tsv"
+out="$(hbw "$UW" upgrade mal 2>&1)"
+check "with one malformed line, every file not the new template's counts as edited" test "$(printf '%s\n' "$out" | grep -c 'edited:   ')" = 2
+check "and the record is read as data, never run" test ! -e "$T/hb-pwned"
+mv "$T/hb-record" "$UR/handbook-hashes.tsv"
+# No sha256 tool: a PATH with everything but them. With openssl alone, hashes still match.
+NS="$T/hb-nosha"; mkdir -p "$NS"
+old_ifs="$IFS"; IFS=:
+for d in $PATH; do [ -d "$d" ] && ln -s "$d"/* "$NS"/ 2>/dev/null; done
+IFS="$old_ifs"
+rm -f "$NS/sha256sum" "$NS/shasum" "$NS"/shasum5*
+if [ -e "$NS/openssl" ]; then
+  hb_old ossl
+  lacks "with only openssl to take hashes, a handbook as shipped is no edit" "edited:" env PATH="$NS" WIKIS_DIR="$HC" "$UW" upgrade ossl
+else
+  skipped "with only openssl to take hashes, a handbook as shipped is no edit (no openssl here)"
+fi
+rm -f "$NS/openssl"
+hb_old nosha; cp "$T/hb-x-compile" "$HC/nosha/rules/compile.md"
+out="$(env PATH="$NS" WIKIS_DIR="$HC" "$UW" upgrade nosha 2>&1)"
+check "with no sha256 tool at all, every file not the new template's counts as edited" test "$(printf '%s\n' "$out" | grep -c 'edited:   ')" = 2
+check "and its text is kept" test "$(hb_kept nosha)" = 2
+# The bytes count: line ends that changed are an edit too.
+hb_old crlf
+perl -pi -e 's/\n/\r\n/' "$HC/crlf/AGENTS.md"
+out="$(hbw "$UW" upgrade crlf 2>&1)"
+case "$out" in *"1 edited file replaced"*"edited:   AGENTS.md"*) ok "a handbook with other line ends counts as edited, and only it" ;; *) bad "a handbook with other line ends counts as edited, and only it" "$out" ;; esac
+
+# Versions it doesn't replace, as before.
+hb_old newer "$((TV + 1))"
+cp "$HC/newer/AGENTS.md" "$T/hb-newer"
+expect "a wiki newer than the template is left alone, as before" "is newer than your template" hbw "$UW" upgrade newer
+check "untouched, with nothing kept" bash -c "cmp -s '$T/hb-newer' '$HC/newer/AGENTS.md' && test \"\$(find '$HC/newer' -name '*.before-v*' | wc -l | tr -d ' ')\" = 0"
+hb_old huge 99999999999999999999999
+out="$(hbw "$UW" upgrade huge 2>&1)"
+case "$out" in *"integer expression"*) bad "a version too long for the shell's test is newer, with no error" "$out" ;; *"is newer than your template"*) ok "a version too long for the shell's test is newer, with no error" ;; *) bad "a version too long for the shell's test is newer, with no error" "$out" ;; esac
+check "and is left as it was" grep -q '^Handbook version 99999999999999999999999\.' "$HC/huge/AGENTS.md"
+rm -rf "$HC/huge"
+hbw "$UW" new cur >/dev/null 2>&1
+printf 'MY OWN RULE.\n' >> "$HC/cur/AGENTS.md"
+expect "a wiki already at the template's version with an edit: nothing to replace" "handbook: already v$TV, nothing to replace" hbw "$UW" upgrade cur
+check "so the edit stays, and nothing is kept beside it" bash -c "grep -q 'MY OWN RULE' '$HC/cur/AGENTS.md' && test \"\$(find '$HC/cur' -name '*.before-v*' | wc -l | tr -d ' ')\" = 0"
+
+# wiki update and setup pass the lines on, and status lists the kept text until it is gone.
+# A rules that is a file, as links_off leaves a link git had: that wiki is left, the rest go on.
+hb_old rfile; rm -rf "$HC/rfile/rules"; printf 'a link once\n' > "$HC/rfile/rules"
+hb_old upd
+printf 'MY OWN RULE.\n' >> "$HC/upd/AGENTS.md"; printf 'mine too\n' >> "$HC/upd/rules/retired.md"; printf '# Team\n' > "$HC/upd/rules/team.md"
+git -C "$HC" add -A -- upd >/dev/null 2>&1; git -C "$HC" commit -qm "upd: edits" -- upd >/dev/null 2>&1
+out="$(hbw "$UW" update --wikis-only </dev/null 2>&1)"
+case "$out" in *"upd: edited:   AGENTS.md was changed in this wiki, and the new handbook replaced it. Your text: $HC/upd/AGENTS.md.before-v$TV."*) ok "wiki update shows the edited: line" ;; *) bad "wiki update shows the edited: line" "$out" ;; esac
+case "$out" in *"upd: kept:     rules/retired.md"*"upd: yours:    rules/team.md"*) ok "and the kept: and yours: lines" ;; *) bad "and the kept: and yours: lines" "$out" ;; esac
+case "$out" in *"Upgraded"*"rfile: handbook: left at v$OV: its rules is a link or not a folder"*) ok "a wiki whose rules is a file is named and left, and the others are upgraded" ;; *) bad "a wiki whose rules is a file is named and left, and the others are upgraded" "$out" ;; esac
+expect "wiki status lists the kept text" "handbook: upd keeps 1 file(s) of your own text that an upgrade replaced, such as $HC/upd/AGENTS.md.before-v$TV. Do: move what you want to keep into wiki/conventions.md under \"For agents\", then delete the .before-v file(s)" hbw "$UW" status
+rm -f "$HC"/upd/AGENTS.md.before-v*
+lacks "until it is removed" "handbook: upd keeps" hbw "$UW" status
+hb_old stp
+printf 'MY OWN RULE.\n' >> "$HC/stp/AGENTS.md"
+out="$(printf 'y\n' | WIKIS_DIR="$HC" tty_run "$UW" setup upgrade 2>&1)"
+case "$out" in *"stp: v$OV -> v$TV, 1 edited file replaced"*"stp: edited:   AGENTS.md was changed in this wiki"*) ok "setup's upgrade step shows the summary and the edited: line" ;; *) bad "setup's upgrade step shows the summary and the edited: line" "$out" ;; esac
+
+# A sync never carries the kept text, in a collection made before the rule.
+hb_old syn
+printf 'MY OWN RULE.\n' >> "$HC/syn/AGENTS.md"
+for f in "$HC/.gitignore" "$HC/syn/.gitignore"; do grep -v 'before-v' "$f" > "$T/hb-gi" && cp "$T/hb-gi" "$f"; done
+git -C "$HC" commit -qm "an old collection" -- .gitignore syn/.gitignore >/dev/null 2>&1
+hbw "$UW" upgrade --all >/dev/null 2>&1
+check "upgrade --all adds the rules to the collection's and each wiki's .gitignore" bash -c "grep -qxF '/*/rules/*.before-v*' '$HC/.gitignore' && grep -qxF '/rules/*.before-v*' '$HC/syn/.gitignore'"
+printf -- '---\ntitle: P\nsummary: A page.\n---\n\nText.\n' > "$HC/syn/wiki/p.md"
+# A page and a note named like kept text are the wiki's own, and are synced.
+printf -- '---\ntitle: X\nsummary: A page.\n---\n\nText.\n' > "$HC/syn/wiki/x.before-v2.md"
+printf 'a note\n' > "$HC/syn/raw/n.before-v2.md"
+hbw "$UW" sync syn >/dev/null 2>&1
+check "a .before-v file is not in the commit a sync makes" bash -c "git -C '$HC' ls-files --error-unmatch syn/wiki/p.md >/dev/null 2>&1 && test -z \"\$(git -C '$HC' ls-files | grep -v -e 'wiki/x.before-v2.md' -e 'raw/n.before-v2.md' | grep before-v)\" && test -e '$HC/syn/AGENTS.md.before-v$TV'"
+check "but a page and a note named like one are" bash -c "git -C '$HC' ls-files --error-unmatch syn/wiki/x.before-v2.md syn/raw/n.before-v2.md >/dev/null 2>&1"
+check "in a collection that is one repository, git ignores only the kept text" bash -c "git -C '$HC' check-ignore -q syn/AGENTS.md.before-v$TV && git -C '$HC' check-ignore -q syn/rules/compile.md.before-v$TV-2 && ! git -C '$HC' check-ignore -q syn/wiki/x.before-v2.md && ! git -C '$HC' check-ignore -q syn/raw/n.before-v2.md && ! git -C '$HC' check-ignore -q syn/wiki/concepts/api.before-v2.md"
+OWN="$T/hb-own"; mkdir -p "$OWN"
+WIKIS_DIR="$OWN" "$UW" new ownw --git >/dev/null 2>&1
+check "and so in a wiki that is a repository of its own" bash -c "git -C '$OWN/ownw' check-ignore -q AGENTS.md.before-v$TV && git -C '$OWN/ownw' check-ignore -q rules/sync.md.before-v$TV && ! git -C '$OWN/ownw' check-ignore -q wiki/x.before-v2.md && ! git -C '$OWN/ownw' check-ignore -q raw/n.before-v2.md"
+
+# Review round 2. A wiki left as it was is not counted, listed or committed as upgraded.
+H2="$T/hb-two"
+hb2() { env WIKIS_DIR="$H2" "$@"; }
+hb2 "$UW" init --git >/dev/null 2>&1
+hb2_old() {
+  hb2 "$UW" new "$1" >/dev/null 2>&1
+  set_version "$H2/$1/AGENTS.md" "${2:-$OV}"
+  git -C "$H2" add -A -- "$1" >/dev/null 2>&1; git -C "$H2" commit -qm "$1: an old handbook" -- "$1" >/dev/null 2>&1
+}
+hb2_x() {
+  hb2 "$UW" new "$1" >/dev/null 2>&1
+  cp "$T/hb-x-agents" "$H2/$1/AGENTS.md"; cp "$T/hb-x-compile" "$H2/$1/rules/compile.md"
+  git -C "$H2" add -A -- "$1" >/dev/null 2>&1; git -C "$H2" commit -qm "$1: v$XV" -- "$1" >/dev/null 2>&1
+}
+hb2_old only; mv "$H2/only/rules" "$T/hb-only-rules"; ln -s "$T/hb-only-rules" "$H2/only/rules"
+out="$(hb2 "$UW" upgrade --all 2>&1)"
+case "$out" in *"Nothing upgraded. Still behind handbook v$TV: only. The lines above say why."*) ok "a wiki left as it was is not counted as upgraded" ;; *) bad "a wiki left as it was is not counted as upgraded" "$out" ;; esac
+case "$out" in *"Upgraded"* | *"from v$OV"*) bad "nor listed under the version it came from" "$out" ;; *) ok "nor listed under the version it came from" ;; esac
+check "nor committed as a handbook upgrade" bash -c "! git -C '$H2' log --format=%s | grep -q 'handbook v$TV'"
+out="$(hb2 "$UW" upgrade only 2>&1)"
+case "$out" in *"Nothing upgraded. Still behind handbook v$TV: only."*) ok "wiki upgrade <wiki> says the same" ;; *) bad "wiki upgrade <wiki> says the same" "$out" ;; esac
+rm "$H2/only/rules"; mv "$T/hb-only-rules" "$H2/only/rules"
+# Checks that need a file this user can't read or write: as root every file can be, so they are skipped.
+if [ "$(id -u)" != 0 ]; then
+# One that stops the upgrade: named with why, and the rest go on and are committed.
+hb2_old aa; hb2_old bb; hb2_old cc
+chmod 000 "$H2/bb/AGENTS.md"
+out="$(hb2 "$UW" update --wikis-only </dev/null 2>&1)"
+case "$out" in *"bb: failed:   the upgrade of this wiki stopped: $H2/bb/AGENTS.md can't be read, so it is left as it is."*) ok "wiki update says which wiki stopped the upgrade, and why" ;; *) bad "wiki update says which wiki stopped the upgrade, and why" "$out" ;; esac
+case "$out" in *"Upgraded 3 wiki(s)"*"from v$OV: aa cc only"*"Still behind handbook v$TV: bb."*) ok "and the wikis after it are upgraded, and it is not counted" ;; *) bad "and the wikis after it are upgraded, and it is not counted" "$out" ;; esac
+check "what was upgraded is committed" bash -c "test -z \"\$(git -C '$H2' status --porcelain -- aa cc only)\" && git -C '$H2' log -1 --format=%s | grep -q 'handbook v$TV'"
+chmod 644 "$H2/bb/AGENTS.md"
+hb2_old dd; chmod 000 "$H2/dd/AGENTS.md"; hb2_old ee
+out="$(printf 'y\n' | WIKIS_DIR="$H2" tty_run "$UW" setup upgrade 2>&1)"
+case "$out" in *"dd: failed:   the upgrade of this wiki stopped:"*"can't be read"*"ee: v$OV -> v$TV"*) ok "setup's upgrade step names the wiki that stopped, and goes on" ;; *) bad "setup's upgrade step names the wiki that stopped, and goes on" "$out" ;; esac
+check "and commits what it upgraded" bash -c "test -z \"\$(git -C '$H2' status --porcelain -- ee)\""
+chmod 644 "$H2/dd/AGENTS.md"
+# A file it can't write: nothing is replaced, and AGENTS.md, which says the version, is last.
+hb2_x ro; rm -f "$H2/ro/rules/open.md"; chmod 444 "$H2/ro/rules/compile.md"
+out="$(hb2 "$UW" upgrade ro 2>&1)"; rc=$?
+case "$out" in *"handbook: left at v$XV: rules/compile.md can't be written, so nothing was replaced"*) ok "a rules file that can't be written: the handbook is left as it is, and why" ;; *) bad "a rules file that can't be written: the handbook is left as it is, and why" "$out" ;; esac
+check "and AGENTS.md still says v$XV" grep -q "^Handbook version $XV\." "$H2/ro/AGENTS.md"
+check "and no rules file the template has is added to the handbook that was left" test ! -e "$H2/ro/rules/open.md"
+check "and wiki upgrade <wiki> exits 1, since the wiki is still behind" test "$rc" = 1
+chmod 644 "$H2/ro/rules/compile.md"
+out="$(hb2 "$UW" upgrade ro 2>&1)"; rc=$?
+case "$out" in *"handbook: v$XV -> v$TV"$'\n'*) ok "made writable, the next upgrade replaces it, with nothing counted as edited" ;; *) bad "made writable, the next upgrade replaces it, with nothing counted as edited" "$out" ;; esac
+check "and exits 0" test "$rc" = 0
+# A rules folder that can't be written: one line, no copy error, nothing added.
+hb2_x rof; rm -f "$H2/rof/rules/open.md"; chmod 555 "$H2/rof/rules"
+out="$(hb2 "$UW" upgrade rof 2>&1)"; rc=$?
+case "$out" in *"handbook: left at v$XV: rules can't be written, so nothing was replaced"*) ok "a rules folder that can't be written: left as it is, and why" ;; *) bad "a rules folder that can't be written: left as it is, and why" "$out" ;; esac
+case "$out" in *"cp:"* | *"Permission denied"*) bad "with no copy error after it" "$out" ;; *) ok "with no copy error after it" ;; esac
+check "and exits 1" test "$rc" = 1
+out="$(hb2 "$UW" upgrade --all 2>&1)"; rc=$?
+case "$out" in *"failed:"*) bad "upgrade --all gives that wiki one line, not a failure besides" "$out" ;; *"handbook: left at v$XV: rules can't be written"*) ok "upgrade --all gives that wiki one line, not a failure besides" ;; *) bad "upgrade --all gives that wiki one line, not a failure besides" "$out" ;; esac
+check "and --all exits 0 with a wiki left, which it names" test "$rc" = 0
+chmod 755 "$H2/rof/rules"
+hb2_old half; chmod 000 "$UR/template/rules/sync.md"
+expect "a copy that fails partway says so" "handbook: left at v$OV: rules/sync.md couldn't be written, so the upgrade stopped partway and AGENTS.md still says v$OV" hb2 "$UW" upgrade half
+check "and AGENTS.md, written last, still says v$OV" grep -q "^Handbook version $OV\." "$H2/half/AGENTS.md"
+chmod 644 "$UR/template/rules/sync.md"
+# A retry after that: what the first run replaced is the template's text, not an edit, and the
+# user's text kept the first time is the copy named.
+hb2_x retry; printf 'MY NOTE\n' >> "$H2/retry/rules/compile.md"
+chmod 000 "$UR/template/rules/sync.md"
+out="$(hb2 "$UW" upgrade retry 2>&1)"
+chmod 644 "$UR/template/rules/sync.md"
+case "$out" in *"rules/sync.md couldn't be written"*"your text, kept: $H2/retry/rules/compile.md.before-v$TV"*) ok "a copy that stops partway names the text it kept" ;; *) bad "a copy that stops partway names the text it kept" "$out" ;; esac
+out="$(hb2 "$UW" upgrade retry 2>&1)"
+if printf '%s\n' "$out" | grep -qx "    - handbook: v$XV -> v$TV"; then ok "the retry counts no file the first run replaced as edited"; else bad "the retry counts no file the first run replaced as edited" "$out"; fi
+check "and makes no copy of the template's text" bash -c "test \"\$(find '$H2/retry/rules' -name '*.before-v*' | wc -l | tr -d ' ')\" = 1 && grep -q 'MY NOTE' '$H2/retry/rules/compile.md.before-v$TV'"
+# The keep step stopping on a second file, run after run: the first file's copy is made once.
+hb2_x twice; printf 'MY NOTE\n' >> "$H2/twice/rules/compile.md"; printf 'MINE\n' >> "$H2/twice/rules/sync.md"; chmod 200 "$H2/twice/rules/sync.md"
+hb2 "$UW" upgrade twice >/dev/null 2>&1
+out="$(hb2 "$UW" upgrade twice 2>&1)"
+case "$out" in *"handbook: left at v$XV: rules/sync.md was changed in this wiki and its text couldn't be kept"*"kept so far: $H2/twice/rules/compile.md.before-v$TV"*) ok "a keep step that stops on a second file, run again, names the first copy" ;; *) bad "a keep step that stops on a second file, run again, names the first copy" "$out" ;; esac
+check "makes it once, and leaves no copy of the file it couldn't read" bash -c "test ! -e '$H2/twice/rules/compile.md.before-v$TV-2' && test ! -e '$H2/twice/rules/sync.md.before-v$TV'"
+chmod 644 "$H2/twice/rules/sync.md"
+# Nowhere for upgrade_guarded to keep a wiki's errors: still one process for each wiki.
+hb2_old tmpa; chmod 000 "$H2/tmpa/AGENTS.md"; hb2_old tmpb
+mkdir -p "$T/hb-nomktemp"; printf '#!/bin/sh\nexit 1\n' > "$T/hb-nomktemp/mktemp"; chmod +x "$T/hb-nomktemp/mktemp"
+out="$(env PATH="$T/hb-nomktemp:$PATH" WIKIS_DIR="$H2" "$UW" upgrade --all 2>&1)"
+case "$out" in *"tmpa"*"failed:   the upgrade of this wiki stopped (exit 1)"*"UPGRADE  tmpb"*"handbook: v$OV -> v$TV"*) ok "with no temporary folder, a wiki that stops is named and the next is upgraded" ;; *) bad "with no temporary folder, a wiki that stops is named and the next is upgraded" "$out" ;; esac
+chmod 644 "$H2/tmpa/AGENTS.md"
+else
+  skipped "the checks of files that can't be read or written (root can)"
+fi
+# A wiki already on the template's version, whose .gitignore the upgrade gives a rule: committed,
+# unless the user changed the file too.
+hb2 "$UW" new gi1 >/dev/null 2>&1; hb2 "$UW" new gi2 >/dev/null 2>&1
+for w in gi1 gi2; do grep -v -e 'before-v' -e '^\.compile-lock\.d$' "$H2/$w/.gitignore" > "$T/hb-gi" && cp "$T/hb-gi" "$H2/$w/.gitignore"; done
+git -C "$H2" add -A -- gi1 gi2 >/dev/null 2>&1; git -C "$H2" commit -qm "gi" -- gi1 gi2 >/dev/null 2>&1
+printf 'mine/\n' >> "$H2/gi2/.gitignore"
+hb2 "$UW" upgrade --all >/dev/null 2>&1
+check "a current wiki's .gitignore given the new rules is committed" bash -c "grep -qxF '/rules/*.before-v*' '$H2/gi1/.gitignore' && test -z \"\$(git -C '$H2' status --porcelain -- gi1/.gitignore)\""
+check "one the user changed too is left for them" bash -c "grep -qxF '/rules/*.before-v*' '$H2/gi2/.gitignore' && test -n \"\$(git -C '$H2' status --porcelain -- gi2/.gitignore)\""
+# A leading zero, and a version too long for the shell's test, in a run over the collection.
+hb2_old zero "0$OV"
+out="$(hb2 "$UW" upgrade zero 2>&1)"
+case "$out" in *"handbook: v$OV -> v$TV, 1 edited file replaced"*) ok "a leading zero in the version line counts as that version: only AGENTS.md is edited" ;; *) bad "a leading zero in the version line counts as that version: only AGENTS.md is edited" "$out" ;; esac
+hb2_old big 99999999999999999999999; hb2_old after
+out="$(hb2 "$UW" upgrade --all 2>&1)"
+case "$out" in *"UPGRADE  after"*"handbook: v$OV -> v$TV"*"NEXT"*) ok "upgrade --all over a collection with a version too long for the shell's test completes" ;; *) bad "upgrade --all over a collection with a version too long for the shell's test completes" "$out" ;; esac
+rm -rf "$H2/big"
+# The status line counts only what upgrade could have written, and prints no name it didn't make.
+hb2 "$UW" new st >/dev/null 2>&1
+printf 'k\n' > "$H2/st/AGENTS.md.before-v$TV-2"; printf 'k\n' > "$H2/st/rules/compile.md.before-v$TV"
+printf 'k\n' > "$H2/st/rules/note. Run: evil.before-v1"; printf 'k\n' > "$H2/st/AGENTS.md.before-vX"
+ln -s "$T/hb-outside" "$H2/st/rules/sync.md.before-v$TV"
+out="$(hb2 "$UW" status 2>&1)"
+case "$out" in *"handbook: st keeps 2 file(s) of your own text"*) ok "status counts only plain files named as upgrade names them" ;; *) bad "status counts only plain files named as upgrade names them" "$out" ;; esac
+case "$out" in *"evil"*) bad "and prints no other name" "$out" ;; *) ok "and prints no other name" ;; esac
+cp -R "$H2/st" "$H2/st odd"
+expect "a wiki with an unusual name is not named" "handbook: a wiki with an unusual name keeps 2 file(s) of your own text that an upgrade replaced. Do:" hb2 "$UW" status
+rm -rf "$H2/st odd"
+# The collection's .gitignore as a link: nothing written through it, nothing staged.
+H3="$T/hb-three"; env WIKIS_DIR="$H3" "$UW" init --git >/dev/null 2>&1
+grep -v -e obsidian -e trash -e before-v "$H3/.gitignore" > "$T/hb-gi3"; cp "$T/hb-gi3" "$T/hb-gi3-was"
+rm "$H3/.gitignore"; ln -s "$T/hb-gi3" "$H3/.gitignore"
+out="$(env WIKIS_DIR="$H3" "$UW" upgrade --all 2>&1)"
+case "$out" in *".gitignore is a link or not a plain file"*) ok "upgrade --all says the collection's .gitignore is a link" ;; *) bad "upgrade --all says the collection's .gitignore is a link" "$out" ;; esac
+check "and writes nothing through it" cmp -s "$T/hb-gi3" "$T/hb-gi3-was"
+case "$out" in *"The upgrade isn't committed"*) bad "nor stages the link, for a commit git refuses" "$out" ;; *) ok "nor stages the link, for a commit git refuses" ;; esac
+check "nor stages or commits the link" bash -c "git -C '$H3' ls-files -s -- .gitignore | grep -q '^100644 ' && git -C '$H3' diff --cached --quiet"
+
+# The record's script takes only files: no link in template/, no link or submodule from history,
+# and no temporary file left when it stops.
+UY="$T/hb-script"; copy_repo "$UY"
+ln -s ../AGENTS.md "$UY/template/rules/evil.md"
+out="$("$UY/scripts/handbook-hashes.sh" --check 2>&1)" && bad "a link in template/ is refused" "$out" || case "$out" in *"template/rules/evil.md is a link"*) ok "a link in template/ is refused" ;; *) bad "a link in template/ is refused" "$out" ;; esac
+git -C "$UY" init -q && git -C "$UY" add -A >/dev/null 2>&1 && git -C "$UY" commit -qm one >/dev/null 2>&1
+git -C "$UY" update-index --add --cacheinfo "160000,$(git -C "$UY" rev-parse HEAD),template/rules/sub.md" && git -C "$UY" commit -qm two >/dev/null 2>&1
+rm "$UY/template/rules/evil.md"; git -C "$UY" rm -q --cached template/rules/sub.md template/rules/evil.md >/dev/null 2>&1; git -C "$UY" commit -qm three >/dev/null 2>&1
+check "--history passes over a link and a submodule in history" "$UY/scripts/handbook-hashes.sh" --history
+check "and records neither" bash -c "! grep -q -e 'rules/evil.md' -e 'rules/sub.md' '$UY/handbook-hashes.tsv'"
+refuse "with no sha256 tool, --history stops" env PATH="$NS" "$UY/scripts/handbook-hashes.sh" --history
+check "and leaves no temporary file" bash -c "for f in '$UY'/handbook-hashes.tsv.*; do test ! -e \"\$f\" || exit 1; done"
+cp "$UY/handbook-hashes.tsv" "$T/hb-uy-was"
+refuse "--replace with no sha256 tool stops" env PATH="$NS" "$UY/scripts/handbook-hashes.sh" --replace
+check "and the record is as it was, with no line missing its hash" cmp -s "$T/hb-uy-was" "$UY/handbook-hashes.tsv"
+git -C "$UY" rm -q template/AGENTS.md >/dev/null 2>&1 && git -C "$UY" commit -qm "no handbook" >/dev/null 2>&1
+git -C "$UY" checkout -q HEAD~1 -- template/AGENTS.md && git -C "$UY" commit -qm "the handbook back" >/dev/null 2>&1
+check "--history passes over a commit with no template/AGENTS.md" "$UY/scripts/handbook-hashes.sh" --history
+rm -rf "$UR" "$HC" "$NG" "$NS" "$H2" "$H3" "$OWN" "$UY"
 fi
 
 if section "Two clones merge index.md and log.md"; then
@@ -5777,6 +6188,8 @@ check "and the upgrade reached the remote" bash -c "git --git-dir='$T/remote.git
 case "$out" in *"paste this into each"*"Run wiki start in this repository"*) ok "update says how to bring open sessions up to date" ;; *) bad "update says how to bring open sessions up to date" "$out" ;; esac
 set_version "$WIKIS_DIR/demo/AGENTS.md" 1
 expect "upgrade says it too" "paste this into each" "$W" upgrade --all
+# A handbook set_version made is no version's, so both upgrades kept its text. Gone, for what follows.
+rm -f "$WIKIS_DIR"/demo/AGENTS.md.before-v* "$WIKIS_DIR"/demo/rules/*.before-v*
 # A clone: update pulls, then the new version, not the old, does the rest.
 U="$T/upd-src"; copy_repo "$U"
 git -C "$U" init -q && git -C "$U" add -A && git -C "$U" commit -qm v1
@@ -6119,7 +6532,9 @@ mkdir -p "$UW/wikis"; "$W" new "$UW/wikis/demo" >/dev/null 2>&1
 git -C "$UW/wikis" init -q && git -C "$UW/wikis" config user.name t && git -C "$UW/wikis" config user.email t@example.test
 git -C "$UW/wikis" add -A && git -C "$UW/wikis" commit -qm start && git -C "$UW/wikis" remote add origin "$UW/remote.git" && git -C "$UW/wikis" push -q -u origin HEAD 2>/dev/null
 printf '# News\n\n## 2026-01-02: Second `entry`\n\nBody with `ticks`.\n\n- Do: run `wiki x`.\n' > "$UW/NEWS.md"
-up_prep() { set_version "$UW/wikis/demo/AGENTS.md" 1; git -C "$UW/wikis" commit -qam old; rm -rf "$UW/state"; }
+# A handbook set_version made is no version's, so each upgrade keeps its text under the next free
+# name: the kept files go first, so that every run names the same ones.
+up_prep() { set_version "$UW/wikis/demo/AGENTS.md" 1; git -C "$UW/wikis" commit -qam old; rm -rf "$UW/state"; rm -f "$UW"/wikis/demo/AGENTS.md.before-v* "$UW"/wikis/demo/rules/*.before-v*; }
 upd() { sty WIKIS_DIR="$UW/wikis" XDG_STATE_HOME="$UW/state" LLM_WIKI_NEWS_FILE="$UW/NEWS.md" LLM_WIKI_NO_GO=1 "$@" "$W" update --wikis-only </dev/null 2>&1; }
 up_prep; uplain="$(upd LLM_WIKI_STYLE=off)"
 up_prep; upstyled="$(upd LLM_WIKI_STYLE=on $UTF)"
