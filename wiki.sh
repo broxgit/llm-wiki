@@ -735,6 +735,181 @@ qpath() {
   printf "%s'%s'" "$pre" "$(printf '%s' "$t" | sed "s/'/'\\\\''/g")"
 }
 
+# sh_quote <text>: the text as one word for sh, in single quotes, for a command written into
+# a file that another program runs through a shell. Exact for any text, line breaks at the end
+# included: no $( ) and no sed. A path in it is a full one: a tilde inside quotes isn't expanded.
+# By byte, so a byte that isn't UTF-8 can't hide a quote from the substitution in any locale.
+sh_quote() {
+  local LC_ALL=C q="'" r="'\\''"  # no command runs here, so the local is enough
+  printf "'%s'" "${1//$q/$r}"
+}
+
+# sh_word <text>: the text as one word for sh. In double quotes, as setup wrote the commands
+# before, when that keeps it as it is, so a file already written that way isn't seen as old and
+# Codex isn't asked to trust its hooks again. In single quotes, by sh_quote, when it holds one of
+# the four characters sh reads inside double quotes: $, `, " and \. Matched by byte, as above.
+sh_word() {
+  local LC_ALL=C  # no command runs here, so the local is enough
+  case "$1" in
+    *'$'* | *'`'* | *'"'* | *\\*) sh_quote "$1" ;;
+    *) printf '"%s"' "$1" ;;
+  esac
+}
+
+# has_cntrl <text>: whether it holds a control character, such as a tab or a line break, by byte.
+has_cntrl() {
+  local LC_ALL=C  # no command runs here, so the local is enough
+  case "$1" in *[[:cntrl:]]*) return 0 ;; esac
+  return 1
+}
+
+# json_text <text>: the text as it goes inside a JSON string. A " and a \ get a \ before them,
+# by sed, byte by byte, so text without a control character comes out as it always has. Text
+# with one, which sed can't escape, goes through Python's json, bytes that aren't UTF-8 kept.
+# Without python3 that can't be done: it fails, and says nothing.
+json_text() {
+  if has_cntrl "$1"; then
+    command -v python3 >/dev/null 2>&1 || return 1
+    printf '%s' "$1" | python3 -c 'import json, sys
+t = sys.stdin.buffer.read().decode("utf-8", "surrogateescape")
+sys.stdout.buffer.write(json.dumps(t, ensure_ascii=False)[1:-1].encode("utf-8", "surrogateescape"))'
+  else
+    printf '%s' "$1" | LC_ALL=C sed 's/["\\]/\\&/g'
+  fi
+}
+
+# write_target <file>: the file a write to <file> lands in: where its chain of links ends, by
+# capture_real, or the file itself. A writer that replaces a file through a temporary one makes
+# it beside this file and puts it in this file's place, so a link stays a link. When there is no
+# file there it can write, it prints one line that says which file and why, in place of the path,
+# and fails: a loop of links, a folder that isn't there or can't be written, or something there
+# that isn't a plain file, such as a folder: a move onto a folder would go into it.
+write_target() {
+  local f="$1" r d t l n=0 what=""
+  if r="$(capture_real "$f")"; then
+    # A link whose text ends in / names a folder, whether or not it is there.
+    case "$r" in */) what="is a folder, not a file" ;; esac
+    if [ -z "$what" ] && { [ -e "$r" ] || [ -L "$r" ]; } && [ ! -f "$r" ]; then
+      if [ -d "$r" ]; then what="is a folder, not a file"; else what="isn't a plain file"; fi
+    fi
+    if [ -n "$what" ]; then
+      if [ -L "$f" ]; then
+        printf "%s wasn't changed: it is a link to %s, which %s. Do: point it at a file, then run this again" "$(tilde "$f")" "$(tilde "$r")" "$what"
+      else
+        printf "%s wasn't changed: it %s. Do: move it aside, then run this again" "$(tilde "$f")" "$what"
+      fi
+      return 1
+    fi
+    d="${r%/*}"
+    [ -n "$d" ] || d=/
+    if [ -w "$d" ]; then printf '%s' "$r"; return 0; fi
+    if [ -L "$f" ]; then
+      printf "%s wasn't changed: it is a link to %s, in a folder that can't be written. Do: make %s writable, then run this again" "$(tilde "$f")" "$(tilde "$r")" "$(tilde "$d")"
+    else
+      printf "%s wasn't changed: its folder can't be written. Do: make %s writable, then run this again" "$(tilde "$f")" "$(tilde "$d")"
+    fi
+    return 1
+  fi
+  # Why not: the links followed as they read, only to say where they lead.
+  t="$f"
+  while [ -L "$t" ]; do
+    n=$((n + 1))
+    if [ "$n" -gt 40 ]; then
+      printf "%s wasn't changed: it is a link, and its links lead round in a loop. Do: point it at a file, then run this again" "$(tilde "$f")"
+      return 1
+    fi
+    l="$(readlink "$t")" || break
+    case "$l" in /*) t="$l" ;; *) t="${t%/*}/$l" ;; esac
+  done
+  if [ "$t" != "$f" ]; then
+    printf "%s wasn't changed: it is a link to %s, whose folder isn't there. Do: make that folder, or point the link at a file, then run this again" "$(tilde "$f")" "$(tilde "$t")"
+  else
+    printf "%s wasn't changed: its folder isn't there. Do: make it, then run this again" "$(tilde "$f")"
+  fi
+  return 1
+}
+
+# file_mode <file>: its permission bits in octal, such as 600, or nothing. GNU stat takes -c, BSD stat -f.
+file_mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1" 2>/dev/null || true; }
+
+# write_file [--mode <octal>] [--json] [--backup <suffix>] <file> <command...>: the command's
+# output becomes the file's text, through a temporary file beside the file the links lead to
+# (write_target), which then takes that file's place. A link stays a link. The file keeps its
+# permissions, or gets the mode given; a new one gets what the umask gives. With --backup, the
+# file as it was is copied to <file the links lead to><suffix> (or <suffix>-2, -3 when that is
+# taken) just before it is replaced, so a write that is refused leaves none. The command fails
+# when it can't read the file; with --json its exit 3 says the text isn't a JSON object, and 127
+# that python3 isn't there.
+#
+# The temporary file is new and private from the start: its name, which carries this shell's
+# process id, is cleared first, so a link left there is never written through, and it is made
+# with umask 077 and noclobber, so a 0600 file's text is never readable by others on the way.
+# On any failure the temporary file is removed, one line says which file and why, and it fails,
+# so a caller can carry on: nothing was changed.
+write_file() {
+  local mode="" json="" bak="" f real tmp bk="" i c=0 ok="" made=""
+  while :; do
+    case "$1" in
+      --mode) mode="$2"; shift 2 ;;
+      --json) json=1; shift ;;
+      --backup) bak="$2"; shift 2 ;;
+      *) break ;;
+    esac
+  done
+  f="$1"
+  shift
+  real="$(write_target "$f")" || { printf '%s\n' "$real"; return 1; }
+  tmp="$real.tmp.$$"
+  if [ -z "$mode" ]; then
+    if [ -e "$real" ]; then mode="$(file_mode "$real")"; else mode="$(printf '%o' $((0666 & ~0$(umask))))"; fi
+  fi
+  if ! { rm -f "$tmp" && (umask 077 && set -C && : > "$tmp"); } 2>/dev/null; then
+    rm -f "$tmp" 2>/dev/null || true
+    printf "%s wasn't changed: a file couldn't be made beside %s. Do: check its folder's space and permissions, then run this again\n" "$(tilde "$f")" "$(tilde "$real")"
+    return 1
+  fi
+  # The command's errors go where they always went. The shell's own go nowhere: a line says it.
+  # Exit 3 is a --json command's own word that the text isn't a JSON object, and 127 that
+  # python3, which it runs, isn't on the PATH. Anything else is a file that couldn't be read.
+  { "$@" > "$tmp" 2>&3; } 3>&2 2>/dev/null || c=$?
+  if [ "$c" != 0 ]; then
+    rm -f "$tmp" 2>/dev/null || true
+    if [ -n "$json" ] && [ "$c" = 3 ]; then
+      printf "%s wasn't changed: its text isn't a JSON object. Do: fix it, or move it aside, then run this again\n" "$(tilde "$f")"
+    elif [ -n "$json" ] && [ "$c" = 127 ]; then
+      printf "%s wasn't changed: it is written with python3, which isn't on the PATH. Do: install python3, then run this again\n" "$(tilde "$f")"
+    else
+      printf "%s wasn't changed: it couldn't be read. Do: check that it can be read, then run this again\n" "$(tilde "$f")"
+    fi
+    return 1
+  fi
+  # The backup takes a name nothing has, not even a link: <file><suffix>, then -2, -3 and on, so
+  # one already there is never written over. It is made new, then filled: a copy that fails
+  # midway is removed, and so is one made for a write that then fails. Only this call's.
+  if [ -n "$bak" ] && [ -e "$real" ]; then
+    bk="$real$bak"
+    i=2
+    while [ -e "$bk" ] || [ -L "$bk" ]; do bk="$real$bak-$i"; i=$((i + 1)); done
+  fi
+  # The mode is set before the move, and a mode that can't be set fails the write.
+  if { case "$mode" in "" | *[!0-7]*) false ;; esac && chmod "$mode" "$tmp"; } 2>/dev/null; then
+    ok=1
+    if [ -n "$bk" ]; then
+      if (umask 077 && set -C && : > "$bk") 2>/dev/null; then
+        made=1
+        cp -p "$real" "$bk" 2>/dev/null || ok=""
+      else
+        ok=""
+      fi
+    fi
+    if [ -n "$ok" ] && mv -f "$tmp" "$real" 2>/dev/null; then return 0; fi
+    [ -z "$made" ] || rm -f "$bk" 2>/dev/null || true
+  fi
+  rm -f "$tmp" 2>/dev/null || true
+  printf "%s wasn't changed: writing %s failed. Do: check its folder's space and permissions, then run this again\n" "$(tilde "$f")" "$(tilde "$real")"
+  return 1
+}
+
 # can_read <file or folder>: whether this shell can read it. An agent's sandbox can
 # refuse what the permissions allow, so this tries rather than asks.
 can_read() {
@@ -7850,25 +8025,24 @@ EOF2
 # a folder that is gone. They bypass wiki.sh, which takes 40 ms to start.
 # The matcher "*" is the docs' own spelling for every tool.
 agy_hook_files() { printf '%s\n' agy-hook.sh reminders.py hook-note.sh; }
+# agy_hooks: the plugin's hooks.json. Antigravity runs each command through a shell, so each
+# path in it is a full one, quoted as one word: a folder with a space or a quote in its name
+# can't split it, and the JSON is written by json.dumps, so it can't break the file either.
+# The wiki.sh command is agy_cmd's, as codex_cmd gives it, without the tilde. Without python3
+# there is none: it fails, and says nothing.
 agy_hooks() {
-  local h
-  h="sh $(tilde "$AGY_DIR")/hooks/agy-hook.sh"
-  cat <<EOF2
-{
-  "llm-wiki": {
-    "SessionStart": [
-      { "type": "command", "command": "$(agy_cmd) __agy-start", "timeout": 30 }
-    ],
-    "PreToolUse": [
-      { "matcher": "*", "hooks": [{ "type": "command", "command": "$h tool", "timeout": 5 }] }
-    ],
+  command -v python3 >/dev/null 2>&1 || return 1
+  AGY_C="$(sh_quote "$(codex_cmd)")" AGY_H="sh $(sh_quote "$AGY_DIR/hooks/agy-hook.sh")" python3 -c '
+import json, os
+c, h = os.environ["AGY_C"], os.environ["AGY_H"]
+print(json.dumps({"llm-wiki": {
+    "SessionStart": [{"type": "command", "command": c + " __agy-start", "timeout": 30}],
+    "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": h + " tool", "timeout": 5}]}],
     "PreInvocation": [
-      { "type": "command", "command": "$h invoke", "timeout": 5 },
-      { "type": "command", "command": "$(agy_cmd) __agy-prompt", "timeout": 10 }
-    ]
-  }
-}
-EOF2
+        {"type": "command", "command": h + " invoke", "timeout": 5},
+        {"type": "command", "command": c + " __agy-prompt", "timeout": 10},
+    ],
+}}, indent=2))'
 }
 
 # agy_hooks_current: whether the plugin's copies of the hook scripts match this version's.
@@ -7892,14 +8066,15 @@ agy_manifest() {
 EOF2
 }
 
-# agy_state: none (no Antigravity here), missing, old, or current.
+# agy_state: none (no Antigravity here), missing, old, or current. Without python3, hooks.json
+# isn't compared: agy_hooks can't make the text to compare it with.
 agy_unreadable() { first_unreadable "$AGY_DIR/plugin.json" "$AGY_DIR/rules/AGENTS.md" "$AGY_DIR/hooks.json" "$AGY_DIR/hooks/agy-hook.sh" "$AGY_DIR/hooks/reminders.py"; }
 agy_state() {
   [ -d "$AGY_HOME" ] || { echo none; return 0; }
   [ -z "$(agy_unreadable)" ] || { echo unreadable; return 0; }
   [ -f "$AGY_DIR/plugin.json" ] || { echo missing; return 0; }
   if [ "$(cat "$AGY_DIR/rules/AGENTS.md" 2>/dev/null)" = "$(agy_rule)" ] \
-    && [ "$(cat "$AGY_DIR/hooks.json" 2>/dev/null)" = "$(agy_hooks)" ] \
+    && { ! command -v python3 >/dev/null 2>&1 || [ "$(cat "$AGY_DIR/hooks.json" 2>/dev/null)" = "$(agy_hooks 2>/dev/null)" ]; } \
     && agy_hooks_current \
     && [ -e "$AGY_DIR/skills/llm-wiki/SKILL.md" ] && [ -e "$AGY_DIR/skills/wiki-status/SKILL.md" ]; then
     echo current
@@ -7911,7 +8086,10 @@ agy_state() {
 # agy_write: write or refresh the plugin's files. The skill is a link into this
 # copy of the template, refreshed with the rest, so it follows plugin updates.
 agy_write() {
-  local f
+  local f h
+  # Made first: without python3 there are none, and an empty hooks.json would be written.
+  h="$(agy_hooks 2>/dev/null)" && [ -n "$h" ] \
+    || { echo "Antigravity's hooks are written with python3, which isn't on the PATH, so nothing was changed. Do: install python3, then run this again"; return 1; }
   mkdir -p "$AGY_DIR/rules" "$AGY_DIR/skills" "$AGY_DIR/hooks" || return 1
   while IFS= read -r f; do
     [ -n "$f" ] || continue
@@ -7921,7 +8099,7 @@ $(agy_hook_files)
 EOF2
   [ "$(cat "$AGY_DIR/plugin.json" 2>/dev/null)" = "$(agy_manifest)" ] || agy_manifest > "$AGY_DIR/plugin.json"
   [ "$(cat "$AGY_DIR/rules/AGENTS.md" 2>/dev/null)" = "$(agy_rule)" ] || agy_rule > "$AGY_DIR/rules/AGENTS.md"
-  [ "$(cat "$AGY_DIR/hooks.json" 2>/dev/null)" = "$(agy_hooks)" ] || agy_hooks > "$AGY_DIR/hooks.json"
+  [ "$(cat "$AGY_DIR/hooks.json" 2>/dev/null)" = "$h" ] || printf '%s\n' "$h" > "$AGY_DIR/hooks.json"
   if [ -d "$REPO/skills/llm-wiki" ] && ! [ "$AGY_DIR/skills/llm-wiki" -ef "$REPO/skills/llm-wiki" ]; then
     rm -f "$AGY_DIR/skills/llm-wiki"
     ln -s "$REPO/skills/llm-wiki" "$AGY_DIR/skills/llm-wiki"
@@ -8479,15 +8657,19 @@ codex_rule() {
   printf '%s' "My knowledge wikis live in $dir, one folder per project, plus a shared one at $dir/$SHARED. Wherever their handbooks say \`wiki.sh\`, run \`$w\`. At the start of each session, $hook runs \`$w start\` for the repository and adds its output to the session: the wiki that covers it, a pull of the collection, the indexes, the agreements under For agents, and the notes waiting. When that output is there, don't run start again: read that wiki's AGENTS.md and follow it. When it's missing, run \`$w start\` in the repository yourself, then do the same. If no wiki covers the repository, create one with \`$w new <repository-name>\` the first time you have something to file there. If you can hand work to sub-agents on cheaper models, do it for large, self-contained work as $dir/delegation.md says, following $dir/$SHARED/rules/delegation.md."
 }
 
+# codex_hooks: the plugin's hooks. Codex runs each command through a shell, so the path is one
+# word for sh (sh_word), then escaped for the JSON. A path that needs no single quotes gives the
+# text it always has, so the version below stays, and Codex doesn't ask to trust them again.
+# It fails, and says nothing, when json_text can't escape the path (python3 missing).
 codex_hooks() {
   local c
-  c="$(codex_cmd | sed 's/["\\]/\\&/g')"
+  c="$(json_text "$(sh_word "$(codex_cmd)")")" || return 1
   cat <<EOF2
 {
     "hooks": {
-      "SessionStart": [{ "hooks": [{ "type": "command", "command": "\\"$c\\" __codex-start", "timeout": 30 }] }],
-      "PostCompact": [{ "hooks": [{ "type": "command", "command": "\\"$c\\" __codex-start", "timeout": 30 }] }],
-      "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "\\"$c\\" __codex-prompt", "timeout": 10 }] }]
+      "SessionStart": [{ "hooks": [{ "type": "command", "command": "$c __codex-start", "timeout": 30 }] }],
+      "PostCompact": [{ "hooks": [{ "type": "command", "command": "$c __codex-start", "timeout": 30 }] }],
+      "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "$c __codex-prompt", "timeout": 10 }] }]
     }
   }
 EOF2
@@ -8496,7 +8678,7 @@ EOF2
 # The version comes from the hooks, so Codex installs a new copy only when they change.
 codex_manifest() {
   local h v
-  h="$(codex_hooks)"
+  h="$(codex_hooks)" || return 1
   v="$(printf '%s' "$h" | cksum | cut -d ' ' -f 1)"
   cat <<EOF2
 {
@@ -8548,17 +8730,20 @@ codex_state() {
 
 # codex_rule_write: put the rule in ~/.codex/AGENTS.md, in place of an earlier wiki
 # line if there is one. The rest of the file stays.
+# An AGENTS.md that is a link stays one: the file it leads to is written (write_file).
+# codex_rule_write [<backup suffix>]: with one, the file as it was is copied beside the file
+# written, with that suffix, just before it is changed.
 codex_rule_write() {
-  local f="$CODEX_DIR/AGENTS.md" old new
+  local f="$CODEX_DIR/AGENTS.md" bak="${1:-}" old new
   old="$(codex_line)"
   new="$(codex_rule)"
   [ "$old" != "$new" ] || return 0
+  set -- --backup "$bak"
+  [ -n "$bak" ] || set --
   if [ -n "$old" ]; then
-    OLD="$old" NEW="$new" awk '$0 == ENVIRON["OLD"] { print ENVIRON["NEW"]; next } { print }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
-  elif [ -s "$f" ]; then
-    printf '\n%s\n' "$new" >> "$f"
+    OLD="$old" NEW="$new" write_file "$@" "$f" awk '$0 == ENVIRON["OLD"] { print ENVIRON["NEW"]; next } { print }' "$f"
   else
-    printf '%s\n' "$new" > "$f"
+    write_file "$@" "$f" text_plus_line "$f" "$new"
   fi
 }
 
@@ -8579,12 +8764,17 @@ codex_links() {
 
 # codex_write: write the marketplace, install the plugin when it's new or changed,
 # and refresh the rule and skills. Installing needs the codex command.
+# codex_write [<backup suffix>]: the suffix is for AGENTS.md's backup (codex_rule_write).
+# The rule goes first: refused, it leaves the plugin's files as they were, so the next run still
+# sees them changed and installs them. The manifest is made before either: a path to wiki.sh
+# with a control character in it needs python3 for its JSON, and without it nothing is written.
 codex_write() {
-  local c m="$CODEX_PLUGIN/.codex-plugin/plugin.json" changed=0
+  local c m="$CODEX_PLUGIN/.codex-plugin/plugin.json" changed=0 man
+  man="$(codex_manifest)" || { echo "Codex's hooks for $(tilde "$(codex_cmd)"), whose path has a control character in it, are written with python3, which isn't on the PATH, so nothing was changed. Do: install python3, then run this again"; return 1; }
+  codex_rule_write "${1:-}" || return 1
   mkdir -p "$CODEX_MKT/.agents/plugins" "${m%/*}" || return 1
   [ "$(cat "$CODEX_MKT/.agents/plugins/marketplace.json" 2>/dev/null)" = "$(codex_marketplace)" ] || codex_marketplace > "$CODEX_MKT/.agents/plugins/marketplace.json"
-  [ "$(cat "$m" 2>/dev/null)" = "$(codex_manifest)" ] || { codex_manifest > "$m"; changed=1; }
-  codex_rule_write
+  [ "$(cat "$m" 2>/dev/null)" = "$man" ] || { printf '%s\n' "$man" > "$m"; changed=1; }
   codex_links
   if [ "$changed" = 1 ] || ! codex_installed; then
     c="$(codex_bin)" || { echo "  no codex command found, so the plugin isn't installed. Install it with: codex plugin marketplace add $(tilde "$CODEX_MKT") && codex plugin add $CODEX_KEY"; return 1; }
@@ -8679,6 +8869,9 @@ EOF2
 }
 
 cursor_cmd() { codex_cmd; }
+# cursor_hook_cmd: the command the hook runs. Cursor runs it through a shell, so the path is one
+# word for sh: in double quotes, as before, unless the path holds a character they don't keep.
+cursor_hook_cmd() { printf '%s __cursor-start' "$(sh_word "$(cursor_cmd)")"; }
 
 cursor_rule() { codex_rule "the llm-wiki hook in $(tilde "$CURSOR_HOOKS")" "$(cursor_cmd)"; }
 
@@ -8690,40 +8883,60 @@ cursor_state() {
   [ -z "$(cursor_unreadable)" ] || { echo unreadable; return 0; }
   [ -z "$(claude_plugin_rows)" ] || { echo claude; return 0; }
   command -v python3 >/dev/null 2>&1 || { echo missing; return 0; }
-  python3 - "$CURSOR_HOOKS" "$(cursor_cmd)" 2>/dev/null <<'PY' || echo missing
+  python3 - "$CURSOR_HOOKS" "$(cursor_hook_cmd)" 2>/dev/null <<'PY' || echo missing
 import json, sys
 try:
     h = json.load(open(sys.argv[1]))
 except Exception:
     print("missing"); sys.exit()
 ours = [x for x in (h.get("hooks") or {}).get("sessionStart") or [] if "__cursor-start" in str(x.get("command", ""))]
-want = '"%s" __cursor-start' % sys.argv[2]
-print("missing" if not ours else "current" if [x.get("command") for x in ours] == [want] else "old")
+print("missing" if not ours else "current" if [x.get("command") for x in ours] == [sys.argv[2]] else "old")
 PY
 }
 
 # cursor_write: add the sessionStart hook to ~/.cursor/hooks.json, or repoint it.
-# Other hooks there stay as they are.
+# Other hooks there stay as they are. A hooks file that is a link stays one (write_file).
+# cursor_write [<backup suffix>]: with one, the file as it was is copied beside it first.
 cursor_write() {
   mkdir -p "$CURSOR_DIR" || return 1
-  python3 - "$CURSOR_HOOKS" "$(cursor_cmd)" <<'PY' || return 1
+  if [ -n "${1:-}" ]; then
+    write_file --json --backup "$1" "$CURSOR_HOOKS" cursor_hooks_json || return 1
+  else
+    write_file --json "$CURSOR_HOOKS" cursor_hooks_json || return 1
+  fi
+  cursor_links
+}
+
+# cursor_hooks_json: the hooks file's new text, with the hook added or repointed. An empty file
+# is no file, and a "hooks" or "sessionStart" of the wrong kind, such as null, is started again,
+# as cursor_state reads them. Text that isn't a JSON object: exit 3, and nothing said.
+cursor_hooks_json() {
+  command -v python3 >/dev/null 2>&1 || return 127
+  python3 - "$CURSOR_HOOKS" "$(cursor_hook_cmd)" <<'PY'
 import json, os, sys
 p, cmd = sys.argv[1], sys.argv[2]
 h = {"version": 1, "hooks": {}}
-if os.path.exists(p):
-    h = json.load(open(p))
-hooks = h.setdefault("hooks", {})
-starts = [x for x in hooks.get("sessionStart") or [] if "__cursor-start" not in str(x.get("command", ""))]
-starts.append({"command": '"%s" __cursor-start' % cmd, "timeout": 30})
+try:
+    t = open(p, encoding="utf-8").read() if os.path.exists(p) else ""
+    if t.strip():
+        h = json.loads(t)
+except Exception:
+    sys.exit(3)
+if not isinstance(h, dict):
+    sys.exit(3)
+hooks = h.get("hooks")
+if not isinstance(hooks, dict):
+    hooks = h["hooks"] = {}
+starts = hooks.get("sessionStart")
+if not isinstance(starts, list):
+    starts = []
+starts = [x for x in starts if not (isinstance(x, dict) and "__cursor-start" in str(x.get("command", "")))]
+starts.append({"command": cmd, "timeout": 30})
 hooks["sessionStart"] = starts
 h.setdefault("version", 1)
-tmp = p + ".tmp"
-with open(tmp, "w") as f:
-    json.dump(h, f, indent=2)
-    f.write("\n")
-os.replace(tmp, p)
+json.dump(h, sys.stdout, indent=2)
+sys.stdout.write("\n")
 PY
-  cursor_links
 }
 
 # cursor_links: the llm-wiki skill and the team skills, in ~/.cursor/skills.
@@ -8764,7 +8977,7 @@ print(p[0] if p else "")' 2>/dev/null || true)"
 }
 
 cmd_claude() {
-  local f="$CLAUDE_FILE" line tmp
+  local f="$CLAUDE_FILE" line real
   if from_plugin; then
     echo "This wiki.sh came with the llm-wiki Claude Code plugin. Its session hook finds each session's wiki, so no line is needed. For another agent, put the output of \`$WIKI_CMD claude --print\` in its instruction file."
     return 0
@@ -8776,18 +8989,35 @@ cmd_claude() {
       echo "already up to date: ~/.claude/CLAUDE.md"
       return 0
     fi
-    # Replace the older wiki line in place. Everything else in the file is kept.
-    tmp="$f.tmp"
-    grep -vF "knowledge wikis live in" "$f" > "$tmp" || true
-    printf '%s\n' "$line" >> "$tmp"
-    mv "$tmp" "$f"
+    # Replace the older wiki line. Everything else in the file is kept, and a CLAUDE.md kept
+    # elsewhere by a link, as in a dotfiles repository, is written there.
+    write_file "$f" claude_replaced "$f" "$line" || return 1
     echo "replaced the wiki line in ~/.claude/CLAUDE.md:"
   else
-    if [ -s "$f" ]; then printf '\n' >> "$f"; fi
-    printf '%s\n' "$line" >> "$f"
+    # Added at the end of the file the links lead to, which is made when it isn't there yet.
+    write_file "$f" text_plus_line "$f" "$line" || return 1
     echo "added to ~/.claude/CLAUDE.md:"
   fi
   echo "  $line"
+}
+
+# text_plus_line <file> <line>: the file's text with the line added at its end, after a line
+# break when the file isn't empty, as an append of "\n<line>\n" gave it. A file that isn't
+# there yet, or a link to one, is no text.
+text_plus_line() {
+  if [ -e "$1" ]; then cat -- "$1" || return 1; fi
+  if [ -s "$1" ]; then printf '\n'; fi
+  printf '%s\n' "$2"
+}
+
+# claude_replaced <file> <line>: the file's text with its wiki line replaced by this one, at the end.
+# Exit 1 from grep is no line kept, and fine. Anything above is an error: it fails, so the file
+# is left as it was. By byte, as text, so no locale or byte that isn't UTF-8 changes what is kept.
+claude_replaced() {
+  local c=0
+  LC_ALL=C grep -a -vF "knowledge wikis live in" "$1" || c=$?
+  [ "$c" -le 1 ] || return 1
+  printf '%s\n' "$2"
 }
 
 # ---- deps -------------------------------------------------------------------
@@ -9829,21 +10059,40 @@ print("missing" if not e else "current" if e.get("command") == os.environ["CMD"]
 PY
 }
 
-# chat_write: add the server to the desktop app's config. Everything else there stays.
+# chat_write: add the server to the desktop app's config. Everything else there stays. A config
+# that is a link stays one, and its backup goes beside the file the link leads to, which is the
+# one written. The file is made 0600 whatever it was, as it always has been. The app starts
+# the server itself, with "command" as the program and "args" as its arguments, and no shell, so
+# the path is written as it is.
+# The backup is made only once the new text is ready, so a write that is refused leaves none.
 chat_write() {
   mkdir -p "$CLAUDE_DESKTOP_DIR" || return 1
-  [ ! -f "$CLAUDE_DESKTOP_CONFIG" ] || cp -p "$CLAUDE_DESKTOP_CONFIG" "$CLAUDE_DESKTOP_CONFIG.bak-llm-wiki-$(date +%Y%m%d-%H%M%S)"
+  write_file --mode 600 --json --backup ".bak-llm-wiki-$(date +%Y%m%d-%H%M%S)" "$CLAUDE_DESKTOP_CONFIG" chat_config_json
+}
+
+# chat_config_json: the desktop app's config with the llm-wiki server in it. An empty file is
+# no file, and an "mcpServers" that isn't an object, such as null, is started again, as
+# chat_state reads it. Text that isn't a JSON object: exit 3, and nothing said.
+chat_config_json() {
+  command -v python3 >/dev/null 2>&1 || return 127
   CMD="$(codex_cmd)" python3 - "$CLAUDE_DESKTOP_CONFIG" <<'PY'
 import json, os, sys
 p = sys.argv[1]
-c = json.load(open(p)) if os.path.exists(p) else {}
-c.setdefault("mcpServers", {})["llm-wiki"] = {"command": os.environ["CMD"], "args": ["mcp"]}
-tmp = p + ".tmp"
-with open(tmp, "w") as f:
-    json.dump(c, f, indent=2)
-    f.write("\n")
-os.chmod(tmp, 0o600)
-os.replace(tmp, p)
+c = {}
+try:
+    t = open(p, encoding="utf-8").read() if os.path.exists(p) else ""
+    if t.strip():
+        c = json.loads(t)
+except Exception:
+    sys.exit(3)
+if not isinstance(c, dict):
+    sys.exit(3)
+m = c.get("mcpServers")
+if not isinstance(m, dict):
+    m = c["mcpServers"] = {}
+m["llm-wiki"] = {"command": os.environ["CMD"], "args": ["mcp"]}
+json.dump(c, sys.stdout, indent=2)
+sys.stdout.write("\n")
 PY
 }
 
@@ -9888,8 +10137,16 @@ setup_unreadable() {
   ui_detail "Can't read $(tilde "$2") from this shell, so there's no telling how this is set up. Nothing was changed."
 }
 
+# setup_why <what a writer printed> <line to use when it printed nothing>: the writer's line, for
+# a setup item, without the indent some writers give it.
+setup_why() {
+  local o="$1"
+  while :; do case "$o" in " "*) o="${o# }" ;; *) break ;; esac; done
+  printf '%s' "${o:-$2}"
+}
+
 setup_chat() {
-  local state
+  local state out
   state="$(chat_state)"
   [ "$state" != none ] || return 0
   if [ "$state" = unreadable ]; then setup_unreadable "Claude desktop Chat" "$CLAUDE_DESKTOP_CONFIG"; return 0; fi
@@ -9899,15 +10156,31 @@ setup_chat() {
   section "Claude desktop Chat"
   case "$state" in
     current) ui_item ok "The Chat tab can reach your wikis."; chat_note ;;
-    old) if chat_wait_closed && chat_write; then ui_item ok "Updated the llm-wiki server in the desktop app's config. Open the Claude app to use it."; fi ;;
+    old)
+      if chat_wait_closed; then
+        if out="$(chat_write)"; then
+          ui_item ok "Updated the llm-wiki server in the desktop app's config. Open the Claude app to use it."
+        else
+          ui_item warn "$(setup_why "$out" "couldn't change the config.")"
+          ui_detail "To add it by hand, with the app closed: $(typed "$WIKI_CMD mcp --print")"
+        fi
+      fi
+      ;;
     missing)
       ui_detail "The desktop app's Chat tab has no file access, so it can't use a wiki. A small local server gives it tools to search and read your wikis and save notes. It runs on this machine; nothing goes anywhere except the pushes to your own wiki remote."
+      # A write that failed is asked about again next time, so it isn't marked.
       if ask_yn "Add it to the desktop app's config? Everything else there stays, with a backup beside it." y; then
         chat_wait_closed || return 1
-        if chat_write; then ui_item ok "added. Open the Claude app."; chat_note; ui_detail "Then ask a new Chat something your wikis know."
-        else ui_item warn "couldn't change the config. To add it by hand, with the app closed: $(typed "$WIKI_CMD mcp --print")"; fi
+        if out="$(chat_write)"; then
+          ui_item ok "added. Open the Claude app."; chat_note; ui_detail "Then ask a new Chat something your wikis know."
+          setup_mark chat
+        else
+          ui_item warn "$(setup_why "$out" "couldn't change the config.")"
+          ui_detail "To add it by hand, with the app closed: $(typed "$WIKI_CMD mcp --print")"
+        fi
+      else
+        setup_mark chat
       fi
-      setup_mark chat
       ;;
   esac
 }
@@ -10176,13 +10449,31 @@ ensure_line() {
   printf '%s\n' "$line" >> "$file"
 }
 
+# remove_line <file> <line> [<backup suffix>]: take each copy of the line out of the file. A file
+# that is a link stays one, and keeps its permissions (write_file). With a suffix, the file as it
+# was is copied beside the file written, just before it changes. Fails, with a line saying why.
 remove_line() {
-  local file="$1" line="$2" tmp
+  local file="$1" line="$2" c=0
   [ -f "$file" ] || return 0
-  grep -qxF -- "$line" "$file" || return 0
-  tmp="$file.tmp"
-  grep -vxF -- "$line" "$file" > "$tmp" || true
-  mv "$tmp" "$file"
+  # Exit 1 is the line not there. Anything above is a file that couldn't be read: that is said.
+  LC_ALL=C grep -a -qxF -- "$line" "$file" 2>/dev/null || c=$?
+  [ "$c" != 1 ] || return 0
+  if [ "$c" != 0 ]; then
+    printf "%s wasn't changed: it couldn't be read. Do: check that it can be read, then run this again\n" "$(tilde "$file")"
+    return 1
+  fi
+  if [ -n "${3:-}" ]; then
+    write_file --backup "$3" "$file" lines_without "$line" "$file"
+  else
+    write_file "$file" lines_without "$line" "$file"
+  fi
+}
+# lines_without <line> <file>: the file without that line. Exit 1 from grep is no line kept, and
+# fine; anything above is an error, and fails. By byte, as text, as claude_replaced.
+lines_without() {
+  local c=0
+  LC_ALL=C grep -a -vxF -- "$1" "$2" || c=$?
+  [ "$c" -le 1 ]
 }
 
 # Keep the collection's .gitignore in step with the commit setting.
@@ -10191,9 +10482,10 @@ apply_journal_commit() {
   in_git_repo "$WIKIS_DIR" || return 0
   gitignore_ok || return 0
   # Anchored with /: unanchored, it would also hide any folder called journal in a wiki.
-  remove_line "$gi" "journal/"
+  # One that can't be written has said why, and the setting itself is kept.
+  remove_line "$gi" "journal/" || return 0
   if [ "$(journal_get commit)" = yes ]; then
-    remove_line "$gi" "/journal/"
+    remove_line "$gi" "/journal/" || return 0
     if git -C "$WIKIS_DIR" check-ignore -q journal/config 2>/dev/null; then
       echo "note:    another ignore rule still hides journal/. Check $(tilde "$gi")."
     fi
@@ -12932,9 +13224,8 @@ sched_xml() {
 }
 # sched_sh_quote <text>: one word for sh, quoted only when it has to be.
 sched_sh_quote() {
-  local q="'" r="'\\''"
   case "$1" in
-    "" | *[!A-Za-z0-9_/.:@+=,-]*) printf '%s%s%s' "$q" "${1//$q/$r}" "$q" ;;
+    "" | *[!A-Za-z0-9_/.:@+=,-]*) sh_quote "$1" ;;
     *) printf '%s' "$1" ;;
   esac
 }
@@ -13622,21 +13913,82 @@ completion_refresh() {
 # completion_shell: zsh or bash, from $SHELL, or nothing.
 completion_shell() { case "${SHELL##*/}" in zsh | bash) printf '%s' "${SHELL##*/}" ;; esac; return 0; }
 
-# completion_on <shell>: the shell's profile loads llm-wiki's completion.
-completion_on() { local prof; prof="$(completion_profile "$1")"; [ -f "$prof" ] && grep -qF "$(completion_file "$1")" "$prof"; }
+# completion_on <shell>: the shell's profile loads llm-wiki's completion: it has the line, or, for a
+# path that double quotes keep, any line naming the file, as it always counted. For a path they
+# don't keep, only the line counts: one in double quotes, as versions before wrote it, loads nothing.
+completion_on() {
+  local prof f
+  prof="$(completion_profile "$1")"
+  f="$(completion_file "$1")"
+  [ -f "$prof" ] || return 1
+  grep -qxF -- "$(completion_line "$1")" "$prof" && return 0
+  case "$(sh_word "$f")" in \"*) grep -qF -- "$f" "$prof" ;; *) return 1 ;; esac
+}
+
+# completion_old_line <shell>: the line versions before wrote, in double quotes, when it differs
+# from completion_line's: a path with a $, a `, a " or a \, which it doesn't keep.
+completion_old_line() {
+  local f old
+  f="$(completion_file "$1")"
+  old="[ -f \"$f\" ] && source \"$f\""
+  [ "$old" = "$(completion_line "$1")" ] || printf '%s' "$old"
+}
+
+# completion_stale <shell>: the profile holds that old line, which loads nothing, whether or not
+# the new one is there too: something setup puts right, even once the step was answered.
+completion_stale() {
+  local prof old
+  prof="$(completion_profile "$1")"
+  old="$(completion_old_line "$1")"
+  [ -n "$old" ] && [ -f "$prof" ] && grep -qxF -- "$old" "$prof" 2>/dev/null
+}
+
+# completion_replaced <profile> <old line> <new line>: the profile with the old line made the new
+# one, in its place, or only dropped where the new one is there already. awk reads by byte.
+completion_replaced() {
+  OLD="$2" NEW="$3" LC_ALL=C awk '
+    BEGIN { old = ENVIRON["OLD"]; new = ENVIRON["NEW"] }
+    { lines[NR] = $0; if ($0 == new) have = 1 }
+    END {
+      for (i = 1; i <= NR; i++) {
+        if (lines[i] == old) { if (!have) { print new; have = 1 }; continue }
+        print lines[i]
+      }
+    }' "$1"
+}
 
 completion_profile() { case "$1" in zsh) printf '%s' "$HOME/.zshrc" ;; bash) printf '%s' "$HOME/.bashrc" ;; esac; }
 
+# completion_line <shell>: the line the profile gets. The shell runs it, so the file's path is one
+# word for sh: in double quotes, as always, unless it holds a character they don't keep.
+completion_line() {
+  local w
+  w="$(sh_word "$(completion_file "$1")")"
+  printf '[ -f %s ] && source %s' "$w" "$w"
+}
+
 # Turn tab completion on: write the file, and source it from the profile.
 setup_completion() {
-  local sh f prof line
+  local sh f prof line old out
   sh="$(completion_shell)"
   [ -n "$sh" ] || return 0
   f="$(completion_file "$sh")"
   prof="$(completion_profile "$sh")"
-  line="[ -f \"$f\" ] && source \"$f\""
+  line="$(completion_line "$sh")"
   mkdir -p "${f%/*}"
   cmd_completion "$sh" > "$f"
+  # The line an earlier version wrote, which loads nothing for this path, is put right in one
+  # write, with a dated backup beside the profile: the person said yes to it then.
+  if completion_stale "$sh"; then
+    old="$(completion_old_line "$sh")"
+    section "Tab completion"
+    if out="$(write_file --backup ".bak-$(date +%Y%m%d-%H%M%S)" "$prof" completion_replaced "$prof" "$old" "$line")"; then
+      ui_item ok "replaced the tab completion line in $(tilde "$prof"): its quotes didn't keep the path. Open a new terminal to use it."
+    else
+      ui_item warn "$out"
+    fi
+    return 0
+  fi
   completion_on "$sh" && return 0
   [ "$SETUP_MODE" = new ] && setup_done completion.$sh && return 0
   section "Tab completion"
@@ -14248,7 +14600,8 @@ apply_delegation_ignore() {
   # Anchored with /, so they match only at the top of the collection. Unanchored,
   # delegation.md also hid every wiki's rules/delegation.md, which belongs in git.
   for f in delegation.md delegation-log.csv stats.csv; do
-    remove_line "$WIKIS_DIR/.gitignore" "$f"
+    # One that can't be written has said why.
+    remove_line "$WIKIS_DIR/.gitignore" "$f" || return 0
     ensure_line "$WIKIS_DIR/.gitignore" "/$f"
   done
   # The command names only what is tracked, since git rm refuses a path it doesn't know, and
@@ -14549,7 +14902,7 @@ plugin_pending() {
 old_claude_line() { from_plugin && [ -f "$CLAUDE_FILE" ] && grep -q "knowledge wikis live in" "$CLAUDE_FILE"; }
 
 setup_plugin() {
-  local mkt
+  local mkt out
   from_plugin || return 0
   mkt="$(plugin_key)"
   mkt="${mkt#*@}"
@@ -14576,9 +14929,12 @@ setup_plugin() {
   if old_claude_line; then
     ui_detail "$(tilde "$CLAUDE_FILE") still has the wiki line from before the plugin. The plugin does its job, and both would point sessions at the handbook twice."
     if ask_yn "Remove it?" y; then
-      cp "$CLAUDE_FILE" "$CLAUDE_FILE.bak"
-      remove_line "$CLAUDE_FILE" "$(grep -m 1 "knowledge wikis live in" "$CLAUDE_FILE")"
-      ui_item ok "removed (backup beside it)"
+      # The backup is made beside the file written, and only when it is written.
+      if out="$(remove_line "$CLAUDE_FILE" "$(grep -m 1 "knowledge wikis live in" "$CLAUDE_FILE")" .bak)"; then
+        ui_item ok "removed (backup beside it)"
+      else
+        ui_item warn "$out"
+      fi
     fi
   fi
 }
@@ -14649,7 +15005,9 @@ setup_pending() {
   # Tab completion, asked once per machine unless the profile already loads it.
   local sh
   sh="$(completion_shell)"
-  if [ -n "$sh" ] && ! completion_on "$sh"; then setup_done "completion.$sh" || echo "completion.$sh"; fi
+  # An old line that loads nothing is listed whatever was answered: setup puts it right.
+  if [ -n "$sh" ] && completion_stale "$sh"; then echo "completion.$sh"
+  elif [ -n "$sh" ] && ! completion_on "$sh"; then setup_done "completion.$sh" || echo "completion.$sh"; fi
   setup_done journal.enabled || echo journal.enabled
   [ "$(journal_get enabled)" = yes ] || return 0
   for k in $JOURNAL_KEYS; do
@@ -15023,13 +15381,13 @@ setup_claude() {
     current) ui_item ok "$(tilde "$CLAUDE_FILE") has the current wiki line. Every session finds its wiki." ;;
     old)
       ui_detail "$(tilde "$CLAUDE_FILE") has an older wiki line."
-      if ask_yn "Replace it with the current one?" y; then cmd_claude | sed -n '1s/^/  /p'; fi
+      if ask_yn "Replace it with the current one?" y; then cmd_claude | sed -n '1s/^/  /p' || true; fi
       ;;
     unreadable) ui_detail "Can't read $(tilde "$CLAUDE_FILE") from this shell, so there's no telling whether it has the wiki line." ;;
     missing)
       ui_detail "Claude Code reads standing instructions from $(tilde "$CLAUDE_FILE"). One line there tells every conversation where your wikis are."
       ui_detail "For another assistant, the same line goes in its own instructions file: $(typed "$WIKI_CMD claude --print") shows it."
-      if ask_yn "Add it?" y; then cmd_claude | sed -n '1s/^/  /p'; fi
+      if ask_yn "Add it?" y; then cmd_claude | sed -n '1s/^/  /p' || true; fi
       ;;
   esac
 }
@@ -15620,7 +15978,7 @@ setup_collections() {
 # Antigravity: offer the llm-wiki plugin when Antigravity is installed, keep it
 # current, and retire the session line pasted into ~/.gemini/GEMINI.md before it.
 setup_antigravity() {
-  local state gm="$AGY_HOME/GEMINI.md" line
+  local state gm="$AGY_HOME/GEMINI.md" line out
   state="$(agy_state)"
   [ "$state" != none ] || return 0
   if [ "$state" = unreadable ]; then setup_unreadable "Antigravity" "$(agy_unreadable)"; return 0; fi
@@ -15633,27 +15991,39 @@ setup_antigravity() {
   case "$state" in
     current) ui_item ok "The llm-wiki plugin for Antigravity is up to date." ;;
     old)
-      agy_write && ui_item ok "Updated the llm-wiki plugin for Antigravity. New conversations use it, and Gemini now gets the wikis' reminders at the tool calls they apply to. Quit and reopen Antigravity once, so it reads the new hooks." ;;
+      if out="$(agy_write)"; then
+        ui_item ok "Updated the llm-wiki plugin for Antigravity. New conversations use it, and Gemini now gets the wikis' reminders at the tool calls they apply to. Quit and reopen Antigravity once, so it reads the new hooks."
+      else
+        ui_item warn "$(setup_why "$out" "couldn't write $(tilde "$AGY_DIR").")"
+      fi
+      ;;
     missing)
       ui_detail "Antigravity is installed. An llm-wiki plugin points its conversations at your wikis, loads the wiki's index and agreements at the start, and hands over the wikis' reminders at the tool calls they apply to, like the Claude Code plugin."
+      # A write that failed is asked about again next time, so it isn't marked.
       if ask_yn "Add it to $(tilde "$AGY_DIR")?" y; then
-        if agy_write; then
+        if out="$(agy_write)"; then
           ui_item ok "added. Quit and reopen Antigravity once, so it finds the new plugin."
+          setup_mark antigravity
         else
-          ui_item warn "couldn't write $(tilde "$AGY_DIR")."
+          ui_item warn "$(setup_why "$out" "couldn't write $(tilde "$AGY_DIR").")"
         fi
+      else
+        setup_mark antigravity
       fi
-      setup_mark antigravity
       ;;
   esac
   line="$(grep -m 1 -F "knowledge wikis live in" "$gm" 2>/dev/null || true)"
   if [ -n "$line" ] && [ "$(agy_state)" = current ]; then
     ui_detail "$(tilde "$gm") still has the wiki line from before the plugin, so conversations would get it twice."
     if ask_yn "Remove that line? The rest of the file stays." y; then
-      cp "$gm" "$gm.bak-$(date +%Y%m%d-%H%M%S)"
-      remove_line "$gm" "$line"
-      ui_item ok "removed (backup beside it)."
-      [ -s "$gm" ] || rm -f "$gm"
+      # The backup is made beside the file written, and only when it is written.
+      if out="$(remove_line "$gm" "$line" ".bak-$(date +%Y%m%d-%H%M%S)")"; then
+        ui_item ok "removed (backup beside it)."
+        # Emptied, it goes, unless it is a link: that is the user's, and stays.
+        [ -s "$gm" ] || [ -L "$gm" ] || rm -f "$gm"
+      else
+        ui_item warn "$out"
+      fi
     fi
   fi
   [ "$(agy_state)" = missing ] || setup_agy_grants
@@ -15661,7 +16031,7 @@ setup_antigravity() {
 
 # Codex: offer the llm-wiki plugin when Codex is installed, and keep it current.
 setup_codex() {
-  local state
+  local state out
   state="$(codex_state)"
   [ "$state" != none ] || return 0
   if [ "$state" = unreadable ]; then setup_unreadable "Codex" "$(codex_unreadable)"; return 0; fi
@@ -15672,7 +16042,12 @@ setup_codex() {
   case "$state" in
     current) ui_item ok "The llm-wiki plugin for Codex is up to date." ;;
     old)
-      if codex_write; then ui_item ok "Updated the llm-wiki plugin for Codex. New sessions use it. It has a new hook, which finds what a message needs in your wikis, and Codex runs it only once you trust it: run codex in a terminal, type /hooks and trust it. The desktop app doesn't ask."; fi ;;
+      if out="$(codex_write)"; then
+        ui_item ok "Updated the llm-wiki plugin for Codex. New sessions use it. It has a new hook, which finds what a message needs in your wikis, and Codex runs it only once you trust it: run codex in a terminal, type /hooks and trust it. The desktop app doesn't ask."
+      else
+        ui_item warn "$(setup_why "$out" "couldn't update the llm-wiki plugin for Codex.")"
+      fi
+      ;;
     missing)
       ui_detail "Codex is installed. An llm-wiki plugin points its sessions at your wikis, and loads the wiki's index and agreements at the start and after compaction, like the Claude Code plugin."
       if [ -n "$(codex_line)" ]; then
@@ -15680,15 +16055,18 @@ setup_codex() {
       else
         ui_detail "It also adds a line about your wikis to $(tilde "$CODEX_DIR/AGENTS.md")."
       fi
+      # AGENTS.md's backup is made beside the file written, and only when it is written. A write
+      # that failed is asked about again next time, so it isn't marked.
       if ask_yn "Add it?" y; then
-        [ ! -f "$CODEX_DIR/AGENTS.md" ] || cp "$CODEX_DIR/AGENTS.md" "$CODEX_DIR/AGENTS.md.bak-$(date +%Y%m%d-%H%M%S)"
-        if codex_write; then
+        if out="$(codex_write ".bak-$(date +%Y%m%d-%H%M%S)")"; then
           ui_item warn "added. Codex runs its hooks only once you trust them, and the desktop app doesn't ask. Run codex in a terminal once: it says 3 hooks need review. Type /hooks and trust them all."
+          setup_mark codex
         else
-          ui_item warn "couldn't install it."
+          ui_item warn "$(setup_why "$out" "couldn't install it.")"
         fi
+      else
+        setup_mark codex
       fi
-      setup_mark codex
       ;;
   esac
 }
@@ -15696,7 +16074,7 @@ setup_codex() {
 # Cursor: with the Claude Code plugin it needs nothing. Without it, offer the
 # sessionStart hook, and give the user-rules line that goes with it.
 setup_cursor() {
-  local state
+  local state out
   state="$(cursor_state)"
   if [ "$state" = unreadable ]; then setup_unreadable "Cursor" "$(cursor_unreadable)"; return 0; fi
   case "$state" in none) return 0 ;; claude) [ "$SETUP_MODE" = new ] || { section "Cursor"; ui_item ok "Cursor runs the Claude Code plugin's hook, so it needs nothing more. Keep the plugin current with $WIKI_CMD update."; }; return 0 ;; esac
@@ -15706,21 +16084,30 @@ setup_cursor() {
   section "Cursor"
   case "$state" in
     current) ui_item ok "The llm-wiki hook for Cursor is up to date." ;;
-    old) if cursor_write; then ui_item ok "Updated the llm-wiki hook in $(tilde "$CURSOR_HOOKS"). New sessions use it."; fi ;;
+    old)
+      if out="$(cursor_write)"; then
+        ui_item ok "Updated the llm-wiki hook in $(tilde "$CURSOR_HOOKS"). New sessions use it."
+      else
+        ui_item warn "$(setup_why "$out" "couldn't write $(tilde "$CURSOR_HOOKS").")"
+      fi
+      ;;
     missing)
       ui_detail "Cursor is installed. A sessionStart hook in $(tilde "$CURSOR_HOOKS") points its sessions at your wikis, pulls, and loads the wiki's index and agreements at the start."
+      # The backup is made beside the file written, and only when it is written. A write that
+      # failed is asked about again next time, so it isn't marked.
       if ask_yn "Add it?" y; then
-        [ ! -f "$CURSOR_HOOKS" ] || cp "$CURSOR_HOOKS" "$CURSOR_HOOKS.bak-$(date +%Y%m%d-%H%M%S)"
-        if cursor_write; then
+        if out="$(cursor_write ".bak-$(date +%Y%m%d-%H%M%S)")"; then
           ui_item warn "added. In Cursor, put this in Settings > Rules > User Rules, in place of any earlier wiki line:"
           echo
           cursor_rule; echo
           echo
+          setup_mark cursor
         else
-          ui_item warn "couldn't write $(tilde "$CURSOR_HOOKS")."
+          ui_item warn "$(setup_why "$out" "couldn't write $(tilde "$CURSOR_HOOKS").")"
         fi
+      else
+        setup_mark cursor
       fi
-      setup_mark cursor
       ;;
   esac
 }
@@ -16103,14 +16490,17 @@ un_links() {
 }
 
 # un_profile_lines: "<file><TAB><line>" for each line setup added to a shell's startup file
-# to turn tab completion on: the whole line, as setup wrote it.
+# to turn tab completion on: the whole line, as setup wrote it. That is completion_line's, or,
+# for a path that needs single quotes, the line in double quotes that setup wrote before.
 un_profile_lines() {
-  local sh f prof
+  local sh prof l old
   for sh in zsh bash; do
-    f="$(completion_file "$sh")"
     prof="$(completion_profile "$sh")"
     [ -f "$prof" ] || continue
-    if grep -qxF -- "[ -f \"$f\" ] && source \"$f\"" "$prof" 2>/dev/null; then printf '%s\t%s\n' "$prof" "[ -f \"$f\" ] && source \"$f\""; fi
+    l="$(completion_line "$sh")"
+    old="$(completion_old_line "$sh")"
+    if grep -qxF -- "$l" "$prof" 2>/dev/null; then printf '%s\t%s\n' "$prof" "$l"; fi
+    if [ -n "$old" ] && grep -qxF -- "$old" "$prof" 2>/dev/null; then printf '%s\t%s\n' "$prof" "$old"; fi
   done
 }
 

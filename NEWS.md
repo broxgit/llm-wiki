@@ -4,6 +4,12 @@ What's new in llm-wiki outside the handbook, written for the person using it. Ha
 
 Format: one `## YYYY-MM-DD: title` section per entry, newest first. The date is the day the entry is written, in UTC, and several entries can share a day. Each title is different. Under it, one line starting `- ` for each change a user would notice, four at most, and nothing else. Leave out what they wouldn't notice: the pull request has that. Add a `- Do:` line only when there is something for them to do. `wiki update` prints these as they are, so a long entry is a long update.
 
+## 2026-11-27: A linked CLAUDE.md stays a link, and a folder with a quote works
+
+- Setup writes a linked `CLAUDE.md`, Codex's `AGENTS.md`, Cursor's hooks or the Claude app's config into the file the link leads to. The link stays.
+- Those files keep their permissions. A link setup can't write through is left as it is, with one line that says why.
+- Antigravity's hooks and the plugin's `wiki` command work from a folder whose name holds a space, a quote or a `$`. The hooks are written again once.
+
 ## 2026-11-26: Upgrade keeps the text of a handbook you edited
 
 - `wiki upgrade` checks each handbook file against what its version shipped. One you changed is replaced, and your text kept beside it as `<file>.before-v<N>`.

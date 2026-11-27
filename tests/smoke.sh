@@ -58,6 +58,7 @@ read -r -d '' PARTS <<'TABLE' || true
 4 | Antigravity plugin | Session hook, Team skills
 4 | Codex plugin | Session hook, Team skills
 4 | Cursor | Session hook, Team skills
+2 | Setup writes carefully |
 4 | Feedback on llm-wiki | Session hook
 4 | MCP server | Two clones merge index.md and log.md
 4 | Compiled without summary pages (v24) | Collection
@@ -3479,8 +3480,23 @@ rm -rf "$C1"
 expect "it still works once the old version is deleted" "behind template v98" "$T/pdata/bin/wiki" status
 printf '{"version":2,"plugins":{"llm-wiki@mk":[{"scope":"user","installPath":"%s/gone"}]}}\n' "$HOME" > "$HOME/.claude/plugins/installed_plugins.json"
 expect "a record pointing nowhere gives a clear error" "can't find the llm-wiki plugin" "$T/pdata/bin/wiki" status
-check "a plugin run from a clone never looks up a version" grep -q 'key=""' "$T/data/bin/wiki"
+check "a plugin run from a clone never looks up a version" grep -qx "key=''" "$T/data/bin/wiki"
 rm -f "$HOME/.claude/plugins/installed_plugins.json"
+# Folders whose names hold a space, both quotes, a $ and a backtick (code review L29): the
+# plugin's, its marketplace's, so the key the command looks up holds them too, and the data folder.
+QP="$HOME/.claude/plugins/cache/m k'q\"d\$x\`b/llm-wiki/v1"
+QD="$T/da ta'q\"d\$x\`b/data"
+mkdir -p "$QP"
+copy_repo "$QP"
+CLAUDE_PLUGIN_ROOT="$QP" CLAUDE_PLUGIN_DATA="$QD" CLAUDE_PROJECT_DIR="$T" bash "$QP/hooks/session-start.sh" </dev/null >/dev/null
+check "the hook writes the command when those folders' names hold a space, quotes, a \$ and a backtick" sh -n "$QD/bin/wiki"
+out="$("$QD/bin/wiki" status 2>&1)"; code=$?
+[ "$code" = 0 ] && case "$out" in *"v98"*) false ;; *WIKI*) true ;; *) false ;; esac && ok "it runs, its own version while nothing says another is installed" || bad "it runs, its own version while nothing says another is installed" "exit $code: $out"
+python3 -c 'import json, sys; json.dump({"version": 2, "plugins": {sys.argv[1]: [{"scope": "user", "installPath": sys.argv[2]}]}}, open(sys.argv[3], "w"))' "llm-wiki@m k'q\"d\$x\`b" "$C2" "$HOME/.claude/plugins/installed_plugins.json"
+expect "and finds the installed version by that key" "behind template v98" "$QD/bin/wiki" status
+expect "and hands wiki.sh its own path, as the stable command" "run \`$QD/bin/wiki start\` in the repository" "$QD/bin/wiki" claude --print
+rm -f "$HOME/.claude/plugins/installed_plugins.json"
+rm -rf "$HOME/.claude/plugins/cache/m k'q\"d\$x\`b" "$T/da ta'q\"d\$x\`b"
 fi
 
 if section "Journal and standup"; then
@@ -3506,6 +3522,19 @@ check "and no second setting was planted" test "$(grep -c '^enabled=' "$JC")" = 
 "$T/m3copy/wiki.sh" journal set exclude 'a.c' >/dev/null 2>&1; "$T/m3copy/wiki.sh" journal set exclude 'abc' >/dev/null 2>&1
 check "a key is compared as text, so the line is replaced and not added again" test "$(grep -c '^exclude=' "$JC")" = 1
 cp "$T/journal-config.before" "$JC"
+# The collection's .gitignore kept somewhere else by a link stays a link (code review M14).
+GI="$WIKIS_DIR/.gitignore"
+[ -f "$GI" ] || printf '/journal/\n' > "$GI"
+mv "$GI" "$T/gitignore.real"
+cp "$T/gitignore.real" "$T/gitignore.before"
+ln -s "$T/gitignore.real" "$GI"
+"$W" journal set commit yes >/dev/null 2>&1
+check ".gitignore as a link: after journal set commit yes it is still a link" test -L "$GI"
+check "and the file it leads to is as it was" cmp -s "$T/gitignore.before" "$T/gitignore.real"
+rm "$GI"
+mv "$T/gitignore.real" "$GI"
+cp "$T/journal-config.before" "$JC"
+rm -f "$T/gitignore.before"
 # A time is one a clock shows.
 refuse "day_starts 29:59 is refused" "$W" journal set day_starts 29:59
 refuse "and 24:00" "$W" journal set day_starts 24:00
@@ -3921,10 +3950,36 @@ check "hooks.json has PreToolUse for every tool (the docs' matcher *), and PreIn
 import json, sys
 h = json.load(open(sys.argv[1]))['llm-wiki']
 m = h['PreToolUse'][0]
-assert m['matcher'] == '*' and m['hooks'][0]['type'] == 'command' and m['hooks'][0]['command'].endswith('hooks/agy-hook.sh tool')
-assert h['PreInvocation'][0]['command'].endswith('hooks/agy-hook.sh invoke')
+assert m['matcher'] == '*' and m['hooks'][0]['type'] == 'command' and m['hooks'][0]['command'].endswith(\"hooks/agy-hook.sh' tool\")
+assert h['PreInvocation'][0]['command'].endswith(\"hooks/agy-hook.sh' invoke\")
 assert h['PreInvocation'][1]['command'].endswith(' __agy-prompt') and h['PreInvocation'][1]['timeout'] == 10
 assert h['SessionStart'][0]['command'].endswith(' __agy-start')" "$AP/hooks.json"
+# A hooks file as versions before wrote it, with a tilde and no quotes (code review M13), is old,
+# is written again once, and then stays as it is.
+cp "$AP/hooks.json" "$T/agy-hooks.now"
+cat > "$AP/hooks.json" <<EOF
+{
+  "llm-wiki": {
+    "SessionStart": [
+      { "type": "command", "command": "$W __agy-start", "timeout": 30 }
+    ],
+    "PreToolUse": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "sh ~/.gemini/config/plugins/llm-wiki/hooks/agy-hook.sh tool", "timeout": 5 }] }
+    ],
+    "PreInvocation": [
+      { "type": "command", "command": "sh ~/.gemini/config/plugins/llm-wiki/hooks/agy-hook.sh invoke", "timeout": 5 },
+      { "type": "command", "command": "$W __agy-prompt", "timeout": 10 }
+    ]
+  }
+}
+EOF
+expect "a hooks file written the old way, with a tilde and no quotes, is old" "plugin old" "$W" setup --list
+printf '{}' | fresh "$W" __agy-start >/dev/null
+check "the next start writes it again, as this version has it" cmp -s "$T/agy-hooks.now" "$AP/hooks.json"
+touch -t 200001010000 "$AP/hooks.json"
+printf '{}' | fresh "$W" __agy-start >/dev/null
+check "and the start after that leaves it alone" test -z "$(find "$AP/hooks.json" -newer "$T/agy-hooks.now")"
+rm -f "$T/agy-hooks.now"
 rm "$AP/hooks/agy-hook.sh"
 expect "a plugin without them is old" "plugin old" "$W" setup --list
 agy_start c-1
@@ -4050,6 +4105,7 @@ case "$out" in *"replaces the wiki line"*"/hooks and trust them all"*) ok "setup
 check "it adds the marketplace and the plugin with the codex command" grep -qx "plugin add llm-wiki@llm-wiki" "$T/codex.log"
 check "its marketplace lists the plugin" python3 -c "import json,sys; p=json.load(open(sys.argv[1]))['plugins'][0]; assert p['name']=='llm-wiki' and p['source']=={'source':'local','path':'./plugins/llm-wiki'}" "$HOME/.codex/llm-wiki/.agents/plugins/marketplace.json"
 check "its hooks run __codex-start at SessionStart and PostCompact" python3 -c "import json,sys; h=json.load(open(sys.argv[1]))['hooks']['hooks']; assert all(h[e][0]['hooks'][0]['command'].endswith(' __codex-start') for e in ('SessionStart','PostCompact'))" "$HOME/.codex/llm-wiki/plugins/llm-wiki/.codex-plugin/plugin.json"
+check "for a path with nothing sh reads inside double quotes, each is in double quotes, as before, so Codex isn't asked to trust them again" python3 -c "import json,sys; h=json.load(open(sys.argv[1]))['hooks']['hooks']; assert [h[e][0]['hooks'][0]['command'] for e in ('SessionStart','PostCompact','UserPromptSubmit')] == ['\"%s\" __codex-start' % sys.argv[2]] * 2 + ['\"%s\" __codex-prompt' % sys.argv[2]]" "$HOME/.codex/llm-wiki/plugins/llm-wiki/.codex-plugin/plugin.json" "$W"
 check "and one at UserPromptSubmit that runs __codex-prompt, for the search of a message" python3 -c "import json,sys; h=json.load(open(sys.argv[1]))['hooks']['hooks']['UserPromptSubmit'][0]['hooks'][0]; assert h['command'].endswith(' __codex-prompt') and h['timeout'] == 10" "$HOME/.codex/llm-wiki/plugins/llm-wiki/.codex-plugin/plugin.json"
 check "the old line is replaced in place, and the rest of AGENTS.md stays" python3 -c "import sys; t=open(sys.argv[1]).read(); assert t.startswith('# Mine\n\nKeep this.\n\nMy knowledge wikis live in') and 'plugin' in t.split('\n')[4] and t.endswith('\n\nAnd this.\n') and 'old line' not in t" "$HOME/.codex/AGENTS.md"
 check "it links the llm-wiki skill" test -f "$HOME/.codex/skills/llm-wiki/SKILL.md"
@@ -4097,6 +4153,7 @@ printf '{"version":1,"hooks":{"afterFileEdit":[{"command":"./format.sh"}],"sessi
 out="$(printf 'y\n' | tty_run "$W" setup cursor 2>&1)"
 case "$out" in *"added."*"User Rules"*"llm-wiki hook in ~/.cursor/hooks.json runs"*) ok "setup cursor adds the hook and gives the user-rules line" ;; *) bad "setup cursor adds the hook and gives the user-rules line" "$out" ;; esac
 check "its hooks.json keeps the other hooks and adds ours" python3 -c "import json,sys; h=json.load(open(sys.argv[1])); s=h['hooks']['sessionStart']; assert h['version']==1 and h['hooks']['afterFileEdit'][0]['command']=='./format.sh' and s[0]['command']=='./mine.sh' and s[1]['command'].endswith(' __cursor-start') and len(s)==2" "$HOME/.cursor/hooks.json"
+check "for a path with nothing sh reads inside double quotes, the command is in double quotes, as before, so a hook written then is still current" python3 -c "import json,sys; s=json.load(open(sys.argv[1]))['hooks']['sessionStart']; assert s[1]['command']=='\"%s\" __cursor-start' % sys.argv[2]" "$HOME/.cursor/hooks.json" "$W"
 expect "setup --list shows it current" "cursor              hook current" "$W" setup --list
 if [ "$(id -u)" != 0 ]; then
   chmod 000 "$HOME/.cursor/hooks.json"
@@ -4124,6 +4181,520 @@ lacks "status is quiet while the plugin copy matches its marketplace" "behind it
 git -C "$T/mkt" commit -q --allow-empty -m two
 expect "status says when the plugin copy is behind its marketplace, for Cursor too" "llm-wiki@mk is installed from ${first:0:7}, behind its marketplace at $(git -C "$T/mkt" rev-parse --short=7 HEAD). Claude Code and Cursor run that copy" "$W" status
 rm -rf "$HOME/.cursor" "$HOME/.claude/plugins/installed_plugins.json" "$HOME/.claude/plugins/known_marketplaces.json" "$T/mkt"
+fi
+
+if section "Setup writes carefully"; then
+# The files setup writes for other tools and the user (code review M13, M14, L29). Everything
+# here has a home of its own under $CAREFUL, so nothing the other sections made is in the way.
+CAREFUL="$T/careful"
+mkdir -p "$CAREFUL"
+# The helpers, taken out of wiki.sh, run as wiki.sh runs them: bash with set -euo pipefail.
+{ printf 'set -euo pipefail\n'; sed -n '/^tilde() {/,/^}/p; /^sh_quote() {/,/^}/p; /^sh_word() {/,/^}/p; /^has_cntrl() {/,/^}/p; /^json_text() {/,/^}/p; /^sched_sh_quote() {/,/^}/p; /^codex_hooks() {/,/^}/p; /^capture_real() {/,/^}/p; /^write_target() {/,/^}/p; /^file_mode() /p; /^write_file() {/,/^}/p; /^remove_line() {/,/^}/p; /^lines_without() {/,/^}/p; /^claude_replaced() {/,/^}/p; /^text_plus_line() {/,/^}/p' "$W"; } > "$CAREFUL/helpers.sh"
+# A PATH with everything in the system's folders but Python, for the checks without python3. A
+# stand-in codex goes before it: with none on the PATH, wiki.sh looks in /Applications.
+mkdir -p "$CAREFUL/nopy" "$CAREFUL/stand"
+printf '#!/bin/sh\necho "$*" >> "%s"\nexit 1\n' "$CAREFUL/stand.log" > "$CAREFUL/stand/codex"
+chmod +x "$CAREFUL/stand/codex"
+for d in /usr/bin /bin /usr/sbin /sbin; do
+  for f in "$d"/*; do
+    case "${f##*/}" in python*) continue ;; esac
+    [ -e "$CAREFUL/nopy/${f##*/}" ] || ln -s "$f" "$CAREFUL/nopy/${f##*/}"
+  done
+done
+cat > "$CAREFUL/roundtrip.sh" <<'RT'
+. "$1"
+nl='
+'
+bads=""
+# With a ' and one of the characters double quotes don't keep, and with a byte that isn't UTF-8
+# before them, which in a UTF-8 locale must not hide them from the matching.
+for s in "a b" "it's" 'say "hi"' 'a $HOME b' 'a `id` b' 'back\slash' "two$nl$nl" "-n" "*" "''" \
+  "it's \$HOME" "it's \`id\`" "it's \"q\"" "it's \\x" $'/tmp/\xff$(id)/wiki.sh' $'/tmp/\xc3`id`/x' $'/tmp/\xff\'q/x'; do
+  for f in sh_quote sh_word; do
+    got="$(sh -c "printf '%s' $("$f" "$s"); printf x")"
+    got="${got%x}"
+    [ "$got" = "$s" ] || bads="$bads $f:[$s]->[$got]"
+  done
+done
+s=$'/tmp/\xff;id/x'
+got="$(sh -c "printf '%s' $(sched_sh_quote "$s")")"
+[ "$got" = "$s" ] || bads="$bads sched_sh_quote:[$s]->[$got]"
+[ "$(sh_word '/a b/wiki.sh')" = '"/a b/wiki.sh"' ] || bads="$bads plain:$(sh_word '/a b/wiki.sh')"
+[ "$(sh_word '/a$b/wiki.sh')" = "'/a\$b/wiki.sh'" ] || bads="$bads dollar:$(sh_word '/a$b/wiki.sh')"
+[ -z "$bads" ] || { echo "$bads"; exit 1; }
+RT
+check "sh_quote and sh_word give back, through sh -c, a space, quotes, a \$, a backtick, a backslash and line breaks at the end, with a ' beside them and a byte that isn't UTF-8 before them, and sh_word keeps a plain path in double quotes, as setup wrote it before" bash "$CAREFUL/roundtrip.sh" "$CAREFUL/helpers.sh"
+# Codex's hooks: a plain path gives the text it always had, which the plugin's version is made
+# from, and a path with a tab in it still gives JSON, with the command as sh_word has it.
+cat > "$CAREFUL/codexjson.sh" <<'CJ'
+. "$1"
+codex_cmd() { printf '%s' "$P"; }
+P='/a b/wiki.sh'
+codex_hooks | grep -qF '"SessionStart": [{ "hooks": [{ "type": "command", "command": "\"/a b/wiki.sh\" __codex-start", "timeout": 30 }] }],' || { echo "plain: $(codex_hooks)"; exit 1; }
+# A byte that isn't UTF-8 is escaped by byte, whatever the locale: sed in a UTF-8 one stops at it.
+P=$'/a\xff"b/wiki.sh'
+codex_hooks | LC_ALL=C grep -qF "\"command\": \"'/a"$'\xff'"\\\"b/wiki.sh' __codex-start\"" || { echo "a byte that isn't UTF-8: $(codex_hooks 2>&1)"; exit 1; }
+for P in "$(printf '/a\tb/wiki.sh')" "$(printf '/a\tb$x/wiki.sh')" "$(printf '/a\001"\\/wiki.sh')"; do
+  W="$(sh_word "$P")" python3 -c 'import json, os, sys
+h = json.loads(sys.stdin.read())["hooks"]
+assert h["UserPromptSubmit"][0]["hooks"][0]["command"] == os.environ["W"] + " __codex-prompt"' <<EOF || { echo "with a control character: $(codex_hooks)"; exit 1; }
+$(codex_hooks)
+EOF
+done
+CJ
+check "Codex's hooks keep their text for a plain path, and are JSON for a path with a tab or another control character" bash "$CAREFUL/codexjson.sh" "$CAREFUL/helpers.sh"
+# write_file: what it won't write onto, its temporary file, and a command that fails.
+cat > "$CAREFUL/writes.sh" <<'WR'
+. "$1"
+d="$2"
+bads=""
+mkdir -p "$d/dir" "$d/fake"
+ln -s dir "$d/ldir"
+ln -s dir/ "$d/ldirslash"
+mkfifo "$d/fifo"
+for t in dir:"is a folder, not a file" ldir:"which is a folder, not a file" ldirslash:"which is a folder, not a file" fifo:"isn't a plain file"; do
+  c=0
+  out="$(write_file "$d/${t%%:*}" printf 'new\n')" || c=$?
+  case "$c:$out" in 1:*"${t#*:}"*) ;; *) bads="$bads | ${t%%:*}: exit $c: $out" ;; esac
+done
+[ -z "$(ls -A "$d/dir")" ] || bads="$bads | something went into the folder: $(ls -A "$d/dir")"
+# The temporary file is private from the start: the command sees it at 0600, under umask 022.
+umask 022
+printf 'secret\n' > "$d/secret"
+chmod 600 "$d/secret"
+probe() { file_mode "$d/secret.tmp.$$"; }
+write_file "$d/secret" probe >/dev/null || bads="$bads | the probe's write failed"
+[ "$(cat "$d/secret")" = 600 ] || bads="$bads | the temporary file was $(cat "$d/secret") while it was written"
+[ "$(file_mode "$d/secret")" = 600 ] || bads="$bads | the file is now $(file_mode "$d/secret")"
+# A new file gets what the umask gives.
+write_file "$d/fresh" printf 'x\n' >/dev/null || bads="$bads | a new file wasn't written"
+[ "$(file_mode "$d/fresh")" = 644 ] || bads="$bads | a new file is $(file_mode "$d/fresh"), not 644"
+# A link left where the temporary file goes is never written through.
+printf 'precious\n' > "$d/victim"
+printf 'old\n' > "$d/f2"
+ln -s "$d/victim" "$d/f2.tmp.$$"
+write_file "$d/f2" printf 'new\n' >/dev/null || bads="$bads | the write beside a planted link failed"
+[ "$(cat "$d/victim")" = precious ] || bads="$bads | the planted link was written through"
+[ ! -L "$d/f2" ] && [ "$(cat "$d/f2")" = new ] || bads="$bads | f2 is $(ls -l "$d/f2")"
+# grep failing (exit 2) is a failure, not an empty answer: the file is left as it was.
+real_grep="$(command -v grep)"
+printf '#!/bin/sh\ncase " $* " in *" -v"*) echo partial; exit 2 ;; esac\nexec "%s" "$@"\n' "$real_grep" > "$d/fake/grep"
+chmod +x "$d/fake/grep"
+printf 'keep\ndrop\nMy knowledge wikis live in ~/old.\n' > "$d/g"
+cp "$d/g" "$d/g.before"
+c=0
+out="$(PATH="$d/fake:$PATH" remove_line "$d/g" drop)" || c=$?
+[ "$c" = 1 ] && cmp -s "$d/g" "$d/g.before" || bads="$bads | remove_line with grep failing: exit $c: $out: $(cat "$d/g")"
+case "$out" in *"couldn't be read"*) ;; *) bads="$bads | remove_line's line: $out" ;; esac
+c=0
+out="$(PATH="$d/fake:$PATH" write_file "$d/g" claude_replaced "$d/g" "My knowledge wikis live in ~/new.")" || c=$?
+[ "$c" = 1 ] && cmp -s "$d/g" "$d/g.before" || bads="$bads | claude_replaced with grep failing: exit $c: $out: $(cat "$d/g")"
+[ -z "$(find "$d" -name '*.tmp.*' ! -type l)" ] || bads="$bads | left: $(find "$d" -name '*.tmp.*')"
+# remove_line's own look for the line: a grep that fails (exit 2) is said, not taken as "not there".
+printf '#!/bin/sh\ncase " $* " in *" -q"*) exit 2 ;; esac\nexec "%s" "$@"\n' "$real_grep" > "$d/fake/qgrep"
+mkdir -p "$d/fakeq"
+mv "$d/fake/qgrep" "$d/fakeq/grep"
+chmod +x "$d/fakeq/grep"
+c=0
+out="$(PATH="$d/fakeq:$PATH" remove_line "$d/g" drop)" || c=$?
+[ "$c" = 1 ] && cmp -s "$d/g" "$d/g.before" && case "$out" in *"couldn't be read"*) true ;; *) false ;; esac || bads="$bads | remove_line, its look failing: exit $c: $out"
+[ -z "$bads" ] || { echo "$bads"; exit 1; }
+WR
+# The backup: a name nothing has, never through a link, only this call's removed, no half copy.
+cat > "$CAREFUL/backups.sh" <<'BK'
+. "$1"
+d="$2"
+bads=""
+mkdir -p "$d/nomv" "$d/badcp"
+printf '#!/bin/sh\nexit 1\n' > "$d/nomv/mv"
+printf '#!/bin/sh\nfor a; do last="$a"; done\nprintf half > "$last"\nexit 1\n' > "$d/badcp/cp"
+chmod +x "$d/nomv/mv" "$d/badcp/cp"
+# (a) No file, so no backup made: one already there under that name stays when the move fails.
+printf 'an earlier backup\n' > "$d/nb.bak"
+c=0
+PATH="$d/nomv:$PATH" write_file --backup .bak "$d/nb" printf 'x\n' >/dev/null || c=$?
+[ "$c" = 1 ] && [ "$(cat "$d/nb.bak")" = "an earlier backup" ] || bads="$bads | (a) exit $c, nb.bak: $(cat "$d/nb.bak" 2>&1)"
+# (b) A backup already there, at 0444, is left; this one is .bak-2.
+printf 'v1\n' > "$d/b"
+printf 'old backup\n' > "$d/b.bak"
+chmod 444 "$d/b.bak"
+write_file --backup .bak "$d/b" printf 'v2\n' >/dev/null || bads="$bads | (b) the write failed"
+[ "$(cat "$d/b")" = v2 ] && [ "$(cat "$d/b.bak")" = "old backup" ] && [ "$(cat "$d/b.bak-2" 2>/dev/null)" = v1 ] || bads="$bads | (b) b: $(cat "$d/b"), b.bak: $(cat "$d/b.bak"), b.bak-2: $(cat "$d/b.bak-2" 2>&1)"
+# (c) A copy that fails midway is removed, and the file stays as it was.
+printf 'v1\n' > "$d/h"
+c=0
+PATH="$d/badcp:$PATH" write_file --backup .bak "$d/h" printf 'v2\n' >/dev/null || c=$?
+[ "$c" = 1 ] && [ "$(cat "$d/h")" = v1 ] && [ ! -e "$d/h.bak" ] || bads="$bads | (c) exit $c, h: $(cat "$d/h"), h.bak: $(cat "$d/h.bak" 2>&1)"
+# (d) A link at the backup's name isn't written through: the backup goes to .bak-2.
+printf 'v1\n' > "$d/k"
+ln -s "$d/victim" "$d/k.bak"
+write_file --backup .bak "$d/k" printf 'v2\n' >/dev/null || bads="$bads | (d) the write failed"
+[ ! -e "$d/victim" ] && [ -L "$d/k.bak" ] && [ "$(cat "$d/k.bak-2" 2>/dev/null)" = v1 ] || bads="$bads | (d) victim: $(cat "$d/victim" 2>&1), k.bak-2: $(cat "$d/k.bak-2" 2>&1)"
+# The line added at the end, as main's append gave it: after a line break when the file has text.
+for t in "abc" "abc
+" ""; do
+  printf '%s' "$t" > "$d/t1"; cp "$d/t1" "$d/t2"
+  { if [ -s "$d/t2" ]; then printf '\n'; fi; printf '%s\n' "the line"; } >> "$d/t2"
+  write_file "$d/t1" text_plus_line "$d/t1" "the line" >/dev/null || bads="$bads | text_plus_line failed"
+  cmp -s "$d/t1" "$d/t2" || bads="$bads | [$t]: $(od -c "$d/t1" | head -2) not $(od -c "$d/t2" | head -2)"
+done
+rm -f "$d/t1"
+write_file "$d/t1" text_plus_line "$d/t1" "the line" >/dev/null && [ "$(cat "$d/t1")" = "the line" ] || bads="$bads | a file not there yet"
+[ -z "$bads" ] || { echo "$bads"; exit 1; }
+BK
+check "a backup takes a name nothing has, never goes through a link, is removed when half made, and one there before stays; the line is added as before" bash "$CAREFUL/backups.sh" "$CAREFUL/helpers.sh" "$CAREFUL/bk"
+check "write_file refuses a folder, a link to one, a link ending in / and a FIFO, makes its temporary file private and new, and a grep that fails leaves the file as it was" bash "$CAREFUL/writes.sh" "$CAREFUL/helpers.sh" "$CAREFUL/wr"
+check "the session hook's sh_quote is wiki.sh's" test "$(sed -n '/^sh_quote() {/,/^}/p' "$W")" = "$(sed -n '/^sh_quote() {/,/^}/p' "$REPO/hooks/session-start.sh")"
+cat > "$CAREFUL/links.sh" <<'LK'
+. "$1"
+d="$2"
+mkdir -p "$d/real" "$d/l"
+: > "$d/real/f"
+ln -s ../real/f "$d/l/rel"
+ln -s "$d/real/f" "$d/l/abs"
+ln -s rel "$d/l/two"
+ln -s "$d/real/none" "$d/l/dangling"
+ln -s loop2 "$d/l/loop1"
+ln -s loop1 "$d/l/loop2"
+ln -s "$d/gone/f" "$d/l/nofolder"
+for l in rel abs two; do [ "$(capture_real "$d/l/$l")" = "$d/real/f" ] || { echo "$l: $(capture_real "$d/l/$l" || true)"; exit 1; }; done
+[ "$(capture_real "$d/real/f")" = "$d/real/f" ] || { echo "a plain file"; exit 1; }
+[ "$(capture_real "$d/l/dangling")" = "$d/real/none" ] || { echo "a dangling link"; exit 1; }
+! capture_real "$d/l/loop1" >/dev/null || { echo "a loop"; exit 1; }
+! capture_real "$d/l/nofolder" >/dev/null || { echo "a missing folder"; exit 1; }
+LK
+check "capture_real follows a relative link, an absolute one and a chain of two, gives a plain file's own path and a dangling link's target, and fails on a loop and a missing folder" bash "$CAREFUL/links.sh" "$CAREFUL/helpers.sh" "$CAREFUL/lk"
+cat > "$CAREFUL/remove.sh" <<'RM'
+. "$1"
+d="$2"
+mkdir -p "$d/dot" "$d/home"
+printf 'keep\ndrop\nkeep too\n' > "$d/dot/f"
+chmod 600 "$d/dot/f"
+ln -s ../dot/f "$d/home/f"
+remove_line "$d/home/f" drop
+[ -L "$d/home/f" ] || { echo "the link is gone"; exit 1; }
+[ "$(cat "$d/dot/f")" = "keep
+keep too" ] || { echo "it holds: $(cat "$d/dot/f")"; exit 1; }
+[ "$(file_mode "$d/dot/f")" = 600 ] || { echo "its mode: $(file_mode "$d/dot/f")"; exit 1; }
+[ "$(ls -A "$d/dot")" = f ] || { echo "beside it: $(ls -A "$d/dot")"; exit 1; }
+RM
+check "remove_line takes a line out of the file a link leads to: the link stays, and the file keeps 0600" bash "$CAREFUL/remove.sh" "$CAREFUL/helpers.sh" "$CAREFUL/rm"
+
+# A link stays a link (M14). The person keeps their files in a dotfiles folder, by links.
+LH="$CAREFUL/home"
+mkdir -p "$LH/.claude" "$LH/dotfiles"
+cwk() { env -u WIKIS_DIR HOME="$LH" LLM_WIKI_DEFAULT_DIR="$LH/wikis" "$@"; }
+perm_of() { python3 -c 'import os, sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$1"; }
+printf '# Mine\n\nMy knowledge wikis live in ~/old, one folder per project. Run ~/old/wiki.sh.\n' > "$LH/dotfiles/claude.md"
+chmod 600 "$LH/dotfiles/claude.md"
+ln -s "$LH/dotfiles/claude.md" "$LH/.claude/CLAUDE.md"
+expect "wiki claude replaces the wiki line in a CLAUDE.md that is a link" "replaced the wiki line in ~/.claude/CLAUDE.md" cwk "$W" claude
+check "it is still a link" test -L "$LH/.claude/CLAUDE.md"
+check "and the file it leads to holds the new line, and the rest of what it held" bash -c "grep -qx '# Mine' '$LH/dotfiles/claude.md' && ! grep -q 'live in ~/old' '$LH/dotfiles/claude.md' && grep -q 'knowledge wikis live in' '$LH/dotfiles/claude.md'"
+check "and keeps its permissions, 0600" test "$(perm_of "$LH/dotfiles/claude.md")" = 600
+check "with no temporary file left beside it" test "$(ls -A "$LH/dotfiles")" = claude.md
+rm "$LH/.claude/CLAUDE.md"
+printf 'My knowledge wikis live in ~/old.\n' > "$LH/.claude/CLAUDE.md"
+chmod 600 "$LH/.claude/CLAUDE.md"
+cwk "$W" claude >/dev/null 2>&1
+check "a plain CLAUDE.md at 0600 is still 0600 once its line is replaced" test "$(perm_of "$LH/.claude/CLAUDE.md")" = 600
+# Adding the line goes through the same write: a CLAUDE.md at 0444, in a folder that can be
+# written, gets it, keeps its mode, and has its text as an append would have left it.
+printf '# Mine' > "$LH/.claude/CLAUDE.md"
+chmod 444 "$LH/.claude/CLAUDE.md"
+expect "a CLAUDE.md at 0444 with no wiki line gets one" "added to ~/.claude/CLAUDE.md" cwk "$W" claude
+check "after its last line, keeping 0444" bash -c "[ \"\$(head -n 1 '$LH/.claude/CLAUDE.md')\" = '# Mine' ] && sed -n 2p '$LH/.claude/CLAUDE.md' | grep -q '^My knowledge wikis live in' && [ \"\$(wc -l < '$LH/.claude/CLAUDE.md' | tr -d ' ')\" = 2 ] && [ \"\$(find '$LH/.claude/CLAUDE.md' -perm 444)\" ]"
+chmod 644 "$LH/.claude/CLAUDE.md"
+rm "$LH/.claude/CLAUDE.md"
+# Codex's AGENTS.md at 0444 with no wiki line: the rule is added and one backup is beside it.
+LH2="$CAREFUL/home2"
+mkdir -p "$LH2/.codex" "$CAREFUL/cbin2"
+printf '#!/bin/sh\ncase "$*" in\n  "plugin marketplace add "*) printf "[marketplaces.llm-wiki]\\n" >> "%s" ;;\n  "plugin add llm-wiki@llm-wiki") printf "[plugins.\\"llm-wiki@llm-wiki\\"]\\n" >> "%s" ;;\nesac\n' "$LH2/.codex/config.toml" "$LH2/.codex/config.toml" > "$CAREFUL/cbin2/codex"
+chmod +x "$CAREFUL/cbin2/codex"
+printf 'Mine.\n' > "$LH2/.codex/AGENTS.md"
+chmod 444 "$LH2/.codex/AGENTS.md"
+out="$(printf 'y\n' | env -u WIKIS_DIR HOME="$LH2" LLM_WIKI_DEFAULT_DIR="$LH2/wikis" PATH="$CAREFUL/cbin2:$PATH" "$TTYRUN" "$W" setup codex 2>&1)"
+check "Codex's AGENTS.md at 0444 with no wiki line gets the rule after a blank line, keeping 0444" bash -c "[ \"\$(sed -n 1p '$LH2/.codex/AGENTS.md')\" = Mine. ] && [ -z \"\$(sed -n 2p '$LH2/.codex/AGENTS.md')\" ] && grep -q \"the llm-wiki plugin's hook\" '$LH2/.codex/AGENTS.md' && [ \"\$(find '$LH2/.codex/AGENTS.md' -perm 444)\" ]"
+check "with one backup beside it, as it was" bash -c "[ \"\$(find '$LH2/.codex' -maxdepth 1 -name 'AGENTS.md.bak-*' | wc -l | tr -d ' ')\" = 1 ] && [ \"\$(cat '$LH2'/.codex/AGENTS.md.bak-*)\" = Mine. ]"
+ln -s "$LH/dotfiles/new.md" "$LH/.claude/CLAUDE.md"
+expect "a CLAUDE.md that is a link to a file not made yet gets the line" "added to ~/.claude/CLAUDE.md" cwk "$W" claude
+check "in that file, made where the link points, and the link stays" bash -c "test -L '$LH/.claude/CLAUDE.md' && grep -q 'knowledge wikis live in' '$LH/dotfiles/new.md'"
+rm "$LH/.claude/CLAUDE.md"
+ln -s loop "$LH/.claude/CLAUDE.md"
+ln -s CLAUDE.md "$LH/.claude/loop"
+out="$(cwk "$W" claude 2>&1)"; code=$?
+# shellcheck disable=SC2088
+[ "$code" = 1 ] && [ "$out" = "~/.claude/CLAUDE.md wasn't changed: it is a link, and its links lead round in a loop. Do: point it at a file, then run this again" ] && ok "a loop of links: wiki claude says so in one line, and fails" || bad "a loop of links: wiki claude says so in one line, and fails" "exit $code: $out"
+check "and both links are as they were" bash -c "[ \"\$(readlink '$LH/.claude/CLAUDE.md')\" = loop ] && [ \"\$(readlink '$LH/.claude/loop')\" = CLAUDE.md ]"
+out="$(printf 'y\n' | cwk "$TTYRUN" "$W" setup claude 2>&1)"; code=$?
+[ "$code" = 0 ] && case "$out" in *"~/.claude/CLAUDE.md wasn't changed: it is a link, and its links lead round in a loop."*) true ;; *) false ;; esac && ok "inside setup, the same line is shown, and setup goes on" || bad "inside setup, the same line is shown, and setup goes on" "exit $code: $out"
+rm "$LH/.claude/CLAUDE.md" "$LH/.claude/loop"
+ln -s "$LH/gone/claude.md" "$LH/.claude/CLAUDE.md"
+out="$(cwk "$W" claude 2>&1)"; code=$?
+# shellcheck disable=SC2088
+[ "$code" = 1 ] && [ "$out" = "~/.claude/CLAUDE.md wasn't changed: it is a link to ~/gone/claude.md, whose folder isn't there. Do: make that folder, or point the link at a file, then run this again" ] && ok "a link into a folder that isn't there: one line, and it fails" || bad "a link into a folder that isn't there: one line, and it fails" "exit $code: $out"
+check "and that folder isn't made" test ! -e "$LH/gone"
+rm "$LH/.claude/CLAUDE.md"
+if [ "$(id -u)" != 0 ]; then
+  mkdir -p "$LH/ro"
+  printf 'My knowledge wikis live in ~/old.\n' > "$LH/ro/claude.md"
+  cp "$LH/ro/claude.md" "$CAREFUL/ro.before"
+  ln -s "$LH/ro/claude.md" "$LH/.claude/CLAUDE.md"
+  chmod 555 "$LH/ro"
+  out="$(cwk "$W" claude 2>&1)"; code=$?
+  # shellcheck disable=SC2088
+  [ "$code" = 1 ] && [ "$out" = "~/.claude/CLAUDE.md wasn't changed: it is a link to ~/ro/claude.md, in a folder that can't be written. Do: make ~/ro writable, then run this again" ] && ok "a link into a folder that can't be written: one line, and it fails" || bad "a link into a folder that can't be written: one line, and it fails" "exit $code: $out"
+  check "and the file is as it was, with nothing beside it" bash -c "cmp -s '$CAREFUL/ro.before' '$LH/ro/claude.md' && [ \"\$(ls -A '$LH/ro')\" = claude.md ]"
+  chmod 755 "$LH/ro"
+  rm "$LH/.claude/CLAUDE.md"
+else
+  skipped "a link into a folder that can't be written (root can write anything)"
+fi
+# Codex's AGENTS.md, rewritten by its session hook once the plugin is there.
+mkdir -p "$LH/.codex/llm-wiki/plugins/llm-wiki/.codex-plugin"
+printf '{}\n' > "$LH/.codex/llm-wiki/plugins/llm-wiki/.codex-plugin/plugin.json"
+printf 'Mine.\n\nMy knowledge wikis live in ~/old. Run the old line.\n' > "$LH/dotfiles/agents.md"
+chmod 600 "$LH/dotfiles/agents.md"
+ln -s "$LH/dotfiles/agents.md" "$LH/.codex/AGENTS.md"
+printf '{"cwd":"%s","hook_event_name":"SessionStart"}' "$LH" | cwk "$W" __codex-start >/dev/null 2>&1
+check "Codex's AGENTS.md as a link: its line is replaced in the file it leads to, and it stays a link" bash -c "test -L '$LH/.codex/AGENTS.md' && grep -qx 'Mine.' '$LH/dotfiles/agents.md' && grep -q \"the llm-wiki plugin's hook\" '$LH/dotfiles/agents.md'"
+check "and that file keeps 0600" test "$(perm_of "$LH/dotfiles/agents.md")" = 600
+# Cursor's hooks file.
+mkdir -p "$LH/.cursor"
+printf '{"version":1,"hooks":{"sessionStart":[{"command":"./mine.sh"}]}}\n' > "$LH/dotfiles/cursor.json"
+chmod 600 "$LH/dotfiles/cursor.json"
+ln -s "$LH/dotfiles/cursor.json" "$LH/.cursor/hooks.json"
+printf 'y\n' | cwk "$TTYRUN" "$W" setup cursor >/dev/null 2>&1
+check "Cursor's hooks file as a link: the hook is added in the file it leads to, and it stays a link" bash -c "test -L '$LH/.cursor/hooks.json' && python3 -c \"import json,sys; s=json.load(open(sys.argv[1]))['hooks']['sessionStart']; assert s[0]['command']=='./mine.sh' and s[1]['command'].endswith(' __cursor-start')\" '$LH/dotfiles/cursor.json'"
+check "and that file keeps 0600" test "$(perm_of "$LH/dotfiles/cursor.json")" = 600
+# The Claude app's config: its backup goes beside the file written, and the file is 0600, as always.
+DK="$CAREFUL/desktop"
+mkdir -p "$DK"
+printf '{"mcpServers":{"other":{"command":"o"}}}\n' > "$LH/dotfiles/desktop.json"
+chmod 644 "$LH/dotfiles/desktop.json"
+ln -s "$LH/dotfiles/desktop.json" "$DK/claude_desktop_config.json"
+expect "the Claude app's config as a link: setup chat adds the server" "added. Open the Claude app" cwk env LLM_WIKI_DESKTOP_DIR="$DK" LLM_WIKI_DESKTOP_PROC="^no such process" "$W" setup chat --yes
+check "in the file it leads to, keeping the rest, and it stays a link" bash -c "test -L '$DK/claude_desktop_config.json' && python3 -c \"import json,sys; c=json.load(open(sys.argv[1]))['mcpServers']; assert c['other']=={'command':'o'} and c['llm-wiki']['args']==['mcp']\" '$LH/dotfiles/desktop.json'"
+check "that file is 0600" test "$(perm_of "$LH/dotfiles/desktop.json")" = 600
+check "and its backup is beside it, not beside the link" bash -c "ls '$LH/dotfiles' | grep -q '^desktop.json.bak-llm-wiki-' && ! ls '$DK' | grep -q 'bak-llm-wiki'"
+# A file that isn't JSON is one line and is left as it is; an empty one, or a null where an
+# object goes, is filled in, as setup --list already reads them.
+SETUPF="$LH/.config/llm-wiki/setup"
+printf 'not json\n' > "$LH/dotfiles/cursor.json"
+cp "$LH/dotfiles/cursor.json" "$CAREFUL/cursor.before"
+rm -f "$LH"/dotfiles/cursor.json.bak-*
+[ ! -f "$SETUPF" ] || { grep -vx cursor "$SETUPF" > "$SETUPF.new"; mv "$SETUPF.new" "$SETUPF"; }
+out="$(printf 'y\n' | cwk "$TTYRUN" "$W" setup cursor 2>&1)"; code=$?
+[ "$code" = 0 ] && case "$out" in *"~/.cursor/hooks.json wasn't changed: its text isn't a JSON object."*) true ;; *) false ;; esac && ok "setup cursor with a hooks file that isn't JSON: one line, and setup goes on" || bad "setup cursor with a hooks file that isn't JSON: one line, and setup goes on" "exit $code: $out"
+case "$out" in *Traceback* | *"couldn't write"*) bad "with no traceback and no second line" "$out" ;; *) ok "with no traceback and no second line" ;; esac
+check "the file is as it was, with no backup left" bash -c "cmp -s '$CAREFUL/cursor.before' '$LH/dotfiles/cursor.json' && ! ls '$LH/dotfiles' | grep -q '^cursor.json.bak-'"
+check "and the step isn't marked as answered, so setup --new asks again" bash -c "! grep -qx cursor '$SETUPF' 2>/dev/null"
+: > "$LH/dotfiles/cursor.json"
+printf 'y\n' | cwk "$TTYRUN" "$W" setup cursor >/dev/null 2>&1
+check "an empty hooks file gets the hook" python3 -c "import json,sys; assert json.load(open(sys.argv[1]))['hooks']['sessionStart'][0]['command'].endswith(' __cursor-start')" "$LH/dotfiles/cursor.json"
+printf '{"version":1,"hooks":null,"x":1}\n' > "$LH/dotfiles/cursor.json"
+printf 'y\n' | cwk "$TTYRUN" "$W" setup cursor >/dev/null 2>&1
+check "and so does one whose hooks are null, keeping the rest" python3 -c "import json,sys; h=json.load(open(sys.argv[1])); assert h['x']==1 and h['hooks']['sessionStart'][0]['command'].endswith(' __cursor-start')" "$LH/dotfiles/cursor.json"
+printf 'not json\n' > "$LH/dotfiles/desktop.json"
+nbak="$(find "$LH/dotfiles" -name 'desktop.json.bak-llm-wiki-*' | wc -l | tr -d ' ')"
+out="$(cwk env LLM_WIKI_DESKTOP_DIR="$DK" LLM_WIKI_DESKTOP_PROC="^no such process" "$W" setup chat --yes 2>&1)"
+case "$out" in *"claude_desktop_config.json wasn't changed: its text isn't a JSON object."*) ok "setup chat with a config that isn't JSON: one line" ;; *) bad "setup chat with a config that isn't JSON: one line" "$out" ;; esac
+case "$out" in *Traceback*) bad "with no traceback" "$out" ;; *) ok "with no traceback" ;; esac
+check "and the config is as it was, with no new backup" bash -c "[ \"\$(cat '$LH/dotfiles/desktop.json')\" = 'not json' ] && [ \"\$(find '$LH/dotfiles' -name 'desktop.json.bak-llm-wiki-*' | wc -l | tr -d ' ')\" = '$nbak' ]"
+printf '{"mcpServers":null,"x":1}\n' > "$LH/dotfiles/desktop.json"
+cwk env LLM_WIKI_DESKTOP_DIR="$DK" LLM_WIKI_DESKTOP_PROC="^no such process" "$W" setup chat --yes >/dev/null 2>&1
+check "a config whose mcpServers is null gets the server, keeping the rest" python3 -c "import json,sys; c=json.load(open(sys.argv[1])); assert c['x']==1 and c['mcpServers']['llm-wiki']['args']==['mcp']" "$LH/dotfiles/desktop.json"
+# Codex: an AGENTS.md that can't be written stops the step before the plugin's files change, so
+# the next run, with it put right, still installs the plugin.
+mkdir -p "$CAREFUL/cbin"
+printf '#!/bin/sh\necho "$*" >> "%s"\ncase "$*" in\n  "plugin marketplace add "*) printf "[marketplaces.llm-wiki]\\n" >> "%s" ;;\n  "plugin add llm-wiki@llm-wiki") printf "[plugins.\\"llm-wiki@llm-wiki\\"]\\n" >> "%s" ;;\nesac\n' "$CAREFUL/codex.log" "$LH/.codex/config.toml" "$LH/.codex/config.toml" > "$CAREFUL/cbin/codex"
+chmod +x "$CAREFUL/cbin/codex"
+rm "$LH/.codex/AGENTS.md"
+ln -s loop "$LH/.codex/AGENTS.md"
+ln -s AGENTS.md "$LH/.codex/loop"
+printf '{}\n' > "$LH/.codex/llm-wiki/plugins/llm-wiki/.codex-plugin/plugin.json"
+out="$(cwk env PATH="$CAREFUL/cbin:$PATH" "$TTYRUN" "$W" setup codex </dev/null 2>&1)"; code=$?
+[ "$code" = 0 ] && case "$out" in *"~/.codex/AGENTS.md wasn't changed: it is a link, and its links lead round in a loop."*) true ;; *) false ;; esac && ok "setup codex with an AGENTS.md in a loop of links: one line, and setup goes on" || bad "setup codex with an AGENTS.md in a loop of links: one line, and setup goes on" "exit $code: $out"
+check "and the plugin's files are as they were" test "$(cat "$LH/.codex/llm-wiki/plugins/llm-wiki/.codex-plugin/plugin.json")" = "{}"
+rm "$LH/.codex/AGENTS.md" "$LH/.codex/loop"
+cwk env PATH="$CAREFUL/cbin:$PATH" "$TTYRUN" "$W" setup codex </dev/null >/dev/null 2>&1
+check "so once it is put right, the next run installs the plugin" grep -qx 'plugin add llm-wiki@llm-wiki' "$CAREFUL/codex.log"
+# From the Claude Code plugin, setup offers to take the old wiki line out of CLAUDE.md.
+LP="$LH/.claude/plugins/cache/mk/llm-wiki/v1"
+mkdir -p "$LP"
+copy_repo "$LP"
+printf '# Mine\n\nMy knowledge wikis live in ~/old. Run ~/old/wiki.sh.\n' > "$LH/dotfiles/claude2.md"
+ln -s "$LH/dotfiles/claude2.md" "$LH/.claude/CLAUDE.md"
+out="$(printf 'n\ny\n' | cwk "$TTYRUN" "$LP/wiki.sh" setup plugin 2>&1)"; code=$?
+[ "$code" = 0 ] && case "$out" in *"removed (backup beside it)"*) true ;; *) false ;; esac && ok "setup plugin takes the old line out of a CLAUDE.md that is a link" || bad "setup plugin takes the old line out of a CLAUDE.md that is a link" "exit $code: $out"
+check "it stays a link, the rest of the file stays, and the backup is beside that file" bash -c "test -L '$LH/.claude/CLAUDE.md' && grep -qx '# Mine' '$LH/dotfiles/claude2.md' && ! grep -q 'live in' '$LH/dotfiles/claude2.md' && grep -q 'live in' '$LH/dotfiles/claude2.md.bak' && test ! -e '$LH/.claude/CLAUDE.md.bak'"
+rm -f "$LH/.claude/CLAUDE.md" "$LH/.claude/CLAUDE.md.bak"
+if [ "$(id -u)" != 0 ]; then
+  printf 'My knowledge wikis live in ~/old. Run ~/old/wiki.sh.\n' > "$LH/.claude/CLAUDE.md"
+  cp "$LH/.claude/CLAUDE.md" "$CAREFUL/claude.before"
+  chmod 555 "$LH/.claude"
+  out="$(printf 'n\ny\n' | cwk "$TTYRUN" "$LP/wiki.sh" setup plugin 2>&1)"; code=$?
+  chmod 755 "$LH/.claude"
+  [ "$code" = 0 ] && case "$out" in *"~/.claude/CLAUDE.md wasn't changed: its folder can't be written."*) true ;; *) false ;; esac && ok "with ~/.claude that can't be written, setup plugin says so in its own line, and goes on" || bad "with ~/.claude that can't be written, setup plugin says so in its own line, and goes on" "exit $code: $out"
+  check "and leaves CLAUDE.md as it was, with no backup" bash -c "cmp -s '$CAREFUL/claude.before' '$LH/.claude/CLAUDE.md' && test ! -e '$LH/.claude/CLAUDE.md.bak'"
+  rm "$LH/.claude/CLAUDE.md"
+else
+  skipped "a ~/.claude that can't be written (root can write anything)"
+fi
+# Codex's hooks for a wiki command whose path has a tab in it need python3 for their JSON. Without
+# it, setup codex says so and writes nothing, and status says nothing of a missing command.
+TABCMD="$(printf '%s/t\tab/bin/wiki' "$CAREFUL")"
+before="$(cat "$LH/.codex/llm-wiki/plugins/llm-wiki/.codex-plugin/plugin.json" "$LH/.codex/AGENTS.md" 2>/dev/null | cksum)"
+out="$(cwk "$(command -v python3)" -I "$TTYRUN" env PATH="$CAREFUL/stand:$CAREFUL/nopy" LLM_WIKI_SHIM="$TABCMD" "$LP/wiki.sh" setup codex </dev/null 2>&1)"; code=$?
+[ "$code" = 0 ] && case "$out" in *"whose path has a control character in it, are written with python3, which isn't on the PATH, so nothing was changed."*) true ;; *) false ;; esac && ok "without python3, a wiki command with a tab in its path: setup codex says why, and goes on" || bad "without python3, a wiki command with a tab in its path: setup codex says why, and goes on" "exit $code: $out"
+check "and the plugin's files and AGENTS.md are as they were, and codex wasn't run" bash -c "[ \"\$(cat '$LH/.codex/llm-wiki/plugins/llm-wiki/.codex-plugin/plugin.json' '$LH/.codex/AGENTS.md' 2>/dev/null | cksum)\" = '$before' ] && [ ! -s '$CAREFUL/stand.log' ]"
+lacks "and status says nothing of a missing command" "not found" cwk env PATH="$CAREFUL/stand:$CAREFUL/nopy" LLM_WIKI_SHIM="$TABCMD" "$LP/wiki.sh" status
+rm -rf "$LH/.claude/plugins"
+# Antigravity: the old wiki line in GEMINI.md, which is a link. Emptied, the link is kept.
+mkdir -p "$LH/.gemini/config/plugins/llm-wiki"
+printf '{}' > "$LH/.gemini/config/plugins/llm-wiki/plugin.json"
+printf '{}' | cwk "$W" __agy-start >/dev/null 2>&1
+printf 'My knowledge wikis live in ~/old. Run ~/old/wiki.sh.\n' > "$LH/dotfiles/gemini.md"
+ln -s "$LH/dotfiles/gemini.md" "$LH/.gemini/GEMINI.md"
+out="$(printf 'y\nn\nn\nn\n' | cwk "$TTYRUN" "$W" setup antigravity 2>&1)"; code=$?
+[ "$code" = 0 ] && case "$out" in *"removed (backup beside it)."*) true ;; *) false ;; esac && ok "setup antigravity takes the old line out of a GEMINI.md that is a link" || bad "setup antigravity takes the old line out of a GEMINI.md that is a link" "exit $code: $out"
+check "emptied, the link is kept, and the backup is beside the file it leads to" bash -c "test -L '$LH/.gemini/GEMINI.md' && test ! -s '$LH/dotfiles/gemini.md' && ls '$LH/dotfiles' | grep -q '^gemini.md.bak-' && ! ls '$LH/.gemini' | grep -q 'bak-'"
+rm "$LH/.gemini/GEMINI.md"
+if [ "$(id -u)" != 0 ]; then
+  mkdir -p "$LH/ro2"
+  printf 'My knowledge wikis live in ~/old. Run ~/old/wiki.sh.\n' > "$LH/ro2/gemini.md"
+  cp "$LH/ro2/gemini.md" "$CAREFUL/gemini.before"
+  ln -s "$LH/ro2/gemini.md" "$LH/.gemini/GEMINI.md"
+  chmod 555 "$LH/ro2"
+  out="$(printf 'y\nn\nn\nn\n' | cwk "$TTYRUN" "$W" setup antigravity 2>&1)"; code=$?
+  chmod 755 "$LH/ro2"
+  [ "$code" = 0 ] && case "$out" in *"~/.gemini/GEMINI.md wasn't changed: it is a link to ~/ro2/gemini.md, in a folder that can't be written."*) true ;; *) false ;; esac && ok "a GEMINI.md that links into a folder that can't be written: setup says so in its own line, and goes on" || bad "a GEMINI.md that links into a folder that can't be written: setup says so in its own line, and goes on" "exit $code: $out"
+  check "and the file is as it was, with no backup" bash -c "cmp -s '$CAREFUL/gemini.before' '$LH/ro2/gemini.md' && [ \"\$(ls -A '$LH/ro2')\" = gemini.md ] && ! ls '$LH/.gemini' | grep -q 'bak-'"
+  rm "$LH/.gemini/GEMINI.md"
+else
+  skipped "a GEMINI.md that links into a folder that can't be written (root can write anything)"
+fi
+check "no write left a temporary file anywhere" test -z "$(find "$LH" "$DK" -name '*.tmp*')"
+
+# Commands written for a shell (M13): a clone in a folder named "my clone", under one whose
+# name holds a double quote, a $, a backtick, a single quote and a backslash, and an Antigravity
+# folder with a space and a single quote. Each command that Antigravity, Cursor and Codex run
+# through a shell is run here.
+CL="$CAREFUL/q\"d \$x\`b'k\\l/my clone"
+copy_repo "$CL"
+QH="$CAREFUL/qhome"
+AGH="$CAREFUL/a g'y/.gemini"
+mkdir -p "$QH" "$AGH/config/plugins/llm-wiki"
+printf '{}' > "$AGH/config/plugins/llm-wiki/plugin.json"
+cqk() { env -u WIKIS_DIR HOME="$QH" LLM_WIKI_DEFAULT_DIR="$QH/wikis" LLM_WIKI_AGY_HOME="$AGH" "$@"; }
+printf '{}' | cqk "$CL/wiki.sh" __agy-start >/dev/null 2>&1
+AJ="$AGH/config/plugins/llm-wiki/hooks.json"
+check "Antigravity's hooks file, from that clone, is JSON" python3 -c 'import json, sys; json.load(open(sys.argv[1]))' "$AJ"
+cmds="$(python3 -c '
+import json, sys
+h = json.load(open(sys.argv[1]))["llm-wiki"]
+for c in (h["SessionStart"][0]["command"], h["PreToolUse"][0]["hooks"][0]["command"], h["PreInvocation"][0]["command"], h["PreInvocation"][1]["command"]):
+    print(c)' "$AJ" 2>&1)"
+n=0
+bads=""
+while IFS= read -r c; do
+  [ -n "$c" ] || continue
+  n=$((n + 1))
+  case "$c" in *"~"*) bads="$bads | a tilde: $c" ;; esac
+  # Each path is a full one in single quotes. That it is the right one is shown by running it.
+  case "$c" in "'/"*" __agy-start" | "'/"*" __agy-prompt" | "sh '/"*" tool" | "sh '/"*" invoke") ;; *) bads="$bads | not a full path in single quotes: $c" ;; esac
+  out="$(printf '{}' | cqk sh -c "$c" 2>&1)" || bads="$bads | failed: $c: $out"
+  case "$c" in
+    *" __agy-start") case "$out" in *'"injectSteps"'*) ;; *) bads="$bads | no reply from start: $out" ;; esac ;;
+    *" tool") case "$out" in *'"decision"'*) ;; *) bads="$bads | no reply from the hook script: $out" ;; esac ;;
+  esac
+done <<EOF
+$cmds
+EOF
+[ "$n" = 4 ] && [ -z "$bads" ] && ok "its commands each hold a full path, with no tilde, and each runs with sh -c" || bad "its commands each hold a full path, with no tilde, and each runs with sh -c" "$n commands$bads
+$cmds"
+before="$(cksum < "$AJ")"
+printf '{}' | cqk "$CL/wiki.sh" __agy-start >/dev/null 2>&1
+expect "and it is current, so the next start leaves it" "plugin current" cqk "$CL/wiki.sh" setup --list
+check "as it was" test "$(cksum < "$AJ")" = "$before"
+mkdir -p "$QH/.cursor"
+printf 'y\n' | cqk "$TTYRUN" "$CL/wiki.sh" setup cursor >/dev/null 2>&1
+c="$(python3 -c 'import json, sys; print([x["command"] for x in json.load(open(sys.argv[1]))["hooks"]["sessionStart"] if "__cursor-start" in x["command"]][0])' "$QH/.cursor/hooks.json" 2>&1)"
+out="$(printf '{"workspace_roots":["%s"]}' "$QH" | cqk sh -c "$c" 2>&1)"
+case "$out" in *'"additional_context"'*) ok "Cursor's hook from that clone runs with sh -c" ;; *) bad "Cursor's hook from that clone runs with sh -c" "$c: $out" ;; esac
+expect "and setup --list sees it current" "cursor              hook current" cqk "$CL/wiki.sh" setup --list
+mkdir -p "$CAREFUL/bin" "$QH/.codex"
+cat > "$CAREFUL/bin/codex" <<EOF
+#!/bin/sh
+case "\$*" in
+  "plugin marketplace add "*) printf '[marketplaces.llm-wiki]\n' >> "$QH/.codex/config.toml" ;;
+  "plugin add llm-wiki@llm-wiki") printf '[plugins."llm-wiki@llm-wiki"]\nenabled = true\n' >> "$QH/.codex/config.toml" ;;
+esac
+EOF
+chmod +x "$CAREFUL/bin/codex"
+printf 'y\n' | cqk env PATH="$CAREFUL/bin:$PATH" "$TTYRUN" "$CL/wiki.sh" setup codex >/dev/null 2>&1
+cmds="$(python3 -c '
+import json, sys
+h = json.load(open(sys.argv[1]))["hooks"]["hooks"]
+for e in ("SessionStart", "PostCompact", "UserPromptSubmit"):
+    print(h[e][0]["hooks"][0]["command"])' "$QH/.codex/llm-wiki/plugins/llm-wiki/.codex-plugin/plugin.json" 2>&1)"
+n=0
+bads=""
+while IFS= read -r c; do
+  [ -n "$c" ] || continue
+  n=$((n + 1))
+  out="$(printf '{"cwd":"%s","hook_event_name":"SessionStart"}' "$QH" | cqk sh -c "$c" 2>&1)" || bads="$bads | failed: $c: $out"
+  case "$c" in *" __codex-start") case "$out" in *'"hookSpecificOutput"'*) ;; *) bads="$bads | no reply: $c: $out" ;; esac ;; esac
+done <<EOF
+$cmds
+EOF
+[ "$n" = 3 ] && [ -z "$bads" ] && ok "Codex's three hooks from that clone each run with sh -c" || bad "Codex's three hooks from that clone each run with sh -c" "$n commands$bads
+$cmds"
+expect "and setup --list sees the plugin current" "codex               plugin current" cqk env PATH="$CAREFUL/bin:$PATH" "$CL/wiki.sh" setup --list
+# The tab completion line in the profile, for a settings folder with a $ in its name.
+XC="$CAREFUL/x\$dg"
+printf 'y\n' | cqk env SHELL=/bin/bash XDG_CONFIG_HOME="$XC" "$TTYRUN" "$W" setup completion >/dev/null 2>&1
+check "the tab completion line for a settings folder with a \$ in its name loads the completion in bash" cqk bash -c ". \"\$HOME/.bashrc\" && complete -p wiki"
+printf 'y\n' | cqk env SHELL=/bin/bash XDG_CONFIG_HOME="$XC" "$TTYRUN" "$W" setup completion >/dev/null 2>&1
+check "and setup doesn't add it twice" test "$(grep -c 'completion.bash' "$QH/.bashrc")" = 1
+expect "and uninstall would take it out" "the tab completion line in ~/.bashrc" cqk env XDG_CONFIG_HOME="$XC" "$W" uninstall --dry-run
+# The line an earlier version wrote for that folder, in double quotes, loads nothing: it doesn't
+# count as on, and setup puts it right.
+printf '# mine\n[ -f "%s" ] && source "%s"\n' "$XC/llm-wiki/completion.bash" "$XC/llm-wiki/completion.bash" > "$QH/.bashrc"
+out="$(cqk env SHELL=/bin/bash XDG_CONFIG_HOME="$XC" "$TTYRUN" "$W" setup completion </dev/null 2>&1)"
+case "$out" in *"replaced the tab completion line in ~/.bashrc"*) ok "a profile with the old line for that folder has it replaced, and says so" ;; *) bad "a profile with the old line for that folder has it replaced, and says so" "$out" ;; esac
+check "and then it loads the completion, with the old line gone and the rest kept" bash -c "env HOME='$QH' bash -c '. \"\$HOME/.bashrc\" && complete -p wiki' >/dev/null && [ \"\$(grep -c 'completion.bash' '$QH/.bashrc')\" = 1 ] && grep -qx '# mine' '$QH/.bashrc'"
+# A profile that can't be written but sits in a folder that can, with the old line: one write
+# puts the new line in its place, the profile keeps its mode, and a dated backup is beside it.
+printf '# mine\n[ -f "%s" ] && source "%s"\n# end\n' "$XC/llm-wiki/completion.bash" "$XC/llm-wiki/completion.bash" > "$QH/.bashrc"
+chmod 444 "$QH/.bashrc"
+out="$(cqk env SHELL=/bin/bash XDG_CONFIG_HOME="$XC" "$TTYRUN" "$W" setup completion </dev/null 2>&1)"; code=$?
+chmod 644 "$QH/.bashrc"
+[ "$code" = 0 ] && case "$out" in *"replaced the tab completion line"*) true ;; *) false ;; esac && ok "a profile at 0444 with the old line has it replaced in one write, and setup goes on" || bad "a profile at 0444 with the old line has it replaced in one write, and setup goes on" "exit $code: $out"
+l2="$(sed -n 2p "$QH/.bashrc")"
+case "$l2" in "[ -f '"*"completion.bash' ] && source '"*) ok "the new line is where the old one was" ;; *) bad "the new line is where the old one was" "$(cat "$QH/.bashrc")" ;; esac
+check "the rest is kept, the old line is gone, the mode is kept and a dated backup is beside it" bash -c "[ \"\$(sed -n 3p '$QH/.bashrc')\" = '# end' ] && [ \"\$(grep -c 'completion.bash' '$QH/.bashrc')\" = 1 ] && [ -n \"\$(find '$QH' -maxdepth 1 -name '.bashrc.bak-*' -perm 444)\" ]"
+# Both lines in it: the old one goes, and setup --list counts it as new though the step was answered.
+printf '[ -f "%s" ] && source "%s"\n%s\n' "$XC/llm-wiki/completion.bash" "$XC/llm-wiki/completion.bash" "$l2" > "$QH/.bashrc"
+printf '%s\n' "$l2" > "$CAREFUL/bashrc.want"
+mkdir -p "$QH/wikis"
+expect "a profile with both lines: setup --list has completion to look at, though it was answered" "  <- new" bash -c "env -u WIKIS_DIR HOME='$QH' LLM_WIKI_DEFAULT_DIR='$QH/wikis' SHELL=/bin/bash XDG_CONFIG_HOME='$XC' '$W' setup --list | grep '^completion'"
+cqk env SHELL=/bin/bash XDG_CONFIG_HOME="$XC" "$TTYRUN" "$W" setup completion </dev/null >/dev/null 2>&1
+check "and setup completion drops the old line, keeping the new one once" cmp -s "$CAREFUL/bashrc.want" "$QH/.bashrc"
+# Without python3, Antigravity's hooks can't be made: nothing about it leaks into setup --list,
+# and setup says why it can't update the plugin.
+rm -f "$AGH/config/plugins/llm-wiki/rules/AGENTS.md"
+lacks "without python3, setup --list says nothing of a missing command" "not found" cqk env PATH="$CAREFUL/stand:$CAREFUL/nopy" "$CL/wiki.sh" setup --list
+lacks "nor does status" "not found" cqk env PATH="$CAREFUL/stand:$CAREFUL/nopy" "$CL/wiki.sh" status
+out="$(cqk "$(command -v python3)" -I "$TTYRUN" env PATH="$CAREFUL/stand:$CAREFUL/nopy" "$CL/wiki.sh" setup antigravity </dev/null 2>&1)"
+case "$out" in *"Antigravity's hooks are written with python3, which isn't on the PATH, so nothing was changed."*) ok "and setup antigravity says python3 is needed, as its own line" ;; *) bad "and setup antigravity says python3 is needed, as its own line" "$out" ;; esac
+case "$out" in *"not found"*) bad "with no shell error" "$out" ;; *) ok "with no shell error" ;; esac
+# Cursor's hooks file without python3: the line says python3 is missing, not that the text is bad.
+out="$(printf 'y\n' | cqk "$(command -v python3)" -I "$TTYRUN" env PATH="$CAREFUL/stand:$CAREFUL/nopy" "$CL/wiki.sh" setup cursor 2>&1)"
+case "$out" in *"~/.cursor/hooks.json wasn't changed: it is written with python3, which isn't on the PATH."*) ok "setup cursor without python3 says python3 is missing" ;; *) bad "setup cursor without python3 says python3 is missing" "$out" ;; esac
+case "$out" in *"JSON object"* | *"not found"*) bad "and nothing else" "$out" ;; *) ok "and nothing else" ;; esac
+rm -rf "$CAREFUL"
+unset -f cwk cqk perm_of
 fi
 
 if section "Feedback on llm-wiki"; then

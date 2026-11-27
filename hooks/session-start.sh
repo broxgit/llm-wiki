@@ -119,14 +119,26 @@ case "$ROOT" in
     KEY="${plugin_dir##*/}@$(basename "${plugin_dir%/*}")"
     ;;
 esac
+# sh_quote <text>: the text as one word for sh, in single quotes, exact for any text. Each value
+# pasted into the command below goes through it, so a folder with a space, a quote, a $, a
+# backtick or a backslash in its name can't break the script. The same as wiki.sh's sh_quote:
+# change them together. By byte, so a byte that isn't UTF-8 can't hide a quote in any locale.
+sh_quote() {
+  local LC_ALL=C q="'" r="'\\''"  # no command runs here, so the local is enough
+  printf "'%s'" "${1//$q/$r}"
+}
 if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
   CMD="$CLAUDE_PLUGIN_DATA/bin/wiki"
+  # Quoted before the here-document, which only pastes them in.
+  q_target="$(sh_quote "$WIKI_SH")"
+  q_key="$(sh_quote "$KEY")"
+  q_cmd="$(sh_quote "$CMD")"
   shim="$(cat <<EOF
 #!/bin/sh
 # The llm-wiki plugin's terminal command, written by the plugin's session hook.
 # It runs the version Claude Code says is installed, so an update counts at once.
-target="$WIKI_SH"
-key="$KEY"
+target=$q_target
+key=$q_key
 installed="\$HOME/.claude/plugins/installed_plugins.json"
 if [ -n "\$key" ] && [ -f "\$installed" ] && command -v python3 >/dev/null 2>&1; then
   path="\$(python3 - "\$installed" "\$key" 2>/dev/null <<'PY'
@@ -139,7 +151,7 @@ PY
   [ -n "\$path" ] && [ -x "\$path/wiki.sh" ] && target="\$path/wiki.sh"
 fi
 [ -x "\$target" ] || { echo "wiki: can't find the llm-wiki plugin. Check it with: claude plugin list" >&2; exit 1; }
-LLM_WIKI_CMD=wiki LLM_WIKI_SHIM="$CMD" exec "\$target" "\$@"
+LLM_WIKI_CMD=wiki LLM_WIKI_SHIM=$q_cmd exec "\$target" "\$@"
 EOF
 )"
   if [ "$(cat "$CMD" 2>/dev/null)" != "$shim" ]; then
